@@ -11,11 +11,11 @@ import (
 
 func TestNodeShow_HappyPath(t *testing.T) {
 	ml := `{"members":[
-		{"id":"node-1","gossip_addr":"127.0.0.1:17946","service_addr":"127.0.0.1:18080","az":"us-east-1a","rg":"default","state":0}
+		{"id":"node-1","gossip_addr":"127.0.0.1:17946","service_addr":"127.0.0.1:18080","cluster_name":"cluster-a","region":"us-east-1","az":"us-east-1a","rg":"default","state":0}
 	]}`
 	status := `{
 		"node_id":"node-1","state":"active","is_decommissioning":false,
-		"member_count":1,"address":"127.0.0.1:18080","resource_group":"default","az":"us-east-1a",
+		"member_count":1,"address":"127.0.0.1:18080","cluster_name":"cluster-a","region":"us-east-1","resource_group":"default","az":"us-east-1a",
 		"tags":{"role":"logstore"},
 		"started_at_ms":1712500000000,"version":"v0.1.26-test","last_health_check_ms":1712553600000
 	}`
@@ -43,6 +43,8 @@ func TestNodeShow_HappyPath(t *testing.T) {
 	require.Contains(t, out, "node-1")
 	require.Contains(t, out, "Identity")
 	require.Contains(t, out, "Lifecycle")
+	require.Contains(t, out, "cluster-a")
+	require.Contains(t, out, "us-east-1")
 	require.Contains(t, out, "v0.1.26-test")
 }
 

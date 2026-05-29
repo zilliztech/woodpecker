@@ -65,6 +65,20 @@ message QuorumInfo{
   int32 wq = 3;
   int32 aq = 4;
   repeated string nodes = 5;
+  repeated QuorumNode replicas = 6;
+}
+
+/**
+ * QuorumNode defines the topology metadata for a quorum replica.
+ */
+message QuorumNode{
+  string endpoint = 1;
+  string node_id = 2;
+  string cluster_name = 3;
+  string region = 4;
+  string az = 5;
+  string resource_group = 6;
+  map<string, string> tags = 7;
 }
 
 /**
@@ -96,5 +110,4 @@ message SegmentCleanupStatus {
   map<string, bool> quorum_cleanup_status = 6;  // Map of node address to cleanup status
   string error_message = 7;  // Error message if cleanup failed
 }
-
 

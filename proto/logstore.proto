@@ -225,6 +225,8 @@ message NodeMeta {
   map<string, string> tags = 5;
   int64 version = 6;
   int64 last_update = 7; // Unix timestamp in milliseconds
+  string cluster_name = 8;
+  string region = 9;
 }
 
 // Node selection strategy types
@@ -266,4 +268,3 @@ message SelectNodesResponse {
   repeated NodeMeta nodes = 2;
   int32 total_count = 3;    // Total number of nodes matching the filter (before limit)
 }
-

@@ -12,6 +12,8 @@ type Member struct {
 	ID          string            `json:"id"`
 	GossipAddr  string            `json:"gossip_addr"`
 	ServiceAddr string            `json:"service_addr"`
+	ClusterName string            `json:"cluster_name"`
+	Region      string            `json:"region"`
 	AZ          string            `json:"az"`
 	RG          string            `json:"rg"`
 	State       int               `json:"state"`

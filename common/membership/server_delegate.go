@@ -83,6 +83,12 @@ func (d *ServerDelegate) UpdateMeta(updates map[string]interface{}) {
 	if rg, ok := updates["resource_group"].(string); ok {
 		d.meta.ResourceGroup = rg
 	}
+	if clusterName, ok := updates["cluster_name"].(string); ok {
+		d.meta.ClusterName = clusterName
+	}
+	if region, ok := updates["region"].(string); ok {
+		d.meta.Region = region
+	}
 	if az, ok := updates["az"].(string); ok {
 		d.meta.Az = az
 	}

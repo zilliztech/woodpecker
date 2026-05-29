@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
@@ -40,9 +41,9 @@ func TestQuorumDiscovery_SelectQuorumNodes_SingleRegion_Success(t *testing.T) {
 
 	// Mock the SelectNodes call
 	expectedNodes := []*proto.NodeMeta{
-		{Endpoint: "node1:8080"},
-		{Endpoint: "node2:8080"},
-		{Endpoint: "node3:8080"},
+		{Endpoint: "node1:8080", NodeId: "node-1", ClusterName: "cluster-a", Region: "region-a", Az: "az-a", ResourceGroup: "rg-a", Tags: map[string]string{"role": "logstore"}},
+		{Endpoint: "node2:8080", NodeId: "node-2", ClusterName: "cluster-a", Region: "region-a", Az: "az-b", ResourceGroup: "rg-a"},
+		{Endpoint: "node3:8080", NodeId: "node-3", ClusterName: "cluster-a", Region: "region-b", Az: "az-c", ResourceGroup: "rg-b"},
 	}
 	mockClient.EXPECT().SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return(expectedNodes, nil)
 
@@ -61,6 +62,14 @@ func TestQuorumDiscovery_SelectQuorumNodes_SingleRegion_Success(t *testing.T) {
 	assert.Contains(t, result.Nodes, "node1:8080")
 	assert.Contains(t, result.Nodes, "node2:8080")
 	assert.Contains(t, result.Nodes, "node3:8080")
+	require.Len(t, result.Replicas, 3)
+	assert.Equal(t, "node1:8080", result.Replicas[0].Endpoint)
+	assert.Equal(t, "node-1", result.Replicas[0].NodeId)
+	assert.Equal(t, "cluster-a", result.Replicas[0].ClusterName)
+	assert.Equal(t, "region-a", result.Replicas[0].Region)
+	assert.Equal(t, "az-a", result.Replicas[0].Az)
+	assert.Equal(t, "rg-a", result.Replicas[0].ResourceGroup)
+	assert.Equal(t, "logstore", result.Replicas[0].Tags["role"])
 }
 
 func TestQuorumDiscovery_SelectQuorumNodes_CustomPlacement_Success(t *testing.T) {

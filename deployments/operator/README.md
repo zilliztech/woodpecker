@@ -152,13 +152,14 @@ The operator detects your constraint on the zone key and does not add its defaul
 
 ### Node-label environment variables
 
-Each pod's Woodpecker process receives two env vars sourced from the node it is
-running on:
+Each pod's Woodpecker process receives topology env vars from the init-generated
+`/etc/woodpecker/topology.env`:
 
-| Env var | Source node label | Fallback |
+| Env var | Source | Fallback |
 |---|---|---|
-| `AVAILABILITY_ZONE` | `topology.kubernetes.io/zone` | `default-az` |
-| `CLUSTER_NAME` | `topology.kubernetes.io/region` | `default-cluster` |
+| `CLUSTER_NAME` | `WoodpeckerCluster` CR name | CR name |
+| `REGION` | `topology.kubernetes.io/region` node label | empty |
+| `AVAILABILITY_ZONE` | `topology.kubernetes.io/zone` node label | empty |
 
 An init container reads the node via the K8s API at pod startup using the
 pod's ServiceAccount token. The operator creates a per-cluster `ClusterRole`

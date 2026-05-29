@@ -60,7 +60,7 @@ func extractPort(t *testing.T, rawURL string) string {
 
 func TestNodeList_HappyPath(t *testing.T) {
 	ml := `{"members":[
-		{"id":"node-1","gossip_addr":"127.0.0.1:17946","service_addr":"127.0.0.1:18080","az":"us-east-1a","rg":"default","state":0,"incarnation":1,"last_seen_ms":1}
+		{"id":"node-1","gossip_addr":"127.0.0.1:17946","service_addr":"127.0.0.1:18080","cluster_name":"cluster-a","region":"us-east-1","az":"us-east-1a","rg":"default","state":0,"incarnation":1,"last_seen_ms":1}
 	]}`
 	srv := spinTestServer(t, ml, nil)
 	defer srv.Close()
@@ -80,4 +80,7 @@ func TestNodeList_HappyPath(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
 	require.Len(t, rows, 1)
 	require.Equal(t, "node-1", rows[0]["name"])
+	require.Equal(t, "cluster-a", rows[0]["cluster"])
+	require.Equal(t, "us-east-1", rows[0]["region"])
+	require.Equal(t, "us-east-1a", rows[0]["az"])
 }

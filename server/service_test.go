@@ -852,6 +852,10 @@ func TestServer_ShutdownUnaryInterceptor(t *testing.T) {
 // === NewServer / NewServerWithConfig Tests ===
 
 func TestNewServer_LocalStorage(t *testing.T) {
+	t.Setenv("CLUSTER_NAME", "")
+	t.Setenv("REGION", "")
+	t.Setenv("AVAILABILITY_ZONE", "")
+
 	cfg, _ := config.NewConfiguration()
 	cfg.Woodpecker.Storage.Type = "local"
 	cfg.Woodpecker.Storage.RootPath = t.TempDir()
@@ -867,8 +871,29 @@ func TestNewServer_LocalStorage(t *testing.T) {
 	assert.Equal(t, 0, s.serverConfig.ServicePort)
 	assert.Equal(t, 0, s.serverConfig.AdvertisePort)
 	assert.Equal(t, "default", s.serverConfig.ResourceGroup)
-	assert.Equal(t, "default", s.serverConfig.AZ)
+	assert.Equal(t, "default", s.serverConfig.ClusterName)
+	assert.Equal(t, "", s.serverConfig.Region)
+	assert.Equal(t, "", s.serverConfig.AZ)
 	assert.Equal(t, map[string]string{"role": "logstore"}, s.serverConfig.Tags)
+}
+
+func TestNewServer_ReadsTopologyFromEnvironment(t *testing.T) {
+	t.Setenv("CLUSTER_NAME", "cluster-env")
+	t.Setenv("REGION", "region-env")
+	t.Setenv("AVAILABILITY_ZONE", "az-env")
+
+	cfg, _ := config.NewConfiguration()
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = t.TempDir()
+
+	s, err := NewServer(context.Background(), cfg, 0, 0, nil)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	defer s.cancel()
+
+	assert.Equal(t, "cluster-env", s.serverConfig.ClusterName)
+	assert.Equal(t, "region-env", s.serverConfig.Region)
+	assert.Equal(t, "az-env", s.serverConfig.AZ)
 }
 
 func TestNewServerWithConfig_LocalStorage(t *testing.T) {
@@ -1515,6 +1540,8 @@ func TestGetNodeStatus_AugmentedFields(t *testing.T) {
 		NodeID:        "test-augmented",
 		BindPort:      0,
 		ServicePort:   0,
+		ClusterName:   "cluster-a",
+		Region:        "region-a",
 		ResourceGroup: "default",
 		AZ:            "default",
 		Tags:          map[string]string{"role": "logstore"},
@@ -1526,6 +1553,9 @@ func TestGetNodeStatus_AugmentedFields(t *testing.T) {
 	require.NotZero(t, status.StartedAt, "StartedAt must be set")
 	require.NotEmpty(t, status.Version, "Version must be set (ldflags or 'dev')")
 	require.NotZero(t, status.LastHealthCheck, "LastHealthCheck must be set")
+	require.Equal(t, "cluster-a", status.ClusterName)
+	require.Equal(t, "region-a", status.Region)
+	require.Equal(t, "default", status.AZ)
 }
 
 func TestServer_NodeLifecycle(t *testing.T) {

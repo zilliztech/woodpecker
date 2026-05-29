@@ -148,9 +148,14 @@ func TestBuildInitContainers_ScriptCallsK8sAPI(t *testing.T) {
 	assert.Contains(t, script, "kubernetes.default.svc")
 	assert.Contains(t, script, "topology.kubernetes.io/zone")
 	assert.Contains(t, script, "topology.kubernetes.io/region")
-	assert.Contains(t, script, "default-az")
-	assert.Contains(t, script, "default-cluster")
-	assert.Contains(t, script, "CLUSTER_NAME=")
+	assert.Contains(t, script, `: "${AZ:=}"`)
+	assert.Contains(t, script, `: "${REGION:=}"`)
+	assert.Contains(t, script, "CLUSTER_NAME=wp")
+	assert.Contains(t, script, "REGION=${REGION}")
+	assert.Contains(t, script, "AVAILABILITY_ZONE=${AZ}")
+	assert.NotContains(t, script, "default-az")
+	assert.NotContains(t, script, "default-cluster")
+	assert.NotContains(t, script, "CLUSTER_NAME=${REGION}")
 	// Regex must allow optional whitespace after the colon — K8s API returns
 	// pretty-printed JSON with `"key": "value"` (note the space).
 	assert.Contains(t, script, `"topology.kubernetes.io/zone": *"[^"]*"`)
@@ -171,5 +176,5 @@ func TestBuildContainers_ExportsClusterName(t *testing.T) {
 	cs := r.buildContainers(cluster)
 	require.Len(t, cs, 1)
 	require.Len(t, cs[0].Args, 1)
-	assert.Contains(t, cs[0].Args[0], "export SEEDS AVAILABILITY_ZONE CLUSTER_NAME RESOURCE_GROUP")
+	assert.Contains(t, cs[0].Args[0], "export SEEDS CLUSTER_NAME REGION AVAILABILITY_ZONE RESOURCE_GROUP")
 }

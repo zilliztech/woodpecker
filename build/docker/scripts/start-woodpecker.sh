@@ -24,7 +24,8 @@ GOSSIP_PORT=${GOSSIP_PORT:-${GOSSIP_PORT:-17946}}       # Gossip port (for clust
 NODE_NAME=${NODE_NAME:-$(hostname)}
 DATA_DIR=${DATA_DIR:-/woodpecker/data}
 CONFIG_FILE=${CONFIG_FILE:-/woodpecker/configs/woodpecker.yaml}
-CLUSTER=${CLUSTER:-woodpecker-cluster}
+CLUSTER_NAME=${CLUSTER_NAME:-default}
+CLUSTER=${CLUSTER:-$CLUSTER_NAME}
 STORAGE_TYPE=${STORAGE_TYPE:-service}
 LOG_LEVEL=${LOG_LEVEL:-info}
 EXTERNAL_DEFAULT_CONFIG_FILE=${EXTERNAL_DEFAULT_CONFIG_FILE:-/woodpecker/configs/default.yaml}
@@ -32,7 +33,8 @@ EXTERNAL_USER_CONFIG_FILE=${EXTERNAL_USER_CONFIG_FILE:-/woodpecker/configs/user.
 
 # Node metadata configuration
 RESOURCE_GROUP=${RESOURCE_GROUP:-default}
-AVAILABILITY_ZONE=${AVAILABILITY_ZONE:-default}
+REGION=${REGION:-}
+AVAILABILITY_ZONE=${AVAILABILITY_ZONE:-}
 
 # Advertise address configuration for Docker bridge networking
 # Gossip advertise configuration (for internal cluster communication)
@@ -174,6 +176,8 @@ log "Starting Woodpecker Server:"
 log "  Node Name: $NODE_NAME"
 log "  Service Port: $SERVICE_PORT"
 log "  Gossip Port: $GOSSIP_PORT"
+log "  Cluster Name: $CLUSTER_NAME"
+log "  Region: $REGION"
 log "  Resource Group: $RESOURCE_GROUP"
 log "  Availability Zone: $AVAILABILITY_ZONE"
 
@@ -206,6 +210,8 @@ CMD_ARGS=(
     "--data-dir" "$DATA_DIR"
     "--config" "$CONFIG_FILE"
     "--resource-group" "$RESOURCE_GROUP"
+    "--cluster" "$CLUSTER_NAME"
+    "--region" "$REGION"
     "--availability-zone" "$AVAILABILITY_ZONE"
     "--external-default-config" "$EXTERNAL_DEFAULT_CONFIG_FILE"
     "--external-user-config" "$EXTERNAL_USER_CONFIG_FILE"

@@ -13,6 +13,7 @@ import (
 type nodeListRow struct {
 	Name    string `json:"name"`
 	Cluster string `json:"cluster,omitempty"`
+	Region  string `json:"region,omitempty"`
 	Addr    string `json:"addr"`
 	State   string `json:"state"`
 	AZ      string `json:"az"`
@@ -22,9 +23,10 @@ type nodeListRow struct {
 
 func newNodeListCommand() *cobra.Command {
 	var (
-		filterAZ    string
-		filterRG    string
-		filterState string
+		filterRegion string
+		filterAZ     string
+		filterRG     string
+		filterState  string
 	)
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -55,7 +57,8 @@ func newNodeListCommand() *cobra.Command {
 			for i, m := range r.Members.Members {
 				row := nodeListRow{
 					Name:    m.ID,
-					Cluster: m.Tags["cluster"],
+					Cluster: clusterNameFromMember(m),
+					Region:  m.Region,
 					Addr:    m.ServiceAddr,
 					AZ:      m.AZ,
 					RG:      m.RG,
@@ -77,6 +80,9 @@ func newNodeListCommand() *cobra.Command {
 					row.Health = "FAIL"
 				}
 				// Apply filters.
+				if filterRegion != "" && row.Region != filterRegion {
+					continue
+				}
 				if filterAZ != "" && row.AZ != filterAZ {
 					continue
 				}
@@ -92,6 +98,7 @@ func newNodeListCommand() *cobra.Command {
 			return renderNodeList(cmd, rows)
 		},
 	}
+	cmd.Flags().StringVar(&filterRegion, "region", "", "filter by region")
 	cmd.Flags().StringVar(&filterAZ, "az", "", "filter by availability zone")
 	cmd.Flags().StringVar(&filterRG, "rg", "", "filter by resource group")
 	cmd.Flags().StringVar(&filterState, "state", "all", "filter by state: active|decommissioning|decommissioned|unreachable|all")
@@ -108,27 +115,37 @@ func renderNodeList(cmd *cobra.Command, rows []nodeListRow) error {
 	case "wide":
 		fallthrough
 	default:
-		// Show CLUSTER column only if any node has a cluster tag.
+		// Show topology identity columns only when present for old-server compatibility.
 		hasCluster := false
+		hasRegion := false
 		for _, r := range rows {
 			if r.Cluster != "" {
 				hasCluster = true
-				break
+			}
+			if r.Region != "" {
+				hasRegion = true
 			}
 		}
-		var headers []string
+		headers := []string{"NAME"}
 		if hasCluster {
-			headers = []string{"NAME", "CLUSTER", "ADDR", "STATE", "AZ", "RG", "HEALTH"}
-		} else {
-			headers = []string{"NAME", "ADDR", "STATE", "AZ", "RG", "HEALTH"}
+			headers = append(headers, "CLUSTER")
 		}
+		if hasRegion {
+			headers = append(headers, "REGION")
+		}
+		headers = append(headers, "ADDR", "STATE", "AZ", "RG", "HEALTH")
+
 		table := make([][]string, len(rows))
 		for i, r := range rows {
+			row := []string{r.Name}
 			if hasCluster {
-				table[i] = []string{r.Name, r.Cluster, r.Addr, r.State, r.AZ, r.RG, r.Health}
-			} else {
-				table[i] = []string{r.Name, r.Addr, r.State, r.AZ, r.RG, r.Health}
+				row = append(row, r.Cluster)
 			}
+			if hasRegion {
+				row = append(row, r.Region)
+			}
+			row = append(row, r.Addr, r.State, r.AZ, r.RG, r.Health)
+			table[i] = row
 		}
 		return output.RenderRowTable(w, headers, table)
 	}

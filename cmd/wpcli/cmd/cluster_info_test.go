@@ -11,9 +11,9 @@ import (
 
 func TestClusterInfo_HappyPath(t *testing.T) {
 	ml := `{"members":[
-		{"id":"node-1","gossip_addr":"127.0.0.1:17946","az":"us-east-1a","rg":"default"},
-		{"id":"node-2","gossip_addr":"127.0.0.1:17946","az":"us-east-1a","rg":"default"},
-		{"id":"node-3","gossip_addr":"127.0.0.1:17946","az":"us-east-1b","rg":"default"}
+		{"id":"node-1","gossip_addr":"127.0.0.1:17946","cluster_name":"cluster-a","region":"us-east-1","az":"us-east-1a","rg":"default"},
+		{"id":"node-2","gossip_addr":"127.0.0.1:17946","cluster_name":"cluster-a","region":"us-east-1","az":"us-east-1a","rg":"default"},
+		{"id":"node-3","gossip_addr":"127.0.0.1:17946","cluster_name":"cluster-a","region":"us-east-1","az":"us-east-1b","rg":"default"}
 	]}`
 
 	mux := http.NewServeMux()
@@ -35,6 +35,8 @@ func TestClusterInfo_HappyPath(t *testing.T) {
 	require.NoError(t, root.Execute())
 	out := buf.String()
 	require.Contains(t, out, "Total Nodes")
+	require.Contains(t, out, "cluster-a")
+	require.Contains(t, out, "us-east-1")
 	require.Contains(t, out, "us-east-1a")
 	require.Contains(t, out, "node-1")
 }

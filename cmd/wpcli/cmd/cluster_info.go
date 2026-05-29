@@ -42,8 +42,8 @@ func newClusterInfoCommand() *cobra.Command {
 				return wperrors.NewStrictPartialFailureError(res.Unreachable, len(urls))
 			}
 
-			// Compute state counts and group by AZ/RG.
-			byAZRG := make(map[string]map[string][]clusterNodeInfo) // az -> rg -> nodes
+			// Compute state counts and group by region/AZ/RG.
+			byRegionAZRG := make(map[string]map[string]map[string][]clusterNodeInfo) // region -> az -> rg -> nodes
 			stateCounts := map[string]int{}
 			for i, m := range r.Members.Members {
 				state := "UNREACHABLE"
@@ -59,18 +59,21 @@ func newClusterInfoCommand() *cobra.Command {
 					}
 				}
 				stateCounts[state]++
-				if byAZRG[m.AZ] == nil {
-					byAZRG[m.AZ] = make(map[string][]clusterNodeInfo)
+				if byRegionAZRG[m.Region] == nil {
+					byRegionAZRG[m.Region] = make(map[string]map[string][]clusterNodeInfo)
 				}
-				byAZRG[m.AZ][m.RG] = append(byAZRG[m.AZ][m.RG], clusterNodeInfo{member: m, state: state})
+				if byRegionAZRG[m.Region][m.AZ] == nil {
+					byRegionAZRG[m.Region][m.AZ] = make(map[string][]clusterNodeInfo)
+				}
+				byRegionAZRG[m.Region][m.AZ][m.RG] = append(byRegionAZRG[m.Region][m.AZ][m.RG], clusterNodeInfo{member: m, state: state})
 			}
 
-			return renderClusterInfo(cmd, r, stateCounts, byAZRG)
+			return renderClusterInfo(cmd, r, stateCounts, byRegionAZRG)
 		},
 	}
 }
 
-func renderClusterInfo(cmd *cobra.Command, r *resolved, states map[string]int, byAZRG map[string]map[string][]clusterNodeInfo) error {
+func renderClusterInfo(cmd *cobra.Command, r *resolved, states map[string]int, byRegionAZRG map[string]map[string]map[string][]clusterNodeInfo) error {
 	w := cmd.OutOrStdout()
 
 	// Build overview block.
@@ -94,30 +97,72 @@ func renderClusterInfo(cmd *cobra.Command, r *resolved, states map[string]int, b
 		treeLabel = clusterName
 	}
 	root := &output.TreeNode{Label: treeLabel}
-	azKeys := sortedMapKeys(byAZRG)
-	for _, az := range azKeys {
-		azNode := &output.TreeNode{Label: az}
-		rgKeys := sortedMapKeys(byAZRG[az])
-		for _, rg := range rgKeys {
-			rgNode := &output.TreeNode{Label: rg}
-			for _, ni := range byAZRG[az][rg] {
-				rgNode.Children = append(rgNode.Children, &output.TreeNode{
-					Label: fmt.Sprintf("%s  %s", ni.member.ID, ni.state),
-				})
+	if hasAnyRegion(byRegionAZRG) {
+		regionKeys := sortedMapKeys(byRegionAZRG)
+		for _, region := range regionKeys {
+			regionLabel := region
+			if regionLabel == "" {
+				regionLabel = "(unknown-region)"
 			}
-			azNode.Children = append(azNode.Children, rgNode)
+			regionNode := &output.TreeNode{Label: regionLabel}
+			appendAZRGNodes(regionNode, byRegionAZRG[region])
+			root.Children = append(root.Children, regionNode)
 		}
-		root.Children = append(root.Children, azNode)
+	} else {
+		for _, az := range sortedMapKeys(byRegionAZRG[""]) {
+			azNode := &output.TreeNode{Label: az}
+			appendRGNodes(azNode, byRegionAZRG[""][az])
+			root.Children = append(root.Children, azNode)
+		}
 	}
 	return output.RenderTree(w, root)
 }
 
-// clusterNameFromMembers extracts the "cluster" tag from the first member that has it.
+func appendAZRGNodes(parent *output.TreeNode, byAZRG map[string]map[string][]clusterNodeInfo) {
+	for _, az := range sortedMapKeys(byAZRG) {
+		azNode := &output.TreeNode{Label: az}
+		appendRGNodes(azNode, byAZRG[az])
+		parent.Children = append(parent.Children, azNode)
+	}
+}
+
+func appendRGNodes(parent *output.TreeNode, byRG map[string][]clusterNodeInfo) {
+	for _, rg := range sortedMapKeys(byRG) {
+		rgNode := &output.TreeNode{Label: rg}
+		for _, ni := range byRG[rg] {
+			rgNode.Children = append(rgNode.Children, &output.TreeNode{
+				Label: fmt.Sprintf("%s  %s", ni.member.ID, ni.state),
+			})
+		}
+		parent.Children = append(parent.Children, rgNode)
+	}
+}
+
+func hasAnyRegion(byRegionAZRG map[string]map[string]map[string][]clusterNodeInfo) bool {
+	for region := range byRegionAZRG {
+		if region != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// clusterNameFromMembers extracts the cluster name from the first member that has it.
 func clusterNameFromMembers(members []client.Member) string {
 	for _, m := range members {
-		if v, ok := m.Tags["cluster"]; ok && v != "" {
-			return v
+		if clusterName := clusterNameFromMember(m); clusterName != "" {
+			return clusterName
 		}
+	}
+	return ""
+}
+
+func clusterNameFromMember(m client.Member) string {
+	if m.ClusterName != "" {
+		return m.ClusterName
+	}
+	if v, ok := m.Tags["cluster"]; ok && v != "" {
+		return v
 	}
 	return ""
 }

@@ -241,6 +241,48 @@ func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context) (*proto.
 	return d.requestNodesFromPool(ctx, pool, d.filters[0], int(d.wq))
 }
 
+func (d *quorumDiscovery) newQuorumInfo(nodes []string, replicas []*proto.QuorumNode) *proto.QuorumInfo {
+	return &proto.QuorumInfo{
+		Id:       1,
+		Nodes:    nodes,
+		Replicas: replicas,
+		Aq:       d.aq,
+		Wq:       d.wq,
+		Es:       d.es,
+	}
+}
+
+func quorumNodeFromMeta(node *proto.NodeMeta) *proto.QuorumNode {
+	if node == nil {
+		return nil
+	}
+	tags := make(map[string]string, len(node.Tags))
+	for k, v := range node.Tags {
+		tags[k] = v
+	}
+	return &proto.QuorumNode{
+		Endpoint:      node.Endpoint,
+		NodeId:        node.NodeId,
+		ClusterName:   node.ClusterName,
+		Region:        node.Region,
+		Az:            node.Az,
+		ResourceGroup: node.ResourceGroup,
+		Tags:          tags,
+	}
+}
+
+func replicaForEndpoint(info *proto.QuorumInfo, endpoint string) *proto.QuorumNode {
+	if info == nil {
+		return nil
+	}
+	for _, replica := range info.Replicas {
+		if replica != nil && replica.Endpoint == endpoint {
+			return replica
+		}
+	}
+	return nil
+}
+
 func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
 	requiredNodes := int(d.es)
 
@@ -249,6 +291,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 	remainingNodes := requiredNodes % len(d.cfg.BufferPools)
 
 	var allSelectedNodes []string
+	var allSelectedReplicas []*proto.QuorumNode
 	selectedSet := make(map[string]bool) // Track selected endpoints to avoid duplicates
 
 	// Use pre-built filter as template, but adjust limit per region
@@ -298,6 +341,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 				if !selectedSet[node] {
 					selectedSet[node] = true
 					allSelectedNodes = append(allSelectedNodes, node)
+					allSelectedReplicas = append(allSelectedReplicas, replicaForEndpoint(regionResult, node))
 				}
 			}
 		}
@@ -308,26 +352,20 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 			return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes across regions: got %d, required %d", len(allSelectedNodes), requiredNodes))
 		}
 		// In soft mode, try to fill remaining nodes from any available region
-		return d.fillRemainingNodes(ctx, allSelectedNodes, selectedSet)
+		return d.fillRemainingNodesWithReplicas(ctx, allSelectedNodes, allSelectedReplicas, selectedSet)
 	}
 
 	// Trim to exact required number if we got more (random to avoid bias toward first pools)
 	if len(allSelectedNodes) > requiredNodes {
 		rand.Shuffle(len(allSelectedNodes), func(i, j int) {
 			allSelectedNodes[i], allSelectedNodes[j] = allSelectedNodes[j], allSelectedNodes[i]
+			allSelectedReplicas[i], allSelectedReplicas[j] = allSelectedReplicas[j], allSelectedReplicas[i]
 		})
 		allSelectedNodes = allSelectedNodes[:requiredNodes]
+		allSelectedReplicas = allSelectedReplicas[:requiredNodes]
 	}
 
-	result := &proto.QuorumInfo{
-		Id:    1,
-		Nodes: allSelectedNodes,
-		Aq:    d.aq,
-		Wq:    d.wq,
-		Es:    d.es,
-	}
-
-	return result, nil
+	return d.newQuorumInfo(allSelectedNodes, allSelectedReplicas), nil
 }
 
 func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
@@ -345,6 +383,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 	}
 
 	var allSelectedNodes []string
+	var allSelectedReplicas []*proto.QuorumNode
 	selectedSet := make(map[string]bool) // Track selected endpoints to avoid duplicates
 
 	for i, placement := range d.cfg.SelectStrategy.CustomPlacement {
@@ -406,6 +445,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 
 		selectedSet[selectedNode] = true
 		allSelectedNodes = append(allSelectedNodes, selectedNode)
+		allSelectedReplicas = append(allSelectedReplicas, replicaForEndpoint(regionResult, selectedNode))
 
 		logger.Ctx(ctx).Debug("Successfully selected node for active custom placement rule",
 			zap.Int("ruleIndex", i),
@@ -424,29 +464,18 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 		zap.Int("selectedNodesCount", len(allSelectedNodes)),
 		zap.Strings("selectedNodes", allSelectedNodes))
 
-	result := &proto.QuorumInfo{
-		Id:    1,
-		Nodes: allSelectedNodes,
-		Aq:    d.aq,
-		Wq:    d.wq,
-		Es:    d.es,
-	}
-
-	return result, nil
+	return d.newQuorumInfo(allSelectedNodes, allSelectedReplicas), nil
 }
 
 func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes []string, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
+	return d.fillRemainingNodesWithReplicas(ctx, currentNodes, nil, selectedSet)
+}
+
+func (d *quorumDiscovery) fillRemainingNodesWithReplicas(ctx context.Context, currentNodes []string, currentReplicas []*proto.QuorumNode, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
 	requiredNodes := int(d.es)
 	remainingNeeded := requiredNodes - len(currentNodes)
 	if remainingNeeded <= 0 {
-		result := &proto.QuorumInfo{
-			Id:    1,
-			Nodes: currentNodes,
-			Aq:    d.aq,
-			Wq:    d.wq,
-			Es:    d.es,
-		}
-		return result, nil
+		return d.newQuorumInfo(currentNodes, currentReplicas), nil
 	}
 
 	// Initialize selectedSet if nil (defensive)
@@ -481,6 +510,7 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 				if !selectedSet[node] {
 					selectedSet[node] = true
 					currentNodes = append(currentNodes, node)
+					currentReplicas = append(currentReplicas, replicaForEndpoint(fillResult, node))
 				}
 			}
 			if len(currentNodes) >= requiredNodes {
@@ -494,15 +524,7 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 		return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient quorum: expected %d nodes, got %d nodes", requiredNodes, len(currentNodes)))
 	}
 
-	result := &proto.QuorumInfo{
-		Id:    1,
-		Nodes: currentNodes,
-		Aq:    d.aq,
-		Wq:    d.wq,
-		Es:    d.es,
-	}
-
-	return result, nil
+	return d.newQuorumInfo(currentNodes, currentReplicas), nil
 }
 
 // requestNodesFromPool tries all seeds in a pool in shuffled order, returning on the first success.
@@ -553,19 +575,15 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 		return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes (%d/%d) satisfy the current selection strategy, returned by seed: %s", len(selectedNodes), expectedAtLeast, seed))
 	}
 
-	// Convert to endpoint addresses
+	// Convert to endpoint addresses and keep topology metadata for read locality.
 	nodeEndpoints := make([]string, len(selectedNodes))
+	replicas := make([]*proto.QuorumNode, len(selectedNodes))
 	for i, node := range selectedNodes {
 		nodeEndpoints[i] = node.Endpoint
+		replicas[i] = quorumNodeFromMeta(node)
 	}
 
-	result := &proto.QuorumInfo{ // Intermediate result
-		Id:    1,
-		Nodes: nodeEndpoints,
-		Aq:    d.aq,
-		Wq:    d.wq,
-		Es:    d.es,
-	}
+	result := d.newQuorumInfo(nodeEndpoints, replicas)
 
 	logger.Ctx(ctx).Debug("Active discovery: Successfully selected nodes from seed via gRPC",
 		zap.String("seed", seed),
