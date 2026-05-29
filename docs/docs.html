@@ -983,8 +983,8 @@ fmt.<span class="hl-fn">Println</span>(<span class="hl-kw">string</span>(msg.Pay
             <h2>Fence Policy</h2>
             <table class="doc-table">
                 <tr><th>Value</th><th>Behavior</th></tr>
-                <tr><td>auto</td><td>Auto-detect condition write support; fallback to distributed locks (default)</td></tr>
-                <tr><td>enable</td><td>Require condition write; panic if unavailable</td></tr>
+                <tr><td>auto</td><td>Follow existing cluster metadata; otherwise verify condition write and fail startup if unavailable (default)</td></tr>
+                <tr><td>enable</td><td>Require condition write; ignore stored false metadata and fail startup if unavailable</td></tr>
                 <tr><td>disable</td><td>Force distributed locks; skip detection</td></tr>
             </table>
 
@@ -1605,21 +1605,21 @@ fmt.<span class="hl-fn">Println</span>(<span class="hl-kw">string</span>(msg.Pay
 
             <h2>Detection Modes</h2>
             <h3>Auto Mode (Default)</h3>
-            <p>Attempts to detect condition write support up to 30 times with exponential backoff. If any detection succeeds, it's enabled cluster-wide. If all fail, falls back to distributed locks.</p>
+            <p>Follows existing true/false cluster metadata when present. If no metadata exists, verifies condition write support with strict enable semantics, stores true on success, and fails startup on failure.</p>
 
             <div class="callout info">
                 <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
-                <span>Cluster consensus is achieved via CAS (Compare-And-Swap) in etcd. The first successful detection determines the cluster-wide setting.</span>
+                <span>Verification failure is surfaced immediately and is never persisted as an unsupported capability.</span>
             </div>
 
             <h3>Enable Mode</h3>
-            <p>Strict requirement: detection must succeed within 10 retries or the system panics. Use when you're certain your backend supports condition write.</p>
+            <p>Strict requirement: stored true is trusted, stored false is ignored, verification must succeed within 10 retries, and successful verification overwrites metadata to true.</p>
 
             <h3>Disable Mode</h3>
             <p>Skips detection entirely and uses distributed locks. Use when you know your backend doesn't support condition write.</p>
 
             <h2>Distributed Lock Fallback</h2>
-            <p>When condition write is unavailable, Woodpecker uses etcd-based distributed locks:</p>
+            <p>When condition write is explicitly disabled, or when legacy auto metadata stores false, Woodpecker uses etcd-based distributed locks:</p>
             <table class="doc-table">
                 <tr><th>Property</th><th>Detail</th></tr>
                 <tr><td>Lock Type</td><td>etcd <code>concurrency.Mutex</code> with <code>concurrency.Session</code></td></tr>

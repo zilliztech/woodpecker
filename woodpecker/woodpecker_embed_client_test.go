@@ -121,7 +121,7 @@ func TestDetectAndStoreConditionWriteCapability_AutoModeSuccess(t *testing.T) {
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(true, nil).Once()
+	mockMetadata.EXPECT().StoreConditionWriteEnabled(mock.Anything).Return(nil).Once()
 
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
 
@@ -129,8 +129,8 @@ func TestDetectAndStoreConditionWriteCapability_AutoModeSuccess(t *testing.T) {
 	assert.True(t, result)
 }
 
-// TestDetectAndStoreConditionWriteCapability_AutoModeFailureWithFallback tests auto mode falling back to disable
-func TestDetectAndStoreConditionWriteCapability_AutoModeFailureWithFallback(t *testing.T) {
+// TestDetectAndStoreConditionWriteCapability_AutoModeFailureNoFallback tests auto mode failing startup without persisting false
+func TestDetectAndStoreConditionWriteCapability_AutoModeFailureNoFallback(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -157,17 +157,17 @@ func TestDetectAndStoreConditionWriteCapability_AutoModeFailureWithFallback(t *t
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Maybe()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// Mock: store false result after fallback
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, false).Return(false, nil).Once()
-
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
 
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "condition write verification failed")
 	assert.False(t, result)
+	mockMetadata.AssertNotCalled(t, "StoreOrGetConditionWriteResult", mock.Anything, false)
+	mockMetadata.AssertNotCalled(t, "StoreConditionWriteEnabled", mock.Anything)
 }
 
-// TestDetectAndStoreConditionWriteCapability_EnableModePanicOnFailure tests enable mode panics on failure
-func TestDetectAndStoreConditionWriteCapability_EnableModePanicOnFailure(t *testing.T) {
+// TestDetectAndStoreConditionWriteCapability_EnableModeErrorOnFailure tests enable mode errors on failure
+func TestDetectAndStoreConditionWriteCapability_EnableModeErrorOnFailure(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -194,10 +194,13 @@ func TestDetectAndStoreConditionWriteCapability_EnableModePanicOnFailure(t *test
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Maybe()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// Should panic after 10 retries
-	assert.Panics(t, func() {
-		_, _ = detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
-	})
+	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "condition write verification failed")
+	assert.False(t, result)
+	mockMetadata.AssertNotCalled(t, "StoreOrGetConditionWriteResult", mock.Anything, false)
+	mockMetadata.AssertNotCalled(t, "StoreConditionWriteEnabled", mock.Anything)
 }
 
 // TestDetectAndStoreConditionWriteCapability_AnotherNodeSetsResult tests that detection stops when another node sets result
@@ -269,12 +272,12 @@ func TestDetectAndStoreConditionWriteCapability_StoreFailureThenRetrySuccess(t *
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
-	// Storing to etcd fails on first attempt
+	// Storing enabled result to etcd fails on first attempt
 	etcdErr := fmt.Errorf("etcd connection failed")
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(false, etcdErr).Once()
+	mockMetadata.EXPECT().StoreConditionWriteEnabled(mock.Anything).Return(etcdErr).Once()
 
 	// Second store attempt succeeds (etcd retry, not detection retry)
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(true, nil).Once()
+	mockMetadata.EXPECT().StoreConditionWriteEnabled(mock.Anything).Return(nil).Once()
 
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
 
@@ -282,8 +285,8 @@ func TestDetectAndStoreConditionWriteCapability_StoreFailureThenRetrySuccess(t *
 	assert.True(t, result)
 }
 
-// TestDetectAndStoreConditionWriteCapability_DetectionFalseStored tests storing false detection result
-func TestDetectAndStoreConditionWriteCapability_DetectionFalseStored(t *testing.T) {
+// TestDetectAndStoreConditionWriteCapability_DetectionFailureDoesNotStoreFalse tests detection failure is not persisted as false
+func TestDetectAndStoreConditionWriteCapability_DetectionFailureDoesNotStoreFalse(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -309,23 +312,23 @@ func TestDetectAndStoreConditionWriteCapability_DetectionFalseStored(t *testing.
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("not supported")).Maybe()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// After all retries fail, store false
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, false).Return(false, nil).Once()
-
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
 
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "condition write verification failed")
 	assert.False(t, result)
+	mockMetadata.AssertNotCalled(t, "StoreOrGetConditionWriteResult", mock.Anything, false)
+	mockMetadata.AssertNotCalled(t, "StoreConditionWriteEnabled", mock.Anything)
 }
 
-// TestDetectAndStoreConditionWriteCapability_AgreedResultDifferent tests using cluster agreed result when different
-func TestDetectAndStoreConditionWriteCapability_AgreedResultDifferent(t *testing.T) {
+// TestDetectAndStoreConditionWriteCapability_EnableModeOverridesPersistedFalse tests enable mode ignores and overwrites historical false
+func TestDetectAndStoreConditionWriteCapability_EnableModeOverridesPersistedFalse(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
 				FencePolicy: config.FencePolicyConfig{
-					ConditionWrite: "auto",
+					ConditionWrite: "enable",
 				},
 			},
 		},
@@ -338,8 +341,8 @@ func TestDetectAndStoreConditionWriteCapability_AgreedResultDifferent(t *testing
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 
-	// Mock: no existing result in etcd
-	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, werr.ErrMetadataKeyNotExists).Once()
+	// Mock: existing false result in etcd is ignored in explicit enable mode
+	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, nil).Once()
 
 	// Mock: detection succeeds with true
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
@@ -349,14 +352,12 @@ func TestDetectAndStoreConditionWriteCapability_AgreedResultDifferent(t *testing
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
-	// But another node stored false first (CAS returns different value)
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(false, nil).Once()
+	mockMetadata.EXPECT().StoreConditionWriteEnabled(mock.Anything).Return(nil).Once()
 
-	// We directly return the agreed result, no need to store false again
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
 
 	assert.NoError(t, err)
-	assert.False(t, result, "Should use the agreed cluster result (false) instead of own detection (true)")
+	assert.True(t, result, "Enable mode should overwrite historical false after successful verification")
 }
 
 // TestDetectAndStoreConditionWriteCapability_DetectionTrueButEtcdAlwaysFails tests detection succeeds but etcd always fails
@@ -390,19 +391,19 @@ func TestDetectAndStoreConditionWriteCapability_DetectionTrueButEtcdAlwaysFails(
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
-	// But etcd operations always fail (all 10 retry attempts)
+	// But enabled-result writes always fail (all 10 retry attempts)
 	etcdErr := fmt.Errorf("etcd connection timeout")
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(false, etcdErr).Maybe()
+	mockMetadata.EXPECT().StoreConditionWriteEnabled(mock.Anything).Return(etcdErr).Maybe()
 
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
 
 	assert.Error(t, err, "Should return error when etcd operations always fail")
-	assert.Contains(t, err.Error(), "failed to store condition write result to etcd")
+	assert.Contains(t, err.Error(), "failed to store condition write enabled result to etcd")
 	assert.False(t, result)
 }
 
-// TestDetectAndStoreConditionWriteCapability_DetectionFalseButEtcdAlwaysFails tests detection fails and etcd always fails
-func TestDetectAndStoreConditionWriteCapability_DetectionFalseButEtcdAlwaysFails(t *testing.T) {
+// TestDetectAndStoreConditionWriteCapability_DetectionFailureDoesNotWriteFalseOnEtcd tests detection failure returns before any false write
+func TestDetectAndStoreConditionWriteCapability_DetectionFailureDoesNotWriteFalseOnEtcd(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -429,106 +430,17 @@ func TestDetectAndStoreConditionWriteCapability_DetectionFalseButEtcdAlwaysFails
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Maybe()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// After all detection retries fail, try to store false but etcd operations always fail
-	etcdErr := fmt.Errorf("etcd connection timeout")
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, false).Return(false, etcdErr).Maybe()
-
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
 
-	assert.Error(t, err, "Should return error when etcd operations always fail")
-	assert.Contains(t, err.Error(), "failed to store false result to etcd")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "condition write verification failed")
 	assert.False(t, result)
+	mockMetadata.AssertNotCalled(t, "StoreOrGetConditionWriteResult", mock.Anything, false)
+	mockMetadata.AssertNotCalled(t, "StoreConditionWriteEnabled", mock.Anything)
 }
 
-// TestDetectAndStoreConditionWriteCapability_EtcdReturnsAgreedResult tests etcd returns agreed result successfully
-func TestDetectAndStoreConditionWriteCapability_EtcdReturnsAgreedResult(t *testing.T) {
-	testCases := []struct {
-		name                string
-		localDetection      bool
-		agreedResult        bool
-		detectionShouldFail bool
-	}{
-		{
-			name:                "Detection succeeds with true, agreed result is true",
-			localDetection:      true,
-			agreedResult:        true,
-			detectionShouldFail: false,
-		},
-		{
-			name:                "Detection succeeds with true, agreed result is false",
-			localDetection:      true,
-			agreedResult:        false,
-			detectionShouldFail: false,
-		},
-		{
-			name:                "Detection fails (false), agreed result is false",
-			localDetection:      false,
-			agreedResult:        false,
-			detectionShouldFail: true,
-		},
-		{
-			name:                "Detection fails (false), agreed result is true",
-			localDetection:      false,
-			agreedResult:        true,
-			detectionShouldFail: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			cfg := &config.Configuration{
-				Woodpecker: config.WoodpeckerConfig{
-					Logstore: config.LogstoreConfig{
-						FencePolicy: config.FencePolicyConfig{
-							ConditionWrite: "auto",
-						},
-					},
-				},
-				Minio: config.MinioConfig{
-					BucketName: "test-bucket",
-					RootPath:   "test-path",
-				},
-			}
-
-			mockMetadata := mocks_meta.NewMetadataProvider(t)
-			mockStorage := mocks_objectstorage.NewObjectStorage(t)
-
-			// Mock: no existing result in etcd
-			mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, werr.ErrMetadataKeyNotExists).Maybe()
-
-			if tc.detectionShouldFail {
-				// Detection always fails
-				detectErr := fmt.Errorf("storage not supported")
-				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Maybe()
-				mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
-
-				// Store false result and get agreed result
-				mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, false).Return(tc.agreedResult, nil).Once()
-			} else {
-				// Detection succeeds
-				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-				mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-				mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
-				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
-				mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
-
-				// Store detection result and get agreed result
-				mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, tc.localDetection).Return(tc.agreedResult, nil).Once()
-			}
-
-			result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
-
-			assert.NoError(t, err, "Should not return error when etcd operations succeed")
-			assert.Equal(t, tc.agreedResult, result, "Should return the agreed result from etcd")
-		})
-	}
-}
-
-// TestDetectAndStoreConditionWriteCapability_UnexpectedEtcdError tests when GetConditionWriteResult
-// returns an unexpected error (not key-not-exists) - the function should continue with detection
-func TestDetectAndStoreConditionWriteCapability_UnexpectedEtcdError(t *testing.T) {
+// TestDetectAndStoreConditionWriteCapability_AutoModeExistingFalseUsesLegacyDecision tests auto mode honors stored false
+func TestDetectAndStoreConditionWriteCapability_AutoModeExistingFalseUsesLegacyDecision(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -547,34 +459,115 @@ func TestDetectAndStoreConditionWriteCapability_UnexpectedEtcdError(t *testing.T
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 
-	// First call returns an unexpected error (not key-not-exists) - covers line 137-140
+	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, nil).Once()
+
+	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
+
+	assert.NoError(t, err)
+	assert.False(t, result)
+	mockMetadata.AssertNotCalled(t, "StoreConditionWriteEnabled", mock.Anything)
+}
+
+// TestDetectAndStoreConditionWriteCapability_EnableModeExistingTrueFastPath tests enable mode trusts stored true
+func TestDetectAndStoreConditionWriteCapability_EnableModeExistingTrueFastPath(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Logstore: config.LogstoreConfig{
+				FencePolicy: config.FencePolicyConfig{
+					ConditionWrite: "enable",
+				},
+			},
+		},
+		Minio: config.MinioConfig{
+			BucketName: "test-bucket",
+			RootPath:   "test-path",
+		},
+	}
+
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(true, nil).Once()
+
+	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
+
+	assert.NoError(t, err)
+	assert.True(t, result)
+	mockMetadata.AssertNotCalled(t, "StoreConditionWriteEnabled", mock.Anything)
+}
+
+// TestDetectAndStoreConditionWriteCapability_EnableModeUnexpectedEtcdError tests enable mode fails
+// when GetConditionWriteResult returns an unexpected error.
+func TestDetectAndStoreConditionWriteCapability_EnableModeUnexpectedEtcdError(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Logstore: config.LogstoreConfig{
+				FencePolicy: config.FencePolicyConfig{
+					ConditionWrite: "enable",
+				},
+			},
+		},
+		Minio: config.MinioConfig{
+			BucketName: "test-bucket",
+			RootPath:   "test-path",
+		},
+	}
+
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	// First call returns an unexpected error (not key-not-exists).
 	unexpectedErr := fmt.Errorf("etcd connection refused")
 	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, unexpectedErr).Once()
 
-	// Detection succeeds
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
-
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(true, nil).Once()
-
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
-	assert.NoError(t, err)
-	assert.True(t, result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read condition write result")
+	assert.False(t, result)
+	mockMetadata.AssertNotCalled(t, "StoreConditionWriteEnabled", mock.Anything)
 }
 
-// TestDetectAndStoreConditionWriteCapability_UnexpectedEtcdErrorInRetry tests when GetConditionWriteResult
-// returns an unexpected error during retry loop (attempt > 1) - covers lines 175-179
-func TestDetectAndStoreConditionWriteCapability_UnexpectedEtcdErrorInRetry(t *testing.T) {
+// TestDetectAndStoreConditionWriteCapability_AutoModeUnexpectedEtcdError tests auto mode fails if legacy metadata cannot be read.
+func TestDetectAndStoreConditionWriteCapability_AutoModeUnexpectedEtcdError(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
 				FencePolicy: config.FencePolicyConfig{
 					ConditionWrite: "auto",
+				},
+			},
+		},
+		Minio: config.MinioConfig{
+			BucketName: "test-bucket",
+			RootPath:   "test-path",
+		},
+	}
+
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	unexpectedErr := fmt.Errorf("etcd connection refused")
+	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, unexpectedErr).Once()
+
+	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read condition write result")
+	assert.False(t, result)
+}
+
+// TestDetectAndStoreConditionWriteCapability_EnableModeUnexpectedEtcdErrorInRetry tests enable mode fails
+// when GetConditionWriteResult returns an unexpected error during the retry loop.
+func TestDetectAndStoreConditionWriteCapability_EnableModeUnexpectedEtcdErrorInRetry(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Logstore: config.LogstoreConfig{
+				FencePolicy: config.FencePolicyConfig{
+					ConditionWrite: "enable",
 				},
 			},
 		},
@@ -594,23 +587,16 @@ func TestDetectAndStoreConditionWriteCapability_UnexpectedEtcdErrorInRetry(t *te
 	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Once()
 	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// Second retry: GetConditionWriteResult returns unexpected error (not key-not-exists) - covers line 175-179
+	// Second retry: GetConditionWriteResult returns unexpected error (not key-not-exists)
 	unexpectedErr := fmt.Errorf("etcd timeout")
 	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, unexpectedErr).Once()
 
-	// Detection succeeds on second attempt
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
-
-	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(true, nil).Once()
-
 	result, err := detectAndStoreConditionWriteCapability(ctx, cfg, mockMetadata, mockStorage)
-	assert.NoError(t, err)
-	assert.True(t, result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "condition write verification failed")
+	assert.Contains(t, err.Error(), "etcd timeout")
+	assert.False(t, result)
+	mockMetadata.AssertNotCalled(t, "StoreConditionWriteEnabled", mock.Anything)
 }
 
 // ============================================================

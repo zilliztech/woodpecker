@@ -1653,6 +1653,33 @@ func (e *metadataProviderEtcd) StoreOrGetConditionWriteResult(ctx context.Contex
 	return result, nil
 }
 
+// StoreConditionWriteEnabled overwrites the condition write cluster decision to enabled.
+// Callers must only invoke this after capability verification succeeds under strict enable-style
+// semantics: explicit enable mode, or legacy auto mode with no persisted cluster decision.
+// Overwriting false is safe there because callers verify support before writing true, and the
+// operation is idempotent.
+func (e *metadataProviderEtcd) StoreConditionWriteEnabled(ctx context.Context) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "StoreConditionWriteEnabled")
+	defer sp.End()
+	startTime := time.Now()
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+
+	_, err := e.client.Put(ctx1, e.keyBuilder.ConditionWriteKey(), "true")
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "store_condition_write_enabled", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "store_condition_write_enabled", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("store condition write enabled result failed", zap.Error(err))
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "store_condition_write_enabled", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "store_condition_write_enabled", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	logger.Ctx(ctx).Info("stored condition write result as enabled")
+	return nil
+}
+
 // GetConditionWriteResult retrieves the condition write detection result.
 // Returns the stored value if the key exists.
 // Returns an error if the key doesn't exist or if there's an etcd operation error.

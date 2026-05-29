@@ -112,6 +112,7 @@ func TestAll(t *testing.T) {
 	t.Run("test update log meta with wrong revision", testUpdateLogMetaWithWrongRevision)
 	t.Run("test update segment meta with wrong revision", testUpdateSegmentMetaWithWrongRevision)
 	t.Run("test store or get condition write result", testStoreOrGetConditionWriteResult)
+	t.Run("test store condition write enabled", testStoreConditionWriteEnabled)
 	t.Run("test get condition write result", testGetConditionWriteResult)
 	t.Run("test session lock with etcd", testSessionLockWithEtcd)
 	t.Run("test check session lock alive nil", testCheckSessionLockAliveNil)
@@ -1622,6 +1623,35 @@ func testStoreOrGetConditionWriteResult(t *testing.T) {
 	assert.Equal(t, "false", string(resp.Kvs[0].Value))
 }
 
+func testStoreConditionWriteEnabled(t *testing.T) {
+	// get etcd client
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Start from a historical disabled result.
+	_, err = etcdCli.Put(context.Background(), legacyKeyBuilder().ConditionWriteKey(), "false")
+	require.NoError(t, err)
+
+	err = provider.StoreConditionWriteEnabled(context.Background())
+	assert.NoError(t, err)
+
+	result, err := provider.GetConditionWriteResult(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, result, "StoreConditionWriteEnabled should overwrite false with true")
+
+	// Repeating the write should stay true.
+	err = provider.StoreConditionWriteEnabled(context.Background())
+	assert.NoError(t, err)
+
+	result, err = provider.GetConditionWriteResult(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, result, "StoreConditionWriteEnabled should be idempotent")
+}
+
 func testGetConditionWriteResult(t *testing.T) {
 	// get etcd client
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
@@ -2158,6 +2188,10 @@ func testCancelledContextEtcdErrors(t *testing.T) {
 
 	// StoreOrGetConditionWriteResult
 	_, err = provider.StoreOrGetConditionWriteResult(cancelledCtx, true)
+	assert.Error(t, err)
+
+	// StoreConditionWriteEnabled
+	err = provider.StoreConditionWriteEnabled(cancelledCtx)
 	assert.Error(t, err)
 
 	// GetConditionWriteResult

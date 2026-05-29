@@ -1457,6 +1457,52 @@ func (_c *MetadataProvider_ReleaseLogWriterLock_Call) RunAndReturn(run func(cont
 	return _c
 }
 
+// StoreConditionWriteEnabled provides a mock function with given fields: ctx
+func (_m *MetadataProvider) StoreConditionWriteEnabled(ctx context.Context) error {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for StoreConditionWriteEnabled")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_StoreConditionWriteEnabled_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StoreConditionWriteEnabled'
+type MetadataProvider_StoreConditionWriteEnabled_Call struct {
+	*mock.Call
+}
+
+// StoreConditionWriteEnabled is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MetadataProvider_Expecter) StoreConditionWriteEnabled(ctx interface{}) *MetadataProvider_StoreConditionWriteEnabled_Call {
+	return &MetadataProvider_StoreConditionWriteEnabled_Call{Call: _e.mock.On("StoreConditionWriteEnabled", ctx)}
+}
+
+func (_c *MetadataProvider_StoreConditionWriteEnabled_Call) Run(run func(ctx context.Context)) *MetadataProvider_StoreConditionWriteEnabled_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_StoreConditionWriteEnabled_Call) Return(_a0 error) *MetadataProvider_StoreConditionWriteEnabled_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_StoreConditionWriteEnabled_Call) RunAndReturn(run func(context.Context) error) *MetadataProvider_StoreConditionWriteEnabled_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // StoreOrGetConditionWriteResult provides a mock function with given fields: ctx, detected
 func (_m *MetadataProvider) StoreOrGetConditionWriteResult(ctx context.Context, detected bool) (bool, error) {
 	ret := _m.Called(ctx, detected)
