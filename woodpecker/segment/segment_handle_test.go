@@ -4555,6 +4555,131 @@ func TestReadBatchAdv_FailoverToSecondNode(t *testing.T) {
 	assert.Equal(t, "node2", result.LastReadState.Node)
 }
 
+func TestReadBatchAdv_PrefersLocalRegionAZReplica(t *testing.T) {
+	t.Setenv("REGION", "region-local")
+	t.Setenv("AVAILABILITY_ZONE", "az-local")
+
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node-local").Return(mockClient, nil).Once()
+
+	expectedResult := &proto.BatchReadResult{
+		Entries: []*proto.LogEntry{
+			{SegId: 1, EntryId: 0, Values: []byte("entry_0")},
+		},
+		LastReadState: &proto.LastReadState{},
+	}
+	mockClient.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).Return(expectedResult, nil).Once()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    2,
+				Es:    3,
+				Wq:    3,
+				Nodes: []string{"node-remote-a", "node-local", "node-remote-b"},
+				Replicas: []*proto.QuorumNode{
+					{Endpoint: "node-remote-a", Region: "region-remote", Az: "az-remote-a"},
+					{Endpoint: "node-local", Region: "region-local", Az: "az-local"},
+					{Endpoint: "node-remote-b", Region: "region-local", Az: "az-other"},
+				},
+			},
+		},
+		Revision: 1,
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	result, err := segmentHandle.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "node-local", result.LastReadState.Node)
+}
+
+func TestReadBatchAdv_NoLocalReplicaFallsBackToOriginalOrder(t *testing.T) {
+	t.Setenv("REGION", "region-local")
+	t.Setenv("AVAILABILITY_ZONE", "az-local")
+
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node-first").Return(mockClient, nil).Once()
+
+	expectedResult := &proto.BatchReadResult{
+		Entries:       []*proto.LogEntry{{SegId: 1, EntryId: 0, Values: []byte("entry_0")}},
+		LastReadState: &proto.LastReadState{},
+	}
+	mockClient.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).Return(expectedResult, nil).Once()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    2,
+				Es:    2,
+				Wq:    2,
+				Nodes: []string{"node-first", "node-second"},
+				Replicas: []*proto.QuorumNode{
+					{Endpoint: "node-first", Region: "region-remote", Az: "az-remote-a"},
+					{Endpoint: "node-second", Region: "region-remote", Az: "az-remote-b"},
+				},
+			},
+		},
+		Revision: 1,
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	result, err := segmentHandle.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "node-first", result.LastReadState.Node)
+}
+
+func TestOrderedQuorumReadCandidates_MissingLocalTopologyKeepsOriginalOrder(t *testing.T) {
+	t.Setenv("REGION", "region-local")
+	t.Setenv("AVAILABILITY_ZONE", "")
+
+	candidates := orderedQuorumReadCandidates(&proto.QuorumInfo{
+		Nodes: []string{"node-first", "node-local"},
+		Replicas: []*proto.QuorumNode{
+			{Endpoint: "node-first", Region: "region-remote", Az: "az-remote"},
+			{Endpoint: "node-local", Region: "region-local", Az: "az-local"},
+		},
+	}, nil)
+
+	assert.Equal(t, []quorumReadCandidate{
+		{node: "node-first", originalIndex: 0},
+		{node: "node-local", originalIndex: 1},
+	}, candidates)
+}
+
 // TestGetLastAddConfirmed_ActiveSegment_FailoverToSecondNode tests LAC failover
 func TestGetLastAddConfirmed_ActiveSegment_FailoverToSecondNode(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)

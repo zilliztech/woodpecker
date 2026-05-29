@@ -33,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
@@ -553,6 +554,65 @@ func (s *segmentHandleImpl) directReadBatch(ctx context.Context, from int64, max
 	return result, err
 }
 
+type quorumReadCandidate struct {
+	node          string
+	originalIndex int
+}
+
+func orderedQuorumReadCandidates(quorumInfo *proto.QuorumInfo, lastReadState *proto.LastReadState) []quorumReadCandidate {
+	nodes := quorumInfo.GetNodes()
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	startNodeIndex := 0
+	if lastReadState != nil && lastReadState.Node != "" {
+		for i, node := range nodes {
+			if node == lastReadState.Node {
+				startNodeIndex = i
+				break
+			}
+		}
+	}
+
+	ordered := make([]quorumReadCandidate, 0, len(nodes))
+	for i := 0; i < len(nodes); i++ {
+		nodeIndex := (startNodeIndex + i) % len(nodes)
+		ordered = append(ordered, quorumReadCandidate{
+			node:          nodes[nodeIndex],
+			originalIndex: nodeIndex,
+		})
+	}
+
+	localRegion := topology.GetCurrentRegion()
+	localAZ := topology.GetCurrentAvailabilityZone()
+	if localRegion == "" || localAZ == "" || len(quorumInfo.GetReplicas()) == 0 {
+		return ordered
+	}
+
+	replicasByEndpoint := make(map[string]*proto.QuorumNode, len(quorumInfo.GetReplicas()))
+	for _, replica := range quorumInfo.GetReplicas() {
+		if replica != nil && replica.Endpoint != "" {
+			replicasByEndpoint[replica.Endpoint] = replica
+		}
+	}
+
+	localCandidates := make([]quorumReadCandidate, 0, len(ordered))
+	remainingCandidates := make([]quorumReadCandidate, 0, len(ordered))
+	for _, candidate := range ordered {
+		replica := replicasByEndpoint[candidate.node]
+		if replica != nil && replica.Region == localRegion && replica.Az == localAZ {
+			localCandidates = append(localCandidates, candidate)
+			continue
+		}
+		remainingCandidates = append(remainingCandidates, candidate)
+	}
+	if len(localCandidates) == 0 {
+		return ordered
+	}
+	return append(localCandidates, remainingCandidates...)
+}
+
 // quorumReadBatch reads a batch of entries from quorum nodes with intelligent node selection.
 func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	quorumInfo, err := s.GetQuorumInfo(ctx)
@@ -562,38 +622,21 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 
 	// quorum read with intelligent node selection
 	// Try to continue from the last successful node first, then try others
-	nodeCount := len(quorumInfo.Nodes)
+	candidates := orderedQuorumReadCandidates(quorumInfo, lastReadState)
+	nodeCount := len(candidates)
 	var lastError error
 
-	// Find the starting node index from lastReadState
-	var startNodeIndex int = 0
-	if lastReadState != nil && lastReadState.Node != "" {
-		for i, node := range quorumInfo.Nodes {
-			if node == lastReadState.Node {
-				startNodeIndex = i
-				break
-			}
-		}
-		logger.Ctx(ctx).Debug("prioritizing last read node",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.String("lastReadNode", lastReadState.Node),
-			zap.Int("startNodeIndex", startNodeIndex))
-	}
-
 	// Cycle through nodes starting from the preferred index
-	for i := 0; i < nodeCount; i++ {
-		nodeIndex := (startNodeIndex + i) % nodeCount
-		node := quorumInfo.Nodes[nodeIndex]
+	for i, candidate := range candidates {
+		node := candidate.node
 		logger.Ctx(ctx).Debug("attempting to read from node",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId),
 			zap.String("node", node),
-			zap.Int("nodeIndex", nodeIndex),
+			zap.Int("nodeIndex", candidate.originalIndex),
 			zap.Int("attempt", i+1),
-			zap.Bool("isLastReadNode", i == 0 && lastReadState != nil && lastReadState.Node == node))
+			zap.Bool("isLastReadNode", lastReadState != nil && lastReadState.Node == node))
 
 		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
 		if err != nil {
