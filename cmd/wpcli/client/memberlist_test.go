@@ -14,6 +14,8 @@ const memberlistJSONBody = `{
       "id": "node-1",
       "gossip_addr": "10.0.1.1:17946",
       "service_addr": "10.0.1.1:18080",
+      "cluster_name": "cluster-a",
+      "region": "us-east-1",
       "az": "us-east-1a",
       "rg": "default",
       "state": 0,
@@ -49,6 +51,8 @@ func TestMemberlistJSON_Parse(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ml.Members, 2)
 	require.Equal(t, "node-1", ml.Members[0].ID)
+	require.Equal(t, "cluster-a", ml.Members[0].ClusterName)
+	require.Equal(t, "us-east-1", ml.Members[0].Region)
 	require.Equal(t, "us-east-1a", ml.Members[0].AZ)
 }
 

@@ -38,6 +38,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/runtime/opregistry"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/server"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -73,7 +74,9 @@ func main() {
 		advertiseGossipAddr       = flag.String("advertise-gossip-addr", "", "Advertise address:port for gossip (for Docker bridge networking)")
 		advertiseServiceAddr      = flag.String("advertise-service-addr", "", "Advertise address:port for service (for client connections)")
 		resourceGroup             = flag.String("resource-group", "default", "Resource group for node placement")
-		availabilityZone          = flag.String("availability-zone", "default", "Availability zone for node placement")
+		clusterName               = flag.String("cluster", topology.GetCurrentClusterName(), "Cluster name for node placement")
+		region                    = flag.String("region", topology.GetCurrentRegion(), "Region for node placement")
+		availabilityZone          = flag.String("availability-zone", topology.GetCurrentAvailabilityZone(), "Availability zone for node placement")
 		externalDefaultConfigFile = flag.String("external-default-config", "/woodpecker/configs/default.yaml", "external default Configuration file path")
 		externalUserConfigFile    = flag.String("external-user-config", "/woodpecker/configs/user.yaml", "external user Configuration file path")
 	)
@@ -174,7 +177,8 @@ func main() {
 		AdvertiseServicePort: advertiseServicePort,    // Service advertise port
 		ResourceGroup:        *resourceGroup,
 		AZ:                   *availabilityZone,
-		ClusterName:          os.Getenv("CLUSTER_NAME"),
+		ClusterName:          *clusterName,
+		Region:               *region,
 		Tags: map[string]string{
 			"role":       "logstore",
 			"admin_port": os.Getenv("METRICS_PORT"),
@@ -298,6 +302,8 @@ func main() {
 	log.Printf("  Node Name: %s", *nodeName)
 	log.Printf("  Service Port: %d", *servicePort)
 	log.Printf("  Gossip Port: %d", *gossipPort)
+	log.Printf("  Cluster Name: %s", *clusterName)
+	log.Printf("  Region: %s", *region)
 	log.Printf("  Resource Group: %s", *resourceGroup)
 	log.Printf("  Availability Zone: %s", *availabilityZone)
 

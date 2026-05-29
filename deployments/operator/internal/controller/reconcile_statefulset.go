@@ -121,7 +121,7 @@ func (r *WoodpeckerClusterReconciler) buildContainers(cluster *woodpeckerv1alpha
 			ImagePullPolicy: cluster.Spec.ImagePullPolicy,
 			// Use wrapper to source topology.env (SEEDS from init container) then exec original entrypoint via tini
 			Command: []string{"/bin/sh", "-c"},
-			Args:    []string{". /etc/woodpecker/topology.env && export SEEDS AVAILABILITY_ZONE CLUSTER_NAME RESOURCE_GROUP && exec /tini -- /woodpecker/bin/start-woodpecker.sh"},
+			Args:    []string{". /etc/woodpecker/topology.env && export SEEDS CLUSTER_NAME REGION AVAILABILITY_ZONE RESOURCE_GROUP && exec /tini -- /woodpecker/bin/start-woodpecker.sh"},
 			Ports: []corev1.ContainerPort{
 				{Name: "grpc", ContainerPort: cluster.Spec.ServicePort, Protocol: corev1.ProtocolTCP},
 				{Name: "gossip-tcp", ContainerPort: cluster.Spec.GossipPort, Protocol: corev1.ProtocolTCP},
@@ -229,18 +229,19 @@ REGION=$(printf '%%s' "$NODE_JSON" \
     | grep -o '"topology.kubernetes.io/region": *"[^"]*"' \
     | head -n1 | cut -d'"' -f4)
 
-: "${AZ:=default-az}"
-: "${REGION:=default-cluster}"
+: "${AZ:=}"
+: "${REGION:=}"
 
 cat > /etc/woodpecker/topology.env << EOF
 SEEDS=${SEEDS}
+CLUSTER_NAME=%s
+REGION=${REGION}
 AVAILABILITY_ZONE=${AZ}
-CLUSTER_NAME=${REGION}
 RESOURCE_GROUP=default
 EOF
 
-echo "Init complete: pod=$POD_NAME node=$HOST_NODE_NAME az=$AZ cluster=$REGION"
-`, seedsExpr)
+echo "Init complete: pod=$POD_NAME node=$HOST_NODE_NAME cluster=%s region=$REGION az=$AZ"
+`, seedsExpr, cluster.Name, cluster.Name)
 
 	return []corev1.Container{
 		{

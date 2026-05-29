@@ -23,6 +23,8 @@ import (
 func TestServerNode_CreateAndShutdown(t *testing.T) {
 	config := &ServerConfig{
 		NodeID:        "test-server-1",
+		ClusterName:   "cluster-1",
+		Region:        "region-1",
 		ResourceGroup: "rg-1",
 		AZ:            "az-1",
 		BindPort:      17946,
@@ -40,6 +42,8 @@ func TestServerNode_CreateAndShutdown(t *testing.T) {
 	assert.NotNil(t, node.GetServerCfg())
 	assert.NotNil(t, node.GetMeta())
 	assert.Equal(t, "test-server-1", node.GetMeta().NodeId)
+	assert.Equal(t, "cluster-1", node.GetMeta().ClusterName)
+	assert.Equal(t, "region-1", node.GetMeta().Region)
 	assert.Equal(t, "rg-1", node.GetMeta().ResourceGroup)
 	assert.Equal(t, "az-1", node.GetMeta().Az)
 

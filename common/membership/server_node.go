@@ -47,7 +47,8 @@ type ServerNode struct {
 type ServerConfig struct {
 	// node info
 	NodeID        string
-	ClusterName   string // cluster/region name; auto-injected into Tags["cluster"]
+	ClusterName   string
+	Region        string
 	ResourceGroup string
 	AZ            string
 	Tags          map[string]string
@@ -79,13 +80,9 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		endpointPort = config.AdvertiseServicePort
 	}
 
-	// Auto-inject ClusterName into tags if set.
-	tags := config.Tags
-	if tags == nil {
-		tags = make(map[string]string)
-	}
-	if config.ClusterName != "" {
-		tags["cluster"] = config.ClusterName
+	tags := make(map[string]string, len(config.Tags))
+	for k, v := range config.Tags {
+		tags[k] = v
 	}
 
 	meta := &proto.NodeMeta{
@@ -96,6 +93,8 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		Tags:          tags,
 		LastUpdate:    time.Now().UnixMilli(),
 		Version:       NodeMetaVersion,
+		ClusterName:   config.ClusterName,
+		Region:        config.Region,
 	}
 	discovery := NewServiceDiscovery()
 	delegate := NewServerDelegate(meta)
@@ -228,6 +227,8 @@ func (n *ServerNode) GetMemberlistJSON() []byte {
 		ID          string            `json:"id"`
 		GossipAddr  string            `json:"gossip_addr"`
 		ServiceAddr string            `json:"service_addr"`
+		ClusterName string            `json:"cluster_name"`
+		Region      string            `json:"region"`
 		AZ          string            `json:"az"`
 		RG          string            `json:"rg"`
 		State       int               `json:"state"`
@@ -250,6 +251,8 @@ func (n *ServerNode) GetMemberlistJSON() []byte {
 			LastSeenMS: time.Now().UnixMilli(),
 		}
 		if meta, ok := allMeta[m.Name]; ok {
+			mj.ClusterName = meta.ClusterName
+			mj.Region = meta.Region
 			mj.AZ = meta.Az
 			mj.RG = meta.ResourceGroup
 			mj.ServiceAddr = meta.Endpoint

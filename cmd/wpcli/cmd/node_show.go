@@ -19,6 +19,8 @@ type nodeStatusDTO struct {
 	IsDecommissioning bool              `json:"is_decommissioning"`
 	MemberCount       int               `json:"member_count"`
 	Address           string            `json:"address"`
+	ClusterName       string            `json:"cluster_name"`
+	Region            string            `json:"region"`
 	ResourceGroup     string            `json:"resource_group"`
 	AZ                string            `json:"az"`
 	Tags              map[string]string `json:"tags"`
@@ -57,12 +59,12 @@ func newNodeShowCommand() *cobra.Command {
 				return wperrors.NewNetworkError(fmt.Sprintf("decode node status: %v", err))
 			}
 
-			return renderNodeShow(cmd, dto, target.Tags["cluster"])
+			return renderNodeShow(cmd, dto, clusterNameFromMember(target), target.Region)
 		},
 	}
 }
 
-func renderNodeShow(cmd *cobra.Command, dto nodeStatusDTO, cluster string) error {
+func renderNodeShow(cmd *cobra.Command, dto nodeStatusDTO, fallbackClusterName string, fallbackRegion string) error {
 	w := cmd.OutOrStdout()
 	switch Globals.Output {
 	case "json":
@@ -70,6 +72,14 @@ func renderNodeShow(cmd *cobra.Command, dto nodeStatusDTO, cluster string) error
 	case "yaml":
 		return output.RenderYAML(w, dto)
 	default:
+		clusterName := dto.ClusterName
+		if clusterName == "" {
+			clusterName = fallbackClusterName
+		}
+		region := dto.Region
+		if region == "" {
+			region = fallbackRegion
+		}
 		startedAt := time.UnixMilli(dto.StartedAtMS).UTC().Format(time.RFC3339)
 		uptime := time.Since(time.UnixMilli(dto.StartedAtMS)).Round(time.Second).String()
 		sections := []output.Section{
@@ -85,8 +95,11 @@ func renderNodeShow(cmd *cobra.Command, dto nodeStatusDTO, cluster string) error
 				Title: "Placement",
 				Pairs: func() [][2]string {
 					pairs := [][2]string{}
-					if cluster != "" {
-						pairs = append(pairs, [2]string{"cluster", cluster})
+					if clusterName != "" {
+						pairs = append(pairs, [2]string{"cluster_name", clusterName})
+					}
+					if region != "" {
+						pairs = append(pairs, [2]string{"region", region})
 					}
 					pairs = append(pairs, [2]string{"az", dto.AZ})
 					pairs = append(pairs, [2]string{"rg", dto.ResourceGroup})

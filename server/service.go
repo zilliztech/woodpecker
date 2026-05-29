@@ -36,6 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/membership"
 	wpNet "github.com/zilliztech/woodpecker/common/net"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/version"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
@@ -78,6 +79,8 @@ type NodeStatus struct {
 	IsDecommissioning bool              `json:"is_decommissioning"`
 	MemberCount       int               `json:"member_count"`
 	Address           string            `json:"address"`
+	ClusterName       string            `json:"cluster_name"`
+	Region            string            `json:"region"`
 	ResourceGroup     string            `json:"resource_group"`
 	AZ                string            `json:"az"`
 	Tags              map[string]string `json:"tags"`
@@ -95,7 +98,9 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 		AdvertisePort:        bindPort,    // Use same port for gossip advertise
 		AdvertiseServicePort: servicePort, // Use same port for service advertise
 		ResourceGroup:        "default",   // Default resource group
-		AZ:                   "default",   // Default availability zone
+		ClusterName:          topology.GetCurrentClusterName(),
+		Region:               topology.GetCurrentRegion(),
+		AZ:                   topology.GetCurrentAvailabilityZone(),
 		Tags:                 map[string]string{"role": "logstore"},
 	}, gossipSeeds)
 }
@@ -595,6 +600,8 @@ func (s *Server) GetNodeStatus() NodeStatus {
 		IsDecommissioning: s.lifecycle.IsDecommissioning(),
 		MemberCount:       s.GetMemberCount(),
 		Address:           s.logStore.GetAddress(),
+		ClusterName:       s.serverConfig.ClusterName,
+		Region:            s.serverConfig.Region,
 		ResourceGroup:     s.serverConfig.ResourceGroup,
 		AZ:                s.serverConfig.AZ,
 		Tags:              s.serverConfig.Tags,
