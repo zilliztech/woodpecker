@@ -59,6 +59,7 @@ type AdminCallbacks struct {
 	GetDecommissionProgress func() any
 	CancelDecommission      func() error
 	GetConfig               func() any
+	GetLogHealth            management.LogHealthCallback
 
 	// Phase 2 callbacks
 	Logstore LogstoreCallbacks
@@ -188,6 +189,12 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		Register(&Handler{
 			Path:        AdminConfigPath,
 			HandlerFunc: management.NewConfigHandler(callbacks.GetConfig),
+		})
+	}
+	if callbacks.GetLogHealth != nil {
+		Register(&Handler{
+			Path:        AdminLogHealthPath,
+			HandlerFunc: management.NewLogHealthHandler(callbacks.GetLogHealth),
 		})
 	}
 

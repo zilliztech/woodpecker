@@ -37,6 +37,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/runtime/loghealth"
 	"github.com/zilliztech/woodpecker/common/runtime/opregistry"
 	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/tracer"
@@ -206,6 +207,9 @@ func main() {
 	opregistry.WirePrometheusCallbacks(opReg)
 	srv.SetGRPCExtraInterceptors(opregistry.UnaryInterceptor())
 
+	logHealth := loghealth.New(loghealth.DefaultStallAfter)
+	metrics.RegisterOpObserver(logHealth)
+
 	// Start HTTP server for metrics, health check, and pprof
 	if err := commonhttp.Start(cfg, commonhttp.AdminCallbacks{
 		GetMemberlistStatus: srv.GetServerNodeMemberlistStatus,
@@ -224,6 +228,9 @@ func main() {
 		},
 		GetConfig: func() any {
 			return cfg
+		},
+		GetLogHealth: func(_ context.Context, bucketName, rootPath string) (any, int) {
+			return logHealth.Report(bucketName, rootPath)
 		},
 		Logstore: commonhttp.LogstoreCallbacks{
 			ListSegments: func(logID *int64, writable *bool) []any {

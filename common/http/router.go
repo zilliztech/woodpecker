@@ -46,6 +46,9 @@ const AdminConfigPath = "/admin/config"
 // AdminEnvPath is path for GET /admin/env.
 const AdminEnvPath = "/admin/env"
 
+// AdminLogHealthPath is the path for node-wide per-log read/write health.
+const AdminLogHealthPath = "/admin/log-health"
+
 // C family — logstore runtime
 const (
 	AdminLogstoreSegmentsPath = "/admin/logstore/segments"
