@@ -1886,3 +1886,115 @@ func TestCompareHardVsSoftMode(t *testing.T) {
 		assert.Contains(t, err.Error(), "no matching nodes found")
 	})
 }
+
+func newTestDiscoveryFixedNow() *ServiceDiscovery {
+	sd := NewServiceDiscovery()
+	sd.nowFn = func() time.Time { return time.UnixMilli(1_000_000) }
+	return sd
+}
+
+func nodeWithLoad(id string, load float64, ageMS int64) *proto.NodeMeta {
+	return &proto.NodeMeta{
+		NodeId:        id,
+		LoadFactor:    load,
+		LoadUpdatedAt: 1_000_000 - ageMS,
+	}
+}
+
+func idsOf(nodes []*proto.NodeMeta) []string {
+	out := make([]string, len(nodes))
+	for i, n := range nodes {
+		out[i] = n.GetNodeId()
+	}
+	return out
+}
+
+// Weighted-probabilistic: the lower-load node (higher weight = 1-load) should win
+// the large majority of draws, but the busier node still gets some traffic — this
+// is what distinguishes weighted selection from greedy argmin (which would herd).
+func TestSelectLoadAware_PrefersLowerLoad(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("busy", 0.80, 1000), // weight 0.20
+		nodeWithLoad("idle", 0.10, 1000), // weight 0.90
+	}
+	counts := map[string]int{}
+	for i := 0; i < 5000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 {
+			counts[got[0].GetNodeId()]++
+		}
+	}
+	if counts["idle"] <= counts["busy"] {
+		t.Fatalf("idle (lower load) should be picked more often: %v", counts)
+	}
+	if counts["busy"] == 0 {
+		t.Fatalf("weighted (not greedy): busy should still receive some traffic: %v", counts)
+	}
+}
+
+// A node at/above the threshold is always muted (only the ok node is ever eligible).
+func TestSelectLoadAware_PenaltyBoxMutesOverloaded(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("over", 0.95, 1000), // >= 0.85 => muted
+		nodeWithLoad("ok", 0.50, 1000),
+	}
+	for i := 0; i < 200; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) != 1 || got[0].GetNodeId() != "ok" {
+			t.Fatalf("overloaded node must always be muted; want [ok], got %v", idsOf(got))
+		}
+	}
+}
+
+// When every candidate is over the threshold, fall through to the full set rather
+// than returning nothing.
+func TestSelectLoadAware_FallThroughWhenAllMuted(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("a", 0.90, 1000),
+		nodeWithLoad("b", 0.95, 1000),
+	}
+	got := sd.selectLowestLoadNodes(nodes, 1)
+	if len(got) != 1 {
+		t.Fatalf("fall-through must still return a node, got %v", idsOf(got))
+	}
+	if id := got[0].GetNodeId(); id != "a" && id != "b" {
+		t.Fatalf("fall-through returned unexpected node %q", id)
+	}
+}
+
+// A reported load older than loadTTL is treated as unknown, so the node is NOT
+// muted even though its stale value (0.95) exceeds the threshold; it must remain
+// selectable. (If the value were fresh it would be muted and never appear.)
+func TestSelectLoadAware_StaleLoadTreatedAsUnknown(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("stale", 0.95, 60_000), // 60s old > 30s TTL => unknown
+		nodeWithLoad("fresh", 0.10, 1000),
+	}
+	seenStale := false
+	for i := 0; i < 5000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 && got[0].GetNodeId() == "stale" {
+			seenStale = true
+			break
+		}
+	}
+	if !seenStale {
+		t.Fatalf("stale load (older than TTL) should be unknown and survive the penalty box, but was never selected")
+	}
+}
+
+func TestSelectLoadAware_NoKnownLoadFallsBackToRandom(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		{NodeId: "x"},
+		{NodeId: "y"},
+	}
+	got := sd.selectLowestLoadNodes(nodes, 2)
+	if len(got) != 2 {
+		t.Fatalf("want both nodes when no load known, got %v", idsOf(got))
+	}
+}

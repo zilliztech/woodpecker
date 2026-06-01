@@ -18,9 +18,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2"
 
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -43,6 +45,13 @@ type ServiceDiscovery struct {
 
 	// Regular expression cache (used only when needed)
 	regexCache *lru.Cache[string, *regexp.Regexp]
+
+	// Load-aware selection (issue #114).
+	maxLoadThreshold float64       // mute candidates with known load >= this; default 0.85
+	loadTTL          time.Duration // load older than this is treated as unknown; default 30s
+	unknownLoad      float64       // assumed load for nodes with no fresh report; default 0.5
+	randFloat        func() float64
+	nowFn            func() time.Time
 }
 
 func NewServiceDiscovery() *ServiceDiscovery {
@@ -51,7 +60,7 @@ func NewServiceDiscovery() *ServiceDiscovery {
 		panic(fmt.Sprintf("Failed to create regex cache: %v", err))
 	}
 
-	return &ServiceDiscovery{
+	sd := &ServiceDiscovery{
 		Nodes:         make(map[string]*proto.NodeMeta),
 		azList:        make([]string, 0),
 		rgList:        make([]string, 0),
@@ -61,6 +70,12 @@ func NewServiceDiscovery() *ServiceDiscovery {
 		rgAzIndexKeys: make(map[string][]string),
 		regexCache:    cache,
 	}
+	sd.maxLoadThreshold = 0.85
+	sd.loadTTL = 30 * time.Second
+	sd.unknownLoad = 0.5
+	sd.randFloat = rand.Float64
+	sd.nowFn = time.Now
+	return sd
 }
 
 // UpdateServer updates server information and maintains all indexes
@@ -219,7 +234,7 @@ func (sd *ServiceDiscovery) SelectSingleAzSingleRg(filter *proto.NodeFilter, aff
 		filteredNodes = sd.excludeDecommissioning(filteredNodes)
 
 		if len(filteredNodes) > 0 {
-			return sd.randomSelectNodes(filteredNodes, int(filter.Limit)), nil
+			return sd.selectLowestLoadNodes(filteredNodes, int(filter.Limit)), nil
 		}
 	}
 
@@ -269,7 +284,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzSingleRg(candidateAZs []stri
 
 	// Randomly select from valid combinations
 	selectedCombination := validCombinations[rand.Intn(len(validCombinations))]
-	return sd.randomSelectNodes(selectedCombination.nodes, int(filter.Limit)), nil
+	return sd.selectLowestLoadNodes(selectedCombination.nodes, int(filter.Limit)), nil
 }
 
 // SelectSingleAzMultiRg: azList → slice random az → azRgIndexKeys[az] → randomly select multiple rgs → randomly select one node from each rg
@@ -311,7 +326,7 @@ func (sd *ServiceDiscovery) SelectSingleAzMultiRg(filter *proto.NodeFilter, affi
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
 			filteredNodes = sd.excludeDecommissioning(filteredNodes)
 			if len(filteredNodes) > 0 {
-				selectedNode := filteredNodes[rand.Intn(len(filteredNodes))]
+				selectedNode := sd.selectLowestLoadNode(filteredNodes)
 				selectedNodes = append(selectedNodes, selectedNode)
 			}
 		}
@@ -338,7 +353,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzMultiRg(candidateAZs []strin
 			filteredNodes = sd.excludeDecommissioning(filteredNodes)
 			if len(filteredNodes) > 0 {
 				// Randomly select one node from each RG
-				selectedNode := filteredNodes[rand.Intn(len(filteredNodes))]
+				selectedNode := sd.selectLowestLoadNode(filteredNodes)
 				allValidNodes = append(allValidNodes, selectedNode)
 			}
 		}
@@ -354,7 +369,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzMultiRg(candidateAZs []strin
 		return allValidNodes, nil
 	}
 
-	return sd.randomSelectNodes(allValidNodes, limit), nil
+	return sd.selectLowestLoadNodes(allValidNodes, limit), nil
 }
 
 // SelectMultiAzSingleRg: rgList → slice random rg → rgAzIndexKeys[rg] → randomly select multiple azs → randomly select one node from each az
@@ -396,7 +411,7 @@ func (sd *ServiceDiscovery) SelectMultiAzSingleRg(filter *proto.NodeFilter, affi
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
 			filteredNodes = sd.excludeDecommissioning(filteredNodes)
 			if len(filteredNodes) > 0 {
-				selectedNode := filteredNodes[rand.Intn(len(filteredNodes))]
+				selectedNode := sd.selectLowestLoadNode(filteredNodes)
 				selectedNodes = append(selectedNodes, selectedNode)
 			}
 		}
@@ -423,7 +438,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchMultiAzSingleRg(candidateRGs []strin
 			filteredNodes = sd.excludeDecommissioning(filteredNodes)
 			if len(filteredNodes) > 0 {
 				// Randomly select one node from each AZ
-				selectedNode := filteredNodes[rand.Intn(len(filteredNodes))]
+				selectedNode := sd.selectLowestLoadNode(filteredNodes)
 				allValidNodes = append(allValidNodes, selectedNode)
 			}
 		}
@@ -439,7 +454,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchMultiAzSingleRg(candidateRGs []strin
 		return allValidNodes, nil
 	}
 
-	return sd.randomSelectNodes(allValidNodes, limit), nil
+	return sd.selectLowestLoadNodes(allValidNodes, limit), nil
 }
 
 // SelectMultiAzMultiRg: azList → slice randomly select multiple azs → randomly select rg from each az → azRgIndex[az][rg] random node
@@ -478,7 +493,7 @@ func (sd *ServiceDiscovery) SelectMultiAzMultiRg(filter *proto.NodeFilter, affin
 				filteredNodes := sd.filterByTags(nodes, filter.Tags)
 				filteredNodes = sd.excludeDecommissioning(filteredNodes)
 				if len(filteredNodes) > 0 {
-					selectedNode := filteredNodes[rand.Intn(len(filteredNodes))]
+					selectedNode := sd.selectLowestLoadNode(filteredNodes)
 					selectedNodes = append(selectedNodes, selectedNode)
 				}
 			}
@@ -486,7 +501,7 @@ func (sd *ServiceDiscovery) SelectMultiAzMultiRg(filter *proto.NodeFilter, affin
 
 		// 4. If limit is specified, randomly select again
 		if limit > 0 && len(selectedNodes) > limit {
-			selectedNodes = sd.randomSelectNodes(selectedNodes, limit)
+			selectedNodes = sd.selectLowestLoadNodes(selectedNodes, limit)
 		}
 
 		if len(selectedNodes) > 0 {
@@ -511,7 +526,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchMultiAzMultiRg(candidateAZs []string
 			filteredNodes = sd.excludeDecommissioning(filteredNodes)
 			if len(filteredNodes) > 0 {
 				// Randomly select one node from each AZ-RG combination
-				selectedNode := filteredNodes[rand.Intn(len(filteredNodes))]
+				selectedNode := sd.selectLowestLoadNode(filteredNodes)
 				allValidNodes = append(allValidNodes, selectedNode)
 			}
 		}
@@ -527,7 +542,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchMultiAzMultiRg(candidateAZs []string
 		return allValidNodes, nil
 	}
 
-	return sd.randomSelectNodes(allValidNodes, limit), nil
+	return sd.selectLowestLoadNodes(allValidNodes, limit), nil
 }
 
 // SelectRandom: random selection (equivalent to SelectMultiAzMultiRg but without AZ/RG quantity constraints)
@@ -553,7 +568,7 @@ func (sd *ServiceDiscovery) SelectRandom(filter *proto.NodeFilter, affinityMode 
 		return nil, fmt.Errorf("no matching nodes found")
 	}
 
-	return sd.randomSelectNodes(allCandidates, int(filter.Limit)), nil
+	return sd.selectLowestLoadNodes(allCandidates, int(filter.Limit)), nil
 }
 
 // SelectCustom filter matches az/rg → corresponding slice randomly selects nodes
@@ -627,7 +642,7 @@ func (sd *ServiceDiscovery) SelectRandomGroup(filter *proto.NodeFilter, affinity
 		needed = len(remaining)
 	}
 	// Random fill from remaining
-	filled := sd.randomSelectNodes(remaining, needed)
+	filled := sd.selectLowestLoadNodes(remaining, needed)
 	selected = append(selected, filled...)
 
 	return selected, nil
@@ -831,7 +846,7 @@ func (sd *ServiceDiscovery) SelectServersAcrossAZ(resourceGroup string, count in
 	for _, az := range chosenAZs {
 		nodes := sd.rgAzIndex[resourceGroup][az]
 		if len(nodes) > 0 {
-			randomNode := nodes[rand.Intn(len(nodes))]
+			randomNode := sd.selectLowestLoadNode(nodes)
 			selected = append(selected, randomNode)
 			selectedAZs = append(selectedAZs, az)
 		}
@@ -956,6 +971,117 @@ func (sd *ServiceDiscovery) removeNodeFromSlice(nodes []*proto.NodeMeta, nodeID 
 }
 
 // === Selection and filtering helper methods ===
+
+// loadOf returns the node's effective load and whether it is known (reported
+// and fresh within loadTTL).
+func (sd *ServiceDiscovery) loadOf(node *proto.NodeMeta) (float64, bool) {
+	updated := node.GetLoadUpdatedAt()
+	if updated <= 0 {
+		return 0, false
+	}
+	age := sd.nowFn().UnixMilli() - updated
+	if age < 0 || time.Duration(age)*time.Millisecond > sd.loadTTL {
+		return 0, false
+	}
+	load := node.GetLoadFactor()
+	if load < 0 {
+		load = 0
+	}
+	if load > 1 {
+		load = 1
+	}
+	return load, true
+}
+
+func (sd *ServiceDiscovery) selectLowestLoadNode(nodes []*proto.NodeMeta) *proto.NodeMeta {
+	selected := sd.selectLowestLoadNodes(nodes, 1)
+	if len(selected) == 0 {
+		return nil
+	}
+	return selected[0]
+}
+
+// selectLowestLoadNodes ranks already-eligible candidates by load using a
+// penalty box (mute nodes at/above maxLoadThreshold) plus weighted-probabilistic
+// selection (weight = 1 - load). Nodes with unknown/stale load get a neutral
+// weight. If every candidate has unknown load, it falls back to random; if the
+// penalty box would mute everything, it falls through to the full set (stick to
+// zone, accept higher latency).
+func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*proto.NodeMeta, limit int) []*proto.NodeMeta {
+	if len(nodes) == 0 {
+		return []*proto.NodeMeta{}
+	}
+
+	type cand struct {
+		node  *proto.NodeMeta
+		load  float64
+		known bool
+	}
+	cands := make([]cand, 0, len(nodes))
+	anyKnown := false
+	for _, n := range nodes {
+		load, known := sd.loadOf(n)
+		if known {
+			anyKnown = true
+		}
+		cands = append(cands, cand{node: n, load: load, known: known})
+	}
+
+	if !anyKnown {
+		metrics.WpQuorumSelectionSkew.WithLabelValues("random_no_load").Inc()
+		return sd.randomSelectNodes(nodes, limit)
+	}
+
+	// Penalty box: drop nodes whose known load is at/above the threshold.
+	eligible := make([]cand, 0, len(cands))
+	for _, c := range cands {
+		if c.known && c.load >= sd.maxLoadThreshold {
+			continue
+		}
+		eligible = append(eligible, c)
+	}
+	mode := "weighted"
+	if len(eligible) == 0 {
+		// Everyone is overloaded: fall through to the full set rather than return nothing.
+		eligible = cands
+		mode = "fallthrough"
+	}
+	metrics.WpQuorumSelectionSkew.WithLabelValues(mode).Inc()
+
+	weights := make([]float64, len(eligible))
+	const minWeight = 0.01 // keep even a near-fully-loaded eligible node selectable
+	for i, c := range eligible {
+		load := c.load
+		if !c.known {
+			load = sd.unknownLoad
+		}
+		w := 1 - load
+		if w < minWeight {
+			w = minWeight
+		}
+		weights[i] = w
+	}
+
+	picked := weightedSampleIndices(weights, limit, sd.randFloat)
+	out := make([]*proto.NodeMeta, 0, len(picked))
+	for _, i := range picked {
+		out = append(out, eligible[i].node)
+	}
+	return out
+}
+
+// SetLoadAwareConfig overrides load-aware selection parameters. Non-positive or
+// out-of-range values keep the existing default for that parameter.
+func (sd *ServiceDiscovery) SetLoadAwareConfig(maxLoadThreshold float64, loadTTL time.Duration) {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	if maxLoadThreshold > 0 && maxLoadThreshold <= 1 {
+		sd.maxLoadThreshold = maxLoadThreshold
+	}
+	if loadTTL > 0 {
+		sd.loadTTL = loadTTL
+	}
+}
 
 func (sd *ServiceDiscovery) randomSelectNodes(nodes []*proto.NodeMeta, limit int) []*proto.NodeMeta {
 	if len(nodes) == 0 {
