@@ -225,6 +225,8 @@ message NodeMeta {
   map<string, string> tags = 5;
   int64 version = 6;
   int64 last_update = 7; // Unix timestamp in milliseconds
+  double load_factor = 8;      // EWMA-smoothed bottleneck load in [0,1]; 0 if never reported
+  int64 load_updated_at = 9;   // Unix ms when load_factor was last set; 0 = never reported
 }
 
 // Node selection strategy types
