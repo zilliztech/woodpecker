@@ -5,11 +5,13 @@
 package proto
 
 import (
+	binary "encoding/binary"
 	fmt "fmt"
 	protohelpers "github.com/planetscale/vtprotobuf/protohelpers"
 	proto "google.golang.org/protobuf/proto"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	io "io"
+	math "math"
 	unsafe "unsafe"
 )
 
@@ -562,6 +564,8 @@ func (m *NodeMeta) CloneVT() *NodeMeta {
 	r.LastUpdate = m.LastUpdate
 	r.ClusterName = m.ClusterName
 	r.Region = m.Region
+	r.LoadFactor = m.LoadFactor
+	r.LoadUpdatedAt = m.LoadUpdatedAt
 	if rhs := m.Tags; rhs != nil {
 		tmpContainer := make(map[string]string, len(rhs))
 		for k, v := range rhs {
@@ -1405,6 +1409,12 @@ func (this *NodeMeta) EqualVT(that *NodeMeta) bool {
 		return false
 	}
 	if this.Region != that.Region {
+		return false
+	}
+	if this.LoadFactor != that.LoadFactor {
+		return false
+	}
+	if this.LoadUpdatedAt != that.LoadUpdatedAt {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -3020,6 +3030,17 @@ func (m *NodeMeta) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if m.LoadUpdatedAt != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LoadUpdatedAt))
+		i--
+		dAtA[i] = 0x58
+	}
+	if m.LoadFactor != 0 {
+		i -= 8
+		binary.LittleEndian.PutUint64(dAtA[i:], uint64(math.Float64bits(float64(m.LoadFactor))))
+		i--
+		dAtA[i] = 0x51
+	}
 	if len(m.Region) > 0 {
 		i -= len(m.Region)
 		copy(dAtA[i:], m.Region)
@@ -3897,6 +3918,12 @@ func (m *NodeMeta) SizeVT() (n int) {
 	l = len(m.Region)
 	if l > 0 {
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	if m.LoadFactor != 0 {
+		n += 9
+	}
+	if m.LoadUpdatedAt != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.LoadUpdatedAt))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -8157,6 +8184,36 @@ func (m *NodeMeta) UnmarshalVT(dAtA []byte) error {
 			}
 			m.Region = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
+		case 10:
+			if wireType != 1 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LoadFactor", wireType)
+			}
+			var v uint64
+			if (iNdEx + 8) > l {
+				return io.ErrUnexpectedEOF
+			}
+			v = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
+			iNdEx += 8
+			m.LoadFactor = float64(math.Float64frombits(v))
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LoadUpdatedAt", wireType)
+			}
+			m.LoadUpdatedAt = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LoadUpdatedAt |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
@@ -13018,6 +13075,36 @@ func (m *NodeMeta) UnmarshalVTUnsafe(dAtA []byte) error {
 			}
 			m.Region = stringValue
 			iNdEx = postIndex
+		case 10:
+			if wireType != 1 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LoadFactor", wireType)
+			}
+			var v uint64
+			if (iNdEx + 8) > l {
+				return io.ErrUnexpectedEOF
+			}
+			v = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
+			iNdEx += 8
+			m.LoadFactor = float64(math.Float64frombits(v))
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LoadUpdatedAt", wireType)
+			}
+			m.LoadUpdatedAt = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LoadUpdatedAt |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
