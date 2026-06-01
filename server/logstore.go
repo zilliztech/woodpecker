@@ -314,8 +314,11 @@ func (l *logStore) GetBatchEntriesAdv(ctx context.Context, bucketName string, ro
 	}
 	batchData, err := segmentProcessor.ReadBatchEntriesAdv(ctx, fromEntryId, maxEntries, lastReadState)
 	if err != nil {
-		status = "error"
-		if !werr.ErrEntryNotFound.Is(err) && !werr.ErrFileReaderEndOfFile.Is(err) {
+		if werr.ErrEntryNotFound.Is(err) || werr.ErrFileReaderEndOfFile.Is(err) {
+			// Reaching the end of the log is a routine, healthy read outcome, not a failure.
+			status = "end_of_file"
+		} else {
+			status = "error"
 			logger.Ctx(ctx).Warn("get batch entries failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxEntries", maxEntries), zap.Error(err))
 		}
 		return nil, err
