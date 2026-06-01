@@ -146,7 +146,7 @@ For a direction with `lastSuccess`, `lastFailure`, and (write only) `lastAttempt
 | Direction state | Rule |
 |---|---|
 | **Healthy** | `now - lastSuccess ≤ stallAfter` (succeeded recently) |
-| **Stalled** (write only) | `now - lastSuccess > stallAfter` **AND** `lastAttempt > lastSuccess` **AND** `lastAttempt > lastFailure` — work is flowing in but nothing completes (catches hung writes even under high QPS, because the rule keys off the age of the last *success*, not the last attempt) |
+| **Stalled** (write only) | `lastSuccess > 0` **AND** `now - lastSuccess > stallAfter` **AND** `lastAttempt > lastSuccess` **AND** `lastAttempt > lastFailure` — was healthy, then work keeps flowing in but nothing completes (catches hung writes even under high QPS, because the rule keys off the age of the last *success*, not the last attempt). A log that has *never* succeeded is never Stalled — it is Failed (recent failure) or Idle. |
 | **Failed** | `lastFailure > lastSuccess` **AND** `now - lastFailure ≤ stallAfter` (recent terminal failures) |
 | **Idle** | no observed activity, or success & failure both stale (older than `stallAfter`) and not Stalled. Idle is informational — the last terminal outcome is still visible via the `last_*_ms` timestamps in the response, so an operator can read "last known status" directly. |
 
