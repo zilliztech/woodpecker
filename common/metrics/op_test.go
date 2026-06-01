@@ -109,6 +109,18 @@ func TestOp_StartedAt(t *testing.T) {
 	assert.False(t, op.StartedAt().After(after))
 }
 
+func TestWithInstance_SetsBucketAndRoot(t *testing.T) {
+	ResetObservers()
+	defer ResetObservers()
+	op := StartOp("test.op", nil, nil, WithInstance("bucket-a", "root-a"), WithLogSegment(7, 3))
+	if op.BucketName != "bucket-a" || op.RootPath != "root-a" {
+		t.Fatalf("got bucket=%q root=%q", op.BucketName, op.RootPath)
+	}
+	if op.LogID != 7 || op.SegmentID != 3 {
+		t.Fatalf("WithLogSegment regressed: log=%d seg=%d", op.LogID, op.SegmentID)
+	}
+}
+
 func TestOp_NoObservers(t *testing.T) {
 	ResetObservers()
 	defer ResetObservers()
