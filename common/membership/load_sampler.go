@@ -11,7 +11,11 @@
 
 package membership
 
-import "github.com/zilliztech/woodpecker/common/hardware"
+import (
+	"time"
+
+	"github.com/zilliztech/woodpecker/common/hardware"
+)
 
 const (
 	defaultMemSoftThreshold = 0.85
@@ -61,8 +65,17 @@ type SystemLoadSampler struct {
 	seeded           bool
 
 	readCPU      func() float64 // returns CPU usage percent (0..100)
-	readIOWait   func() float64 // returns IO wait percent (0..100)
+	readIOWait   func() float64 // returns cumulative iowait seconds since boot
 	readMemRatio func() float64 // returns memory used ratio (0..1)
+
+	// IO-wait rate state: GetIOWait returns a cumulative seconds counter, so we
+	// derive the busy fraction from the delta between samples.
+	prevIOWaitSeconds float64
+	prevSampleTime    time.Time
+	hasPrevIO         bool
+
+	cpuNum func() int       // CPU core count (for normalizing the iowait rate)
+	now    func() time.Time // clock (injectable for tests)
 }
 
 // NewSystemLoadSampler builds a sampler backed by the common/hardware package.
@@ -81,14 +94,31 @@ func NewSystemLoadSampler(memSoftThreshold, alpha float64) *SystemLoadSampler {
 		readCPU:          hardware.GetCPUUsage,
 		readIOWait:       func() float64 { v, _ := hardware.GetIOWait(); return v },
 		readMemRatio:     hardware.GetMemoryUseRatio,
+		cpuNum:           hardware.GetCPUNum,
+		now:              time.Now,
 	}
 }
 
 // Sample reads the hardware signals, computes the raw load, and applies EWMA smoothing.
 func (s *SystemLoadSampler) Sample() float64 {
 	cpuFrac := clamp01(s.readCPU() / 100)
-	ioFrac := clamp01(s.readIOWait() / 100)
 	memRatio := clamp01(s.readMemRatio())
+
+	// IO-wait is a cumulative seconds counter; convert the delta since the last
+	// sample into a busy fraction in [0,1]. The first sample has no prior point.
+	ioFrac := 0.0
+	iowaitNow := s.readIOWait()
+	tNow := s.now()
+	if s.hasPrevIO {
+		elapsed := tNow.Sub(s.prevSampleTime).Seconds()
+		n := s.cpuNum()
+		if elapsed > 0 && n > 0 {
+			ioFrac = clamp01((iowaitNow - s.prevIOWaitSeconds) / (elapsed * float64(n)))
+		}
+	}
+	s.prevIOWaitSeconds = iowaitNow
+	s.prevSampleTime = tNow
+	s.hasPrevIO = true
 
 	raw := computeRawLoad(cpuFrac, ioFrac, memRatio, s.memSoftThreshold)
 	if !s.seeded {
