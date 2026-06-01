@@ -77,8 +77,8 @@ check.
    record methods called from the hot path, and snapshot/classification logic.
 2. **Hot-path instrumentation** — calls into the tracker from `Server.AddEntry`
    (write) and `Server.GetBatchEntriesAdv` (read).
-3. **HTTP handler** (`common/http/management/log_health_handler.go`) — validates
-   `bucket_name` / `root_path` query params and serializes the response.
+3. **HTTP handler** (`common/http/management/log_health_handler.go`) — parses the
+   optional `bucket_name` / `root_path` filter and serializes the response.
 4. **Wiring** — `Server.GetLogHealth` callback, registered at route
    `/admin/log-health` in `common/http/server.go`, exposed from `cmd/main.go`.
 
@@ -165,8 +165,9 @@ mutually exclusive and partition `tracked_logs` by this overall state.
 
 ### Node-level rollup
 
-The node decision deliberately keys off **active evidence**, so a merely quiet node is
-never pulled out of rotation:
+The rollup spans **all logs in scope** (all tenants when unfiltered, or the one
+filtered instance). It deliberately keys off **active evidence**, so a merely quiet
+node is never pulled out of rotation:
 
 - Node `state = Unhealthy` **iff** `tracked_logs > 0` **AND** every tracked log is
   `Stalled` or `Failed` (zero Healthy, zero Idle — there is current, active evidence
@@ -180,10 +181,19 @@ conservatively (idle alone never forces Unhealthy).
 
 ### HTTP endpoint
 
-`GET /admin/log-health?bucket_name=<bucket>&root_path=<root>`
+**Node-level scope.** Woodpecker is multi-tenant: a node serves many
+`(bucket_name, root_path)` instances at once, and a log is uniquely identified by the
+triple `(bucket_name, root_path, log_id)` (there is no `logName` at the logstore
+layer). So one probe call returns **every** log the node tracks, across all tenants,
+and each log carries its own triple.
 
-- 400 if `bucket_name` or `root_path` is missing (accepts snake/camel/lower variants,
-  as the existing handler does).
+`GET /admin/log-health[?bucket_name=<bucket>&root_path=<root>]`
+
+- `bucket_name` / `root_path` are **optional filters** (accepts snake/camel/lower
+  variants). When both are supplied, the response is narrowed to that one instance;
+  when omitted, all tracked logs across all tenants are returned. Supplying only one
+  of the two is treated as "no filter" (or 400 — see open detail below); default is
+  to ignore a lone param and return everything.
 - 405 on non-GET.
 - Body `LogHealthResponse`:
 
@@ -192,19 +202,21 @@ conservatively (idle alone never forces Unhealthy).
   "state": "Healthy",              // node rollup: Healthy | Unhealthy
   "reason": "observed_write_success",
   "node_id": "...",
-  "bucket_name": "...",
-  "root_path": "...",
+  "filter_bucket_name": "",        // echoes the filter when one was applied, else ""
+  "filter_root_path": "",
   "timestamp_ms": 0,
   "stall_after_ms": 600000,
-  "tracked_logs": 1,
+  "tracked_logs": 2,
   "healthy_logs": 1,
   "failed_logs": 0,
   "stalled_logs": 0,
-  "idle_logs": 0,
+  "idle_logs": 1,
   "logs": [
     {
+      "bucket_name": "tenant-a-bucket",   // the unique triple, per log
+      "root_path": "tenant-a/root",
       "log_id": 1,
-      "state": "Healthy",          // worst of write_state / read_state
+      "state": "Healthy",          // overall, see "Log overall state"
       "write_state": "Healthy",
       "read_state": "Idle",
       "last_write_success_ms": 0,
@@ -218,14 +230,19 @@ conservatively (idle alone never forces Unhealthy).
 ```
 
 - HTTP status: `200` when node `state == Healthy`, `503` when `Unhealthy` (so a load
-  balancer / probe can act on status code alone). Logs are sorted by `log_id`.
+  balancer / probe can act on status code alone). Logs are sorted by
+  `(bucket_name, root_path, log_id)` for stable output.
 
 ### Wiring
 
 - `Server` gains `logHealthTracker *LogHealthTracker`, constructed in
   `NewServerWithConfig` with `NewLogHealthTracker(defaultLogHealthStallAfter)`.
-- `Server.GetLogHealth(ctx, bucket, rootPath) (LogHealthResponse, int)` builds the
-  snapshot and returns the response + HTTP status.
+- `Server.GetLogHealth(ctx, bucketFilter, rootPathFilter) (LogHealthResponse, int)`
+  builds the snapshot and returns the response + HTTP status. Empty filter strings
+  mean "all tenants"; when both are non-empty the snapshot is narrowed to that
+  instance.
+- `LogHealthCallback func(ctx, bucketName, rootPath) (any, int)` — the handler passes
+  the parsed filter (empty strings when absent); signature unchanged from the draft.
 - `AdminCallbacks` gains one field `GetLogHealth management.LogHealthCallback`; the
   cluster callback is removed.
 - `common/http/server.go` registers the route when the callback is set.
@@ -236,7 +253,7 @@ conservatively (idle alone never forces Unhealthy).
 
 - `nil` tracker → all record methods no-op; `GetLogHealth` falls back to an empty
   tracker and reports `Healthy / no_observed_activity`.
-- Missing query params → `400`. Non-GET → `405`.
+- Missing filter params → return all tenants (not an error). Non-GET → `405`.
 - Client-cancelled writes are deliberately not counted as failures.
 
 ## Testing
@@ -254,8 +271,12 @@ conservatively (idle alone never forces Unhealthy).
   - `nil` tracker safety.
   - Concurrency smoke test: many goroutines recording on the same/different logs
     under `-race` to confirm the RLock + atomic model is data-race free.
-- **`common/http/management/log_health_handler_test.go`:** 400 missing params, 405
-  non-GET, 200 vs 503 by node state, JSON shape.
+- **`server/log_health_test.go`** also: unfiltered snapshot returns logs across
+  multiple `(bucket, rootPath)` instances, each tagged with its own triple; filtered
+  snapshot narrows to one instance.
+- **`common/http/management/log_health_handler_test.go`:** no-filter returns all,
+  filter narrows, 405 non-GET, 200 vs 503 by node state, JSON shape (per-log triple
+  present).
 - **`server/service_test.go`:** adjust existing tests to the renamed
   symbols/endpoint; drop cluster-health expectations.
 
