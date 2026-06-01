@@ -731,3 +731,30 @@ func TestServiceDiscovery_UpdateServer_Overwrite(t *testing.T) {
 	assert.Empty(t, sd.GetAZDistribution("rg1"))
 	assert.Equal(t, 1, sd.GetAZDistribution("rg2")["az2"])
 }
+
+func TestServerDelegate_SetLoadFactor(t *testing.T) {
+	meta := &proto.NodeMeta{NodeId: "n1"}
+	d := NewServerDelegate(meta)
+
+	d.SetLoadFactor(0.42)
+
+	if got := meta.GetLoadFactor(); got != 0.42 {
+		t.Fatalf("load_factor: want 0.42, got %v", got)
+	}
+	if meta.GetLoadUpdatedAt() == 0 {
+		t.Fatalf("load_updated_at should be set to a non-zero unix ms timestamp")
+	}
+}
+
+func TestServerDelegate_SetLoadFactorClamps(t *testing.T) {
+	meta := &proto.NodeMeta{NodeId: "n1"}
+	d := NewServerDelegate(meta)
+	d.SetLoadFactor(1.7)
+	if got := meta.GetLoadFactor(); got != 1.0 {
+		t.Fatalf("want clamp to 1.0, got %v", got)
+	}
+	d.SetLoadFactor(-0.5)
+	if got := meta.GetLoadFactor(); got != 0.0 {
+		t.Fatalf("want clamp to 0.0, got %v", got)
+	}
+}
