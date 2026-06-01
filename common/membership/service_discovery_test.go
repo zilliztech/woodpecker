@@ -1998,3 +1998,28 @@ func TestSelectLoadAware_NoKnownLoadFallsBackToRandom(t *testing.T) {
 		t.Fatalf("want both nodes when no load known, got %v", idsOf(got))
 	}
 }
+
+func TestSelectLoadAware_DistributesAcrossLowLoadNodes(t *testing.T) {
+	// Two low-load nodes (0.10, 0.15) and one busy (0.90). Over many trials the
+	// busy node is muted (>= 0.85), and BOTH low nodes receive traffic — proving
+	// weighted spread rather than greedy argmin onto a single node.
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("low1", 0.10, 1000),
+		nodeWithLoad("low2", 0.15, 1000),
+		nodeWithLoad("busy", 0.90, 1000),
+	}
+	counts := map[string]int{}
+	for i := 0; i < 3000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 {
+			counts[got[0].GetNodeId()]++
+		}
+	}
+	if counts["busy"] != 0 {
+		t.Errorf("busy node (load 0.90 >= 0.85) must be muted, got %d picks", counts["busy"])
+	}
+	if counts["low1"] == 0 || counts["low2"] == 0 {
+		t.Errorf("both low-load nodes should receive traffic: %v", counts)
+	}
+}
