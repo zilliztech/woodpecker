@@ -48,7 +48,9 @@ type logHealth struct {
 	writeFailureMS atomic.Int64
 	readSuccessMS  atomic.Int64
 	readFailureMS  atomic.Int64
-	failureReason  atomic.Pointer[string]
+
+	writeFailureReason atomic.Pointer[string]
+	readFailureReason  atomic.Pointer[string]
 }
 
 // Tracker observes the metrics.Op stream and derives per-log read/write health.
@@ -179,7 +181,7 @@ func (t *Tracker) recordWriteFailure(b, r string, logID int64, now time.Time, re
 	}
 	lh := t.get(b, r, logID)
 	lh.writeFailureMS.Store(now.UnixMilli())
-	lh.failureReason.Store(&reason)
+	lh.writeFailureReason.Store(&reason)
 }
 
 func (t *Tracker) recordReadSuccess(b, r string, logID int64, now time.Time) {
@@ -195,7 +197,7 @@ func (t *Tracker) recordReadFailure(b, r string, logID int64, now time.Time, rea
 	}
 	lh := t.get(b, r, logID)
 	lh.readFailureMS.Store(now.UnixMilli())
-	lh.failureReason.Store(&reason)
+	lh.readFailureReason.Store(&reason)
 }
 
 // --- snapshot / classification ---
@@ -274,7 +276,13 @@ func (t *Tracker) snapshotLog(key logInstanceKey, logID int64, lh *logHealth, no
 		LastReadSuccessMS:  lh.readSuccessMS.Load(),
 		LastReadFailureMS:  lh.readFailureMS.Load(),
 	}
-	if rp := lh.failureReason.Load(); rp != nil {
+	// Surface the reason of whichever direction failed most recently. When both
+	// are zero (no failures), this loads the write pointer, which is nil -> "".
+	if snap.LastWriteFailureMS >= snap.LastReadFailureMS {
+		if rp := lh.writeFailureReason.Load(); rp != nil {
+			snap.LastFailureReason = *rp
+		}
+	} else if rp := lh.readFailureReason.Load(); rp != nil {
 		snap.LastFailureReason = *rp
 	}
 	writeAttempt := lh.writeAttemptMS.Load()

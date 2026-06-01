@@ -184,3 +184,18 @@ func TestTracker_ObserverMapsOps(t *testing.T) {
 	require.Equal(t, logStateHealthy, byLog[1].WriteState)
 	require.Equal(t, logStateFailed, byLog[2].ReadState)
 }
+
+func TestTracker_FailureReasonPerDirection(t *testing.T) {
+	now := time.UnixMilli(1_000_000)
+	tr := New(testStall)
+	// Write fails; later read succeeds. The write reason must survive.
+	tr.recordWriteFailure("b", "r", 1, now, "write boom")
+	tr.recordReadSuccess("b", "r", 1, now.Add(time.Second))
+	snap := tr.Snapshot("", "", "n", now.Add(2*time.Second))
+	require.Equal(t, "write boom", snap.Logs[0].LastFailureReason)
+
+	// A newer read failure should win over the older write failure.
+	tr.recordReadFailure("b", "r", 1, now.Add(3*time.Second), "read boom")
+	snap = tr.Snapshot("", "", "n", now.Add(4*time.Second))
+	require.Equal(t, "read boom", snap.Logs[0].LastFailureReason)
+}
