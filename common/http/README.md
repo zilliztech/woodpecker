@@ -94,6 +94,7 @@ curl "http://localhost:9091/admin/log-health?bucket_name=a-bucket&root_path=file
   and all tenants are returned.
 - Write health is the logstore "accept" outcome (`logstore.add_entry`); read health is
   `logstore.get_batch_entries`. Each log is classified Healthy / Stalled / Failed / Idle.
+  Reaching the end of a log (EOF / entry-not-found) is a healthy read, not a failure.
 - Independent of `/healthz`: `/healthz` is process liveness, while `/admin/log-health` is
   data-path health — a stalled or failed log never affects the `/healthz` result.
 - Cold start, idle, or no observed log activity returns `Healthy` (a quiet node is not

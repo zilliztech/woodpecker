@@ -120,8 +120,15 @@ calls — see Wiring).
   makes `add_entry` itself error. This is the deliberate trade-off of choosing the
   logstore layer over `file.flush`.
 - **Read** = `logstore.get_batch_entries` op `End(status)`.
-- **Success vs failure** = `status == "success"` (the literal logstore uses) →
-  success; any other status → failure.
+- **Success vs failure** = `status == "success"` → success; any other status →
+  failure. **Exception (read only):** reaching the end of the log
+  (`werr.ErrFileReaderEndOfFile` / `werr.ErrEntryNotFound`) is a routine, healthy read
+  outcome, not a fault. `logstore.go` tags these with a distinct status
+  `"end_of_file"`, and the tracker treats `"end_of_file"` as a **read success**.
+  Without this, a node merely tailing a caught-up log would accumulate fake read
+  failures and falsely report Unhealthy/503. (This also relabels the existing
+  `WpLogStoreOperationsTotal` metric for those reads from `error` → `end_of_file`,
+  which is more accurate.)
 - **Client cancel:** because `add_entry`'s op ends at buffering (it does not span the
   client's sync-wait), client cancellation during the sync-wait is naturally not
   observed as a write failure. A `get_batch_entries` cancelled mid-call ends with a
