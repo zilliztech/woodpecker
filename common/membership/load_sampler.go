@@ -13,6 +13,11 @@ package membership
 
 import "github.com/zilliztech/woodpecker/common/hardware"
 
+const (
+	defaultMemSoftThreshold = 0.85
+	defaultEWMAAlpha        = 0.5
+)
+
 // LoadSampler produces a node's current load factor in [0,1], where higher means busier.
 type LoadSampler interface {
 	Sample() float64
@@ -38,13 +43,13 @@ func computeRawLoad(cpuFrac, ioWaitFrac, memRatio, memSoftThreshold float64) flo
 }
 
 func clamp01(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 1 {
+	if v >= 1 {
 		return 1
 	}
-	return v
+	if v > 0 {
+		return v
+	}
+	return 0
 }
 
 // SystemLoadSampler samples local hardware metrics and EWMA-smooths the result.
@@ -62,11 +67,13 @@ type SystemLoadSampler struct {
 
 // NewSystemLoadSampler builds a sampler backed by the common/hardware package.
 func NewSystemLoadSampler(memSoftThreshold, alpha float64) *SystemLoadSampler {
+	// memSoftThreshold must be in (0,1): the penalty divides by (1-threshold),
+	// so a threshold of 1 (or out of range) falls back to the default.
 	if memSoftThreshold <= 0 || memSoftThreshold >= 1 {
-		memSoftThreshold = 0.85
+		memSoftThreshold = defaultMemSoftThreshold
 	}
 	if alpha <= 0 || alpha > 1 {
-		alpha = 0.5
+		alpha = defaultEWMAAlpha
 	}
 	return &SystemLoadSampler{
 		memSoftThreshold: memSoftThreshold,

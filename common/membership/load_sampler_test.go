@@ -67,3 +67,31 @@ func TestSystemLoadSampler_EWMASmoothing(t *testing.T) {
 		t.Fatalf("second sample want 0.5, got %v", got)
 	}
 }
+
+func TestNewSystemLoadSampler_DefaultsForOutOfRange(t *testing.T) {
+	cases := []struct {
+		name      string
+		memSoft   float64
+		alpha     float64
+		wantMem   float64
+		wantAlpha float64
+	}{
+		{"both valid", 0.9, 0.3, 0.9, 0.3},
+		{"mem too low", 0, 0.3, 0.85, 0.3},
+		{"mem too high", 1.0, 0.3, 0.85, 0.3},
+		{"alpha zero", 0.9, 0, 0.9, 0.5},
+		{"alpha above one", 0.9, 1.5, 0.9, 0.5},
+		{"alpha one is valid", 0.9, 1.0, 0.9, 1.0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSystemLoadSampler(tc.memSoft, tc.alpha)
+			if !approxEq(s.memSoftThreshold, tc.wantMem) {
+				t.Errorf("memSoftThreshold: want %v, got %v", tc.wantMem, s.memSoftThreshold)
+			}
+			if !approxEq(s.alpha, tc.wantAlpha) {
+				t.Errorf("alpha: want %v, got %v", tc.wantAlpha, s.alpha)
+			}
+		})
+	}
+}
