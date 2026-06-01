@@ -12,6 +12,7 @@
 package membership
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -41,6 +42,10 @@ type ServerNode struct {
 	meta *proto.NodeMeta
 	// server cfg
 	serverConfig *ServerConfig
+	// load reporter lifecycle
+	loadCtx    context.Context
+	loadCancel context.CancelFunc
+	sampler    LoadSampler
 }
 
 // ServerConfig Server configuration
@@ -62,6 +67,11 @@ type ServerConfig struct {
 	ServicePort          int
 	AdvertiseServiceAddr string
 	AdvertiseServicePort int
+
+	// Load-aware selection (issue #114). LoadReportInterval == 0 disables reporting.
+	LoadReportInterval time.Duration
+	MemSoftThreshold   float64 // memory ratio above which memory escalates load; default 0.85
+	EWMAAlpha          float64 // EWMA weight on newest sample; default 0.5
 }
 
 func NewServerNode(config *ServerConfig) (*ServerNode, error) {
@@ -128,14 +138,22 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	}
 	discovery.UpdateServer(config.NodeID, meta) // cache for known node meta information list
 
-	return &ServerNode{
+	loadCtx, loadCancel := context.WithCancel(context.Background())
+	node := &ServerNode{
 		memberlist:   list,
 		delegate:     delegate,
 		eventDel:     eventDel,
 		discovery:    discovery,
 		meta:         meta,
 		serverConfig: config,
-	}, nil
+		loadCtx:      loadCtx,
+		loadCancel:   loadCancel,
+	}
+	if config.LoadReportInterval > 0 {
+		node.sampler = NewSystemLoadSampler(config.MemSoftThreshold, config.EWMAAlpha)
+		node.startLoadReporter(config.LoadReportInterval)
+	}
+	return node, nil
 }
 
 func (n *ServerNode) Join(existing []string) error {
@@ -185,8 +203,57 @@ func (n *ServerNode) PrintStatus() {
 	}
 }
 
-func (n *ServerNode) Leave() error    { return n.memberlist.Leave(5 * time.Second) }
-func (n *ServerNode) Shutdown() error { return n.memberlist.Shutdown() }
+// startLoadReporter periodically samples local load, publishes it into the
+// gossip meta, and refreshes the local discovery copy so this node's own
+// load is visible to its own selections too.
+func (n *ServerNode) startLoadReporter(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		n.reportLoadOnce()
+		for {
+			select {
+			case <-n.loadCtx.Done():
+				return
+			case <-ticker.C:
+				n.reportLoadOnce()
+			}
+		}
+	}()
+}
+
+func (n *ServerNode) reportLoadOnce() {
+	if n.sampler == nil {
+		return
+	}
+	n.publishLoad()
+	// Trigger gossip of the refreshed meta. Best-effort; ignore timeout errors.
+	_ = n.memberlist.UpdateNode(2 * time.Second)
+	// Keep our own discovery copy current for local selections.
+	n.discovery.UpdateServer(n.meta.NodeId, n.meta)
+}
+
+// publishLoad samples load and writes it into the gossip meta (no I/O).
+func (n *ServerNode) publishLoad() {
+	if n.sampler == nil {
+		return
+	}
+	n.delegate.SetLoadFactor(n.sampler.Sample())
+}
+
+func (n *ServerNode) Leave() error {
+	if n.loadCancel != nil {
+		n.loadCancel()
+	}
+	return n.memberlist.Leave(5 * time.Second)
+}
+
+func (n *ServerNode) Shutdown() error {
+	if n.loadCancel != nil {
+		n.loadCancel()
+	}
+	return n.memberlist.Shutdown()
+}
 
 func (n *ServerNode) GetMemberlist() *ml.Memberlist {
 	return n.memberlist
