@@ -199,3 +199,21 @@ func TestTracker_FailureReasonPerDirection(t *testing.T) {
 	snap = tr.Snapshot("", "", "n", now.Add(4*time.Second))
 	require.Equal(t, "read boom", snap.Logs[0].LastFailureReason)
 }
+
+func TestTracker_ReadEndOfFileIsHealthy(t *testing.T) {
+	metrics.ResetObservers()
+	defer metrics.ResetObservers()
+	tr := New(testStall)
+	metrics.RegisterOpObserver(tr)
+
+	// A caught-up tail read ends with the end_of_file status — must count as a
+	// healthy read, not a failure.
+	r := metrics.StartOp(opGetBatchEntries, nil, nil, metrics.WithInstance("b", "r"), metrics.WithLogSegment(5, 0))
+	r.End("end_of_file")
+
+	snap := tr.Snapshot("", "", "n", time.Now())
+	require.Equal(t, 1, snap.TrackedLogs)
+	require.Equal(t, logStateHealthy, snap.Logs[0].ReadState)
+	require.Equal(t, 0, snap.FailedLogs)
+	require.Equal(t, StateHealthy, snap.State)
+}

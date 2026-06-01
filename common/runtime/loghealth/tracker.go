@@ -31,6 +31,9 @@ const (
 	opGetBatchEntries = "logstore.get_batch_entries"
 	// statusSuccess is the literal status server/logstore.go sets on success.
 	statusSuccess = "success"
+	// statusEndOfFile marks a read that reached the end of the log — a healthy read
+	// outcome, not a failure (server/logstore.go sets it for EOF / entry-not-found).
+	statusEndOfFile = "end_of_file"
 )
 
 // Compile-time assertion that Tracker is an OpObserver.
@@ -129,7 +132,7 @@ func (t *Tracker) OnOpEnd(op *metrics.Op, _ uint64, elapsed time.Duration, statu
 			t.recordWriteFailure(op.BucketName, op.RootPath, op.LogID, now, status)
 		}
 	case opGetBatchEntries:
-		if ok {
+		if ok || status == statusEndOfFile {
 			t.recordReadSuccess(op.BucketName, op.RootPath, op.LogID, now)
 		} else {
 			t.recordReadFailure(op.BucketName, op.RootPath, op.LogID, now, status)
