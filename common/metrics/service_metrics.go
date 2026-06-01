@@ -248,6 +248,17 @@ var (
 		Name:      "sync_scheduler_capacity",
 		Help:      "Worker capacity of the staged-writer sync scheduler",
 	}, []string{"node_id"})
+
+	// WpQuorumSelectionSkew counts node-selection outcomes by mode, to observe
+	// how often load actually changed the selection (issue #114).
+	// mode: "weighted" (load-ranked), "fallthrough" (all candidates muted),
+	// "random_no_load" (no fresh load data, fell back to random).
+	WpQuorumSelectionSkew = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "quorum_selection_skew_total",
+		Help:      "Count of quorum node selections by mode (weighted/fallthrough/random_no_load)",
+	}, []string{"mode"})
 )
 
 // RegisterServerMetricsWithRegisterer registers all server-side metrics and system metrics.
@@ -289,5 +300,7 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSyncSchedulerRunning)
 		registerer.MustRegister(WpSyncSchedulerWaiting)
 		registerer.MustRegister(WpSyncSchedulerCapacity)
+		// Quorum selection skew (load-aware node selection, issue #114)
+		registerer.MustRegister(WpQuorumSelectionSkew)
 	})
 }
