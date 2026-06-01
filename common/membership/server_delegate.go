@@ -92,6 +92,14 @@ func (d *ServerDelegate) SetLoadFactor(load float64) {
 	d.meta.LoadUpdatedAt = time.Now().UnixMilli()
 }
 
+// SnapshotMeta returns a deep copy of the current meta, safe to hand to other
+// components (e.g. ServiceDiscovery) without exposing the live, mutated object.
+func (d *ServerDelegate) SnapshotMeta() *proto.NodeMeta {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.meta.CloneVT()
+}
+
 // UpdateMeta updates metadata
 func (d *ServerDelegate) UpdateMeta(updates map[string]interface{}) {
 	d.mu.Lock()

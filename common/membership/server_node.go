@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	ml "github.com/hashicorp/memberlist"
@@ -45,6 +46,7 @@ type ServerNode struct {
 	// load reporter lifecycle
 	loadCtx    context.Context
 	loadCancel context.CancelFunc
+	loadWG     sync.WaitGroup
 	sampler    LoadSampler
 }
 
@@ -137,7 +139,7 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create memberlist: %w", err)
 	}
-	discovery.UpdateServer(config.NodeID, meta) // cache for known node meta information list
+	discovery.UpdateServer(config.NodeID, delegate.SnapshotMeta()) // store a snapshot, not the live meta pointer
 
 	loadCtx, loadCancel := context.WithCancel(context.Background())
 	node := &ServerNode{
@@ -208,7 +210,9 @@ func (n *ServerNode) PrintStatus() {
 // gossip meta, and refreshes the local discovery copy so this node's own
 // load is visible to its own selections too.
 func (n *ServerNode) startLoadReporter(interval time.Duration) {
+	n.loadWG.Add(1)
 	go func() {
+		defer n.loadWG.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		n.reportLoadOnce()
@@ -230,8 +234,10 @@ func (n *ServerNode) reportLoadOnce() {
 	n.publishLoad()
 	// Trigger gossip of the refreshed meta. Best-effort; ignore timeout errors.
 	_ = n.memberlist.UpdateNode(2 * time.Second)
-	// Keep our own discovery copy current for local selections.
-	n.discovery.UpdateServer(n.meta.NodeId, n.meta)
+	// Keep our own discovery copy current for local selections. Store a snapshot,
+	// not the live meta pointer, so the reporter's writes don't race with selectors.
+	snap := n.delegate.SnapshotMeta()
+	n.discovery.UpdateServer(snap.GetNodeId(), snap)
 }
 
 // publishLoad samples load and writes it into the gossip meta (no I/O).
@@ -253,6 +259,7 @@ func (n *ServerNode) Shutdown() error {
 	if n.loadCancel != nil {
 		n.loadCancel()
 	}
+	n.loadWG.Wait()
 	return n.memberlist.Shutdown()
 }
 
