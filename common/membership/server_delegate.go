@@ -76,6 +76,22 @@ func (d *ServerDelegate) LocalState(join bool) []byte {
 // MergeRemoteState merges remote state
 func (d *ServerDelegate) MergeRemoteState(buf []byte, join bool) {}
 
+// SetLoadFactor updates the node's published load factor (clamped to [0,1])
+// and stamps load_updated_at. The new value is picked up by the next
+// NodeMeta() gossip refresh (callers trigger memberlist.UpdateNode separately).
+func (d *ServerDelegate) SetLoadFactor(load float64) {
+	if load < 0 {
+		load = 0
+	}
+	if load > 1 {
+		load = 1
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.meta.LoadFactor = load
+	d.meta.LoadUpdatedAt = time.Now().UnixMilli()
+}
+
 // UpdateMeta updates metadata
 func (d *ServerDelegate) UpdateMeta(updates map[string]interface{}) {
 	d.mu.Lock()
