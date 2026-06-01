@@ -194,7 +194,7 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 	defer sp.End()
 	logIdStr := strconv.FormatInt(logId, 10)
 	ns := bucketName + "/" + rootPath
-	op := metrics.StartOp("logstore.add_entry", nil, nil, metrics.WithLogSegment(logId, entry.SegId))
+	op := metrics.StartOp("logstore.add_entry", nil, nil, metrics.WithInstance(bucketName, rootPath), metrics.WithLogSegment(logId, entry.SegId))
 	status := "success"
 	defer func() {
 		op.End(status)
@@ -297,7 +297,7 @@ func (l *logStore) GetBatchEntriesAdv(ctx context.Context, bucketName string, ro
 	defer sp.End()
 	logIdStr := strconv.FormatInt(logId, 10)
 	ns := bucketName + "/" + rootPath
-	op := metrics.StartOp("logstore.get_batch_entries", nil, nil, metrics.WithLogSegment(logId, segmentId))
+	op := metrics.StartOp("logstore.get_batch_entries", nil, nil, metrics.WithInstance(bucketName, rootPath), metrics.WithLogSegment(logId, segmentId))
 	status := "success"
 	defer func() {
 		op.End(status)
