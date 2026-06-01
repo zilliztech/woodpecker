@@ -14,6 +14,7 @@ package membership
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func approxEq(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
@@ -58,6 +59,8 @@ func TestSystemLoadSampler_EWMASmoothing(t *testing.T) {
 		readCPU:          func() float64 { v := calls[i]; return v * 100 },
 		readIOWait:       func() float64 { return 0 },
 		readMemRatio:     func() float64 { return 0 },
+		cpuNum:           func() int { return 1 },
+		now:              func() time.Time { return time.Unix(0, 0) },
 	}
 	if got := s.Sample(); !approxEq(got, 1.0) {
 		t.Fatalf("first sample want 1.0, got %v", got)
@@ -93,5 +96,50 @@ func TestNewSystemLoadSampler_DefaultsForOutOfRange(t *testing.T) {
 				t.Errorf("alpha: want %v, got %v", tc.wantAlpha, s.alpha)
 			}
 		})
+	}
+}
+
+func TestSystemLoadSampler_IOWaitRate(t *testing.T) {
+	// Cumulative iowait counter: 0s then 2s, 1 core, 1s elapsed between samples
+	// => second-sample ioFrac = (2-0)/(1*1) = 1.0 (clamped). alpha=1 => ewma=raw.
+	iowaitSeq := []float64{0, 2}
+	timeSeq := []time.Time{time.Unix(100, 0), time.Unix(101, 0)}
+	i := 0
+	s := &SystemLoadSampler{
+		memSoftThreshold: 0.85,
+		alpha:            1.0, // no smoothing, ewma == raw
+		readCPU:          func() float64 { return 0 },
+		readIOWait:       func() float64 { return iowaitSeq[i] },
+		readMemRatio:     func() float64 { return 0 },
+		cpuNum:           func() int { return 1 },
+		now:              func() time.Time { return timeSeq[i] },
+	}
+	if got := s.Sample(); got != 0 { // first sample: no prior, ioFrac=0, cpu=0
+		t.Fatalf("first sample want 0, got %v", got)
+	}
+	i = 1
+	if got := s.Sample(); !approxEq(got, 1.0) { // (2-0)/(1*1)=1.0
+		t.Fatalf("second sample want iowait rate 1.0, got %v", got)
+	}
+}
+
+func TestSystemLoadSampler_IOWaitRate_HalfBusyTwoCores(t *testing.T) {
+	// delta 1s iowait over 1s wall on 2 cores => 1/(1*2)=0.5
+	iowaitSeq := []float64{0, 1}
+	timeSeq := []time.Time{time.Unix(100, 0), time.Unix(101, 0)}
+	i := 0
+	s := &SystemLoadSampler{
+		memSoftThreshold: 0.85,
+		alpha:            1.0,
+		readCPU:          func() float64 { return 0 },
+		readIOWait:       func() float64 { return iowaitSeq[i] },
+		readMemRatio:     func() float64 { return 0 },
+		cpuNum:           func() int { return 2 },
+		now:              func() time.Time { return timeSeq[i] },
+	}
+	s.Sample()
+	i = 1
+	if got := s.Sample(); !approxEq(got, 0.5) {
+		t.Fatalf("want 0.5, got %v", got)
 	}
 }
