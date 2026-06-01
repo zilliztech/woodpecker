@@ -9,12 +9,14 @@ import (
 
 // Op represents an in-flight operation being tracked.
 type Op struct {
-	OpType    string
-	Labels    prometheus.Labels
-	LogID     int64
-	SegmentID int64
-	TraceID   string
-	SpanID    string
+	OpType     string
+	Labels     prometheus.Labels
+	BucketName string
+	RootPath   string
+	LogID      int64
+	SegmentID  int64
+	TraceID    string
+	SpanID     string
 
 	histo   prometheus.Observer // may be nil
 	start   time.Time
@@ -30,6 +32,14 @@ func WithLogSegment(logID, segmentID int64) OpOption {
 	return func(op *Op) {
 		op.LogID = logID
 		op.SegmentID = segmentID
+	}
+}
+
+// WithInstance sets the multi-tenant identity (bucket + root path) for the op.
+func WithInstance(bucketName, rootPath string) OpOption {
+	return func(op *Op) {
+		op.BucketName = bucketName
+		op.RootPath = rootPath
 	}
 }
 
