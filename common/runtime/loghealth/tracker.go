@@ -1,0 +1,361 @@
+package loghealth
+
+import (
+	"maps"
+	"net/http"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/zilliztech/woodpecker/common/metrics"
+)
+
+const (
+	// Node rollup states.
+	StateHealthy   = "Healthy"
+	StateUnhealthy = "Unhealthy"
+
+	// Per-log / per-direction states.
+	logStateHealthy = "Healthy"
+	logStateFailed  = "Failed"
+	logStateStalled = "Stalled"
+	logStateIdle    = "Idle"
+
+	// DefaultStallAfter is the no-success window after which an active-but-not-
+	// completing log is considered Stalled.
+	DefaultStallAfter = 10 * time.Minute
+
+	// Observed op types — MUST match the opType strings passed to metrics.StartOp
+	// in server/logstore.go.
+	opAddEntry        = "logstore.add_entry"
+	opGetBatchEntries = "logstore.get_batch_entries"
+	// statusSuccess is the literal status server/logstore.go sets on success.
+	statusSuccess = "success"
+	// statusEndOfFile marks a read that reached the end of the log — a healthy read
+	// outcome, not a failure (server/logstore.go sets it for EOF / entry-not-found).
+	statusEndOfFile = "end_of_file"
+)
+
+// Compile-time assertion that Tracker is an OpObserver.
+var _ metrics.OpObserver = (*Tracker)(nil)
+
+// namespace is woodpecker's per-tenant scope — a (bucketName, rootPath) pair,
+// the same identity metrics.BuildMetricsNamespace renders as "bucket/rootPath".
+type namespace struct {
+	bucketName string
+	rootPath   string
+}
+
+// logKey is the full per-log identity: a namespace plus the log ID. It is a
+// comparable struct used directly as a native map key, so lookups hash it in
+// place without boxing or allocation (unlike an interface-keyed sync.Map).
+type logKey struct {
+	ns    namespace
+	logID int64
+}
+
+// logHealth is the lock-free per-log state. Once its *logHealth is published in
+// the map, every update is a plain atomic store — no lock is taken to record.
+type logHealth struct {
+	writeAttemptMS atomic.Int64
+	writeSuccessMS atomic.Int64
+	writeFailureMS atomic.Int64
+	readSuccessMS  atomic.Int64
+	readFailureMS  atomic.Int64
+
+	writeFailureReason atomic.Pointer[string]
+	readFailureReason  atomic.Pointer[string]
+}
+
+// Tracker observes the metrics.Op stream and derives per-log read/write health.
+//
+// The hot path (recording an op on an already-seen log) is lock-free and
+// allocation-free: it atomically loads an immutable map snapshot and indexes it.
+// Only the first time a given log is observed does a writer take writerMu, clone
+// the map, insert the entry, and atomically swap the snapshot in (copy-on-write).
+// Thereafter the log's *logHealth never moves and updates are plain atomic stores.
+type Tracker struct {
+	stallAfter time.Duration
+	logs       atomic.Pointer[map[logKey]*logHealth]
+	writerMu   sync.Mutex // serializes copy-on-write inserts only; readers never take it
+}
+
+// LogSnapshot is the per-log view; (BucketName, RootPath, LogID) is the unique key.
+type LogSnapshot struct {
+	BucketName         string `json:"bucket_name"`
+	RootPath           string `json:"root_path"`
+	LogID              int64  `json:"log_id"`
+	State              string `json:"state"`
+	WriteState         string `json:"write_state"`
+	ReadState          string `json:"read_state"`
+	LastWriteSuccessMS int64  `json:"last_write_success_ms,omitempty"`
+	LastWriteFailureMS int64  `json:"last_write_failure_ms,omitempty"`
+	LastReadSuccessMS  int64  `json:"last_read_success_ms,omitempty"`
+	LastReadFailureMS  int64  `json:"last_read_failure_ms,omitempty"`
+	LastFailureReason  string `json:"last_failure_reason,omitempty"`
+}
+
+// Response is the node-wide payload, optionally filtered to one tenant.
+type Response struct {
+	State            string        `json:"state"`
+	Reason           string        `json:"reason"`
+	NodeID           string        `json:"node_id,omitempty"`
+	FilterBucketName string        `json:"filter_bucket_name,omitempty"`
+	FilterRootPath   string        `json:"filter_root_path,omitempty"`
+	TimestampMS      int64         `json:"timestamp_ms"`
+	StallAfterMS     int64         `json:"stall_after_ms"`
+	TrackedLogs      int           `json:"tracked_logs"`
+	HealthyLogs      int           `json:"healthy_logs"`
+	FailedLogs       int           `json:"failed_logs"`
+	StalledLogs      int           `json:"stalled_logs"`
+	IdleLogs         int           `json:"idle_logs"`
+	Logs             []LogSnapshot `json:"logs"`
+}
+
+// New creates a Tracker. stallAfter <= 0 uses DefaultStallAfter.
+func New(stallAfter time.Duration) *Tracker {
+	if stallAfter <= 0 {
+		stallAfter = DefaultStallAfter
+	}
+	t := &Tracker{stallAfter: stallAfter}
+	empty := make(map[logKey]*logHealth)
+	t.logs.Store(&empty)
+	return t
+}
+
+// --- metrics.OpObserver ---
+
+func (t *Tracker) OnOpStart(op *metrics.Op) uint64 {
+	if t == nil || op == nil {
+		return 0
+	}
+	if op.OpType == opAddEntry {
+		t.recordWriteAttempt(op.BucketName, op.RootPath, op.LogID, op.StartedAt())
+	}
+	return 0 // the tracker keeps no per-op handle
+}
+
+func (t *Tracker) OnOpEnd(op *metrics.Op, _ uint64, elapsed time.Duration, status string) {
+	if t == nil || op == nil {
+		return
+	}
+	now := op.StartedAt().Add(elapsed)
+	ok := status == statusSuccess
+	switch op.OpType {
+	case opAddEntry:
+		if ok {
+			t.recordWriteSuccess(op.BucketName, op.RootPath, op.LogID, now)
+		} else {
+			t.recordWriteFailure(op.BucketName, op.RootPath, op.LogID, now, status)
+		}
+	case opGetBatchEntries:
+		if ok || status == statusEndOfFile {
+			t.recordReadSuccess(op.BucketName, op.RootPath, op.LogID, now)
+		} else {
+			t.recordReadFailure(op.BucketName, op.RootPath, op.LogID, now, status)
+		}
+	}
+}
+
+// --- internal record methods (unit-testable without metrics.Op) ---
+
+func (t *Tracker) get(bucketName, rootPath string, logID int64) *logHealth {
+	key := logKey{ns: namespace{bucketName: bucketName, rootPath: rootPath}, logID: logID}
+	// Fast path: lock-free, allocation-free read of the current snapshot.
+	if lh := (*t.logs.Load())[key]; lh != nil {
+		return lh
+	}
+	// Slow path — first touch of this log. Clone-on-write under writerMu so the
+	// published map stays immutable for lock-free readers.
+	t.writerMu.Lock()
+	defer t.writerMu.Unlock()
+	cur := *t.logs.Load()
+	if lh := cur[key]; lh != nil {
+		return lh // another writer inserted it between our load and the lock
+	}
+	next := make(map[logKey]*logHealth, len(cur)+1)
+	maps.Copy(next, cur)
+	lh := &logHealth{}
+	next[key] = lh
+	t.logs.Store(&next)
+	return lh
+}
+
+func (t *Tracker) recordWriteAttempt(b, r string, logID int64, now time.Time) {
+	if t == nil {
+		return
+	}
+	t.get(b, r, logID).writeAttemptMS.Store(now.UnixMilli())
+}
+
+func (t *Tracker) recordWriteSuccess(b, r string, logID int64, now time.Time) {
+	if t == nil {
+		return
+	}
+	t.get(b, r, logID).writeSuccessMS.Store(now.UnixMilli())
+}
+
+func (t *Tracker) recordWriteFailure(b, r string, logID int64, now time.Time, reason string) {
+	if t == nil {
+		return
+	}
+	lh := t.get(b, r, logID)
+	lh.writeFailureMS.Store(now.UnixMilli())
+	lh.writeFailureReason.Store(&reason)
+}
+
+func (t *Tracker) recordReadSuccess(b, r string, logID int64, now time.Time) {
+	if t == nil {
+		return
+	}
+	t.get(b, r, logID).readSuccessMS.Store(now.UnixMilli())
+}
+
+func (t *Tracker) recordReadFailure(b, r string, logID int64, now time.Time, reason string) {
+	if t == nil {
+		return
+	}
+	lh := t.get(b, r, logID)
+	lh.readFailureMS.Store(now.UnixMilli())
+	lh.readFailureReason.Store(&reason)
+}
+
+// --- snapshot / classification ---
+
+// Snapshot is pure and deterministic (nodeID + now injected). Empty filters = all.
+func (t *Tracker) Snapshot(bucketFilter, rootPathFilter, nodeID string, now time.Time) Response {
+	resp := Response{
+		State:            StateHealthy,
+		Reason:           "no_observed_activity",
+		NodeID:           nodeID,
+		FilterBucketName: bucketFilter,
+		FilterRootPath:   rootPathFilter,
+		TimestampMS:      now.UnixMilli(),
+		StallAfterMS:     int64(t.stallAfter / time.Millisecond),
+		Logs:             []LogSnapshot{},
+	}
+	filtered := bucketFilter != "" && rootPathFilter != ""
+
+	// Load the immutable snapshot once; iterating it needs no lock, and each
+	// log's per-direction fields are read atomically inside snapshotLog.
+	for key, lh := range *t.logs.Load() {
+		if filtered && (key.ns.bucketName != bucketFilter || key.ns.rootPath != rootPathFilter) {
+			continue
+		}
+		resp.Logs = append(resp.Logs, t.snapshotLog(key, lh, now))
+	}
+
+	sort.Slice(resp.Logs, func(i, j int) bool {
+		a, b := resp.Logs[i], resp.Logs[j]
+		if a.BucketName != b.BucketName {
+			return a.BucketName < b.BucketName
+		}
+		if a.RootPath != b.RootPath {
+			return a.RootPath < b.RootPath
+		}
+		return a.LogID < b.LogID
+	})
+
+	resp.TrackedLogs = len(resp.Logs)
+	for _, s := range resp.Logs {
+		switch s.State {
+		case logStateHealthy:
+			resp.HealthyLogs++
+		case logStateFailed:
+			resp.FailedLogs++
+		case logStateStalled:
+			resp.StalledLogs++
+		case logStateIdle:
+			resp.IdleLogs++
+		}
+	}
+
+	switch {
+	case resp.TrackedLogs == 0:
+		// Healthy / no_observed_activity
+	case resp.HealthyLogs > 0:
+		resp.Reason = "observed_read_write_success"
+	case resp.IdleLogs == 0: // all Stalled or Failed
+		resp.State = StateUnhealthy
+		resp.Reason = "all_logs_failed_or_stalled"
+	default: // no healthy, but some idle -> quiet, not actively broken
+		resp.Reason = "idle_logs_present"
+	}
+	return resp
+}
+
+func (t *Tracker) snapshotLog(key logKey, lh *logHealth, now time.Time) LogSnapshot {
+	snap := LogSnapshot{
+		BucketName:         key.ns.bucketName,
+		RootPath:           key.ns.rootPath,
+		LogID:              key.logID,
+		LastWriteSuccessMS: lh.writeSuccessMS.Load(),
+		LastWriteFailureMS: lh.writeFailureMS.Load(),
+		LastReadSuccessMS:  lh.readSuccessMS.Load(),
+		LastReadFailureMS:  lh.readFailureMS.Load(),
+	}
+	// Surface the reason of whichever direction failed most recently. When both
+	// are zero (no failures), this loads the write pointer, which is nil -> "".
+	if snap.LastWriteFailureMS >= snap.LastReadFailureMS {
+		if rp := lh.writeFailureReason.Load(); rp != nil {
+			snap.LastFailureReason = *rp
+		}
+	} else if rp := lh.readFailureReason.Load(); rp != nil {
+		snap.LastFailureReason = *rp
+	}
+	writeAttempt := lh.writeAttemptMS.Load()
+	snap.WriteState = t.classify(snap.LastWriteSuccessMS, snap.LastWriteFailureMS, writeAttempt, now, true)
+	snap.ReadState = t.classify(snap.LastReadSuccessMS, snap.LastReadFailureMS, 0, now, false)
+	snap.State = overallLogState(snap.WriteState, snap.ReadState)
+	return snap
+}
+
+// classify derives one direction's state. Stalled requires allowStall (writes) AND a
+// prior success (lastSuccess > 0): a never-succeeded log is Failed or Idle, not Stalled.
+func (t *Tracker) classify(lastSuccess, lastFailure, lastAttempt int64, now time.Time, allowStall bool) string {
+	if lastSuccess == 0 && lastFailure == 0 && lastAttempt == 0 {
+		return logStateIdle
+	}
+	nowMS := now.UnixMilli()
+	stallMS := int64(t.stallAfter / time.Millisecond)
+
+	if lastSuccess > 0 && nowMS-lastSuccess <= stallMS {
+		return logStateHealthy
+	}
+	if allowStall && lastSuccess > 0 && nowMS-lastSuccess > stallMS &&
+		lastAttempt > lastSuccess && lastAttempt > lastFailure {
+		return logStateStalled
+	}
+	if lastFailure > lastSuccess && nowMS-lastFailure <= stallMS {
+		return logStateFailed
+	}
+	return logStateIdle
+}
+
+// overallLogState combines the two directions, worst-wins: Stalled > Failed > Healthy > Idle.
+func overallLogState(writeState, readState string) string {
+	switch {
+	case writeState == logStateStalled || readState == logStateStalled:
+		return logStateStalled
+	case writeState == logStateFailed || readState == logStateFailed:
+		return logStateFailed
+	case writeState == logStateHealthy || readState == logStateHealthy:
+		return logStateHealthy
+	default:
+		return logStateIdle
+	}
+}
+
+// Report is the production entry point for the admin callback: nodeID from
+// metrics.NodeID, now from time.Now(), and state -> HTTP status.
+func (t *Tracker) Report(bucketFilter, rootPathFilter string) (Response, int) {
+	if t == nil {
+		return Response{State: StateHealthy, Reason: "no_observed_activity", Logs: []LogSnapshot{}}, http.StatusOK
+	}
+	resp := t.Snapshot(bucketFilter, rootPathFilter, metrics.NodeID, time.Now())
+	if resp.State == StateUnhealthy {
+		return resp, http.StatusServiceUnavailable
+	}
+	return resp, http.StatusOK
+}

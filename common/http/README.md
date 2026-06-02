@@ -11,6 +11,7 @@ Woodpecker exposes an HTTP admin server on each node (default port `9091`, confi
 | GET | `/log/level` | Ops | Query/update log level at runtime |
 | GET | `/admin/memberlist` | Cluster | Gossip memberlist status |
 | GET | `/admin/node/status` | Lifecycle | Node status and membership info |
+| GET | `/admin/log-health` | Health | Node-wide per-log read/write health (optionally filtered by bucket/rootPath) |
 | POST | `/admin/node/decommission` | Lifecycle | Start graceful node decommission |
 | GET | `/admin/node/decommission/progress` | Lifecycle | Decommission progress and safe-to-terminate check |
 | GET | `/debug/pprof/` | Debug | Pprof index page (enabled by default, disable via `PPROF_ENABLE=false`) |
@@ -73,6 +74,32 @@ curl -H "Content-Type: application/json" http://localhost:9091/healthz
 **HTTP Status:** `200` if all healthy, `500` if any component is unhealthy.
 
 **Component health codes:** `Initializing` | `Healthy` | `Abnormal` | `StandBy` | `Stopping`
+
+---
+
+## Log Health
+
+`/admin/log-health` reports the local node's observed per-log read/write health, derived
+from real operation results (no synthetic heartbeat logs are created).
+
+```bash
+# All logs observed on this node
+curl "http://localhost:9091/admin/log-health"
+
+# Filter to a single Woodpecker instance (both params required, otherwise ignored)
+curl "http://localhost:9091/admin/log-health?bucket_name=a-bucket&root_path=files"
+```
+
+- Both `bucket_name` and `root_path` must be supplied to filter; a partial filter is ignored
+  and all tenants are returned.
+- Write health is the logstore "accept" outcome (`logstore.add_entry`); read health is
+  `logstore.get_batch_entries`. Each log is classified Healthy / Stalled / Failed / Idle.
+  Reaching the end of a log (EOF / entry-not-found) is a healthy read, not a failure.
+- Independent of `/healthz`: `/healthz` is process liveness, while `/admin/log-health` is
+  data-path health — a stalled or failed log never affects the `/healthz` result.
+- Cold start, idle, or no observed log activity returns `Healthy` (a quiet node is not
+  pulled out of rotation).
+- **HTTP Status:** `503` only when every tracked log is Stalled or Failed; `200` otherwise.
 
 ---
 
