@@ -70,10 +70,13 @@ type ServerConfig struct {
 	AdvertiseServiceAddr string
 	AdvertiseServicePort int
 
-	// Load-aware selection (issue #114). LoadReportInterval == 0 disables reporting.
-	LoadReportInterval time.Duration
-	MemSoftThreshold   float64 // memory ratio above which memory escalates load; default 0.85
-	EWMAAlpha          float64 // EWMA weight on newest sample; default 0.5
+	// Load-aware selection (issue #114). LoadAwareEnabled is the master switch for
+	// both load reporting and load-aware selection.
+	LoadAwareEnabled   bool
+	LoadReportInterval time.Duration // how often this node samples & publishes its load
+	LoadTTL            time.Duration // load older than this is treated as unknown by selectors
+	MemSoftThreshold   float64       // memory ratio above which memory escalates load; default 0.85
+	EWMAAlpha          float64       // EWMA weight on newest sample; default 0.5
 }
 
 func NewServerNode(config *ServerConfig) (*ServerNode, error) {
@@ -108,7 +111,7 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		ClusterName:   config.ClusterName,
 		Region:        config.Region,
 	}
-	discovery := NewServiceDiscovery()
+	discovery := NewServiceDiscovery(WithLoadAware(config.LoadAwareEnabled, config.LoadTTL))
 	delegate := NewServerDelegate(meta)
 	delegate.discovery = discovery // ingest peer metas (load hint) via push/pull MergeRemoteState
 	eventDel := NewEventDelegate(discovery, RoleServer, fmt.Sprintf("%s:%d", endpointAddr, endpointPort))
@@ -152,7 +155,7 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		loadCtx:      loadCtx,
 		loadCancel:   loadCancel,
 	}
-	if config.LoadReportInterval > 0 {
+	if config.LoadAwareEnabled && config.LoadReportInterval > 0 {
 		node.sampler = NewSystemLoadSampler(config.MemSoftThreshold, config.EWMAAlpha)
 		node.startLoadReporter(config.LoadReportInterval)
 	}

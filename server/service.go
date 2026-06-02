@@ -136,12 +136,14 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 	s.serverConfig = serverConfig
 	s.gossipSeeds = gossipSeeds
 
-	// Wire load-aware selection (issue #114) from config into the membership reporter.
-	if p := configuration.Woodpecker.Logstore.NodeSelectionPolicy; p.LoadAwareEnabled {
-		serverConfig.LoadReportInterval = p.LoadReportInterval.Duration.Duration()
-		serverConfig.MemSoftThreshold = p.MemSoftThreshold
-		serverConfig.EWMAAlpha = p.EWMAAlpha
-	}
+	// Wire load-aware selection (issue #114) config into the node, which gates both
+	// the load reporter and load-aware selection on LoadAwareEnabled.
+	p := configuration.Woodpecker.Logstore.NodeSelectionPolicy
+	serverConfig.LoadAwareEnabled = p.LoadAwareEnabled
+	serverConfig.LoadReportInterval = p.LoadReportInterval.Duration.Duration()
+	serverConfig.LoadTTL = p.LoadTTL.Duration.Duration()
+	serverConfig.MemSoftThreshold = p.MemSoftThreshold
+	serverConfig.EWMAAlpha = p.EWMAAlpha
 
 	return s, nil
 }
@@ -826,8 +828,6 @@ func (s *Server) waitAndStartCurrentNode(ctx context.Context) error {
 			zap.String("currentNodeID", currentNodeID),
 			zap.Int("attempt", attempt+1),
 			zap.String("initMemberlist", node.GetMemberlistStatus()))
-		p := s.cfg.Woodpecker.Logstore.NodeSelectionPolicy
-		node.GetDiscovery().SetLoadAwareConfig(p.LoadAwareEnabled, p.LoadTTL.Duration.Duration())
 		s.serverNodeMu.Lock()
 		s.serverNode = node
 		s.serverNodeMu.Unlock()

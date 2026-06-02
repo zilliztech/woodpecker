@@ -2078,8 +2078,7 @@ func TestSelectLoadAware_ReturnsLimitWhenSomeHighLoad(t *testing.T) {
 // random — a near-fully-loaded node is picked about as often as an idle one
 // (unlike the weighted path, where the busy node would be picked ~1% of the time).
 func TestSelectLoadAware_DisabledIgnoresLoad(t *testing.T) {
-	sd := newTestDiscoveryFixedNow()
-	sd.SetLoadAwareConfig(false, 0) // disable load-aware selection
+	sd := NewServiceDiscovery(WithLoadAware(false, 0)) // disable load-aware selection
 	nodes := []*proto.NodeMeta{
 		nodeWithLoad("idle", 0.0, 1000),  // weight 1.00 if weighted
 		nodeWithLoad("busy", 0.99, 1000), // weight 0.01 if weighted

@@ -54,7 +54,22 @@ type ServiceDiscovery struct {
 	nowFn       func() time.Time
 }
 
-func NewServiceDiscovery() *ServiceDiscovery {
+// DiscoveryOption configures a ServiceDiscovery at construction.
+type DiscoveryOption func(*ServiceDiscovery)
+
+// WithLoadAware sets whether selection is load-aware and the load freshness TTL.
+// When enabled is false, selection ignores load and picks uniformly at random.
+// A non-positive loadTTL keeps the default.
+func WithLoadAware(enabled bool, loadTTL time.Duration) DiscoveryOption {
+	return func(sd *ServiceDiscovery) {
+		sd.loadAware = enabled
+		if loadTTL > 0 {
+			sd.loadTTL = loadTTL
+		}
+	}
+}
+
+func NewServiceDiscovery(opts ...DiscoveryOption) *ServiceDiscovery {
 	cache, err := lru.New[string, *regexp.Regexp](100) // TODO should be configurable
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create regex cache: %v", err))
@@ -70,11 +85,15 @@ func NewServiceDiscovery() *ServiceDiscovery {
 		rgAzIndexKeys: make(map[string][]string),
 		regexCache:    cache,
 	}
-	sd.loadAware = true // matches config default loadAwareEnabled=true; disabled explicitly via SetLoadAwareConfig
+	// Defaults (load-aware on, matching config default loadAwareEnabled=true).
+	sd.loadAware = true
 	sd.loadTTL = 30 * time.Second
 	sd.unknownLoad = 0.5
 	sd.randFloat = rand.Float64
 	sd.nowFn = time.Now
+	for _, opt := range opts {
+		opt(sd)
+	}
 	return sd
 }
 
@@ -1048,18 +1067,6 @@ func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*proto.NodeMeta, limit
 		out = append(out, nodes[i])
 	}
 	return out
-}
-
-// SetLoadAwareConfig sets whether selection is load-aware and overrides load-aware
-// selection parameters. When enabled is false, selection ignores load entirely and
-// picks uniformly at random. A non-positive loadTTL keeps the existing default.
-func (sd *ServiceDiscovery) SetLoadAwareConfig(enabled bool, loadTTL time.Duration) {
-	sd.mu.Lock()
-	defer sd.mu.Unlock()
-	sd.loadAware = enabled
-	if loadTTL > 0 {
-		sd.loadTTL = loadTTL
-	}
 }
 
 func (sd *ServiceDiscovery) randomSelectNodes(nodes []*proto.NodeMeta, limit int) []*proto.NodeMeta {
