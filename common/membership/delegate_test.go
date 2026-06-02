@@ -152,7 +152,38 @@ func TestServerDelegate_MergeRemoteState(t *testing.T) {
 	d := NewServerDelegate(meta)
 	assert.NotPanics(t, func() {
 		d.MergeRemoteState([]byte("data"), true)
+		d.MergeRemoteState(nil, false)
 	})
+}
+
+// A peer's meta arriving via push/pull anti-entropy must be ingested into
+// discovery so its (best-effort) load hint becomes visible to local selection.
+// This replaces the previous UpdateNode-driven propagation.
+func TestServerDelegate_MergeRemoteState_UpdatesDiscovery(t *testing.T) {
+	sd := NewServiceDiscovery()
+	d := NewServerDelegate(&proto.NodeMeta{NodeId: "self"})
+	d.discovery = sd
+
+	peer := &proto.NodeMeta{
+		NodeId:        "peer1",
+		ResourceGroup: "rg1",
+		Az:            "az1",
+		Endpoint:      "1.2.3.4:5",
+		LoadFactor:    0.42,
+		LoadUpdatedAt: time.Now().UnixMilli(),
+	}
+	buf, err := pb.Marshal(peer)
+	assert.NoError(t, err)
+
+	d.MergeRemoteState(buf, false)
+
+	got := sd.GetAllServers()["peer1"]
+	if got == nil {
+		t.Fatalf("peer1 should be ingested into discovery from MergeRemoteState")
+	}
+	if got.GetLoadFactor() != 0.42 {
+		t.Fatalf("want propagated load 0.42, got %v", got.GetLoadFactor())
+	}
 }
 
 func TestServerDelegate_UpdateMeta(t *testing.T) {

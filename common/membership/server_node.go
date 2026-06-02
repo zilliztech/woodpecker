@@ -110,6 +110,7 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	}
 	discovery := NewServiceDiscovery()
 	delegate := NewServerDelegate(meta)
+	delegate.discovery = discovery // ingest peer metas (load hint) via push/pull MergeRemoteState
 	eventDel := NewEventDelegate(discovery, RoleServer, fmt.Sprintf("%s:%d", endpointAddr, endpointPort))
 
 	mlConfig := ml.DefaultLocalConfig()
@@ -230,9 +231,12 @@ func (n *ServerNode) reportLoadOnce() {
 	if n.sampler == nil {
 		return
 	}
+	// Stamp the fresh load onto our own meta only. We deliberately do NOT call
+	// memberlist.UpdateNode here: load is a best-effort hint, not worth churning
+	// memberlist node state / bumping incarnations on our own cadence (which also
+	// raced with status readers). memberlist already gossips this meta on its own
+	// push/pull cadence via LocalState, and peers ingest it in MergeRemoteState.
 	n.publishLoad()
-	// Trigger gossip of the refreshed meta. Best-effort; ignore timeout errors.
-	_ = n.memberlist.UpdateNode(2 * time.Second)
 	// Keep our own discovery copy current for local selections. Store a snapshot,
 	// not the live meta pointer, so the reporter's writes don't race with selectors.
 	snap := n.delegate.SnapshotMeta()

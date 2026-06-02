@@ -29,6 +29,9 @@ type ServerDelegate struct {
 	mu          sync.RWMutex
 	meta        *proto.NodeMeta
 	metaVersion int64 // metadata version, corresponds to version in ServerMeta for compatibility between nodes of different versions
+	// discovery receives peer metas merged in via push/pull anti-entropy
+	// (MergeRemoteState). Optional; nil disables ingestion. Issue #114.
+	discovery *ServiceDiscovery
 }
 
 func NewServerDelegate(meta *proto.NodeMeta) *ServerDelegate {
@@ -73,12 +76,29 @@ func (d *ServerDelegate) LocalState(join bool) []byte {
 	return data
 }
 
-// MergeRemoteState merges remote state
-func (d *ServerDelegate) MergeRemoteState(buf []byte, join bool) {}
+// MergeRemoteState ingests a peer's meta delivered by memberlist's push/pull
+// anti-entropy (the counterpart of LocalState). This is how a node's best-effort
+// load hint propagates: each node stamps its load onto its own meta, memberlist
+// gossips it via its existing push/pull cadence, and the receiver merges it into
+// discovery here. Best-effort: bad/empty payloads are ignored. Issue #114.
+func (d *ServerDelegate) MergeRemoteState(buf []byte, join bool) {
+	if d.discovery == nil || len(buf) == 0 {
+		return
+	}
+	var meta proto.NodeMeta
+	if err := pb.Unmarshal(buf, &meta); err != nil {
+		return
+	}
+	if meta.GetNodeId() == "" {
+		return
+	}
+	d.discovery.UpdateServer(meta.GetNodeId(), &meta)
+}
 
 // SetLoadFactor updates the node's published load factor (clamped to [0,1])
-// and stamps load_updated_at. The new value is picked up by the next
-// NodeMeta() gossip refresh (callers trigger memberlist.UpdateNode separately).
+// and stamps load_updated_at. The new value rides out on memberlist's existing
+// push/pull anti-entropy via LocalState (no forced UpdateNode); peers ingest it
+// in MergeRemoteState. Best-effort hint propagation.
 func (d *ServerDelegate) SetLoadFactor(load float64) {
 	if load < 0 {
 		load = 0
