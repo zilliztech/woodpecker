@@ -1135,7 +1135,6 @@ func TestNodeSelectionPolicyDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	p := cfg.Woodpecker.Logstore.NodeSelectionPolicy
 	assert.True(t, p.LoadAwareEnabled, "LoadAwareEnabled should default to true")
-	assert.Equal(t, 0.85, p.MaxLoadThreshold)
 	assert.Equal(t, 10, p.LoadReportInterval.Seconds())
 	assert.Equal(t, 30, p.LoadTTL.Seconds())
 	assert.Equal(t, 0.85, p.MemSoftThreshold)
@@ -1145,6 +1144,6 @@ func TestNodeSelectionPolicyDefaults(t *testing.T) {
 func TestNodeSelectionPolicyValidation(t *testing.T) {
 	cfg, err := NewConfiguration()
 	assert.NoError(t, err)
-	cfg.Woodpecker.Logstore.NodeSelectionPolicy.MaxLoadThreshold = 1.5
-	assert.Error(t, cfg.validateLogstoreConfig(), "MaxLoadThreshold > 1 should fail validation")
+	cfg.Woodpecker.Logstore.NodeSelectionPolicy.MemSoftThreshold = 1.5
+	assert.Error(t, cfg.validateLogstoreConfig(), "memSoftThreshold > 1 should fail validation")
 }

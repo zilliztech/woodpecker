@@ -251,13 +251,13 @@ var (
 
 	// WpQuorumSelectionSkew counts node-selection outcomes by mode, to observe
 	// how often load actually changed the selection (issue #114).
-	// mode: "weighted" (load-ranked), "fallthrough" (all candidates muted),
-	// "random_no_load" (no fresh load data, fell back to random).
+	// mode: "weighted" (load-ranked), "random_no_load" (no fresh load data,
+	// fell back to random).
 	WpQuorumSelectionSkew = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "quorum_selection_skew_total",
-		Help:      "Count of quorum node selections by mode (weighted/fallthrough/random_no_load)",
+		Help:      "Count of quorum node selections by mode (weighted/random_no_load)",
 	}, []string{"mode"})
 )
 

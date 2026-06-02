@@ -117,7 +117,6 @@ woodpecker:
       shutdownTimeout: 15 # Timeout for closing all processors during LogStore shutdown in seconds, default is 15 seconds
     nodeSelectionPolicy:
       loadAwareEnabled: true    # Prefer lower-load nodes among eligible candidates (issue #114)
-      maxLoadThreshold: 0.85    # Mute candidates whose load factor >= this from selection
       loadReportInterval: 10    # Seconds between a node publishing its own load factor
       loadTTL: 30               # Seconds; a node's load older than this is treated as unknown
       memSoftThreshold: 0.85    # Memory ratio above which memory escalates the load factor
