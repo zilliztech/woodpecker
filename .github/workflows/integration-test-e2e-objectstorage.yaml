@@ -104,6 +104,8 @@ jobs:
           for check in "${REQUIRED_CHECKS[@]}"; do
             [ "$check" = "$SELF" ] && continue
             bucket=$(echo "$CHECKS" | jq -r --arg n "$check" '.[] | select(.name == $n) | .bucket' | head -1)
+            # Skip checks not triggered for this PR (filtered out by `paths`); only block on checks that actually ran.
+            [ -z "$bucket" ] && continue
             if [ "$bucket" != "pass" ]; then
               ALL_PASSED=false
               break
