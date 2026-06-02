@@ -827,7 +827,7 @@ func (s *Server) waitAndStartCurrentNode(ctx context.Context) error {
 			zap.Int("attempt", attempt+1),
 			zap.String("initMemberlist", node.GetMemberlistStatus()))
 		if p := s.cfg.Woodpecker.Logstore.NodeSelectionPolicy; p.LoadAwareEnabled {
-			node.GetDiscovery().SetLoadAwareConfig(p.MaxLoadThreshold, p.LoadTTL.Duration.Duration())
+			node.GetDiscovery().SetLoadAwareConfig(p.LoadTTL.Duration.Duration())
 		}
 		s.serverNodeMu.Lock()
 		s.serverNode = node

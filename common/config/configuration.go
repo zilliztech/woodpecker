@@ -340,7 +340,7 @@ type ProcessorCleanupPolicyConfig struct {
 // NodeSelectionPolicyConfig controls load-aware quorum node selection (issue #114).
 type NodeSelectionPolicyConfig struct {
 	LoadAwareEnabled   bool            `yaml:"loadAwareEnabled"`   // master switch; default true
-	MaxLoadThreshold   float64         `yaml:"maxLoadThreshold"`   // mute candidates with load >= this; default 0.85
+	MaxLoadThreshold   float64         `yaml:"maxLoadThreshold"`   // deprecated/no-op: selection now ranks by load weight and never hard-excludes nodes; kept for config back-compat. default 0.85
 	LoadReportInterval DurationSeconds `yaml:"loadReportInterval"` // how often a node publishes its load; default 10s
 	LoadTTL            DurationSeconds `yaml:"loadTTL"`            // load older than this is treated as unknown; default 30s
 	MemSoftThreshold   float64         `yaml:"memSoftThreshold"`   // memory ratio above which memory escalates load; default 0.85

@@ -47,11 +47,10 @@ type ServiceDiscovery struct {
 	regexCache *lru.Cache[string, *regexp.Regexp]
 
 	// Load-aware selection (issue #114).
-	maxLoadThreshold float64       // mute candidates with known load >= this; default 0.85
-	loadTTL          time.Duration // load older than this is treated as unknown; default 30s
-	unknownLoad      float64       // assumed load for nodes with no fresh report; default 0.5
-	randFloat        func() float64
-	nowFn            func() time.Time
+	loadTTL     time.Duration // load older than this is treated as unknown; default 30s
+	unknownLoad float64       // assumed load for nodes with no fresh report; default 0.5
+	randFloat   func() float64
+	nowFn       func() time.Time
 }
 
 func NewServiceDiscovery() *ServiceDiscovery {
@@ -70,7 +69,6 @@ func NewServiceDiscovery() *ServiceDiscovery {
 		rgAzIndexKeys: make(map[string][]string),
 		regexCache:    cache,
 	}
-	sd.maxLoadThreshold = 0.85
 	sd.loadTTL = 30 * time.Second
 	sd.unknownLoad = 0.5
 	sd.randFloat = rand.Float64
@@ -1001,58 +999,27 @@ func (sd *ServiceDiscovery) selectLowestLoadNode(nodes []*proto.NodeMeta) *proto
 	return selected[0]
 }
 
-// selectLowestLoadNodes ranks already-eligible candidates by load using a
-// penalty box (mute nodes at/above maxLoadThreshold) plus weighted-probabilistic
-// selection (weight = 1 - load). Nodes with unknown/stale load get a neutral
-// weight. If every candidate has unknown load, it falls back to random; if the
-// penalty box would mute everything, it falls through to the full set (stick to
-// zone, accept higher latency).
+// selectLowestLoadNodes ranks candidates by load and returns up to `limit` of
+// them, preferring lower-load nodes. Load only influences a node's selection
+// weight (weight = 1 - load, so lower load => higher weight => more likely
+// picked first); it never makes a node unselectable. The result therefore always
+// contains min(limit, len(nodes)) distinct nodes, so quorum formation is never
+// starved even when every candidate is busy. Nodes with unknown/stale load get a
+// neutral weight; if no node has a known load, selection falls back to uniform
+// random.
 func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*proto.NodeMeta, limit int) []*proto.NodeMeta {
 	if len(nodes) == 0 {
 		return []*proto.NodeMeta{}
 	}
 
-	type cand struct {
-		node  *proto.NodeMeta
-		load  float64
-		known bool
-	}
-	cands := make([]cand, 0, len(nodes))
+	weights := make([]float64, len(nodes))
+	const minWeight = 0.01 // keep even a near-fully-loaded node selectable
 	anyKnown := false
-	for _, n := range nodes {
+	for i, n := range nodes {
 		load, known := sd.loadOf(n)
 		if known {
 			anyKnown = true
-		}
-		cands = append(cands, cand{node: n, load: load, known: known})
-	}
-
-	if !anyKnown {
-		metrics.WpQuorumSelectionSkew.WithLabelValues("random_no_load").Inc()
-		return sd.randomSelectNodes(nodes, limit)
-	}
-
-	// Penalty box: drop nodes whose known load is at/above the threshold.
-	eligible := make([]cand, 0, len(cands))
-	for _, c := range cands {
-		if c.known && c.load >= sd.maxLoadThreshold {
-			continue
-		}
-		eligible = append(eligible, c)
-	}
-	mode := "weighted"
-	if len(eligible) == 0 {
-		// Everyone is overloaded: fall through to the full set rather than return nothing.
-		eligible = cands
-		mode = "fallthrough"
-	}
-	metrics.WpQuorumSelectionSkew.WithLabelValues(mode).Inc()
-
-	weights := make([]float64, len(eligible))
-	const minWeight = 0.01 // keep even a near-fully-loaded eligible node selectable
-	for i, c := range eligible {
-		load := c.load
-		if !c.known {
+		} else {
 			load = sd.unknownLoad
 		}
 		w := 1 - load
@@ -1062,22 +1029,25 @@ func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*proto.NodeMeta, limit
 		weights[i] = w
 	}
 
+	if !anyKnown {
+		metrics.WpQuorumSelectionSkew.WithLabelValues("random_no_load").Inc()
+		return sd.randomSelectNodes(nodes, limit)
+	}
+	metrics.WpQuorumSelectionSkew.WithLabelValues("weighted").Inc()
+
 	picked := weightedSampleIndices(weights, limit, sd.randFloat)
 	out := make([]*proto.NodeMeta, 0, len(picked))
 	for _, i := range picked {
-		out = append(out, eligible[i].node)
+		out = append(out, nodes[i])
 	}
 	return out
 }
 
 // SetLoadAwareConfig overrides load-aware selection parameters. Non-positive or
 // out-of-range values keep the existing default for that parameter.
-func (sd *ServiceDiscovery) SetLoadAwareConfig(maxLoadThreshold float64, loadTTL time.Duration) {
+func (sd *ServiceDiscovery) SetLoadAwareConfig(loadTTL time.Duration) {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
-	if maxLoadThreshold > 0 && maxLoadThreshold <= 1 {
-		sd.maxLoadThreshold = maxLoadThreshold
-	}
 	if loadTTL > 0 {
 		sd.loadTTL = loadTTL
 	}
