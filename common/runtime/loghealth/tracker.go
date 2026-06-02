@@ -1,6 +1,7 @@
 package loghealth
 
 import (
+	"maps"
 	"net/http"
 	"sort"
 	"sync"
@@ -39,12 +40,17 @@ const (
 // Compile-time assertion that Tracker is an OpObserver.
 var _ metrics.OpObserver = (*Tracker)(nil)
 
-type logInstanceKey struct {
+// logKey is the full per-log identity. It is a comparable struct used directly
+// as a native map key, so lookups hash it in place without boxing or allocation
+// (unlike an interface-keyed sync.Map).
+type logKey struct {
 	bucketName string
 	rootPath   string
+	logID      int64
 }
 
-// logHealth is the lock-free per-log state, written via atomic stores under RLock.
+// logHealth is the lock-free per-log state. Once its *logHealth is published in
+// the map, every update is a plain atomic store — no lock is taken to record.
 type logHealth struct {
 	writeAttemptMS atomic.Int64
 	writeSuccessMS atomic.Int64
@@ -57,10 +63,16 @@ type logHealth struct {
 }
 
 // Tracker observes the metrics.Op stream and derives per-log read/write health.
+//
+// The hot path (recording an op on an already-seen log) is lock-free and
+// allocation-free: it atomically loads an immutable map snapshot and indexes it.
+// Only the first time a given log is observed does a writer take writerMu, clone
+// the map, insert the entry, and atomically swap the snapshot in (copy-on-write).
+// Thereafter the log's *logHealth never moves and updates are plain atomic stores.
 type Tracker struct {
-	mu         sync.RWMutex // guards map STRUCTURE only
 	stallAfter time.Duration
-	logs       map[logInstanceKey]map[int64]*logHealth
+	logs       atomic.Pointer[map[logKey]*logHealth]
+	writerMu   sync.Mutex // serializes copy-on-write inserts only; readers never take it
 }
 
 // LogSnapshot is the per-log view; (BucketName, RootPath, LogID) is the unique key.
@@ -100,10 +112,10 @@ func New(stallAfter time.Duration) *Tracker {
 	if stallAfter <= 0 {
 		stallAfter = DefaultStallAfter
 	}
-	return &Tracker{
-		stallAfter: stallAfter,
-		logs:       make(map[logInstanceKey]map[int64]*logHealth),
-	}
+	t := &Tracker{stallAfter: stallAfter}
+	empty := make(map[logKey]*logHealth)
+	t.logs.Store(&empty)
+	return t
 }
 
 // --- metrics.OpObserver ---
@@ -143,24 +155,24 @@ func (t *Tracker) OnOpEnd(op *metrics.Op, _ uint64, elapsed time.Duration, statu
 // --- internal record methods (unit-testable without metrics.Op) ---
 
 func (t *Tracker) get(bucketName, rootPath string, logID int64) *logHealth {
-	key := logInstanceKey{bucketName: bucketName, rootPath: rootPath}
-	t.mu.RLock()
-	lh := t.logs[key][logID] // indexing a nil inner map is safe -> nil
-	t.mu.RUnlock()
-	if lh != nil {
+	key := logKey{bucketName: bucketName, rootPath: rootPath, logID: logID}
+	// Fast path: lock-free, allocation-free read of the current snapshot.
+	if lh := (*t.logs.Load())[key]; lh != nil {
 		return lh
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	instanceLogs := t.logs[key]
-	if instanceLogs == nil {
-		instanceLogs = make(map[int64]*logHealth)
-		t.logs[key] = instanceLogs
+	// Slow path — first touch of this log. Clone-on-write under writerMu so the
+	// published map stays immutable for lock-free readers.
+	t.writerMu.Lock()
+	defer t.writerMu.Unlock()
+	cur := *t.logs.Load()
+	if lh := cur[key]; lh != nil {
+		return lh // another writer inserted it between our load and the lock
 	}
-	if lh = instanceLogs[logID]; lh == nil {
-		lh = &logHealth{}
-		instanceLogs[logID] = lh
-	}
+	next := make(map[logKey]*logHealth, len(cur)+1)
+	maps.Copy(next, cur)
+	lh := &logHealth{}
+	next[key] = lh
+	t.logs.Store(&next)
 	return lh
 }
 
@@ -219,16 +231,14 @@ func (t *Tracker) Snapshot(bucketFilter, rootPathFilter, nodeID string, now time
 	}
 	filtered := bucketFilter != "" && rootPathFilter != ""
 
-	t.mu.RLock()
-	for key, instanceLogs := range t.logs {
+	// Load the immutable snapshot once; iterating it needs no lock, and each
+	// log's per-direction fields are read atomically inside snapshotLog.
+	for key, lh := range *t.logs.Load() {
 		if filtered && (key.bucketName != bucketFilter || key.rootPath != rootPathFilter) {
 			continue
 		}
-		for logID, lh := range instanceLogs {
-			resp.Logs = append(resp.Logs, t.snapshotLog(key, logID, lh, now))
-		}
+		resp.Logs = append(resp.Logs, t.snapshotLog(key, lh, now))
 	}
-	t.mu.RUnlock()
 
 	sort.Slice(resp.Logs, func(i, j int) bool {
 		a, b := resp.Logs[i], resp.Logs[j]
@@ -269,11 +279,11 @@ func (t *Tracker) Snapshot(bucketFilter, rootPathFilter, nodeID string, now time
 	return resp
 }
 
-func (t *Tracker) snapshotLog(key logInstanceKey, logID int64, lh *logHealth, now time.Time) LogSnapshot {
+func (t *Tracker) snapshotLog(key logKey, lh *logHealth, now time.Time) LogSnapshot {
 	snap := LogSnapshot{
 		BucketName:         key.bucketName,
 		RootPath:           key.rootPath,
-		LogID:              logID,
+		LogID:              key.logID,
 		LastWriteSuccessMS: lh.writeSuccessMS.Load(),
 		LastWriteFailureMS: lh.writeFailureMS.Load(),
 		LastReadSuccessMS:  lh.readSuccessMS.Load(),

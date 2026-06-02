@@ -217,3 +217,50 @@ func TestTracker_ReadEndOfFileIsHealthy(t *testing.T) {
 	require.Equal(t, 0, snap.FailedLogs)
 	require.Equal(t, StateHealthy, snap.State)
 }
+
+// TestTracker_RecordHotPathZeroAlloc pins the core performance contract: once a
+// log is known, recording an op outcome on it must not allocate. This is what
+// makes the observer "as light as metrics" on the hot path. It also guards the
+// implementation choice — e.g. a sync.Map keyed by a struct would box the key
+// into an interface and allocate on every call, which this test would catch.
+func TestTracker_RecordHotPathZeroAlloc(t *testing.T) {
+	tr := New(testStall)
+	now := time.UnixMilli(1_000_000)
+	// Warm up: first touch is the only path allowed to allocate (it creates the
+	// per-log state). Everything after must be allocation-free.
+	tr.recordWriteSuccess("b", "r", 1, now)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		tr.recordWriteAttempt("b", "r", 1, now)
+		tr.recordWriteSuccess("b", "r", 1, now)
+		tr.recordReadSuccess("b", "r", 1, now)
+	})
+	require.Zero(t, allocs, "recording on a known log must be zero-allocation on the hot path")
+}
+
+// TestTracker_ConcurrentInsertRaceFree stresses the new-log insert path: every
+// (goroutine, i) pair is a distinct log, so all goroutines race to create new
+// entries while others snapshot concurrently. It must be race-free (run with
+// -race) and lose no inserts — a copy-on-write writer that stores without a
+// re-check under its lock would drop entries and fail the final count.
+func TestTracker_ConcurrentInsertRaceFree(t *testing.T) {
+	tr := New(testStall)
+	now := time.UnixMilli(1_000_000)
+	const goroutines = 16
+	const perG = 200
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < perG; i++ {
+				id := int64(g*perG + i) // unique across all goroutines
+				tr.recordWriteAttempt("b", "r", id, now)
+				tr.recordWriteSuccess("b", "r", id, now)
+				_ = tr.Snapshot("", "", "n", now)
+			}
+		}(g)
+	}
+	wg.Wait()
+	require.Equal(t, goroutines*perG, tr.Snapshot("", "", "n", now).TrackedLogs)
+}
