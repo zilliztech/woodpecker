@@ -110,6 +110,7 @@ woodpecker:
     segmentSyncPolicy:
       maxInterval: 200 # Maximum interval between two sync operations in milliseconds
       maxIntervalForLocalStorage: 10 # Maximum interval between sync operations for local storage backend, in milliseconds
+      maxIntervalForService: 1 # Maximum interval between sync operations for service mode, in milliseconds (service mode also syncs on service-side events)
       maxEntries: 10000 # Maximum entries number of write buffer
       maxBytes: 256000000 # Maximum size of write buffer in bytes
       maxFlushRetries: 5 # Maximum number of retries for sync operations

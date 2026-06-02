@@ -159,6 +159,7 @@ type SegmentReadPolicyConfig struct {
 type SegmentSyncPolicyConfig struct {
 	MaxInterval                DurationMilliseconds `yaml:"maxInterval"`
 	MaxIntervalForLocalStorage DurationMilliseconds `yaml:"maxIntervalForLocalStorage"`
+	MaxIntervalForService      DurationMilliseconds `yaml:"maxIntervalForService"`
 	MaxEntries                 int                  `yaml:"maxEntries"`
 	MaxBytes                   ByteSize             `yaml:"maxBytes"`
 	MaxFlushRetries            int                  `yaml:"maxFlushRetries"`
@@ -653,6 +654,9 @@ func (c *Configuration) validateLogstoreConfig() error {
 	if logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds() <= 0 {
 		return fmt.Errorf("segment sync policy max interval for local storage must be positive, got %d", logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
 	}
+	if logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds() <= 0 {
+		return fmt.Errorf("segment sync policy max interval for service must be positive, got %d", logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds())
+	}
 	if logstore.SegmentSyncPolicy.MaxEntries <= 0 {
 		return fmt.Errorf("segment sync policy max entries must be positive, got %d", logstore.SegmentSyncPolicy.MaxEntries)
 	}
@@ -771,6 +775,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{
 				MaxInterval:                DurationMilliseconds{Duration: Duration{duration: 1000 * 1000000}}, // 1000ms
 				MaxIntervalForLocalStorage: DurationMilliseconds{Duration: Duration{duration: 5 * 1000000}},    // 5ms
+				MaxIntervalForService:      DurationMilliseconds{Duration: Duration{duration: 1 * 1000000}},    // 1ms
 				MaxEntries:                 2000,
 				MaxBytes:                   ByteSize(100000000),
 				MaxFlushRetries:            3,
