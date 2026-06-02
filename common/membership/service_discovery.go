@@ -47,6 +47,7 @@ type ServiceDiscovery struct {
 	regexCache *lru.Cache[string, *regexp.Regexp]
 
 	// Load-aware selection (issue #114).
+	loadAware   bool          // when false, selection ignores load and picks uniformly at random
 	loadTTL     time.Duration // load older than this is treated as unknown; default 30s
 	unknownLoad float64       // assumed load for nodes with no fresh report; default 0.5
 	randFloat   func() float64
@@ -69,6 +70,7 @@ func NewServiceDiscovery() *ServiceDiscovery {
 		rgAzIndexKeys: make(map[string][]string),
 		regexCache:    cache,
 	}
+	sd.loadAware = true // matches config default loadAwareEnabled=true; disabled explicitly via SetLoadAwareConfig
 	sd.loadTTL = 30 * time.Second
 	sd.unknownLoad = 0.5
 	sd.randFloat = rand.Float64
@@ -1006,10 +1008,15 @@ func (sd *ServiceDiscovery) selectLowestLoadNode(nodes []*proto.NodeMeta) *proto
 // contains min(limit, len(nodes)) distinct nodes, so quorum formation is never
 // starved even when every candidate is busy. Nodes with unknown/stale load get a
 // neutral weight; if no node has a known load, selection falls back to uniform
-// random.
+// random. When load-aware selection is disabled, load is ignored entirely and
+// selection is uniform random.
 func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*proto.NodeMeta, limit int) []*proto.NodeMeta {
 	if len(nodes) == 0 {
 		return []*proto.NodeMeta{}
+	}
+
+	if !sd.loadAware {
+		return sd.randomSelectNodes(nodes, limit)
 	}
 
 	weights := make([]float64, len(nodes))
@@ -1043,11 +1050,13 @@ func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*proto.NodeMeta, limit
 	return out
 }
 
-// SetLoadAwareConfig overrides load-aware selection parameters. Non-positive or
-// out-of-range values keep the existing default for that parameter.
-func (sd *ServiceDiscovery) SetLoadAwareConfig(loadTTL time.Duration) {
+// SetLoadAwareConfig sets whether selection is load-aware and overrides load-aware
+// selection parameters. When enabled is false, selection ignores load entirely and
+// picks uniformly at random. A non-positive loadTTL keeps the existing default.
+func (sd *ServiceDiscovery) SetLoadAwareConfig(enabled bool, loadTTL time.Duration) {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
+	sd.loadAware = enabled
 	if loadTTL > 0 {
 		sd.loadTTL = loadTTL
 	}

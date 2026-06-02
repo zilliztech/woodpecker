@@ -2074,6 +2074,30 @@ func TestSelectLoadAware_ReturnsLimitWhenSomeHighLoad(t *testing.T) {
 	}
 }
 
+// With load-aware selection disabled, load is ignored and selection is uniform
+// random — a near-fully-loaded node is picked about as often as an idle one
+// (unlike the weighted path, where the busy node would be picked ~1% of the time).
+func TestSelectLoadAware_DisabledIgnoresLoad(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	sd.SetLoadAwareConfig(false, 0) // disable load-aware selection
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("idle", 0.0, 1000),  // weight 1.00 if weighted
+		nodeWithLoad("busy", 0.99, 1000), // weight 0.01 if weighted
+	}
+	counts := map[string]int{}
+	for i := 0; i < 5000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 {
+			counts[got[0].GetNodeId()]++
+		}
+	}
+	// Uniform random => busy ~2500/5000. Weighted would give busy ~50. The loose
+	// 1500 bound cleanly separates the two.
+	if counts["busy"] < 1500 {
+		t.Fatalf("disabled load-aware must select uniformly (busy ~half), got %v", counts)
+	}
+}
+
 func unique(ss []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(ss))
