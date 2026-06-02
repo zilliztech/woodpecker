@@ -327,6 +327,7 @@ type LogstoreConfig struct {
 	FencePolicy             FencePolicyConfig            `yaml:"fencePolicy"`
 	GRPCConfig              GRPCConfig                   `yaml:"grpc"`
 	ProcessorCleanupPolicy  ProcessorCleanupPolicyConfig `yaml:"processorCleanupPolicy"`
+	NodeSelectionPolicy     NodeSelectionPolicyConfig    `yaml:"nodeSelectionPolicy"`
 }
 
 // ProcessorCleanupPolicyConfig stores the background segment processor cleanup and shutdown configuration.
@@ -334,6 +335,15 @@ type ProcessorCleanupPolicyConfig struct {
 	CleanupInterval DurationSeconds `yaml:"cleanupInterval"` // How often to scan for idle processors
 	MaxIdleTime     DurationSeconds `yaml:"maxIdleTime"`     // How long a processor can be idle before cleanup
 	ShutdownTimeout DurationSeconds `yaml:"shutdownTimeout"` // Timeout for closing all processors during LogStore shutdown
+}
+
+// NodeSelectionPolicyConfig controls load-aware quorum node selection (issue #114).
+type NodeSelectionPolicyConfig struct {
+	LoadAwareEnabled   bool            `yaml:"loadAwareEnabled"`   // master switch; default true
+	LoadReportInterval DurationSeconds `yaml:"loadReportInterval"` // how often a node publishes its load; default 10s
+	LoadTTL            DurationSeconds `yaml:"loadTTL"`            // load older than this is treated as unknown; default 30s
+	MemSoftThreshold   float64         `yaml:"memSoftThreshold"`   // memory ratio above which memory escalates load; default 0.85
+	EWMAAlpha          float64         `yaml:"ewmaAlpha"`          // EWMA weight on newest sample; default 0.5
 }
 
 type StorageConfig struct {
@@ -684,6 +694,16 @@ func (c *Configuration) validateLogstoreConfig() error {
 		return fmt.Errorf("segment read policy max fetch threads must be positive, got %d", logstore.SegmentReadPolicy.MaxFetchThreads)
 	}
 
+	p := logstore.NodeSelectionPolicy
+	if p.LoadAwareEnabled {
+		if p.MemSoftThreshold < 0 || p.MemSoftThreshold > 1 {
+			return fmt.Errorf("nodeSelectionPolicy.memSoftThreshold must be in [0,1], got %v", p.MemSoftThreshold)
+		}
+		if p.EWMAAlpha <= 0 || p.EWMAAlpha > 1 {
+			return fmt.Errorf("nodeSelectionPolicy.ewmaAlpha must be in (0,1], got %v", p.EWMAAlpha)
+		}
+	}
+
 	return nil
 }
 
@@ -784,6 +804,13 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				CleanupInterval: DurationSeconds{Duration: Duration{duration: 60 * time.Second}},  // 1 min
 				MaxIdleTime:     DurationSeconds{Duration: Duration{duration: 300 * time.Second}}, // 5 min
 				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}},  // 15s
+			},
+			NodeSelectionPolicy: NodeSelectionPolicyConfig{
+				LoadAwareEnabled:   true,
+				LoadReportInterval: DurationSeconds{Duration: Duration{duration: 10 * time.Second}},
+				LoadTTL:            DurationSeconds{Duration: Duration{duration: 30 * time.Second}},
+				MemSoftThreshold:   0.85,
+				EWMAAlpha:          0.5,
 			},
 		},
 		Storage: StorageConfig{

@@ -1886,3 +1886,226 @@ func TestCompareHardVsSoftMode(t *testing.T) {
 		assert.Contains(t, err.Error(), "no matching nodes found")
 	})
 }
+
+func newTestDiscoveryFixedNow() *ServiceDiscovery {
+	sd := NewServiceDiscovery()
+	sd.nowFn = func() time.Time { return time.UnixMilli(1_000_000) }
+	return sd
+}
+
+func nodeWithLoad(id string, load float64, ageMS int64) *proto.NodeMeta {
+	return &proto.NodeMeta{
+		NodeId:        id,
+		LoadFactor:    load,
+		LoadUpdatedAt: 1_000_000 - ageMS,
+	}
+}
+
+func idsOf(nodes []*proto.NodeMeta) []string {
+	out := make([]string, len(nodes))
+	for i, n := range nodes {
+		out[i] = n.GetNodeId()
+	}
+	return out
+}
+
+// Weighted-probabilistic: the lower-load node (higher weight = 1-load) should win
+// the large majority of draws, but the busier node still gets some traffic — this
+// is what distinguishes weighted selection from greedy argmin (which would herd).
+func TestSelectLoadAware_PrefersLowerLoad(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("busy", 0.80, 1000), // weight 0.20
+		nodeWithLoad("idle", 0.10, 1000), // weight 0.90
+	}
+	counts := map[string]int{}
+	for i := 0; i < 5000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 {
+			counts[got[0].GetNodeId()]++
+		}
+	}
+	if counts["idle"] <= counts["busy"] {
+		t.Fatalf("idle (lower load) should be picked more often: %v", counts)
+	}
+	if counts["busy"] == 0 {
+		t.Fatalf("weighted (not greedy): busy should still receive some traffic: %v", counts)
+	}
+}
+
+// A high-load node is strongly de-prioritized but never excluded: load only
+// lowers a node's weight, it does not make the node unselectable. The low-load
+// node wins the large majority of single-node draws, yet the busy node still
+// receives some traffic over many draws.
+func TestSelectLoadAware_StronglyPrefersLowerLoadButStaysSelectable(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("over", 0.95, 1000), // weight 0.05
+		nodeWithLoad("ok", 0.50, 1000),   // weight 0.50
+	}
+	counts := map[string]int{}
+	for i := 0; i < 5000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 {
+			counts[got[0].GetNodeId()]++
+		}
+	}
+	if counts["ok"] <= counts["over"] {
+		t.Fatalf("lower-load node should be picked far more often: %v", counts)
+	}
+	if counts["over"] == 0 {
+		t.Fatalf("high-load node must remain selectable (load ranks, never excludes): %v", counts)
+	}
+}
+
+// When every candidate is high-load, the selector must still return the requested
+// node rather than nothing — quorum formation is never starved by load.
+func TestSelectLoadAware_AllHighLoadStillSelectable(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("a", 0.90, 1000),
+		nodeWithLoad("b", 0.95, 1000),
+	}
+	got := sd.selectLowestLoadNodes(nodes, 1)
+	if len(got) != 1 {
+		t.Fatalf("must still return a node when all are high-load, got %v", idsOf(got))
+	}
+	if id := got[0].GetNodeId(); id != "a" && id != "b" {
+		t.Fatalf("returned unexpected node %q", id)
+	}
+}
+
+// A reported load older than loadTTL is treated as unknown, so the node is NOT
+// muted even though its stale value (0.95) exceeds the threshold; it must remain
+// selectable. (If the value were fresh it would be muted and never appear.)
+func TestSelectLoadAware_StaleLoadTreatedAsUnknown(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("stale", 0.95, 60_000), // 60s old > 30s TTL => unknown
+		nodeWithLoad("fresh", 0.10, 1000),
+	}
+	seenStale := false
+	for i := 0; i < 5000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 && got[0].GetNodeId() == "stale" {
+			seenStale = true
+			break
+		}
+	}
+	if !seenStale {
+		t.Fatalf("stale load (older than TTL) should be unknown and survive the penalty box, but was never selected")
+	}
+}
+
+func TestSelectLoadAware_NoKnownLoadFallsBackToRandom(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		{NodeId: "x"},
+		{NodeId: "y"},
+	}
+	got := sd.selectLowestLoadNodes(nodes, 2)
+	if len(got) != 2 {
+		t.Fatalf("want both nodes when no load known, got %v", idsOf(got))
+	}
+}
+
+func TestSelectLoadAware_DistributesAcrossLowLoadNodes(t *testing.T) {
+	// Two low-load nodes (0.10, 0.15) and one busy (0.90). Over many trials BOTH
+	// low nodes receive substantial traffic — proving weighted spread rather than
+	// greedy argmin onto a single node — while the busy node, strongly
+	// de-prioritized but not excluded, gets only a small share.
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("low1", 0.10, 1000), // weight 0.90
+		nodeWithLoad("low2", 0.15, 1000), // weight 0.85
+		nodeWithLoad("busy", 0.90, 1000), // weight 0.10
+	}
+	counts := map[string]int{}
+	for i := 0; i < 3000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 {
+			counts[got[0].GetNodeId()]++
+		}
+	}
+	if counts["low1"] == 0 || counts["low2"] == 0 {
+		t.Errorf("both low-load nodes should receive traffic: %v", counts)
+	}
+	if counts["busy"] >= counts["low1"] || counts["busy"] >= counts["low2"] {
+		t.Errorf("busy node should receive far less traffic than the low-load nodes: %v", counts)
+	}
+}
+
+// Quorum requirement must win over load avoidance: when every candidate is
+// high-load, the selector must still return the requested count (a high load
+// only lowers a node's score, it never makes the node unselectable). This is
+// the regression for the "insufficient nodes (1/3)" quorum-formation failure.
+func TestSelectLoadAware_ReturnsLimitWhenAllHighLoad(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("a", 0.90, 1000),
+		nodeWithLoad("b", 0.95, 1000),
+		nodeWithLoad("c", 0.99, 1000),
+	}
+	got := sd.selectLowestLoadNodes(nodes, 3)
+	if len(got) != 3 {
+		t.Fatalf("must return all 3 nodes to form quorum even when all high-load, got %v", idsOf(got))
+	}
+	if len(unique(idsOf(got))) != 3 {
+		t.Fatalf("returned nodes must be distinct, got %v", idsOf(got))
+	}
+}
+
+// The penalty box previously hard-excluded over-threshold nodes, so a mix of
+// healthy + over-threshold nodes returned fewer than `limit`. The selector must
+// fill up to the requested count regardless of how many are over threshold.
+func TestSelectLoadAware_ReturnsLimitWhenSomeHighLoad(t *testing.T) {
+	sd := newTestDiscoveryFixedNow()
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("low", 0.10, 1000),
+		nodeWithLoad("high1", 0.90, 1000),
+		nodeWithLoad("high2", 0.95, 1000),
+	}
+	got := sd.selectLowestLoadNodes(nodes, 3)
+	if len(got) != 3 {
+		t.Fatalf("must return all 3 nodes for a 3-node quorum, got %v", idsOf(got))
+	}
+	if len(unique(idsOf(got))) != 3 {
+		t.Fatalf("returned nodes must be distinct, got %v", idsOf(got))
+	}
+}
+
+// With load-aware selection disabled, load is ignored and selection is uniform
+// random — a near-fully-loaded node is picked about as often as an idle one
+// (unlike the weighted path, where the busy node would be picked ~1% of the time).
+func TestSelectLoadAware_DisabledIgnoresLoad(t *testing.T) {
+	sd := NewServiceDiscovery(WithLoadAware(false, 0)) // disable load-aware selection
+	nodes := []*proto.NodeMeta{
+		nodeWithLoad("idle", 0.0, 1000),  // weight 1.00 if weighted
+		nodeWithLoad("busy", 0.99, 1000), // weight 0.01 if weighted
+	}
+	counts := map[string]int{}
+	for i := 0; i < 5000; i++ {
+		got := sd.selectLowestLoadNodes(nodes, 1)
+		if len(got) == 1 {
+			counts[got[0].GetNodeId()]++
+		}
+	}
+	// Uniform random => busy ~2500/5000. Weighted would give busy ~50. The loose
+	// 1500 bound cleanly separates the two.
+	if counts["busy"] < 1500 {
+		t.Fatalf("disabled load-aware must select uniformly (busy ~half), got %v", counts)
+	}
+}
+
+func unique(ss []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}

@@ -135,6 +135,16 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 	// Store the server config and seeds for later use in Prepare()
 	s.serverConfig = serverConfig
 	s.gossipSeeds = gossipSeeds
+
+	// Wire load-aware selection (issue #114) config into the node, which gates both
+	// the load reporter and load-aware selection on LoadAwareEnabled.
+	p := configuration.Woodpecker.Logstore.NodeSelectionPolicy
+	serverConfig.LoadAwareEnabled = p.LoadAwareEnabled
+	serverConfig.LoadReportInterval = p.LoadReportInterval.Duration.Duration()
+	serverConfig.LoadTTL = p.LoadTTL.Duration.Duration()
+	serverConfig.MemSoftThreshold = p.MemSoftThreshold
+	serverConfig.EWMAAlpha = p.EWMAAlpha
+
 	return s, nil
 }
 

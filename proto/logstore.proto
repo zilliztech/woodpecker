@@ -227,6 +227,8 @@ message NodeMeta {
   int64 last_update = 7; // Unix timestamp in milliseconds
   string cluster_name = 8;
   string region = 9;
+  double load_factor = 10;      // EWMA-smoothed bottleneck load in [0,1]; 0 if never reported
+  int64 load_updated_at = 11;   // Unix ms when load_factor was last set; 0 = never reported
 }
 
 // Node selection strategy types

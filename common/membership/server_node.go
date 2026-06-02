@@ -12,9 +12,11 @@
 package membership
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	ml "github.com/hashicorp/memberlist"
@@ -41,6 +43,11 @@ type ServerNode struct {
 	meta *proto.NodeMeta
 	// server cfg
 	serverConfig *ServerConfig
+	// load reporter lifecycle
+	loadCtx    context.Context
+	loadCancel context.CancelFunc
+	loadWG     sync.WaitGroup
+	sampler    LoadSampler
 }
 
 // ServerConfig Server configuration
@@ -62,6 +69,14 @@ type ServerConfig struct {
 	ServicePort          int
 	AdvertiseServiceAddr string
 	AdvertiseServicePort int
+
+	// Load-aware selection (issue #114). LoadAwareEnabled is the master switch for
+	// both load reporting and load-aware selection.
+	LoadAwareEnabled   bool
+	LoadReportInterval time.Duration // how often this node samples & publishes its load
+	LoadTTL            time.Duration // load older than this is treated as unknown by selectors
+	MemSoftThreshold   float64       // memory ratio above which memory escalates load; default 0.85
+	EWMAAlpha          float64       // EWMA weight on newest sample; default 0.5
 }
 
 func NewServerNode(config *ServerConfig) (*ServerNode, error) {
@@ -96,8 +111,9 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		ClusterName:   config.ClusterName,
 		Region:        config.Region,
 	}
-	discovery := NewServiceDiscovery()
+	discovery := NewServiceDiscovery(WithLoadAware(config.LoadAwareEnabled, config.LoadTTL))
 	delegate := NewServerDelegate(meta)
+	delegate.discovery = discovery // ingest peer metas (load hint) via push/pull MergeRemoteState
 	eventDel := NewEventDelegate(discovery, RoleServer, fmt.Sprintf("%s:%d", endpointAddr, endpointPort))
 
 	mlConfig := ml.DefaultLocalConfig()
@@ -126,16 +142,24 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create memberlist: %w", err)
 	}
-	discovery.UpdateServer(config.NodeID, meta) // cache for known node meta information list
+	discovery.UpdateServer(config.NodeID, delegate.SnapshotMeta()) // store a snapshot, not the live meta pointer
 
-	return &ServerNode{
+	loadCtx, loadCancel := context.WithCancel(context.Background())
+	node := &ServerNode{
 		memberlist:   list,
 		delegate:     delegate,
 		eventDel:     eventDel,
 		discovery:    discovery,
 		meta:         meta,
 		serverConfig: config,
-	}, nil
+		loadCtx:      loadCtx,
+		loadCancel:   loadCancel,
+	}
+	if config.LoadAwareEnabled && config.LoadReportInterval > 0 {
+		node.sampler = NewSystemLoadSampler(config.MemSoftThreshold, config.EWMAAlpha)
+		node.startLoadReporter(config.LoadReportInterval)
+	}
+	return node, nil
 }
 
 func (n *ServerNode) Join(existing []string) error {
@@ -185,8 +209,65 @@ func (n *ServerNode) PrintStatus() {
 	}
 }
 
-func (n *ServerNode) Leave() error    { return n.memberlist.Leave(5 * time.Second) }
-func (n *ServerNode) Shutdown() error { return n.memberlist.Shutdown() }
+// startLoadReporter periodically samples local load, publishes it into the
+// gossip meta, and refreshes the local discovery copy so this node's own
+// load is visible to its own selections too.
+func (n *ServerNode) startLoadReporter(interval time.Duration) {
+	n.loadWG.Add(1)
+	go func() {
+		defer n.loadWG.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		n.reportLoadOnce()
+		for {
+			select {
+			case <-n.loadCtx.Done():
+				return
+			case <-ticker.C:
+				n.reportLoadOnce()
+			}
+		}
+	}()
+}
+
+func (n *ServerNode) reportLoadOnce() {
+	if n.sampler == nil {
+		return
+	}
+	// Stamp the fresh load onto our own meta only. We deliberately do NOT call
+	// memberlist.UpdateNode here: load is a best-effort hint, not worth churning
+	// memberlist node state / bumping incarnations on our own cadence (which also
+	// raced with status readers). memberlist already gossips this meta on its own
+	// push/pull cadence via LocalState, and peers ingest it in MergeRemoteState.
+	n.publishLoad()
+	// Keep our own discovery copy current for local selections. Store a snapshot,
+	// not the live meta pointer, so the reporter's writes don't race with selectors.
+	snap := n.delegate.SnapshotMeta()
+	n.discovery.UpdateServer(snap.GetNodeId(), snap)
+}
+
+// publishLoad samples load and writes it into the gossip meta (no I/O).
+func (n *ServerNode) publishLoad() {
+	if n.sampler == nil {
+		return
+	}
+	n.delegate.SetLoadFactor(n.sampler.Sample())
+}
+
+func (n *ServerNode) Leave() error {
+	if n.loadCancel != nil {
+		n.loadCancel()
+	}
+	return n.memberlist.Leave(5 * time.Second)
+}
+
+func (n *ServerNode) Shutdown() error {
+	if n.loadCancel != nil {
+		n.loadCancel()
+	}
+	n.loadWG.Wait()
+	return n.memberlist.Shutdown()
+}
 
 func (n *ServerNode) GetMemberlist() *ml.Memberlist {
 	return n.memberlist
