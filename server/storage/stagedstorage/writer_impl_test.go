@@ -2566,6 +2566,14 @@ func TestStagedFileWriter_Close_ErrorCleansUpResources(t *testing.T) {
 	writer.runCancel()
 	time.Sleep(100 * time.Millisecond)
 
+	// Block the flush-queue processor from (re)starting during Close. Otherwise
+	// awaitAllFlushTasks can win the race where its select takes the buffered
+	// "send termination signal" branch, a processor consumes that signal and
+	// flips allUploadingTaskDone to true, and awaitAllFlushTasks returns nil --
+	// making this test flaky. With no processor to consume the signal, the
+	// cancelled ctx/runCtx deterministically drive awaitAllFlushTasks to error.
+	writer.flushTasksQueueProcessing.Store(true)
+
 	// Close with an already-cancelled context so awaitAllFlushTasks returns error immediately
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
