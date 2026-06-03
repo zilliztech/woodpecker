@@ -942,16 +942,31 @@ func TestMiniCluster_CustomAZRGPreservation(t *testing.T) {
 	t.Logf("Restarting node 1...")
 	_, err = cluster.RestartNode(t, 1, cluster.GetSeedList())
 	assert.NoError(t, err)
-	time.Sleep(3 * time.Second)
 
-	// Verify the restarted node has preserved AZ/RG via discovery
-	updatedServers := discovery.GetAllServers()
-	assert.Equal(t, 3, len(updatedServers), "Should discover all 3 nodes after restart")
-
+	// Wait for the client to rediscover all 3 nodes (including the restarted
+	// node1) with node1's AZ/RG re-propagated via gossip. The async seed-join
+	// reconcile loop runs on a backoff of up to 10s, so a fixed sleep is racy
+	// (a 2-node snapshot also makes node1's AZ/RG read as "" from a missing map
+	// key). Poll until membership has actually converged.
 	restartedMeta := make(map[string][2]string)
-	for _, srv := range updatedServers {
-		restartedMeta[srv.NodeId] = [2]string{srv.Az, srv.ResourceGroup}
-		t.Logf("After restart: %s -> AZ=%s, RG=%s", srv.NodeId, srv.Az, srv.ResourceGroup)
+	require.Eventually(t, func() bool {
+		updatedServers := discovery.GetAllServers()
+		if len(updatedServers) != 3 {
+			return false
+		}
+		m := make(map[string][2]string)
+		for _, srv := range updatedServers {
+			m[srv.NodeId] = [2]string{srv.Az, srv.ResourceGroup}
+		}
+		if m["node1"][0] != "us-west-2" || m["node1"][1] != "rg-standard" {
+			return false
+		}
+		restartedMeta = m
+		return true
+	}, 30*time.Second, 500*time.Millisecond, "Client should rediscover all 3 nodes with node1's AZ/RG preserved after restart")
+
+	for nodeID, meta := range restartedMeta {
+		t.Logf("After restart: %s -> AZ=%s, RG=%s", nodeID, meta[0], meta[1])
 	}
 
 	// Verify AZ/RG preserved after restart
