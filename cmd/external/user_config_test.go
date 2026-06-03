@@ -309,6 +309,7 @@ woodpecker:
     segmentSyncPolicy:
       maxInterval: 500ms
       maxIntervalForLocalStorage: 5ms
+      maxIntervalForService: 3ms
       maxBytes: 128M
       retryInterval: 1s
       maxFlushSize: 2MB
@@ -346,6 +347,7 @@ etcd:
 	// Verify DurationMilliseconds parsing (default unit: milliseconds)
 	assert.Equal(t, 500, userConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
 	assert.Equal(t, 5, userConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
+	assert.Equal(t, 3, userConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds())
 	assert.Equal(t, 1000, userConfig.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
 	assert.Equal(t, 10000, userConfig.Minio.RequestTimeoutMs.Milliseconds())
 	assert.Equal(t, 5000, userConfig.Etcd.RequestTimeout.Milliseconds())

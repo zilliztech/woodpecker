@@ -51,6 +51,23 @@ func TestNewLocalFileWriter(t *testing.T) {
 	assert.False(t, writer.fenced.Load())
 }
 
+// TestLocalFileWriter_UsesMaxIntervalForLocalStorage verifies that local storage
+// mode drives its sync ticker from MaxIntervalForLocalStorage and is independent
+// of MaxIntervalForService (issue #172).
+func TestLocalFileWriter_UsesMaxIntervalForLocalStorage(t *testing.T) {
+	dir := getTempDir(t)
+	cfg, _ := config.NewConfiguration()
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(13)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = config.NewDurationMillisecondsFromInt(99)
+
+	writer, err := NewLocalFileWriter(context.Background(), dir, 1, 0, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, writer)
+	defer writer.Close(context.Background())
+
+	assert.Equal(t, 13, writer.maxIntervalMs)
+}
+
 func TestNewLocalFileWriterWithMode_RecoveryMode(t *testing.T) {
 	dir := getTempDir(t)
 	cfg, _ := config.NewConfiguration()

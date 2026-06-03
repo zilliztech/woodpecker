@@ -48,6 +48,24 @@ func newTestConfig(t *testing.T) *config.Configuration {
 	return cfg
 }
 
+// TestStagedFileWriter_UsesMaxIntervalForService verifies that service mode
+// (staged storage) drives its sync ticker from MaxIntervalForService and is
+// independent of MaxIntervalForLocalStorage (issue #172).
+func TestStagedFileWriter_UsesMaxIntervalForService(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = config.NewDurationMillisecondsFromInt(7)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(123)
+	scheduler := NewSyncScheduler(1)
+	defer scheduler.Close()
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, scheduler)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	assert.Equal(t, 7, writer.maxIntervalMs)
+}
+
 // --- NewStagedFileWriter ---
 
 func TestNewStagedFileWriter(t *testing.T) {
@@ -356,7 +374,7 @@ func TestStagedFileWriter_Sync(t *testing.T) {
 func TestStagedFileWriter_ScheduledSyncFlushesBufferedEntry(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(10)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = config.NewDurationMillisecondsFromInt(10)
 	scheduler := NewSyncScheduler(1)
 	defer scheduler.Close()
 
@@ -380,7 +398,7 @@ func TestStagedFileWriter_ScheduledSyncFlushesBufferedEntry(t *testing.T) {
 func TestStagedFileWriter_ScheduledSyncWaitsForMissingFirstEntry(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(10)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = config.NewDurationMillisecondsFromInt(10)
 	scheduler := NewSyncScheduler(1)
 	defer scheduler.Close()
 
@@ -425,7 +443,7 @@ func TestStagedFileWriter_ScheduledSyncWaitsForMissingFirstEntry(t *testing.T) {
 func TestStagedFileWriter_ScheduledSyncReschedulesWhenJobAlreadySubmitted(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(10)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = config.NewDurationMillisecondsFromInt(10)
 	scheduler := NewSyncScheduler(1)
 	defer scheduler.Close()
 

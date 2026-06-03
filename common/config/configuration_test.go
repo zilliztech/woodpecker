@@ -62,6 +62,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 2, config.Woodpecker.Client.Quorum.GetAckQuorumSize())
 	assert.Equal(t, 200, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
 	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
+	assert.Equal(t, 1, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds())
 	assert.Equal(t, 10000, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
 	assert.Equal(t, int64(256000000), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64())
 	assert.Equal(t, 5, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries)
@@ -158,6 +159,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.Quorum.GetAckQuorumSize())
 	assert.Equal(t, 1000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
+	assert.Equal(t, 1, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds())
 	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
 	assert.Equal(t, int64(100000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64())
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries)
@@ -446,6 +448,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 						SegmentSyncPolicy: SegmentSyncPolicyConfig{
 							MaxInterval:                NewDurationMillisecondsFromInt(1000),
 							MaxIntervalForLocalStorage: NewDurationMillisecondsFromInt(5),
+							MaxIntervalForService:      NewDurationMillisecondsFromInt(1),
 							MaxEntries:                 2000,
 							MaxBytes:                   NewByteSize(100000000),
 							MaxFlushRetries:            3,
@@ -671,6 +674,12 @@ func TestValidateLogstoreConfig_Errors(t *testing.T) {
 		cfg := newValidCfg()
 		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = NewDurationMillisecondsFromInt(0)
 		assert.ErrorContains(t, cfg.Validate(), "max interval for local storage must be positive")
+	})
+
+	t.Run("SyncPolicy MaxIntervalForService<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = NewDurationMillisecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "max interval for service must be positive")
 	})
 
 	t.Run("SyncPolicy MaxEntries<=0", func(t *testing.T) {
@@ -1001,6 +1010,7 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 				SegmentSyncPolicy: SegmentSyncPolicyConfig{
 					MaxInterval:                NewDurationMillisecondsFromInt(1000),
 					MaxIntervalForLocalStorage: NewDurationMillisecondsFromInt(5),
+					MaxIntervalForService:      NewDurationMillisecondsFromInt(1),
 					MaxEntries:                 2000,
 					MaxBytes:                   NewByteSize(100000000),
 					MaxFlushRetries:            3,

@@ -139,7 +139,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
 	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64()
 	flushQueueSize := max(int(maxBytes/blockSize), 300)
-	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds()
+	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds()
 	syncScheduler := DefaultSyncScheduler()
 	if len(schedulers) > 0 && schedulers[0] != nil {
 		syncScheduler = schedulers[0]
@@ -188,7 +188,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		writtenBytes:        0,
 		maxFlushSize:        blockSize,
 		maxBufferEntries:    int64(maxBufferEntries),                    // Default max entries per buffer
-		maxIntervalMs:       maxInterval,                                // 10ms default sync interval for more responsive syncing
+		maxIntervalMs:       maxInterval,                                // service-mode sync interval (maxIntervalForService, 1ms default); event-driven sync also triggers flushes
 		flushTaskChan:       make(chan *blockFlushTask, flushQueueSize), // Increased buffer size to reduce blocking
 		syncScheduler:       syncScheduler,
 		runCtx:              runCtx,

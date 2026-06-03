@@ -314,6 +314,9 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 	if src.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds() > 0 {
 		dst.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = src.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage
 	}
+	if src.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds() > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxIntervalForService = src.Logstore.SegmentSyncPolicy.MaxIntervalForService
+	}
 	if src.Logstore.SegmentSyncPolicy.MaxEntries > 0 {
 		dst.Logstore.SegmentSyncPolicy.MaxEntries = src.Logstore.SegmentSyncPolicy.MaxEntries
 	}
