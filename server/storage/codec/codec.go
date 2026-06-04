@@ -201,8 +201,9 @@ func ParseHeader(payload []byte) (*HeaderRecord, error) {
 		FirstEntryID: int64(binary.LittleEndian.Uint64(payload[4:])),
 	}
 
-	// Verify version
-	if h.Version != FormatVersion {
+	// Verify version (accept the v5 layout written by older releases as well as the
+	// current format, mirroring ParseFooter's backward-compatible version check).
+	if h.Version != 5 && h.Version != FormatVersion {
 		return nil, errors.New("invalid format version")
 	}
 
