@@ -1,0 +1,149 @@
+name: Upgrade Compat Service
+
+on:
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "server/storage/codec/**"
+      - "meta/**"
+      - "proto/**"
+      - "tests/upgrade/**"
+      - "tests/docker/upgrade/**"
+      - "tests/docker/framework/**"
+      - "deployments/docker-compose.yaml"
+      - "build/**"
+      - ".github/workflows/integration-test-upgrade-service.yaml"
+  workflow_call:
+
+concurrency:
+  group: integration-test-upgrade-service-${{ github.event_name == 'workflow_call' && 'nightly-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  Upgrade-Compat-Service:
+    name: Upgrade Compat Service
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve baseline image upgrade-base:v0.1.30
+        id: baseline
+        run: |
+          IMG="ghcr.io/${{ github.repository }}/upgrade-base:v0.1.30"
+          if docker pull "$IMG"; then
+            echo "image=${IMG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Baseline pull failed; building from the v0.1.30 worktree as a fallback..."
+            git worktree add /tmp/wp-v0130 v0.1.30
+            ( cd /tmp/wp-v0130 && ./build/build_image.sh ubuntu22.04 auto -t "$IMG" )
+            echo "image=${IMG}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build current HEAD image
+        run: |
+          ./build/build_image.sh ubuntu22.04 auto -t woodpecker:current
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Run upgrade compatibility test (service mode)
+        env:
+          WOODPECKER_IMAGE_BASELINE: ${{ steps.baseline.outputs.image }}
+          WOODPECKER_IMAGE_TARGET: woodpecker:current
+        run: |
+          set +e
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output-upgrade-service.json \
+            -- -timeout=25m \
+            -run "^TestUpgradeCompat_ServiceMode$" \
+            ./tests/docker/upgrade/...
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-upgrade-service.json 2>/dev/null || true
+          exit $exit_code
+
+      - name: Dump docker logs on failure
+        if: failure()
+        run: |
+          docker ps -a || true
+          for c in $(docker ps -aq); do
+            echo "===== logs for container $c ($(docker inspect --format '{{.Name}}' "$c")) ====="
+            docker logs --tail 200 "$c" 2>&1 || true
+          done
+
+      - name: Upload test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-compat-service-logs
+          path: |
+            test-output-upgrade-service.json
+            tests/docker/upgrade/logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Handle failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          gh pr comment $PR --body "❌ **Upgrade Compat Service** failed. Comment \`/rerun-upgrade-service\` to rerun, or \`/rerun\` to rerun all failed checks."
+          gh pr edit $PR --remove-label "ci-passed" 2>/dev/null || true
+
+      - name: Add ci-passed label
+        if: success() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          SELF="${{ github.workflow }}"
+          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
+          CHECKS=$(gh pr checks $PR --json name,bucket 2>/dev/null || echo "[]")
+          ALL_PASSED=true
+          for check in "${REQUIRED_CHECKS[@]}"; do
+            [ "$check" = "$SELF" ] && continue
+            bucket=$(echo "$CHECKS" | jq -r --arg n "$check" '.[] | select(.name == $n) | .bucket' | head -1)
+            # Skip checks not triggered for this PR (filtered out by `paths`); only block on checks that actually ran.
+            [ -z "$bucket" ] && continue
+            if [ "$bucket" != "pass" ]; then
+              ALL_PASSED=false
+              break
+            fi
+          done
+          if [ "$ALL_PASSED" = true ]; then
+            gh pr edit $PR --add-label "ci-passed"
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -p woodpecker-upgrade \
+            -f deployments/docker-compose.yaml \
+            -f tests/docker/upgrade/docker-compose.upgrade.yaml down -v 2>/dev/null || true
+          git worktree remove --force /tmp/wp-v0130 2>/dev/null || rm -rf /tmp/wp-v0130

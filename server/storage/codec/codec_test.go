@@ -477,6 +477,20 @@ func TestMagicValidation(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid format version")
 	})
 
+	t.Run("BackwardCompatibleHeaderVersionV5", func(t *testing.T) {
+		// HEAD must still read v5 block headers written by older releases
+		// (v0.1.13), mirroring ParseFooter's v5 acceptance. Without this,
+		// object-storage upgrade reads fail with "block header record not found"
+		// because DecodeRecordList stops at the first (v5) header. Regression
+		// guard for the v0.1.13 -> latest upgrade path (issue #169).
+		payload := make([]byte, HeaderRecordSize)
+		binary.LittleEndian.PutUint16(payload[0:], 5) // legacy v5 version
+		copy(payload[12:], HeaderMagic[:])            // valid magic
+		h, err := ParseHeader(payload)
+		assert.NoError(t, err)
+		assert.Equal(t, uint16(5), h.Version)
+	})
+
 	t.Run("InvalidHeaderMagic", func(t *testing.T) {
 		// Create a payload with correct version but invalid magic
 		payload := make([]byte, HeaderRecordSize)

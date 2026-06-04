@@ -1,4 +1,4 @@
-name: E2E Service
+name: Upgrade Compat Object Storage
 
 on:
   pull_request:
@@ -10,23 +10,29 @@ on:
       - "go.mod"
       - "go.sum"
       - "config/**"
-      - ".github/workflows/integration-test-e2e-service.yaml"
+      - "server/storage/codec/**"
+      - "meta/**"
+      - "proto/**"
+      - "tests/upgrade/**"
+      - ".github/workflows/integration-test-upgrade-objectstorage.yaml"
       - ".github/docker-compose-ci.yaml"
   workflow_call:
 
 concurrency:
-  group: integration-test-e2e-service-${{ github.event_name == 'workflow_call' && 'nightly-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  group: integration-test-upgrade-objectstorage-${{ github.event_name == 'workflow_call' && 'nightly-' || '' }}${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  E2E-Service:
-    name: E2E Service
+  Upgrade-Compat-Object-Storage:
+    name: Upgrade Compat Object Storage
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -55,58 +61,30 @@ jobs:
           mc alias set local http://localhost:9000 minioadmin minioadmin
           mc mb local/a-bucket --ignore-existing
 
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@latest
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run e2e service storage tests
+      - name: Run upgrade compatibility test (object storage)
+        env:
+          GHCR_REPO: ghcr.io/${{ github.repository }}
         run: |
-          E2E_TESTS="TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup"
-          set +e
-          gotestsum --format pkgname-and-test-fails \
-            --jsonfile test-output-service.json \
-            -- -race -cover -failfast -timeout=25m \
-            -run "^(${E2E_TESTS})/ServiceStorage$" \
-            ./tests/integration/...
-          exit_code=$?
-          echo ""
-          echo "=== Test Results ==="
-          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-service.json
-          exit $exit_code
+          # run_upgrade_compat.sh resolves the v0.1.13 writer image from
+          # $GHCR_REPO with a pull-fast-path / build-fallback, runs the writer
+          # container, builds the HEAD verifier, and runs the verifier.
+          bash tests/upgrade/run_upgrade_compat.sh --storage minio
 
-      - name: Run e2e service failover tests
-        run: |
-          set +e
-          gotestsum --format pkgname-and-test-fails \
-            --jsonfile test-output-failover.json \
-            -- -race -cover -failfast -timeout=25m \
-            -run "^TestStagedStorageService" \
-            ./tests/integration/...
-          exit_code=$?
-          echo ""
-          echo "=== Test Results ==="
-          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-failover.json
-          exit $exit_code
-
-      - name: Run e2e service upgrade tests
-        run: |
-          set +e
-          gotestsum --format pkgname-and-test-fails \
-            --jsonfile test-output-upgrade.json \
-            -- -race -cover -failfast -timeout=25m \
-            -run "^TestServiceUpgrade" \
-            ./tests/integration/...
-          exit_code=$?
-          echo ""
-          echo "=== Test Results ==="
-          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-upgrade.json
-          exit $exit_code
-
-      - name: Upload test output on failure
+      - name: Upload test artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-logs-e2e-service
-          path: test-output-*.json
+          name: upgrade-compat-objectstorage-artifacts
+          path: |
+            /tmp/woodpecker_upgrade_data/
+            /tmp/upgrade-test-*.log
           retention-days: 7
           if-no-files-found: ignore
 
@@ -116,7 +94,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR=${{ github.event.pull_request.number }}
-          gh pr comment $PR --body "❌ **E2E Service** failed. Comment \`/rerun-e2e-service\` to rerun, or \`/rerun\` to rerun all failed checks."
+          gh pr comment $PR --body "❌ **Upgrade Compat Object Storage** failed. Comment \`/rerun-upgrade-objectstorage\` to rerun, or \`/rerun\` to rerun all failed checks."
           gh pr edit $PR --remove-label "ci-passed" 2>/dev/null || true
 
       - name: Add ci-passed label

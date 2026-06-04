@@ -1,4 +1,4 @@
-name: Component Integration Test
+name: Upgrade Compat Local
 
 on:
   pull_request:
@@ -10,23 +10,29 @@ on:
       - "go.mod"
       - "go.sum"
       - "config/**"
-      - ".github/workflows/integration-test-components.yaml"
+      - "server/storage/codec/**"
+      - "meta/**"
+      - "proto/**"
+      - "tests/upgrade/**"
+      - ".github/workflows/integration-test-upgrade-local.yaml"
       - ".github/docker-compose-ci.yaml"
   workflow_call:
 
 concurrency:
-  group: integration-test-components-${{ github.event_name == 'workflow_call' && 'nightly-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  group: integration-test-upgrade-local-${{ github.event_name == 'workflow_call' && 'nightly-' || '' }}${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  Component-Test:
-    name: Component Integration Test
+  Upgrade-Compat-Local:
+    name: Upgrade Compat Local
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -48,36 +54,30 @@ jobs:
           done
           echo "MinIO is ready"
 
-      - name: Create MinIO bucket
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run upgrade compatibility test (local storage)
+        env:
+          GHCR_REPO: ghcr.io/${{ github.repository }}
         run: |
-          wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc
-          chmod +x /usr/local/bin/mc
-          mc alias set local http://localhost:9000 minioadmin minioadmin
-          mc mb local/a-bucket --ignore-existing
+          # run_upgrade_compat.sh resolves the v0.1.13 writer image from
+          # $GHCR_REPO with a pull-fast-path / build-fallback, runs the writer
+          # container, builds the HEAD verifier, and runs the verifier.
+          bash tests/upgrade/run_upgrade_compat.sh --storage local
 
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@latest
-
-      - name: Run component integration tests
-        run: |
-          set +e
-          gotestsum --format pkgname-and-test-fails \
-            --jsonfile test-output.json \
-            -- -race -cover -failfast -timeout=20m \
-            -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestServiceUpgrade|TestClientLogWriter)" \
-            ./tests/integration/...
-          exit_code=$?
-          echo ""
-          echo "=== Test Results ==="
-          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output.json
-          exit $exit_code
-
-      - name: Upload test output on failure
+      - name: Upload test artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-logs-components
-          path: test-output.json
+          name: upgrade-compat-local-artifacts
+          path: |
+            /tmp/woodpecker_upgrade_data/
+            /tmp/upgrade-test-*.log
           retention-days: 7
           if-no-files-found: ignore
 
@@ -87,7 +87,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR=${{ github.event.pull_request.number }}
-          gh pr comment $PR --body "❌ **Component Integration Test** failed. Comment \`/rerun-component-test\` to rerun, or \`/rerun\` to rerun all failed checks."
+          gh pr comment $PR --body "❌ **Upgrade Compat Local** failed. Comment \`/rerun-upgrade-local\` to rerun, or \`/rerun\` to rerun all failed checks."
           gh pr edit $PR --remove-label "ci-passed" 2>/dev/null || true
 
       - name: Add ci-passed label

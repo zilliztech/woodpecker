@@ -1,0 +1,110 @@
+name: Prime Upgrade Baselines
+
+on:
+  schedule:
+    # 15:00 UTC = 23:00 Beijing Time (UTC+8), before the 16:15 nightly run.
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "Force rebuild even if the images already exist in GHCR"
+        type: boolean
+        required: false
+        default: false
+  workflow_call:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prime-baselines:
+    name: Prime Upgrade Baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tags
+        id: tags
+        run: |
+          # Content hash for the writer image must match content_hash() in
+          # tests/upgrade/run_upgrade_compat.sh and build_old_writer.sh
+          # (sha256 of manifest.go + writer/*.go, first 16 hex chars).
+          WRITER_HASH=$( { cat tests/upgrade/manifest.go; find tests/upgrade/writer -type f -name '*.go' | sort | while read -r f; do cat "$f"; done; } | sha256sum | awk '{print substr($1, 1, 16)}')
+          REPO="${{ github.repository }}"
+          {
+            echo "writer_hash=${WRITER_HASH}"
+            echo "base_image=ghcr.io/${REPO}/upgrade-base:v0.1.30"
+            echo "writer_image=ghcr.io/${REPO}/upgrade-writer:v0.1.13-${WRITER_HASH}"
+            echo "writer_image_latest=ghcr.io/${REPO}/upgrade-writer:v0.1.13-latest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check if upgrade-base:v0.1.30 exists
+        id: check_base
+        run: |
+          FORCE="${{ inputs.force_rebuild }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if docker manifest inspect "${{ steps.tags.outputs.base_image }}" >/dev/null 2>&1; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check if upgrade-writer image exists
+        id: check_writer
+        run: |
+          FORCE="${{ inputs.force_rebuild }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if docker manifest inspect "${{ steps.tags.outputs.writer_image }}" >/dev/null 2>&1; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push upgrade-base:v0.1.30
+        if: steps.check_base.outputs.should_build == 'true'
+        run: |
+          git worktree add /tmp/wp-v0130 v0.1.30
+          ( cd /tmp/wp-v0130 && ./build/build_image.sh ubuntu22.04 auto -t "${{ steps.tags.outputs.base_image }}" )
+          docker push "${{ steps.tags.outputs.base_image }}"
+          git worktree remove --force /tmp/wp-v0130 || rm -rf /tmp/wp-v0130
+
+      - name: Build and push upgrade-writer image
+        if: steps.check_writer.outputs.should_build == 'true'
+        run: |
+          # build_old_writer.sh worktrees branch-v0.1.13, injects the generic
+          # writer + manifest sources, go builds, and docker builds + pushes
+          # the tagged image.
+          ./tests/upgrade/build_old_writer.sh "${{ steps.tags.outputs.writer_image }}" --push
+          # Also publish a moving v0.1.13-latest tag for convenience / debugging.
+          docker tag "${{ steps.tags.outputs.writer_image }}" "${{ steps.tags.outputs.writer_image_latest }}"
+          docker push "${{ steps.tags.outputs.writer_image_latest }}"
+
+      - name: Report status
+        run: |
+          echo "upgrade-base:v0.1.30 -> ${{ steps.check_base.outputs.should_build == 'true' && 'built & pushed' || 'already present' }}"
+          echo "${{ steps.tags.outputs.writer_image }} -> ${{ steps.check_writer.outputs.should_build == 'true' && 'built & pushed' || 'already present' }}"

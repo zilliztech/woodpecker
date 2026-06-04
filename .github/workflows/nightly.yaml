@@ -11,6 +11,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  prime:
+    name: Prime Upgrade Baselines
+    uses: ./.github/workflows/prime-upgrade-baselines.yaml
+    secrets: inherit
+
   e2e-local:
     name: E2E Local
     uses: ./.github/workflows/integration-test-e2e-local.yaml
@@ -24,6 +29,24 @@ jobs:
   e2e-service:
     name: E2E Service
     uses: ./.github/workflows/integration-test-e2e-service.yaml
+    secrets: inherit
+
+  upgrade-local:
+    name: Upgrade Compat Local
+    needs: [prime]
+    uses: ./.github/workflows/integration-test-upgrade-local.yaml
+    secrets: inherit
+
+  upgrade-objectstorage:
+    name: Upgrade Compat Object Storage
+    needs: [prime]
+    uses: ./.github/workflows/integration-test-upgrade-objectstorage.yaml
+    secrets: inherit
+
+  upgrade-service:
+    name: Upgrade Compat Service
+    needs: [prime]
+    uses: ./.github/workflows/integration-test-upgrade-service.yaml
     secrets: inherit
 
   component-test:
