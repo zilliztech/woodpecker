@@ -62,11 +62,11 @@ injection_smoke_check() {
   log "Injection smoke-check PASSED (${before}ms -> ${after}ms)"
 }
 
-run_phase() {  # $1 = phase
+run_phase() {  # $1 = phase ; $2 = optional extra go-test flags
   kubectl exec -i "$CLIENT_POD" -- /bin/bash -c "
     set -e; cd $WORKLOAD_IN_POD
     go test -v -count=1 -timeout 16m -run TestNetworkChaosWorkload \
-      -config-file /tmp/test-config.yaml -phase $1 -record-file $RECORD_FILE ."
+      -config-file /tmp/test-config.yaml -phase $1 -record-file $RECORD_FILE ${2:-} ."
 }
 
 restart_sum() {  # I6: total server container restarts (host-side; client pod is itself under chaos)
@@ -88,9 +88,10 @@ collect_artifacts() {  # mirror integration-test-chaos.yaml log collection
 
 run_steady() {  # $1 = manifest basename
   local m="$SCRIPT_DIR/manifests/$1.yaml" rc0; rc0=$(restart_sum)
-  run_phase warmup
-  kubectl apply -f "$m"
-  kubectl wait --for=condition=AllInjected "networkchaos/$1" -n "$NAMESPACE" --timeout=60s
+  run_phase warmup || { collect_artifacts "$1"; return 1; }
+  kubectl apply -f "$m" || { collect_artifacts "$1"; return 1; }
+  kubectl wait --for=condition=AllInjected "networkchaos/$1" -n "$NAMESPACE" --timeout=60s \
+      || { collect_artifacts "$1"; kubectl delete -f "$m" --ignore-not-found; return 1; }
   run_phase under-chaos || { collect_artifacts "$1"; kubectl delete -f "$m" --ignore-not-found; return 1; }
   kubectl delete -f "$m" --ignore-not-found
   run_phase recovery || { collect_artifacts "$1"; return 1; }
@@ -101,9 +102,9 @@ run_steady() {  # $1 = manifest basename
 
 run_blip() {  # $1 = manifest basename (N3/N5)
   local m="$SCRIPT_DIR/manifests/$1.yaml" rc0; rc0=$(restart_sum)
-  run_phase warmup
-  ( run_phase under-chaos ) & local wl=$!
-  for _ in $(seq 1 6); do kubectl apply -f "$m"; sleep 5; kubectl delete -f "$m" --ignore-not-found; sleep 5; done
+  run_phase warmup || { collect_artifacts "$1"; return 1; }
+  ( run_phase under-chaos "-window 60" ) & local wl=$!
+  for _ in $(seq 1 6); do kubectl apply -f "$m" || warn "blip apply failed for $1"; sleep 5; kubectl delete -f "$m" --ignore-not-found; sleep 5; done
   wait "$wl" || { collect_artifacts "$1"; return 1; }
   run_phase recovery && run_phase verify || { collect_artifacts "$1"; return 1; }
   [ "$(restart_sum)" -eq "$rc0" ] || { collect_artifacts "$1"; fail "I6 VIOLATION: server restarted during $1"; }
