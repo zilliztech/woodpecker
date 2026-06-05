@@ -58,3 +58,8 @@ jobs:
     name: Chaos Test
     uses: ./.github/workflows/integration-test-chaos.yaml
     secrets: inherit
+
+  chaos-mesh-test:
+    name: Chaos Mesh Test
+    uses: ./.github/workflows/nightly-chaos-mesh.yaml
+    secrets: inherit
