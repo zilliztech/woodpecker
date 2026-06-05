@@ -1,6 +1,12 @@
 package workload
 
-import ("context"; "errors"; "testing"; "github.com/stretchr/testify/require")
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestPayloadHashDeterministic(t *testing.T) {
 	require.Equal(t, payloadHash([]byte("abc")), payloadHash([]byte("abc")))

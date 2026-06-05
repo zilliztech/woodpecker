@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/woodpecker"
@@ -33,7 +34,7 @@ func newClient(ctx context.Context, t *testing.T) (woodpecker.Client, func()) {
 	require.NoError(t, err)
 	cli, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
 	require.NoError(t, err)
-	return cli, func() { _ = cli.Close(ctx); _ = etcdCli.Close() }
+	return cli, func() { _ = cli.Close(ctx) }
 }
 
 func TestNetworkChaosWorkload(t *testing.T) {
@@ -107,11 +108,13 @@ func runLoadPhase(ctx context.Context, t *testing.T, cli woodpecker.Client, trun
 					continue
 				}
 				atomic.AddInt64(&m.ok, 1)
-				_ = rec.append(AckRecord{
+				if err := rec.append(AckRecord{
 					LogName: L.name, LogId: L.id,
 					SegmentId: res.LogMessageId.SegmentId, EntryId: res.LogMessageId.EntryId,
 					PayloadHash: ph, Seq: seq,
-				})
+				}); err != nil {
+					t.Errorf("failed to persist ack record (logId=%d seg=%d entry=%d): %v", L.id, res.LogMessageId.SegmentId, res.LogMessageId.EntryId, err)
+				}
 			}
 		}(L)
 	}
