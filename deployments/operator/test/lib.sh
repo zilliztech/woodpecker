@@ -36,10 +36,16 @@ warn() { echo -e "\033[1;33m[$(date +'%H:%M:%S')] WARN:\033[0m $*"; }
 fail() { echo -e "\033[0;31m[$(date +'%H:%M:%S')] FAIL:\033[0m $*"; exit 1; }
 
 wp_minikube_start() {
-    if minikube status -p "$CLUSTER_NAME" &>/dev/null; then log "cluster $CLUSTER_NAME up"; return 0; fi
+    log "=== Step 1: Starting minikube cluster '$CLUSTER_NAME' ==="
+    if minikube status -p "$CLUSTER_NAME" &>/dev/null; then
+        log "Cluster '$CLUSTER_NAME' already running, skipping"
+        return 0
+    fi
     local rt=""; [ -n "$MK_RUNTIME" ] && rt="--container-runtime=$MK_RUNTIME"
     minikube start -p "$CLUSTER_NAME" --cpus="$MK_CPUS" --memory="$MK_MEMORY" --driver=docker $rt
     kubectl config use-context "$CLUSTER_NAME"
+    kubectl cluster-info
+    log "Step 1 done: minikube running"
 }
 
 wp_deploy_operator() {
@@ -297,9 +303,11 @@ EOF
     kubectl wait --for=condition=Ready pod/"$CLIENT_POD" --timeout=300s
 }
 
-wp_write_client_config() {
-    local replicas="${1:-$REPLICAS}" seeds=""
-    for i in $(seq 0 $((replicas-1))); do
+wp_write_client_config() {     # $1 = seed replica count ; $2 (optional) = replicaCount override
+    local seed_replicas="${1:-$REPLICAS}"
+    local replica_count="${2:-$seed_replicas}"
+    local seeds=""
+    for i in $(seq 0 $((seed_replicas-1))); do
         seeds="$seeds
             - ${CR_NAME}-server-${i}.${CR_NAME}-server-headless.${NAMESPACE}.svc:18080"
     done
@@ -309,7 +317,7 @@ woodpecker:
   client:
     segmentRollingPolicy: { maxSize: 1000 }
     quorum:
-      replicaCount: ${replicas}
+      replicaCount: ${replica_count}
       quorumBufferPools:
         - name: default-region-pool
           seeds:${seeds}

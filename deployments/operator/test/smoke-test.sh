@@ -156,8 +156,8 @@ do_step8() {
     kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance="$CR_NAME" --timeout=300s
     kubectl get woodpeckerclusters
 
-    wp_write_client_config "$NEW_REPLICAS"
-    log "Test config updated with $NEW_REPLICAS seeds"
+    wp_write_client_config "$NEW_REPLICAS" "$REPLICAS"
+    log "Test config updated with $NEW_REPLICAS seeds (replicaCount=$REPLICAS)"
 
     log "Running E2E tests after scale-up..."
     kubectl exec -i "$CLIENT_POD" -- /bin/bash -c '
