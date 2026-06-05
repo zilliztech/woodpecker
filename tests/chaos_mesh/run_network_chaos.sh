@@ -38,6 +38,11 @@ preload_image() {  # $1 = image ref
 
 bringup() {
   wp_minikube_start
+  # Single-node minikube has no zone label, but the operator's StatefulSet sets a topology
+  # spread constraint (topologyKey=topology.kubernetes.io/zone, whenUnsatisfiable=DoNotSchedule),
+  # so server pods stay Pending ("didn't match pod topology spread constraints"). Give the node a
+  # synthetic zone/region so all replicas can schedule (we don't test physical AZ separation).
+  kubectl label node "$CLUSTER_NAME" topology.kubernetes.io/zone=zone-a topology.kubernetes.io/region=region-local --overwrite
   preload_image "$ETCD_IMG"
   preload_image "$MINIO_IMG"
   wp_deploy_operator; wp_build_wp_image
