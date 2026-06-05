@@ -75,7 +75,7 @@ do_clean() {
     kubectl delete statefulset "${CR_NAME}-server" 2>/dev/null || true
     kubectl delete configmap my-wp-config 2>/dev/null || true
     kubectl delete pvc -l app.kubernetes.io/instance="$CR_NAME" 2>/dev/null || true
-    kubectl delete pod wp-client-test --force --grace-period=0 2>/dev/null || true
+    kubectl delete pod "$CLIENT_POD" --force --grace-period=0 2>/dev/null || true
     kubectl delete pod/etcd svc/etcd pod/minio svc/minio 2>/dev/null || true
 
     cd "$OPERATOR_DIR"
