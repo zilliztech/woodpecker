@@ -23,8 +23,24 @@ source "$PROJECT_ROOT/deployments/operator/test/lib.sh"
 WORKLOAD_IN_POD=/root/woodpecker/tests/chaos_mesh/workload
 RECORD_FILE=/tmp/wp-chaos-acked.jsonl
 
+# External dependency images (keep etcd/minio in sync with deployments/operator/test/lib.sh).
+ETCD_IMG="quay.io/coreos/etcd:v3.5.18"
+MINIO_IMG="minio/minio:RELEASE.2024-06-13T22-53-53Z"
+
+# The minikube node can't reach external registries when the host uses a loopback proxy
+# (HTTP_PROXY=127.0.0.1:xxxx — minikube logs "Local proxy ignored"). The HOST can pull (its
+# proxy works), so for images we don't build locally we pull on the host and load into the node.
+preload_image() {  # $1 = image ref
+  log "preload: $1"
+  docker pull "$1" || fail "host 'docker pull $1' failed (proxy/network?)"
+  minikube -p "$CLUSTER_NAME" image load "$1" || fail "'minikube image load $1' failed"
+}
+
 bringup() {
-  wp_minikube_start; wp_deploy_operator; wp_build_wp_image
+  wp_minikube_start
+  preload_image "$ETCD_IMG"
+  preload_image "$MINIO_IMG"
+  wp_deploy_operator; wp_build_wp_image
   wp_deploy_deps; wp_create_cr; wp_wait_healthy
   wp_launch_client_pod; wp_write_client_config "$REPLICAS"
 }
@@ -41,9 +57,18 @@ install_chaos_mesh() {
   log "installing chaos-mesh (chaosDaemon.runtime=$daemon_runtime socket=$daemon_socket)"
   helm repo add chaos-mesh https://charts.chaos-mesh.org 2>/dev/null || true
   helm repo update
+  # Preload chaos-mesh images: the node can't reach ghcr.io through the host's loopback proxy.
+  # dashboard.create=false trims a pod we don't need (saves resources on the tight node).
+  local cm_imgs img
+  cm_imgs=$(helm template chaos-mesh chaos-mesh/chaos-mesh -n chaos-mesh --set dashboard.create=false 2>/dev/null \
+    | grep -hoE 'image: *"?[^"[:space:]]+' | sed -E 's/image: *"?//' | sort -u)
+  while read -r img; do
+    [ -n "$img" ] && preload_image "$img"
+  done <<< "$cm_imgs"
   helm install chaos-mesh chaos-mesh/chaos-mesh -n chaos-mesh --create-namespace \
     --set chaosDaemon.runtime="$daemon_runtime" \
     --set chaosDaemon.socketPath="$daemon_socket" \
+    --set dashboard.create=false \
     --wait --timeout 5m
   kubectl -n chaos-mesh rollout status daemonset/chaos-daemon --timeout=180s
 }
