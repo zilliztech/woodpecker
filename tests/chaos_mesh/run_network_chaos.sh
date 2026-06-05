@@ -8,7 +8,13 @@ export CLUSTER_NAME="wp-chaos"
 export CR_NAME="my-woodpecker"
 export NAMESPACE="default"
 export REPLICAS=3
-export MK_CPUS="${MK_CPUS:-6}" MK_MEMORY="${MK_MEMORY:-8192}" MK_RUNTIME="${MK_RUNTIME:-containerd}"
+# Default to minikube's docker runtime: it uses built-in bridge networking and needs no
+# external CNI image. The containerd runtime forces a kindnet CNI whose image
+# (kindest/kindnetd:<ver>) frequently cannot be pulled on constrained/offline hosts, leaving
+# the cluster with no pod networking ("failed to find network info for sandbox"). Chaos Mesh
+# supports the docker runtime, and the injection smoke-check guards correctness either way.
+# Override with MK_RUNTIME=containerd only where the kindnet image is reachable.
+export MK_CPUS="${MK_CPUS:-6}" MK_MEMORY="${MK_MEMORY:-8192}" MK_RUNTIME="${MK_RUNTIME:-}"
 export WP_IMG="zilliztech/woodpecker:v0.1.26"
 export CLIENT_POD="wp-client-test"
 
@@ -24,11 +30,20 @@ bringup() {
 }
 
 install_chaos_mesh() {
+  # chaos-daemon must point at the SAME container runtime minikube uses, else injection is a
+  # silent no-op (caught by injection_smoke_check). Empty MK_RUNTIME = minikube's docker runtime.
+  local daemon_runtime daemon_socket
+  if [ "${MK_RUNTIME:-}" = "containerd" ]; then
+    daemon_runtime=containerd; daemon_socket=/run/containerd/containerd.sock
+  else
+    daemon_runtime=docker; daemon_socket=/var/run/docker.sock
+  fi
+  log "installing chaos-mesh (chaosDaemon.runtime=$daemon_runtime socket=$daemon_socket)"
   helm repo add chaos-mesh https://charts.chaos-mesh.org 2>/dev/null || true
   helm repo update
   helm install chaos-mesh chaos-mesh/chaos-mesh -n chaos-mesh --create-namespace \
-    --set chaosDaemon.runtime=containerd \
-    --set chaosDaemon.socketPath=/run/containerd/containerd.sock \
+    --set chaosDaemon.runtime="$daemon_runtime" \
+    --set chaosDaemon.socketPath="$daemon_socket" \
     --wait --timeout 5m
   kubectl -n chaos-mesh rollout status daemonset/chaos-daemon --timeout=180s
 }

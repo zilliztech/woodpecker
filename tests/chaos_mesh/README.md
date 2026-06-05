@@ -6,7 +6,7 @@ This suite injects **soft network faults** (latency+jitter, packet loss, transie
 
 ## Prerequisites
 
-- [minikube](https://minikube.sigs.k8s.io/) (with `--container-runtime=containerd` support)
+- [minikube](https://minikube.sigs.k8s.io/) (docker driver; uses the docker runtime by default)
 - docker
 - kubectl
 - helm
@@ -30,11 +30,16 @@ creation, gossip convergence check — reusing the same steps as `smoke-test.sh`
 installs Chaos Mesh via Helm:
 
 ```bash
+# chaosDaemon.runtime/socketPath follow the minikube runtime (docker by default):
 helm install chaos-mesh chaos-mesh/chaos-mesh \
   -n chaos-mesh --create-namespace \
-  --set chaosDaemon.runtime=containerd \
-  --set chaosDaemon.socketPath=/run/containerd/containerd.sock
+  --set chaosDaemon.runtime=docker \
+  --set chaosDaemon.socketPath=/var/run/docker.sock
 ```
+
+> The suite defaults to minikube's **docker** runtime. `--container-runtime=containerd`
+> makes minikube deploy a kindnet CNI whose image often can't be pulled on constrained
+> hosts (no pod networking); set `MK_RUNTIME=containerd` only where that image is reachable.
 
 An injection smoke-check (a brief delay applied to the client→server link, latency
 measured from inside the pod, then removed) runs before the scenario loop to confirm
