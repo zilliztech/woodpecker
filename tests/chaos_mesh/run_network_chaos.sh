@@ -20,7 +20,7 @@ export CLIENT_POD="wp-client-test"
 
 source "$PROJECT_ROOT/deployments/operator/test/lib.sh"
 
-WORKLOAD_IN_POD=/root/woodpecker/tests/chaos_mesh/workload
+WORKLOAD_BIN_IN_POD=/root/workload.test
 RECORD_FILE=/tmp/wp-chaos-acked.jsonl
 
 # External dependency images (keep etcd/minio in sync with deployments/operator/test/lib.sh).
@@ -70,7 +70,8 @@ install_chaos_mesh() {
   while read -r img; do
     [ -n "$img" ] && preload_image "$img"
   done <<< "$cm_imgs"
-  helm install chaos-mesh chaos-mesh/chaos-mesh -n chaos-mesh --create-namespace \
+  # upgrade --install is idempotent so re-running against an existing cluster doesn't error.
+  helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh -n chaos-mesh --create-namespace \
     --set chaosDaemon.runtime="$daemon_runtime" \
     --set chaosDaemon.socketPath="$daemon_socket" \
     --set dashboard.create=false \
@@ -78,15 +79,19 @@ install_chaos_mesh() {
   kubectl -n chaos-mesh rollout status daemonset/chaos-daemon --timeout=180s
 }
 
-# Deliver CURRENT source into the pod (Correction #5 / refinement B), then it's ready for `go test`.
+# Build the workload test binary ON THE HOST (it has the Go module cache + a working proxy) and
+# copy the static linux/<arch> binary into the pod. The pod can't reach the Go module proxy (the
+# same host-loopback-proxy limit that blocks registries), so an in-pod `go build` can't fetch deps.
+# Host arch == minikube-node arch (the node is a container on the host's Docker), so go env GOARCH
+# is correct for the node.
 push_workload() {
-  local tgz=/tmp/wp-src.tgz
-  tar --exclude='./.git' --exclude='./tests/chaos_mesh/artifacts' -czf "$tgz" -C "$PROJECT_ROOT" .
-  kubectl exec "$CLIENT_POD" -- mkdir -p /root/woodpecker
-  kubectl cp "$tgz" "$CLIENT_POD:/tmp/wp-src.tgz"
-  kubectl exec "$CLIENT_POD" -- bash -c "tar -xzf /tmp/wp-src.tgz -C /root/woodpecker"
-  kubectl exec "$CLIENT_POD" -- bash -c "cd $WORKLOAD_IN_POD && go build ./..." \
-    || fail "in-pod go build failed (module/source delivery problem)"
+  local bin=/tmp/workload.test
+  log "building workload test binary on host (GOOS=linux GOARCH=$(go env GOARCH) CGO_ENABLED=0)"
+  ( cd "$PROJECT_ROOT" && GOOS=linux GOARCH="$(go env GOARCH)" CGO_ENABLED=0 \
+      go test -c -o "$bin" ./tests/chaos_mesh/workload ) || fail "host build of workload test binary failed"
+  kubectl cp "$bin" "$CLIENT_POD:$WORKLOAD_BIN_IN_POD"
+  kubectl exec "$CLIENT_POD" -- chmod +x "$WORKLOAD_BIN_IN_POD"
+  log "workload binary delivered to $CLIENT_POD:$WORKLOAD_BIN_IN_POD"
 }
 
 # Spec Layer 2 / Risk #1: prove injection is NOT a silent no-op before trusting any result.
@@ -107,11 +112,12 @@ injection_smoke_check() {
   log "Injection smoke-check PASSED (${before}ms -> ${after}ms)"
 }
 
-run_phase() {  # $1 = phase ; $2 = optional extra go-test flags
-  kubectl exec -i "$CLIENT_POD" -- /bin/bash -c "
-    set -e; cd $WORKLOAD_IN_POD
-    go test -v -count=1 -timeout 16m -run TestNetworkChaosWorkload \
-      -config-file /tmp/test-config.yaml -phase $1 -record-file $RECORD_FILE ${2:-} ."
+run_phase() {  # $1 = phase ; $2 = optional extra workload flags (e.g. "-window 60")
+  # Run the prebuilt test binary (compiled flags take the -test. prefix; the workload's own
+  # flags -config-file/-phase/-record-file/-window do not).
+  kubectl exec -i "$CLIENT_POD" -- "$WORKLOAD_BIN_IN_POD" \
+    -test.v -test.count=1 -test.timeout=16m -test.run=TestNetworkChaosWorkload \
+    -config-file /tmp/test-config.yaml -phase "$1" -record-file "$RECORD_FILE" ${2:-}
 }
 
 restart_sum() {  # I6: total server container restarts (host-side; client pod is itself under chaos)
