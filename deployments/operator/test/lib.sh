@@ -41,9 +41,10 @@ wp_minikube_start() {
         log "Cluster '$CLUSTER_NAME' already running, skipping"
         return 0
     fi
-    local rt=""; [ -n "$MK_RUNTIME" ] && rt="--container-runtime=$MK_RUNTIME"
-    minikube start -p "$CLUSTER_NAME" --cpus="$MK_CPUS" --memory="$MK_MEMORY" --driver=docker $rt
-    kubectl config use-context "$CLUSTER_NAME"
+    local rt_args=()
+    [ -n "$MK_RUNTIME" ] && rt_args=("--container-runtime=$MK_RUNTIME")
+    minikube start -p "$CLUSTER_NAME" --cpus="$MK_CPUS" --memory="$MK_MEMORY" --driver=docker "${rt_args[@]}"
+    kubectl config use-context "$CLUSTER_NAME" # pin context (chaos suite creates multiple minikube profiles)
     kubectl cluster-info
     log "Step 1 done: minikube running"
 }
@@ -137,7 +138,8 @@ wp_create_cr() {
     log "=== Step 5: Creating WoodpeckerCluster ($REPLICAS replicas) ==="
 
     # Generate seeds
-    SEEDS_YAML=""
+    local SEEDS_YAML=""
+    local i
     for i in $(seq 0 $((REPLICAS - 1))); do
         SEEDS_YAML="$SEEDS_YAML
                 - ${CR_NAME}-server-${i}.${CR_NAME}-server-headless.${NAMESPACE}.svc:18080"
@@ -205,7 +207,7 @@ spec:
 EOF
 
     log "Waiting for StatefulSet to appear..."
-    TIMEOUT=60
+    local TIMEOUT=60
     while [ $TIMEOUT -gt 0 ]; do
         if kubectl get statefulset "${CR_NAME}-server" &>/dev/null; then break; fi
         sleep 3; TIMEOUT=$((TIMEOUT - 3))
@@ -222,14 +224,14 @@ wp_wait_healthy() {
 
     # Check each node's memberlist via admin API
     log "Checking gossip memberlist on each node..."
-    TIMEOUT=120
-    ALL_READY=false
+    local TIMEOUT=120
+    local ALL_READY=false
+    local i POD HEALTH NODE_STATUS IS_ACTIVE STATUS
 
     while [ $TIMEOUT -gt 0 ] && [ "$ALL_READY" = false ]; do
         ALL_READY=true
         for i in $(seq 0 $((REPLICAS - 1))); do
             POD="${CR_NAME}-server-${i}"
-            HOST="${POD}.${CR_NAME}-server-headless.${NAMESPACE}.svc"
 
             # Check healthz
             HEALTH=$(kubectl exec "$POD" -- curl -s -o /dev/null -w "%{http_code}" "http://localhost:9091/healthz" 2>/dev/null || echo "000")
@@ -313,18 +315,30 @@ wp_write_client_config() {     # $1 = seed replica count ; $2 (optional) = repli
     done
     kubectl exec "$CLIENT_POD" -- bash -c "cat > /tmp/test-config.yaml <<'CFGEOF'
 woodpecker:
-  meta: { type: etcd }
+  meta:
+    type: etcd
   client:
-    segmentRollingPolicy: { maxSize: 1000 }
+    segmentRollingPolicy:
+      maxSize: 1000
     quorum:
       replicaCount: ${replica_count}
       quorumBufferPools:
         - name: default-region-pool
           seeds:${seeds}
-  logstore: { retentionPolicy: { ttl: 10 } }
-  storage: { type: service, rootPath: /tmp/wp-test-data }
-log: { level: info, format: json, stdout: true }
-etcd: { endpoints: [ etcd.${NAMESPACE}.svc:2379 ], rootPath: by-dev }
+  logstore:
+    retentionPolicy:
+      ttl: 10
+  storage:
+    type: service
+    rootPath: /tmp/wp-test-data
+log:
+  level: info
+  format: json
+  stdout: true
+etcd:
+  endpoints:
+    - etcd.${NAMESPACE}.svc:2379
+  rootPath: by-dev
 minio:
   address: minio.${NAMESPACE}.svc
   port: 9000
