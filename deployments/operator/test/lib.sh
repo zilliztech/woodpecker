@@ -41,9 +41,14 @@ wp_minikube_start() {
         log "Cluster '$CLUSTER_NAME' already running, skipping"
         return 0
     fi
-    local rt_args=()
-    [ -n "$MK_RUNTIME" ] && rt_args=("--container-runtime=$MK_RUNTIME")
-    minikube start -p "$CLUSTER_NAME" --cpus="$MK_CPUS" --memory="$MK_MEMORY" --driver=docker "${rt_args[@]}"
+    # NOTE: explicit if/else rather than a bash array — expanding an empty array under `set -u`
+    # ("${arr[@]}") throws "unbound variable" on macOS's bash 3.2, which both this suite and
+    # smoke-test.sh run under. $MK_RUNTIME is a controlled value with no spaces.
+    if [ -n "$MK_RUNTIME" ]; then
+        minikube start -p "$CLUSTER_NAME" --cpus="$MK_CPUS" --memory="$MK_MEMORY" --driver=docker --container-runtime="$MK_RUNTIME"
+    else
+        minikube start -p "$CLUSTER_NAME" --cpus="$MK_CPUS" --memory="$MK_MEMORY" --driver=docker
+    fi
     kubectl config use-context "$CLUSTER_NAME" # pin context (chaos suite creates multiple minikube profiles)
     kubectl cluster-info
     log "Step 1 done: minikube running"
