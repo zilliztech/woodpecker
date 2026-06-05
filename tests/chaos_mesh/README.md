@@ -105,6 +105,46 @@ The workload binary runs **inside** the `wp-client-test` pod (it needs in-cluste
 for the quorum seeds); chaos is applied and removed from the **host** via
 `kubectl apply/delete` — no client-go dependency, no in-pod RBAC.
 
+## Run results — 2026-06-05 (local minikube, docker runtime, 3-node, ~6 GiB)
+
+### Realistic jitter — all 7 scenarios PASSED (exit 0)
+
+| Scenario | Fault | under-chaos `ok / retryable / permanent` | Verdict |
+|---|---|---|---|
+| server→MinIO delay | 300ms±100ms | 12464 / 0 / 0 | PASS — async upload path, no client impact |
+| server→MinIO loss | 10% | 4658 / 0 / 0 | PASS |
+| server→etcd delay | 300ms±100ms | 6412 / 0 / 0 | PASS — metadata async |
+| client→server delay | 300ms±100ms | 298 / 0 / 0 | PASS — ~20–40× slower, zero errors |
+| client→server loss | 10% | 6185 / 0 / 0 | PASS — TCP recovers |
+| server→MinIO blip | 5s partitions | 6683 / 0 / 0 | PASS — local-buffer ack |
+| server→etcd blip | 5s partitions | 6387 / 0 / 0 | PASS |
+
+Every scenario: zero client-visible errors, zero data loss, all acked entries durable/ordered/hash-matched,
+no server restarts. Under moderate jitter Woodpecker degrades only in latency/throughput (worst: the
+synchronous client↔server delay), because writes ack from the local staged buffer and MinIO/etcd work is async.
+
+### Stress (manual, ad-hoc NetworkChaos on the client→server link)
+
+| Fault | warmup ok | under-chaos `ok / retryable / permanent` | recovery ok | verify |
+|---|---|---|---|---|
+| delay 20s±14s (≈ total outage; per-packet × RPC round-trips ≫ 30s op timeout) | 6049 | 0 (I7 stall) | 1857 | all durable |
+| **loss 60%** | 3694 | **28 / 8 / 0** | 5678 | all durable |
+
+- **60% loss is the textbook target**: occasional transient errors (`retryable=8`) with continued progress
+  (`ok=28`), **zero permanent errors**, then full recovery (`ok=5678`) and **zero data loss** — i.e.
+  "occasional internal errors, retries recover."
+- **20s±14s delay** is effectively a total outage (per-packet delay compounds across RPC round-trips, far
+  exceeding the 30s op timeout) → zero progress *during* the fault, but **fail-safe** (no loss/corruption/hang)
+  and **full recovery** once cleared. The workload's I7 ("ok>0 during chaos") flags this — a **test-design
+  nuance**, not a Woodpecker bug: a sustained near-total outage legitimately makes zero progress. (Possible
+  refinement: have I7 distinguish "no progress that later recovers" from "no progress that never recovers".)
+
+### Conclusion (issue #152)
+
+No serious bugs. Under network jitter Woodpecker degrades gracefully (latency/throughput) with zero data loss;
+under harsh faults it fails safe and fully recovers, surfacing only transient/retryable errors (never spurious
+permanent ones). Acknowledged writes are never lost; ordering and CRC always hold.
+
 ## Further Reading
 
 Detailed design and implementation plan live in:
