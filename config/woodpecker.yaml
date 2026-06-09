@@ -237,11 +237,18 @@ minio:
     tlsCACert: /path/to/public.crt # path to your CACert file
   # Name of the bucket where Woodpecker stores data in MinIO or S3.
   # Woodpecker does not support storing data in multiple buckets.
-  # Bucket with this name will be created if it does not exist. If the bucket already exists and is accessible, it will be used directly. Otherwise, there will be an error.
+  # When createBucket is true, a bucket with this name is created at startup if it does not exist.
+  # When createBucket is false, Woodpecker neither checks nor creates the bucket; it must be pre-provisioned.
   # To share an MinIO instance among multiple Woodpecker instances, consider changing this to a different value for each Woodpecker instance before you start them.
   # The data will be stored in the local Docker if Docker is used to start the MinIO service locally. Ensure that there is sufficient storage space.
   # A bucket name is globally unique in one MinIO or S3 instance.
   bucketName: a-bucket
+  # Whether Woodpecker manages the bucket above at startup.
+  # true:  check the bucket and create it if missing (single-tenant / embed default).
+  # false: skip the bucket check and creation entirely — use when the bucket is pre-provisioned and
+  #        managed by the caller, e.g. service (multi-tenant) mode where bucket/rootPath arrive
+  #        per-request, so startup does not depend on any specific bucket.
+  createBucket: true
   # Root prefix of the key to where Woodpecker stores data in MinIO or S3.
   # It is recommended to change this parameter before starting Woodpecker for the first time.
   # To share an MinIO instance among multiple Woodpecker instances, consider changing this to a different value for each Woodpecker instance before you start them.

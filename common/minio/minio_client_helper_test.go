@@ -357,6 +357,34 @@ func TestNewMinioClient_SSL_NoCert(t *testing.T) {
 	assert.Empty(t, os.Getenv("SSL_CERT_FILE"))
 }
 
+// === CreateBucket gating tests ===
+
+// TestNewMinioClient_CreateBucketFalse_SkipsBucketCheck verifies that when
+// CreateBucket is false the client init performs no bucket existence check and no
+// bucket creation. In service mode Woodpecker can be multi-tenant: bucket/rootPath
+// arrive per-request and are owned/pre-provisioned by the caller, so the node must
+// not touch any global bucket at startup. We prove the check is skipped with a
+// cancelled context: if BucketExists ran it would error, so a nil error means the
+// whole check/create block was skipped.
+func TestNewMinioClient_CreateBucketFalse_SkipsBucketCheck(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAWS
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.CreateBucket = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client, err := newMinioClient(ctx, cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+}
+
 // === newMinioClientFromConfig tests ===
 
 func TestNewMinioClientFromConfig_InvalidEndpoint(t *testing.T) {
@@ -419,6 +447,27 @@ func TestNewMinioClientFromConfig_SSL_SetsCertEnv(t *testing.T) {
 	assert.Error(t, err) // cancelled ctx
 
 	assert.Equal(t, "/tmp/test-cert-from-config.pem", os.Getenv("SSL_CERT_FILE"))
+}
+
+// TestNewMinioClientFromConfig_CreateBucketFalse_SkipsBucketCheck mirrors the
+// active-path gating for the deprecated constructor: CreateBucket=false must skip
+// the bucket existence check/create (proven via cancelled context → nil error).
+func TestNewMinioClientFromConfig_CreateBucketFalse_SkipsBucketCheck(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.CreateBucket = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client, err := newMinioClientFromConfig(ctx, cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, client)
 }
 
 // === Constants tests ===
