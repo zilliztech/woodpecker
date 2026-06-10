@@ -45,6 +45,10 @@ import (
 
 const (
 	CurrentScopeName = "Meta"
+
+	// maxTxnOps is the maximum number of operations per etcd transaction.
+	// etcd's default --max-txn-ops is 128; we stay well under it to leave headroom.
+	maxTxnOps = 120
 )
 
 var _ MetadataProvider = (*metadataProviderEtcd)(nil)
@@ -769,9 +773,11 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
 
-	// Create segmentKey if it does not already exist
+	// Create segmentKey if it does not already exist AND the parent log still exists.
 	txnResp, err := txn.If(
-		// Ensure segmentKey does not exist
+		// Ensure the parent log key exists (resurrection guard).
+		clientv3.Compare(clientv3.CreateRevision(e.keyBuilder.BuildLogKey(logName)), "!=", 0),
+		// Ensure segmentKey does not exist.
 		clientv3.Compare(clientv3.CreateRevision(segmentKey), "=", 0),
 	).Then(
 		// Create segmentKey with segmentMetadata
@@ -787,6 +793,16 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "store_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "store_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		// The txn guards two conditions: the parent log exists AND the segment does not
+		// exist yet. Disambiguate (cheap read on this rare error path) so the returned
+		// error is accurate — the resurrection guard rejects writes whose parent log was
+		// deleted, which is NOT "segment already exists".
+		if logResp, getErr := e.client.Get(ctx1, e.keyBuilder.BuildLogKey(logName)); getErr == nil && len(logResp.Kvs) == 0 {
+			logger.Ctx(ctx).Warn("reject segment store: parent log no longer exists",
+				zap.String("logName", logName), zap.Int64("segmentId", segmentMeta.Metadata.GetSegNo()))
+			return werr.ErrMetadataKeyNotExists.WithCauseErrMsg(
+				fmt.Sprintf("parent log no longer exists for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()))
+		}
 		logger.Ctx(ctx).Warn("segment metadata already exists", zap.String("logName", logName), zap.Int64("segmentId", segmentMeta.Metadata.GetSegNo()))
 		return werr.ErrMetadataSegmentAlreadyExists.WithCauseErrMsg(
 			fmt.Sprintf("segment metadata already exists for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()))
@@ -1717,6 +1733,159 @@ func (e *metadataProviderEtcd) GetConditionWriteResult(ctx context.Context) (boo
 	logger.Ctx(ctx).Info("retrieved condition write result", zap.Bool("result", result))
 
 	return result, nil
+}
+
+func (e *metadataProviderEtcd) DeleteLogMetadata(ctx context.Context, logName string, force bool) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "DeleteLogMetadata")
+	defer sp.End()
+	startTime := time.Now()
+
+	e.Lock()
+	defer e.Unlock()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+
+	// Read the active log key RAW so we can distinguish "absent" (idempotent no-op)
+	// from a genuine read error, and capture ModRevision + logId for CAS/scoping.
+	// (We hold e.Lock() throughout; do NOT call locking helpers like GetLogMeta here.)
+	logResp, err := e.client.Get(ctx1, e.keyBuilder.BuildLogKey(logName))
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		return werr.ErrMetadataRead.WithCauseErr(err)
+	}
+	if len(logResp.Kvs) == 0 {
+		// already deleted/freed — idempotent no-op, counts as success
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		return nil
+	}
+	rev := logResp.Kvs[0].ModRevision
+	logMetaValue := logResp.Kvs[0].Value
+	logMeta := &proto.LogMeta{}
+	if err := pb.Unmarshal(logMetaValue, logMeta); err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		return werr.ErrMetadataDecode.WithCauseErr(err)
+	}
+	logId := logMeta.LogId
+
+	if !force {
+		// force=false: two-phase approach to stay under etcd's --max-txn-ops limit.
+		//
+		// Phase 1 — park (idempotent plain puts, no CAS, batched to ≤maxTxnOps per txn).
+		// We park everything BEFORE the delete so we never delete-without-parking even
+		// if the process crashes between the two phases.
+		//
+		// Phase 2 — atomic delete with CAS (constant 5 ops, unchanged).
+		// If the CAS misses (log was concurrently recreated), we return nil and leave
+		// harmless orphan parked copies under logs-deleted/<name>-<ts>/ — acceptable.
+		if err := e.parkLogInBatches(ctx1, logName, logMetaValue); err != nil {
+			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
+			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			return err
+		}
+
+		// Phase 2: constant-size atomic delete guarded by ModRevision CAS.
+		if err := e.casDeleteActiveSubtree(ctx1, logName, rev, e.buildActiveSubtreeDeleteOps(logName, logId)); err != nil {
+			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
+			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			return err
+		}
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		return nil
+	}
+
+	// force=true: single transaction — only 5 constant delete ops, no park puts, safe regardless of segment count.
+	// CAS on the log key's ModRevision: if the name was deleted+recreated between
+	// our read and now, the revision differs and we must NOT clobber the new log.
+	if err := e.casDeleteActiveSubtree(ctx1, logName, rev, e.buildActiveSubtreeDeleteOps(logName, logId)); err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		return err
+	}
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return nil
+}
+
+// buildActiveSubtreeDeleteOps returns the scoped, sibling-safe delete ops for a log's active subtree.
+func (e *metadataProviderEtcd) buildActiveSubtreeDeleteOps(logName string, logId int64) []clientv3.Op {
+	kb := e.keyBuilder
+	return []clientv3.Op{
+		clientv3.OpDelete(kb.BuildLogKey(logName)),
+		clientv3.OpDelete(kb.BuildLogLockKey(logName)),
+		clientv3.OpDelete(kb.BuildSegmentInstanceKey(logName, ""), clientv3.WithPrefix()),
+		clientv3.OpDelete(kb.BuildLogAllReaderTempInfosKey(logId), clientv3.WithPrefix()),
+		clientv3.OpDelete(kb.BuildLogCleanupStatusPrefix(logId), clientv3.WithPrefix()),
+	}
+}
+
+// casDeleteActiveSubtree runs the ModRevision-guarded delete txn; a CAS miss is treated as already-deleted (nil).
+func (e *metadataProviderEtcd) casDeleteActiveSubtree(ctx context.Context, logName string, rev int64, ops []clientv3.Op) error {
+	txnResp, err := e.client.Txn(ctx).If(
+		clientv3.Compare(clientv3.ModRevision(e.keyBuilder.BuildLogKey(logName)), "=", rev),
+	).Then(ops...).Commit()
+	if err != nil {
+		logger.Ctx(ctx).Warn("delete log metadata txn failed", zap.String("logName", logName), zap.Error(err))
+		return werr.ErrMetadataDelete.WithCauseErr(err)
+	}
+	if !txnResp.Succeeded {
+		logger.Ctx(ctx).Info("delete log metadata CAS miss; treating as already-deleted", zap.String("logName", logName))
+	}
+	return nil
+}
+
+// parkLogInBatches copies LogMeta + all segment records to logs-deleted/<name>-<ts>/
+// using plain (no-CAS) transactions capped at maxTxnOps ops each. This keeps every
+// batch well under etcd's default --max-txn-ops=128 limit regardless of segment count.
+func (e *metadataProviderEtcd) parkLogInBatches(ctx context.Context, logName string, logMetaValue []byte) error {
+	kb := e.keyBuilder
+	// Use nanosecond granularity so that two soft-deletes of the same name within
+	// the same second produce distinct parked keys rather than overwriting each other.
+	ts := time.Now().UnixNano()
+
+	// Read all segment kvs raw — we already hold e.Lock().
+	segResp, err := e.client.Get(ctx, kb.BuildSegmentInstanceKey(logName, ""), clientv3.WithPrefix())
+	if err != nil {
+		return werr.ErrMetadataRead.WithCauseErr(err)
+	}
+
+	// Build the full list of park puts: 1 LogMeta put + N segment puts.
+	allPuts := make([]clientv3.Op, 0, 1+len(segResp.Kvs))
+	allPuts = append(allPuts, clientv3.OpPut(kb.BuildLogDeletedKey(logName, ts), string(logMetaValue)))
+	for _, kv := range segResp.Kvs {
+		segId, perr := segmentIdFromKey(string(kv.Key))
+		if perr != nil {
+			logger.Ctx(ctx).Warn("skipping unparseable segment key while parking deleted log",
+				zap.String("key", string(kv.Key)), zap.Error(perr))
+			continue
+		}
+		allPuts = append(allPuts, clientv3.OpPut(kb.BuildLogDeletedSegmentKey(logName, ts, segId), string(kv.Value)))
+	}
+
+	// Commit in chunks of at most maxTxnOps (plain puts, no If — always succeeds).
+	for i := 0; i < len(allPuts); i += maxTxnOps {
+		end := i + maxTxnOps
+		if end > len(allPuts) {
+			end = len(allPuts)
+		}
+		chunk := allPuts[i:end]
+		if _, txnErr := e.client.Txn(ctx).Then(chunk...).Commit(); txnErr != nil {
+			return werr.ErrMetadataWrite.WithCauseErr(txnErr)
+		}
+	}
+	return nil
+}
+
+// segmentIdFromKey extracts the trailing numeric segment id from a .../segments/<id> key.
+func segmentIdFromKey(key string) (int64, error) {
+	idx := strings.LastIndex(key, "/")
+	if idx < 0 {
+		return 0, fmt.Errorf("not a segment key: %s", key)
+	}
+	return strconv.ParseInt(key[idx+1:], 10, 64)
 }
 
 // getContextWithTimeout returns a context with timeout

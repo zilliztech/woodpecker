@@ -31,6 +31,8 @@ const (
 	LogStore_GetSegmentBlockCount_FullMethodName       = "/woodpecker.proto.logstore.LogStore/GetSegmentBlockCount"
 	LogStore_UpdateLastAddConfirmed_FullMethodName     = "/woodpecker.proto.logstore.LogStore/UpdateLastAddConfirmed"
 	LogStore_CleanSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/CleanSegment"
+	LogStore_MarkLogDeleted_FullMethodName             = "/woodpecker.proto.logstore.LogStore/MarkLogDeleted"
+	LogStore_MarkInstanceDeleted_FullMethodName        = "/woodpecker.proto.logstore.LogStore/MarkInstanceDeleted"
 	LogStore_SelectNodes_FullMethodName                = "/woodpecker.proto.logstore.LogStore/SelectNodes"
 )
 
@@ -57,6 +59,11 @@ type LogStoreClient interface {
 	UpdateLastAddConfirmed(ctx context.Context, in *UpdateLastAddConfirmedRequest, opts ...grpc.CallOption) (*UpdateLastAddConfirmedResponse, error)
 	// Maintenance
 	CleanSegment(ctx context.Context, in *CleanSegmentRequest, opts ...grpc.CallOption) (*CleanSegmentResponse, error)
+	// Mark deleted
+	// MarkLogDeleted marks a single log deleted on this node (stop serving + persist marker).
+	MarkLogDeleted(ctx context.Context, in *MarkLogDeletedRequest, opts ...grpc.CallOption) (*MarkLogDeletedResponse, error)
+	// MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on this node.
+	MarkInstanceDeleted(ctx context.Context, in *MarkInstanceDeletedRequest, opts ...grpc.CallOption) (*MarkInstanceDeletedResponse, error)
 	// Node management
 	SelectNodes(ctx context.Context, in *SelectNodesRequest, opts ...grpc.CallOption) (*SelectNodesResponse, error)
 }
@@ -168,6 +175,26 @@ func (c *logStoreClient) CleanSegment(ctx context.Context, in *CleanSegmentReque
 	return out, nil
 }
 
+func (c *logStoreClient) MarkLogDeleted(ctx context.Context, in *MarkLogDeletedRequest, opts ...grpc.CallOption) (*MarkLogDeletedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkLogDeletedResponse)
+	err := c.cc.Invoke(ctx, LogStore_MarkLogDeleted_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) MarkInstanceDeleted(ctx context.Context, in *MarkInstanceDeletedRequest, opts ...grpc.CallOption) (*MarkInstanceDeletedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkInstanceDeletedResponse)
+	err := c.cc.Invoke(ctx, LogStore_MarkInstanceDeleted_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *logStoreClient) SelectNodes(ctx context.Context, in *SelectNodesRequest, opts ...grpc.CallOption) (*SelectNodesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SelectNodesResponse)
@@ -201,6 +228,11 @@ type LogStoreServer interface {
 	UpdateLastAddConfirmed(context.Context, *UpdateLastAddConfirmedRequest) (*UpdateLastAddConfirmedResponse, error)
 	// Maintenance
 	CleanSegment(context.Context, *CleanSegmentRequest) (*CleanSegmentResponse, error)
+	// Mark deleted
+	// MarkLogDeleted marks a single log deleted on this node (stop serving + persist marker).
+	MarkLogDeleted(context.Context, *MarkLogDeletedRequest) (*MarkLogDeletedResponse, error)
+	// MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on this node.
+	MarkInstanceDeleted(context.Context, *MarkInstanceDeletedRequest) (*MarkInstanceDeletedResponse, error)
 	// Node management
 	SelectNodes(context.Context, *SelectNodesRequest) (*SelectNodesResponse, error)
 }
@@ -238,6 +270,12 @@ func (UnimplementedLogStoreServer) UpdateLastAddConfirmed(context.Context, *Upda
 }
 func (UnimplementedLogStoreServer) CleanSegment(context.Context, *CleanSegmentRequest) (*CleanSegmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CleanSegment not implemented")
+}
+func (UnimplementedLogStoreServer) MarkLogDeleted(context.Context, *MarkLogDeletedRequest) (*MarkLogDeletedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarkLogDeleted not implemented")
+}
+func (UnimplementedLogStoreServer) MarkInstanceDeleted(context.Context, *MarkInstanceDeletedRequest) (*MarkInstanceDeletedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarkInstanceDeleted not implemented")
 }
 func (UnimplementedLogStoreServer) SelectNodes(context.Context, *SelectNodesRequest) (*SelectNodesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SelectNodes not implemented")
@@ -417,6 +455,42 @@ func _LogStore_CleanSegment_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LogStore_MarkLogDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkLogDeletedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).MarkLogDeleted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_MarkLogDeleted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).MarkLogDeleted(ctx, req.(*MarkLogDeletedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_MarkInstanceDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkInstanceDeletedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).MarkInstanceDeleted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_MarkInstanceDeleted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).MarkInstanceDeleted(ctx, req.(*MarkInstanceDeletedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _LogStore_SelectNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SelectNodesRequest)
 	if err := dec(in); err != nil {
@@ -473,6 +547,14 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CleanSegment",
 			Handler:    _LogStore_CleanSegment_Handler,
+		},
+		{
+			MethodName: "MarkLogDeleted",
+			Handler:    _LogStore_MarkLogDeleted_Handler,
+		},
+		{
+			MethodName: "MarkInstanceDeleted",
+			Handler:    _LogStore_MarkInstanceDeleted_Handler,
 		},
 		{
 			MethodName: "SelectNodes",

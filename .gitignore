@@ -32,3 +32,6 @@ go.work.sum
 
 # operator bin
 deployments/operator/bin/*
+
+# superpowers (Claude Code) design/plan docs — not for the repo
+docs/superpowers/

@@ -50,7 +50,9 @@ func createTestLogStore() *logStore {
 		ctx:               ctx,
 		cancel:            cancel,
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
-		cleanupDone:       make(chan struct{}),
+		deletingLogs:      make(map[string]struct{}),
+		deletingInstances: make(map[string]struct{}),
+		maintenance:       NewNodeMaintenanceManager(ctx),
 	}
 	store.stopped.Store(true) // Match production: NewLogStore starts in stopped state
 	return store
@@ -375,22 +377,15 @@ func TestLogStore_SegmentProcessorCleanup_ProtectLatestSegments(t *testing.T) {
 func TestLogStore_BackgroundCleanup_StartStop(t *testing.T) {
 	store := createTestLogStore()
 
-	// Test starting background cleanup
-	store.startBackgroundCleanup()
+	// Start via the manager lifecycle (same path as production Start())
+	err := store.Start()
+	assert.NoError(t, err)
+	assert.False(t, store.stopped.Load())
 
-	// Give it a moment to start
-	time.Sleep(10 * time.Millisecond)
-
-	// Test stopping background cleanup
-	store.stopBackgroundCleanup()
-
-	// Verify cleanup channel is closed
-	select {
-	case <-store.cleanupDone:
-		// Expected - channel should be closed
-	default:
-		t.Fatal("cleanupDone channel should be closed")
-	}
+	// Stop via the manager lifecycle — must not hang or panic
+	err = store.Stop()
+	assert.NoError(t, err)
+	assert.True(t, store.stopped.Load())
 }
 
 // === LogStore core method tests ===
@@ -909,9 +904,7 @@ func TestLogStore_StopAlreadyStopped(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, store.stopped.Load())
 
-	// Calling Stop again should not panic (already stopped)
-	// Re-create cleanupDone channel since it was already closed
-	store.cleanupDone = make(chan struct{})
+	// Calling Stop again should not panic (already stopped) — maintenance cancel is idempotent
 	err = store.Stop()
 	assert.NoError(t, err)
 }
@@ -1039,6 +1032,125 @@ func TestLogStore_HasLocalSegmentData_OnlyManagementFiles(t *testing.T) {
 	assert.False(t, ls.HasLocalSegmentData())
 }
 
+// === EvictLog / EvictInstance tests ===
+
+func TestLogStore_EvictLog_RejectsServing(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	err := store.EvictLog(ctx, testBucketName, testRootPath, testLogId)
+	assert.NoError(t, err)
+
+	// AddEntry should now return ErrLogBeingDeleted
+	_, addErr := store.AddEntry(ctx, testBucketName, testRootPath, testLogId, &proto.LogEntry{SegId: 0, EntryId: 0}, nil)
+	assert.ErrorIs(t, addErr, werr.ErrLogBeingDeleted)
+
+	// GetBatchEntriesAdv should also return ErrLogBeingDeleted
+	_, getErr := store.GetBatchEntriesAdv(ctx, testBucketName, testRootPath, testLogId, 0, 0, 10, nil)
+	assert.ErrorIs(t, getErr, werr.ErrLogBeingDeleted)
+}
+
+func TestLogStore_EvictLog_ClosesProcessors(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	mockProc.EXPECT().GetLogId().Return(testLogId).Maybe()
+	mockProc.EXPECT().Close(mock.Anything).Return(nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{0: mockProc}
+
+	err := store.EvictLog(ctx, testBucketName, testRootPath, testLogId)
+	assert.NoError(t, err)
+
+	store.spMu.RLock()
+	_, processorEntryPresent := store.segmentProcessors[logKey]
+	_, deletingPresent := store.deletingLogs[logKey]
+	store.spMu.RUnlock()
+
+	assert.False(t, processorEntryPresent, "segmentProcessors entry should be gone after eviction")
+	assert.True(t, deletingPresent, "deletingLogs should contain the logKey after eviction")
+}
+
+func TestLogStore_EvictInstance_RejectsAllLogsUnderInstance(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	err := store.EvictInstance(ctx, testBucketName, testRootPath)
+	assert.NoError(t, err)
+
+	for _, logId := range []int64{1, 2, 99} {
+		_, addErr := store.AddEntry(ctx, testBucketName, testRootPath, logId, &proto.LogEntry{SegId: 0, EntryId: 0}, nil)
+		assert.ErrorIs(t, addErr, werr.ErrLogBeingDeleted, "logId %d should be rejected", logId)
+	}
+}
+
+func TestLogStore_EvictLog_Idempotent(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	mockProc.EXPECT().GetLogId().Return(testLogId).Maybe()
+	mockProc.EXPECT().Close(mock.Anything).Return(nil).Once() // exactly once across BOTH evicts
+	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)] = map[int64]processor.SegmentProcessor{0: mockProc}
+
+	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId))
+	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId))
+}
+
+func TestLogStore_EvictInstance_ClosesProcessors(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mock1 := mocks_segment.NewSegmentProcessor(t)
+	mock1.EXPECT().GetLogId().Return(int64(1)).Maybe()
+	mock1.EXPECT().Close(mock.Anything).Return(nil).Once()
+	mock2 := mocks_segment.NewSegmentProcessor(t)
+	mock2.EXPECT().GetLogId().Return(int64(2)).Maybe()
+	mock2.EXPECT().Close(mock.Anything).Return(nil).Once()
+
+	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, 1)] = map[int64]processor.SegmentProcessor{0: mock1}
+	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, 2)] = map[int64]processor.SegmentProcessor{0: mock2}
+
+	require.NoError(t, store.EvictInstance(context.Background(), testBucketName, testRootPath))
+
+	store.spMu.RLock()
+	_, r1 := store.segmentProcessors[GetLogKey(testBucketName, testRootPath, 1)]
+	_, r2 := store.segmentProcessors[GetLogKey(testBucketName, testRootPath, 2)]
+	store.spMu.RUnlock()
+	assert.False(t, r1, "log 1 processors should be evicted")
+	assert.False(t, r2, "log 2 processors should be evicted")
+}
+
+func TestLogStore_EvictInstance_DoesNotEvictSiblingInstance(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	siblingRoot := testRootPath + "2" // "test-root2" shares "test-root" as a string prefix
+	siblingMock := mocks_segment.NewSegmentProcessor(t)
+	siblingMock.EXPECT().GetLogId().Return(int64(1)).Maybe()
+	// NOTE: no Close expectation — it must NOT be closed.
+	siblingMock.EXPECT().AddEntry(mock.Anything, mock.Anything, mock.Anything).Return(int64(0), nil).Maybe()
+	store.segmentProcessors[GetLogKey(testBucketName, siblingRoot, 1)] = map[int64]processor.SegmentProcessor{0: siblingMock}
+
+	require.NoError(t, store.EvictInstance(context.Background(), testBucketName, testRootPath))
+
+	// The sibling instance's processor is untouched...
+	store.spMu.RLock()
+	_, resident := store.segmentProcessors[GetLogKey(testBucketName, siblingRoot, 1)]
+	store.spMu.RUnlock()
+	assert.True(t, resident, "sibling instance test-root2 must not be evicted")
+
+	// ...and the sibling log is still served (returns the resident processor, no ErrLogBeingDeleted).
+	_, err := store.AddEntry(context.Background(), testBucketName, siblingRoot, 1,
+		&proto.LogEntry{SegId: 0, EntryId: 0}, nil)
+	assert.NotErrorIs(t, err, werr.ErrLogBeingDeleted, "sibling instance must not be gated")
+}
+
 func TestLogStore_HasLocalSegmentData_EmptyDataLog(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 	dir := t.TempDir()
@@ -1052,4 +1164,82 @@ func TestLogStore_HasLocalSegmentData_EmptyDataLog(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte{}, 0o644))
 
 	assert.False(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_EvictLog_PersistsMarker(t *testing.T) {
+	store := createTestLogStore()
+	root := t.TempDir()
+	store.cfg.Woodpecker.Storage.RootPath = root
+	store.stopped.Store(false)
+
+	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId))
+
+	markers, err := scanDeleteMarkers(root)
+	require.NoError(t, err)
+	require.Len(t, markers, 1)
+	assert.Equal(t, testLogId, markers[0].LogId)
+	assert.False(t, markers[0].Instance)
+}
+
+func TestLogStore_RebuildDeletingSetsFromMarkers(t *testing.T) {
+	root := t.TempDir()
+
+	// Pre-seed a marker as if a previous run had evicted the log
+	require.NoError(t, writeDeleteMarker(root, deleteMarker{
+		Bucket:    testBucketName,
+		RootPath:  testRootPath,
+		LogId:     testLogId,
+		DeletedAt: 1,
+	}))
+
+	// Create a fresh store pointing at the same root
+	store := createTestLogStore()
+	store.cfg.Woodpecker.Storage.RootPath = root
+
+	// Rebuild deleting sets from on-disk markers
+	require.NoError(t, store.rebuildDeletingSetsFromMarkers())
+	store.stopped.Store(false)
+
+	// The log should now be gated — AddEntry must return ErrLogBeingDeleted
+	_, err := store.AddEntry(context.Background(), testBucketName, testRootPath, testLogId,
+		&proto.LogEntry{SegId: 0, EntryId: 0}, nil)
+	assert.ErrorIs(t, err, werr.ErrLogBeingDeleted)
+}
+
+func TestLogStore_HasLocalSegmentData_IgnoresMarkers(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	root := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = root
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Write a delete marker — it should NOT be counted as segment data
+	require.NoError(t, writeDeleteMarker(root, deleteMarker{
+		Bucket:    testBucketName,
+		RootPath:  testRootPath,
+		LogId:     testLogId,
+		DeletedAt: 1,
+	}))
+
+	assert.False(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_EvictLog_MarkerWriteFailure(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	// Point the storage root at a path that cannot be created (a regular FILE, so MkdirAll under it fails).
+	badFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(badFile, []byte("x"), 0o644))
+	store.cfg.Woodpecker.Storage.RootPath = badFile
+
+	err := store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId)
+	require.Error(t, err)
+	assert.False(t, werr.ErrLogBeingDeleted.Is(err), "a mark-write failure must NOT look like ErrLogBeingDeleted")
+	assert.True(t, werr.ErrMarkDeleteFailed.Is(err), "a mark-write failure should be ErrMarkDeleteFailed")
+
+	// The in-memory set must NOT have been marked (mark is durable-before-memory).
+	store.spMu.RLock()
+	_, marked := store.deletingLogs[GetLogKey(testBucketName, testRootPath, testLogId)]
+	store.spMu.RUnlock()
+	assert.False(t, marked, "log must not be marked in memory when the durable marker write failed")
 }

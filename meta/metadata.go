@@ -45,6 +45,12 @@ type MetadataProvider interface {
 	GetLogMeta(ctx context.Context, logName string) (*LogMeta, error)
 	// UpdateLogMeta updates the metadata for a specific log.
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error
+	// DeleteLogMetadata removes a log's active metadata. When force is true the
+	// log meta, its segments, and its orphan reader/cleanup keys are hard-deleted.
+	// When force is false the log meta and its segments are first copied to the
+	// logs-deleted/<name>-<ts> namespace (for recovery) and then removed. Either
+	// way the name is freed immediately and the call is idempotent.
+	DeleteLogMetadata(ctx context.Context, logName string, force bool) error
 	// AcquireLogWriterLock acquires a lock for writing to a specific log.
 	// Returns a SessionLock that encapsulates the mutex and session, with validity tracking.
 	AcquireLogWriterLock(ctx context.Context, logName string) (*SessionLock, error)

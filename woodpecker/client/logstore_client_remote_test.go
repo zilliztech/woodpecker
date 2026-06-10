@@ -123,6 +123,22 @@ func (m *mockProtoLogStoreClient) SelectNodes(ctx context.Context, in *proto.Sel
 	return args.Get(0).(*proto.SelectNodesResponse), args.Error(1)
 }
 
+func (m *mockProtoLogStoreClient) MarkLogDeleted(ctx context.Context, in *proto.MarkLogDeletedRequest, opts ...grpc.CallOption) (*proto.MarkLogDeletedResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.MarkLogDeletedResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) MarkInstanceDeleted(ctx context.Context, in *proto.MarkInstanceDeletedRequest, opts ...grpc.CallOption) (*proto.MarkInstanceDeletedResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.MarkInstanceDeletedResponse), args.Error(1)
+}
+
 // mockAddEntryStream mocks grpc.ServerStreamingClient[proto.AddEntryResponse]
 type mockAddEntryStream struct {
 	responses []*proto.AddEntryResponse
@@ -779,4 +795,74 @@ func TestRemoteClient_NilPool_IsNoOp(t *testing.T) {
 	assert.NotPanics(t, func() {
 		_, _ = client.FenceSegment(ctx, "bucket", "root", 1, 0)
 	})
+}
+
+func TestRemoteClient_MarkLogDeleted_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkLogDeleted", ctx, mock.AnythingOfType("*proto.MarkLogDeletedRequest")).
+		Return(&proto.MarkLogDeletedResponse{}, nil)
+
+	err := client.MarkLogDeleted(ctx, "bucket", "root", 1)
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_MarkLogDeleted_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkLogDeleted", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("mark log deleted error"))
+
+	err := client.MarkLogDeleted(ctx, "bucket", "root", 1)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_MarkLogDeleted_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkLogDeleted", ctx, mock.Anything).
+		Return(&proto.MarkLogDeletedResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	err := client.MarkLogDeleted(ctx, "bucket", "root", 1)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_MarkInstanceDeleted_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkInstanceDeleted", ctx, mock.AnythingOfType("*proto.MarkInstanceDeletedRequest")).
+		Return(&proto.MarkInstanceDeletedResponse{}, nil)
+
+	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_MarkInstanceDeleted_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkInstanceDeleted", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("mark instance deleted error"))
+
+	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_MarkInstanceDeleted_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkInstanceDeleted", ctx, mock.Anything).
+		Return(&proto.MarkInstanceDeletedResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
+	assert.Error(t, err)
 }

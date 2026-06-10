@@ -292,6 +292,12 @@ func main() {
 				return opReg.Stats()
 			},
 		},
+		MarkLogDeleted: func(bucketName, rootPath string, logId int64) error {
+			return srv.EvictLog(context.Background(), bucketName, rootPath, logId)
+		},
+		MarkInstanceDeleted: func(bucketName, rootPath string) error {
+			return srv.EvictInstance(context.Background(), bucketName, rootPath)
+		},
 	}); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}

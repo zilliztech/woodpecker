@@ -83,6 +83,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 60, config.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, config.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, config.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
+	assert.Equal(t, 259200, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())  // 72h = 259200s
+	assert.Equal(t, 600, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds()) // 10m = 600s
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", config.Log.Level)
@@ -180,6 +182,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 60, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
+	assert.Equal(t, 259200, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())  // 72h = 259200s
+	assert.Equal(t, 600, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds()) // 10m = 600s
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", defaultConfig.Log.Level)
@@ -465,6 +469,10 @@ func TestQuorumConfigValidation(t *testing.T) {
 						SegmentReadPolicy: SegmentReadPolicyConfig{
 							MaxBatchSize:    NewByteSize(16000000),
 							MaxFetchThreads: 32,
+						},
+						MaintenanceStrategy: MaintenanceStrategyConfig{
+							DeleteGracePeriod:     NewDurationSecondsFromInt(259200),
+							DeleteReclaimInterval: NewDurationSecondsFromInt(600),
 						},
 					},
 					Storage: StorageConfig{
@@ -1027,6 +1035,10 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 				SegmentReadPolicy: SegmentReadPolicyConfig{
 					MaxBatchSize:    NewByteSize(16000000),
 					MaxFetchThreads: 32,
+				},
+				MaintenanceStrategy: MaintenanceStrategyConfig{
+					DeleteGracePeriod:     NewDurationSecondsFromInt(259200),
+					DeleteReclaimInterval: NewDurationSecondsFromInt(600),
 				},
 			},
 			Storage: StorageConfig{
