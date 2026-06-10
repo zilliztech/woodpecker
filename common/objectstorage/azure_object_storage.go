@@ -242,29 +242,34 @@ func newAzureObjectStorageClient(ctx context.Context, c *config.Configuration) (
 	if err != nil {
 		return nil, err
 	}
-	if c.Minio.BucketName == "" {
-		return nil, werr.ErrInvalidConfiguration.WithCauseErrMsg("invalid empty bucket name")
-	}
-	// check valid in first query
-	checkBucketFn := func() error {
-		_, err := client.NewContainerClient(c.Minio.BucketName).GetProperties(ctx, &container.GetPropertiesOptions{})
-		if err != nil {
-			switch err := err.(type) {
-			case *azcore.ResponseError:
-				if c.Minio.CreateBucket && err.ErrorCode == string(bloberror.ContainerNotFound) {
-					_, createErr := client.NewContainerClient(c.Minio.BucketName).Create(ctx, &azblob.CreateContainerOptions{})
-					if createErr != nil {
-						return createErr
+	// Only check/create the container when CreateBucket is set. In service mode
+	// Woodpecker is caller-managed (per-request bucket/rootPath), so startup must not
+	// depend on a global container — nor even on a configured bucket name. When
+	// CreateBucket is false we skip the whole block. See newMinioClient.
+	if c.Minio.CreateBucket {
+		if c.Minio.BucketName == "" {
+			return nil, werr.ErrInvalidConfiguration.WithCauseErrMsg("invalid empty bucket name")
+		}
+		// check valid in first query
+		checkBucketFn := func() error {
+			_, err := client.NewContainerClient(c.Minio.BucketName).GetProperties(ctx, &container.GetPropertiesOptions{})
+			if err != nil {
+				switch err := err.(type) {
+				case *azcore.ResponseError:
+					if err.ErrorCode == string(bloberror.ContainerNotFound) {
+						_, createErr := client.NewContainerClient(c.Minio.BucketName).Create(ctx, &azblob.CreateContainerOptions{})
+						if createErr != nil {
+							return createErr
+						}
+						return nil
 					}
-					return nil
 				}
 			}
+			return err
 		}
-		return err
-	}
-	err = retry.Do(ctx, checkBucketFn, retry.Attempts(CheckBucketRetryAttempts))
-	if err != nil {
-		return nil, err
+		if err = retry.Do(ctx, checkBucketFn, retry.Attempts(CheckBucketRetryAttempts)); err != nil {
+			return nil, err
+		}
 	}
 	return client, nil
 }

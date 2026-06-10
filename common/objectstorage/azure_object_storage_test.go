@@ -907,6 +907,45 @@ func TestNewAzureObjectStorageClient_IAM_InvalidCredentials(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestNewAzureObjectStorageClient_CreateBucketFalse_SkipsBucketCheck verifies that
+// with CreateBucket=false the container existence check is skipped. In service mode
+// the container is caller-managed (per-request), so startup must not depend on it.
+// Proven via cancelled context: if GetProperties ran it would error, so nil error
+// means the check was skipped.
+func TestNewAzureObjectStorageClient_CreateBucketFalse_SkipsBucketCheck(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testaccount"
+	cfg.Minio.SecretAccessKey = "dGVzdGtleQ=="
+	cfg.Minio.Address = "core.windows.net"
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.CreateBucket = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client, err := newAzureObjectStorageClient(ctx, cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+}
+
+// TestNewAzureObjectStorageClient_CreateBucketFalse_EmptyBucketNameOK verifies that
+// with CreateBucket=false an empty configured bucket name no longer fails startup —
+// the global bucket is unused in service mode (buckets arrive per-request).
+func TestNewAzureObjectStorageClient_CreateBucketFalse_EmptyBucketNameOK(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testaccount"
+	cfg.Minio.SecretAccessKey = "dGVzdGtleQ=="
+	cfg.Minio.Address = "core.windows.net"
+	cfg.Minio.BucketName = ""
+	cfg.Minio.CreateBucket = false
+
+	client, err := newAzureObjectStorageClient(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+}
+
 func TestNewAzureObjectStorageWithConfig_EmptyBucketName(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 	cfg.Minio.UseIAM = false
