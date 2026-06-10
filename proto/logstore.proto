@@ -68,6 +68,12 @@ service LogStore {
   // Maintenance
   rpc CleanSegment(CleanSegmentRequest) returns (CleanSegmentResponse);
 
+  // Mark deleted
+  // MarkLogDeleted marks a single log deleted on this node (stop serving + persist marker).
+  rpc MarkLogDeleted(MarkLogDeletedRequest) returns (MarkLogDeletedResponse);
+  // MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on this node.
+  rpc MarkInstanceDeleted(MarkInstanceDeletedRequest) returns (MarkInstanceDeletedResponse);
+
   // Node management
   rpc SelectNodes(SelectNodesRequest) returns (SelectNodesResponse);
 }
@@ -269,4 +275,21 @@ message SelectNodesResponse {
   Status status = 1;
   repeated NodeMeta nodes = 2;
   int32 total_count = 3;    // Total number of nodes matching the filter (before limit)
+}
+
+// Delete-log marker RPC messages (appended at end to keep generated message indices stable).
+message MarkLogDeletedRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+}
+message MarkLogDeletedResponse {
+  Status status = 1;
+}
+message MarkInstanceDeletedRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+}
+message MarkInstanceDeletedResponse {
+  Status status = 1;
 }

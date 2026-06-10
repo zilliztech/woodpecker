@@ -765,6 +765,103 @@ func (_m *LogStore) RejectNewWrites() {
 	_m.Called()
 }
 
+// EvictLog provides a mock function with given fields: ctx, bucketName, rootPath, logId
+func (_m *LogStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error {
+	ret := _m.Called(ctx, bucketName, rootPath, logId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for EvictLog")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64) error); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStore_EvictLog_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'EvictLog'
+type LogStore_EvictLog_Call struct {
+	*mock.Call
+}
+
+// EvictLog is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
+//   - logId int64
+func (_e *LogStore_Expecter) EvictLog(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}) *LogStore_EvictLog_Call {
+	return &LogStore_EvictLog_Call{Call: _e.mock.On("EvictLog", ctx, bucketName, rootPath, logId)}
+}
+
+func (_c *LogStore_EvictLog_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64)) *LogStore_EvictLog_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStore_EvictLog_Call) Return(_a0 error) *LogStore_EvictLog_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStore_EvictLog_Call) RunAndReturn(run func(context.Context, string, string, int64) error) *LogStore_EvictLog_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// EvictInstance provides a mock function with given fields: ctx, bucketName, rootPath
+func (_m *LogStore) EvictInstance(ctx context.Context, bucketName string, rootPath string) error {
+	ret := _m.Called(ctx, bucketName, rootPath)
+
+	if len(ret) == 0 {
+		panic("no return value specified for EvictInstance")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
+		r0 = rf(ctx, bucketName, rootPath)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStore_EvictInstance_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'EvictInstance'
+type LogStore_EvictInstance_Call struct {
+	*mock.Call
+}
+
+// EvictInstance is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
+func (_e *LogStore_Expecter) EvictInstance(ctx interface{}, bucketName interface{}, rootPath interface{}) *LogStore_EvictInstance_Call {
+	return &LogStore_EvictInstance_Call{Call: _e.mock.On("EvictInstance", ctx, bucketName, rootPath)}
+}
+
+func (_c *LogStore_EvictInstance_Call) Run(run func(ctx context.Context, bucketName string, rootPath string)) *LogStore_EvictInstance_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string))
+	})
+	return _c
+}
+
+func (_c *LogStore_EvictInstance_Call) Return(_a0 error) *LogStore_EvictInstance_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStore_EvictInstance_Call) RunAndReturn(run func(context.Context, string, string) error) *LogStore_EvictInstance_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewLogStore creates a new instance of LogStore. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewLogStore(t interface {

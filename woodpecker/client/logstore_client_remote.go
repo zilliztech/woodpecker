@@ -222,6 +222,24 @@ func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName stri
 	return nil
 }
 
+func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64) (err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
+	resp, err := l.innerClient.MarkLogDeleted(ctx, &proto.MarkLogDeletedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId})
+	if err != nil {
+		return err
+	}
+	return werr.Error(resp.GetStatus())
+}
+
+func (l *logStoreClientRemote) MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) (err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
+	resp, err := l.innerClient.MarkInstanceDeleted(ctx, &proto.MarkInstanceDeletedRequest{BucketName: bucketName, RootPath: rootPath})
+	if err != nil {
+		return err
+	}
+	return werr.Error(resp.GetStatus())
+}
+
 func (l *logStoreClientRemote) UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.UpdateLastAddConfirmed(ctx, &proto.UpdateLastAddConfirmedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, LastAddConfirmed: lac})

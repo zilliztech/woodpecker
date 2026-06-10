@@ -45,6 +45,8 @@ type Client interface {
 	OpenLog(ctx context.Context, logName string) (log.LogHandle, error)
 	// DeleteLog deletes the log with the specified name.
 	DeleteLog(ctx context.Context, logName string) error
+	// DeleteAllLogs deletes all logs managed by this client.
+	DeleteAllLogs(ctx context.Context) error
 	// LogExists checks if a log with the specified name exists.
 	LogExists(ctx context.Context, logName string) (bool, error)
 	// GetAllLogs retrieves all log names.
@@ -238,9 +240,22 @@ func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.Quorum
 
 // DeleteLog deletes the log with the specified name.
 func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error {
-	// Implement the DeleteLog method
-	// This is just a stub - you'll need to implement this
-	return werr.ErrOperationNotSupported.WithCauseErrMsg("delete log is not supported currently")
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, logName)
+}
+
+// DeleteAllLogs deletes all logs managed by this client.
+func (c *woodpeckerClient) DeleteAllLogs(ctx context.Context) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg)
 }
 
 // LogExists checks if a log with the specified name exists.

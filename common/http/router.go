@@ -57,6 +57,12 @@ const (
 	AdminLogstoreCompactPath  = "/admin/logstore/compact"
 )
 
+// AdminLogDeletePath marks a single log deleted: POST {bucketName, rootPath, logId}.
+const AdminLogDeletePath = "/admin/log/delete"
+
+// AdminInstanceDeletePath marks a whole instance deleted: POST {bucketName, rootPath}.
+const AdminInstanceDeletePath = "/admin/instance/delete"
+
 // G family — ops registry
 const (
 	AdminRuntimeOpsPath      = "/admin/runtime/ops"
