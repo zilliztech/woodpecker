@@ -25,8 +25,8 @@ LABEL maintainer="zilliz-team@zilliz.com"
 LABEL version="1.0.0"
 LABEL description="Woodpecker distributed log store server"
 
-# Install dependencies including user management tools
-RUN dnf install -y wget libgomp libaio libatomic shadow-utils
+# Install dependencies
+RUN dnf install -y wget libgomp libaio libatomic
 
 RUN dnf -y install dnf-plugins-core && \
     dnf config-manager --set-enabled powertools && \
@@ -41,27 +41,21 @@ RUN case ${TARGETPLATFORM} in \
     wget -O /tini https://github.com/krallin/tini/releases/download/v0.19.0/tini-${TINI_ARCH} && \
     chmod +x /tini
 
-# Create woodpecker user and directories
-RUN useradd -r -u 1000 -g root -s /bin/bash -d /woodpecker woodpecker && \
-    mkdir -p /woodpecker/bin && \
+# Create directories
+RUN mkdir -p /woodpecker/bin && \
     mkdir -p /woodpecker/configs && \
     mkdir -p /woodpecker/data && \
-    mkdir -p /woodpecker/logs && \
-    chown -R woodpecker:root /woodpecker && \
-    chmod -R g=u /woodpecker
+    mkdir -p /woodpecker/logs
 
 # Copy Woodpecker binary
-COPY --chown=woodpecker:root --chmod=755 ./bin/woodpecker /woodpecker/bin/woodpecker
+COPY --chmod=755 ./bin/woodpecker /woodpecker/bin/woodpecker
 
 # Copy startup and health check scripts
-COPY --chown=woodpecker:root --chmod=755 ./build/docker/scripts/start-woodpecker.sh /woodpecker/bin/start-woodpecker.sh
-COPY --chown=woodpecker:root --chmod=755 ./build/docker/scripts/health-check.sh /woodpecker/bin/health-check.sh
+COPY --chmod=755 ./build/docker/scripts/start-woodpecker.sh /woodpecker/bin/start-woodpecker.sh
+COPY --chmod=755 ./build/docker/scripts/health-check.sh /woodpecker/bin/health-check.sh
 
 # Set working directory
 WORKDIR /woodpecker
-
-# Switch to woodpecker user
-USER woodpecker
 
 # Environment variables with defaults (removed sensitive defaults)
 ENV GOSSIP_PORT=17946 \
