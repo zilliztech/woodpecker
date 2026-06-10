@@ -152,6 +152,10 @@ func TestGenerateUniqueTestID_ContainsTimestamp(t *testing.T) {
 func TestNewObjectStorage_AzureProvider(t *testing.T) {
 	cfg := &config.Configuration{}
 	cfg.Minio.CloudProvider = minioHandler.CloudProviderAzure
+	// With CreateBucket=true Woodpecker manages the bucket, so an empty bucket name
+	// is rejected. (With CreateBucket=false the bucket is caller-managed and an empty
+	// name is allowed — see TestNewAzureObjectStorageClient_CreateBucketFalse_*.)
+	cfg.Minio.CreateBucket = true
 	cfg.Minio.BucketName = "" // empty bucket name should cause error
 
 	_, err := NewObjectStorage(context.Background(), cfg)
