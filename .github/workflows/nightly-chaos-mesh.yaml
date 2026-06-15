@@ -1,0 +1,32 @@
+name: Chaos Mesh Test
+on:
+  workflow_call:
+  workflow_dispatch:        # manual only; deliberately NO pull_request trigger -> never PR-gating
+concurrency:
+  group: nightly-chaos-mesh-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  Chaos-Mesh-Test:
+    name: Chaos Mesh Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25", cache: true }
+      - name: Install minikube, helm
+        run: |
+          curl -Lo minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+          sudo install minikube /usr/local/bin/
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          kubectl version --client
+      - name: Run network-chaos suite
+        run: ./tests/chaos_mesh/run_network_chaos.sh
+      - name: Upload chaos artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-mesh-artifacts
+          path: tests/chaos_mesh/artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
