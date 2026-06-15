@@ -546,6 +546,40 @@ func TestStorageConfig_IsStorageMinio(t *testing.T) {
 	assert.False(t, s.IsStorageMinio())
 }
 
+// TestMinioCreateBucketConfig verifies createBucket parsing both ways. The default
+// is true (also asserted in TestNewConfiguration); here we additionally cover the
+// false override, used by multi-tenant service deployments that manage their own
+// buckets so the node does not check/create a global bucket at startup.
+func TestMinioCreateBucketConfig(t *testing.T) {
+	t.Run("default is true", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		assert.NoError(t, err)
+		assert.True(t, cfg.Minio.CreateBucket)
+	})
+
+	t.Run("yaml can disable createBucket", func(t *testing.T) {
+		content := `woodpecker:
+  meta:
+    type: etcd
+    prefix: woodpecker
+  storage:
+    type: default
+    rootPath: /tmp/test
+minio:
+  createBucket: false`
+		tmpFile, err := os.CreateTemp("", "create_bucket_*.yaml")
+		assert.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		_, err = tmpFile.WriteString(content)
+		assert.NoError(t, err)
+		tmpFile.Close()
+
+		cfg, err := NewConfiguration(tmpFile.Name())
+		assert.NoError(t, err)
+		assert.False(t, cfg.Minio.CreateBucket)
+	})
+}
+
 func TestNewConfiguration_FileErrors(t *testing.T) {
 	// Non-existent file
 	_, err := NewConfiguration("/nonexistent/path/file.yaml")
