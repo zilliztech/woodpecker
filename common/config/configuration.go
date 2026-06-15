@@ -328,6 +328,7 @@ type LogstoreConfig struct {
 	FencePolicy             FencePolicyConfig            `yaml:"fencePolicy"`
 	GRPCConfig              GRPCConfig                   `yaml:"grpc"`
 	ProcessorCleanupPolicy  ProcessorCleanupPolicyConfig `yaml:"processorCleanupPolicy"`
+	MaintenanceStrategy     MaintenanceStrategyConfig    `yaml:"maintenanceStrategy"`
 	NodeSelectionPolicy     NodeSelectionPolicyConfig    `yaml:"nodeSelectionPolicy"`
 }
 
@@ -336,6 +337,16 @@ type ProcessorCleanupPolicyConfig struct {
 	CleanupInterval DurationSeconds `yaml:"cleanupInterval"` // How often to scan for idle processors
 	MaxIdleTime     DurationSeconds `yaml:"maxIdleTime"`     // How long a processor can be idle before cleanup
 	ShutdownTimeout DurationSeconds `yaml:"shutdownTimeout"` // Timeout for closing all processors during LogStore shutdown
+}
+
+// MaintenanceStrategyConfig configures the node's autonomous self-maintenance tasks
+// (delete-marker reclaim, and future cleaner/gc tasks).
+type MaintenanceStrategyConfig struct {
+	// DeleteGracePeriod is how long after a log/instance is marked deleted before its
+	// LOCAL data is reclaimed (object storage is never auto-reclaimed). Default 72h.
+	DeleteGracePeriod DurationSeconds `yaml:"deleteGracePeriod"`
+	// DeleteReclaimInterval is how often the reclaim task scans delete markers.
+	DeleteReclaimInterval DurationSeconds `yaml:"deleteReclaimInterval"`
 }
 
 // NodeSelectionPolicyConfig controls load-aware quorum node selection (issue #114).
@@ -698,6 +709,13 @@ func (c *Configuration) validateLogstoreConfig() error {
 		return fmt.Errorf("segment read policy max fetch threads must be positive, got %d", logstore.SegmentReadPolicy.MaxFetchThreads)
 	}
 
+	if logstore.MaintenanceStrategy.DeleteGracePeriod.Milliseconds() <= 0 {
+		return fmt.Errorf("maintenance strategy delete grace period must be positive, got %d", logstore.MaintenanceStrategy.DeleteGracePeriod.Milliseconds())
+	}
+	if logstore.MaintenanceStrategy.DeleteReclaimInterval.Milliseconds() <= 0 {
+		return fmt.Errorf("maintenance strategy delete reclaim interval must be positive, got %d", logstore.MaintenanceStrategy.DeleteReclaimInterval.Milliseconds())
+	}
+
 	p := logstore.NodeSelectionPolicy
 	if p.LoadAwareEnabled {
 		if p.MemSoftThreshold < 0 || p.MemSoftThreshold > 1 {
@@ -809,6 +827,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				CleanupInterval: DurationSeconds{Duration: Duration{duration: 60 * time.Second}},  // 1 min
 				MaxIdleTime:     DurationSeconds{Duration: Duration{duration: 300 * time.Second}}, // 5 min
 				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}},  // 15s
+			},
+			MaintenanceStrategy: MaintenanceStrategyConfig{
+				DeleteGracePeriod:     DurationSeconds{Duration: Duration{duration: 72 * time.Hour}},
+				DeleteReclaimInterval: DurationSeconds{Duration: Duration{duration: 10 * time.Minute}},
 			},
 			NodeSelectionPolicy: NodeSelectionPolicyConfig{
 				LoadAwareEnabled:   true,

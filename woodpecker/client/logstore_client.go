@@ -37,6 +37,10 @@ type LogStoreClient interface {
 	SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentClean cleans up the specified log segment and returns an error if any.
 	SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error
+	// MarkLogDeleted marks a single log deleted on the target node.
+	MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64) error
+	// MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on the target node.
+	MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.
 	GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// GetBlockCount gets the block count of the specified log segment and returns it and an error if any.

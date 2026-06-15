@@ -394,3 +394,53 @@ func TestLocalClient_MultipleOperations(t *testing.T) {
 	err = client.Close(ctx)
 	assert.NoError(t, err)
 }
+
+func TestLocalClient_MarkLogDeleted_Success(t *testing.T) {
+	client, mockStore := newLocalClientWithMock(t)
+	ctx := context.Background()
+
+	mockStore.EXPECT().EvictLog(mock.Anything, "bucket", "root", int64(1)).
+		Return(nil)
+
+	err := client.MarkLogDeleted(ctx, "bucket", "root", 1)
+	assert.NoError(t, err)
+}
+
+func TestLocalClient_MarkLogDeleted_Error(t *testing.T) {
+	client, mockStore := newLocalClientWithMock(t)
+	ctx := context.Background()
+
+	expectedErr := fmt.Errorf("evict log failed")
+
+	mockStore.EXPECT().EvictLog(mock.Anything, "bucket", "root", int64(1)).
+		Return(expectedErr)
+
+	err := client.MarkLogDeleted(ctx, "bucket", "root", 1)
+	assert.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+}
+
+func TestLocalClient_MarkInstanceDeleted_Success(t *testing.T) {
+	client, mockStore := newLocalClientWithMock(t)
+	ctx := context.Background()
+
+	mockStore.EXPECT().EvictInstance(mock.Anything, "bucket", "root").
+		Return(nil)
+
+	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
+	assert.NoError(t, err)
+}
+
+func TestLocalClient_MarkInstanceDeleted_Error(t *testing.T) {
+	client, mockStore := newLocalClientWithMock(t)
+	ctx := context.Background()
+
+	expectedErr := fmt.Errorf("evict instance failed")
+
+	mockStore.EXPECT().EvictInstance(mock.Anything, "bucket", "root").
+		Return(expectedErr)
+
+	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
+	assert.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+}

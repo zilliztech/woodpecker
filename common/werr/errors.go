@@ -94,6 +94,8 @@ var (
 	ErrLogStoreShutdown       = newWoodpeckerError("logstore is shutting down", 2002, false)
 	ErrLogStoreRegisterFailed = newWoodpeckerError("failed to register logstore", 2003, true)
 	ErrLogStoreInvalidAddress = newWoodpeckerError("invalid logstore address", 2004, false)
+	ErrLogBeingDeleted        = newWoodpeckerError("log is being deleted", 2005, false)
+	ErrMarkDeleteFailed       = newWoodpeckerError("failed to durably mark log/instance deleted", 2006, true)
 
 	// segment_processor errors (2100-2199)
 	ErrSegmentProcessorNotFound          = newWoodpeckerError("segment processor not found", 2100, false)
@@ -166,6 +168,7 @@ var (
 	ErrMetadataKeyNotExists           = newWoodpeckerError("metadata key not exists", 3012, false)
 	ErrMetadataCreateLogAlreadyExists = newWoodpeckerError("log already exists in metadata", 3013, false)
 	ErrMetadataSegmentAlreadyExists   = newWoodpeckerError("segment already exists in metadata", 3014, false)
+	ErrMetadataDelete                 = newWoodpeckerError("failed to delete metadata", 3015, true)
 
 	// ---------------------------------------------
 	// Service Layer Errors

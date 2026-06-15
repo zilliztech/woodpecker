@@ -62,8 +62,10 @@ type AdminCallbacks struct {
 	GetLogHealth            management.LogHealthCallback
 
 	// Phase 2 callbacks
-	Logstore LogstoreCallbacks
-	Ops      OpsCallbacks
+	Logstore            LogstoreCallbacks
+	Ops                 OpsCallbacks
+	MarkLogDeleted      func(bucketName, rootPath string, logId int64) error
+	MarkInstanceDeleted func(bucketName, rootPath string) error
 }
 
 const (
@@ -233,6 +235,20 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		Register(&Handler{
 			Path:        AdminLogstoreCompactPath,
 			HandlerFunc: management.NewLogstoreCompactHandler(callbacks.Logstore.ForceCompact),
+		})
+	}
+
+	// Register log/instance delete admin handlers (Phase 2)
+	if callbacks.MarkLogDeleted != nil {
+		Register(&Handler{
+			Path:        AdminLogDeletePath,
+			HandlerFunc: management.NewLogDeleteHandler(callbacks.MarkLogDeleted),
+		})
+	}
+	if callbacks.MarkInstanceDeleted != nil {
+		Register(&Handler{
+			Path:        AdminInstanceDeletePath,
+			HandlerFunc: management.NewInstanceDeleteHandler(callbacks.MarkInstanceDeleted),
 		})
 	}
 

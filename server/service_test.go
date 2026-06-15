@@ -444,6 +444,8 @@ type fakeLogStore struct {
 	getBlockCountFn func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
 	updateLACFn     func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) error
 	cleanFn         func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, flag int) error
+	evictLogFn      func(ctx context.Context, bucketName, rootPath string, logId int64) error
+	evictInstanceFn func(ctx context.Context, bucketName, rootPath string) error
 }
 
 func (f *fakeLogStore) Start() error       { return nil }
@@ -489,6 +491,19 @@ func (f *fakeLogStore) CleanSegment(ctx context.Context, bucketName, rootPath st
 func (f *fakeLogStore) GetActiveProcessorCount() int { return 0 }
 func (f *fakeLogStore) RejectNewWrites()             {}
 func (f *fakeLogStore) HasLocalSegmentData() bool    { return false }
+func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64) error {
+	if f.evictLogFn != nil {
+		return f.evictLogFn(ctx, bucketName, rootPath, logId)
+	}
+	return nil
+}
+
+func (f *fakeLogStore) EvictInstance(ctx context.Context, bucketName, rootPath string) error {
+	if f.evictInstanceFn != nil {
+		return f.evictInstanceFn(ctx, bucketName, rootPath)
+	}
+	return nil
+}
 
 func createTestServerWithFakeLogStore(fake *fakeLogStore) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1619,4 +1634,72 @@ func TestServer_DecommissionAutoComplete(t *testing.T) {
 	// Cleanup: cancel context to stop monitor (already stopped, but for safety)
 	srv.cancel()
 	srv.decommWG.Wait()
+}
+
+func TestServer_MarkLogDeleted_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64) error {
+			return nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.MarkLogDeleted(context.Background(), &proto.MarkLogDeletedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+	assert.Nil(t, werr.Error(resp.GetStatus()))
+}
+
+func TestServer_MarkLogDeleted_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64) error {
+			return assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.MarkLogDeleted(context.Background(), &proto.MarkLogDeletedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+	assert.NotNil(t, werr.Error(resp.GetStatus()))
+}
+
+func TestServer_MarkInstanceDeleted_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		evictInstanceFn: func(ctx context.Context, bn, rp string) error {
+			return nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.MarkInstanceDeleted(context.Background(), &proto.MarkInstanceDeletedRequest{
+		BucketName: "b", RootPath: "r",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+	assert.Nil(t, werr.Error(resp.GetStatus()))
+}
+
+func TestServer_MarkInstanceDeleted_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		evictInstanceFn: func(ctx context.Context, bn, rp string) error {
+			return assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.MarkInstanceDeleted(context.Background(), &proto.MarkInstanceDeletedRequest{
+		BucketName: "b", RootPath: "r",
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+	assert.NotNil(t, werr.Error(resp.GetStatus()))
 }
