@@ -107,6 +107,22 @@ func globalLogger() *zap.Logger {
 	return _globalLogger.Load().(*zap.Logger)
 }
 
+// ReplaceGlobals swaps the global logger for l and returns a function that
+// restores the previous logger.
+//
+// FOR TESTS ONLY. It exists so tests can capture log output (e.g. via a
+// zaptest/observer core), since Ctx/WithFields always derive from the global
+// logger. Do not call this from production code.
+func ReplaceGlobals(l *zap.Logger) func() {
+	prev := _globalLogger.Load()
+	_globalLogger.Store(l)
+	return func() {
+		if prev != nil {
+			_globalLogger.Store(prev.(*zap.Logger))
+		}
+	}
+}
+
 func Ctx(ctx context.Context) *zap.Logger {
 	if ctx == nil {
 		return globalLogger()

@@ -29,10 +29,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	commonObjectStorage "github.com/zilliztech/woodpecker/common/objectstorage"
@@ -1140,6 +1144,31 @@ func TestMinioFileWriter_Sync_EmptyBuffer(t *testing.T) {
 
 	err := w.Sync(ctx)
 	assert.NoError(t, err)
+}
+
+// TestMinioFileWriter_Sync_EmptyBuffer_EmitsNoDebugLogs verifies that a periodic
+// sync over an idle writer (empty buffer, nothing appended since the last flush)
+// produces NO debug log lines. The periodic ticker calls Sync on every interval
+// regardless of whether anything was written; on the idle path it must stay
+// silent instead of emitting per-tick "no data to flush" noise (issue #189).
+func TestMinioFileWriter_Sync_EmptyBuffer_EmitsNoDebugLogs(t *testing.T) {
+	core, recorded := observer.New(zapcore.DebugLevel)
+	restore := logger.ReplaceGlobals(zap.New(core))
+	defer restore()
+
+	ctx := context.Background()
+	w := newTestMinioFileWriter() // empty buffer, nothing appended
+
+	err := w.Sync(ctx)
+	assert.NoError(t, err)
+
+	debugLines := make([]string, 0)
+	for _, e := range recorded.All() {
+		if e.Level == zapcore.DebugLevel {
+			debugLines = append(debugLines, e.Message)
+		}
+	}
+	assert.Empty(t, debugLines, "idle Sync (empty buffer) must not emit debug logs, got: %v", debugLines)
 }
 
 // ===== Compact tests =====
