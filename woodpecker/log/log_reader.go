@@ -182,7 +182,6 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			// If entry not found, wait and retry until EOF
 			if werr.ErrEntryNotFound.Is(readBatchErr) {
 				// just wait and retry
-				logger.Ctx(ctx).Debug("segment has no entry to read, wait and retry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId))
 				if waitErr := l.waitWithContext(ctx); waitErr != nil {
 					metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 					return nil, waitErr
@@ -367,12 +366,6 @@ func (l *logBatchReaderImpl) isEntryInCurrentSegment(ctx context.Context) bool {
 	}
 
 	// For active segments, always try to read the segment
-	logger.Ctx(ctx).Debug("current active segment, try to read",
-		zap.String("logName", l.logName),
-		zap.Int64("logId", l.logId),
-		zap.Int64("segmentId", l.currentSegmentHandle.GetId(ctx)),
-		zap.String("readerName", l.readerName),
-		zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 	return true
 }
 
@@ -383,12 +376,6 @@ func (l *logBatchReaderImpl) findNextReadableSegment(ctx context.Context, latest
 	nextEntryId := l.pendingReadEntryId
 
 	for nextSegmentId <= latestSegmentId {
-		logger.Ctx(ctx).Debug("trying to find next segment",
-			zap.String("logName", l.logName),
-			zap.Int64("logId", l.logId),
-			zap.Int64("nextSegmentId", nextSegmentId),
-			zap.String("readerName", l.readerName))
-
 		segHandle, err := l.logHandle.GetExistsReadonlySegmentHandle(context.Background(), nextSegmentId)
 		if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 			logger.Ctx(ctx).Warn("get segment handle error",
@@ -439,12 +426,8 @@ func (l *logBatchReaderImpl) findNextReadableSegment(ctx context.Context, latest
 		nextSegmentId++
 	}
 
-	// No existing segment found, wait for future segment
-	logger.Ctx(ctx).Debug("no existing segment found, wait for future segment",
-		zap.String("logName", l.logName),
-		zap.Int64("logId", l.logId),
-		zap.Int64("latestSegmentId", latestSegmentId),
-		zap.String("readerName", l.readerName))
+	// No existing segment found, wait for future segment (silent: this is the
+	// steady-state of an idle tail reader and must not log on every poll, issue #190).
 	return nil, -1, -1, werr.ErrSegmentNotFound.WithCauseErrMsg("no existing readable segment found")
 }
 
