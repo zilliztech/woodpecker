@@ -806,21 +806,27 @@ func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Con
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "waitIfFlushingBufferSizeExceededUnsafe")
 	defer sp.End()
 	startTime := time.Now()
-	logger.Ctx(ctx).Debug("waitIfFlushingBufferSizeExceededUnsafe: checking flushing buffer size", zap.String("segmentFileKey", f.segmentFileKey))
 	// Check if current flushing buffer size exceeds the maximum allowed buffer size
+	waited := false
 	for {
 		currentFlushingSize := f.flushingBufferSize.Load()
 		if currentFlushingSize < f.maxBufferSize {
-			// Safe to proceed, flushing buffer size is within limits
-			logger.Ctx(ctx).Debug("Flushing buffer size check passed",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("currentFlushingSize", currentFlushingSize),
-				zap.Int64("maxBufferSize", f.maxBufferSize),
-				zap.Int64("elapsedTime", time.Since(startTime).Milliseconds()))
+			// Safe to proceed, flushing buffer size is within limits. Only log when we
+			// actually had to wait for space (backpressure, a rare and notable event);
+			// the common no-wait path runs on every periodic sync and must stay silent
+			// to avoid idle-spin logging (issue #189).
+			if waited {
+				logger.Ctx(ctx).Debug("Flushing buffer size check passed after waiting",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.Int64("currentFlushingSize", currentFlushingSize),
+					zap.Int64("maxBufferSize", f.maxBufferSize),
+					zap.Int64("elapsedTime", time.Since(startTime).Milliseconds()))
+			}
 			return nil
 		}
 
 		// Flushing buffer size exceeded, need to wait
+		waited = true
 		logger.Ctx(ctx).Debug("Flushing buffer size exceeded, waiting for space",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("currentFlushingSize", currentFlushingSize),
@@ -1026,7 +1032,8 @@ func (f *MinioFileWriter) Sync(ctx context.Context) (retErr error) {
 		return err
 	}
 	if len(toFlushData) == 0 {
-		logger.Ctx(ctx).Debug("Sync skipped: no data to flush", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		// idle path: nothing to flush this cycle — return silently instead of
+		// logging on every periodic sync (issue #189).
 		return nil
 	}
 
@@ -1066,18 +1073,17 @@ func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.Sequenti
 	// get current buffer
 	currentBuffer := f.buffer.Load()
 
-	logger.Ctx(ctx).Debug("start roll buffer", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
-
 	// check if there are any entries to be written
 	entryCount := len(currentBuffer.Entries)
 	if entryCount == 0 {
-		logger.Ctx(ctx).Debug("Sync skipped: buffer is empty", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		// idle path: nothing buffered since the last flush — return silently
+		// instead of logging on every periodic sync (issue #189).
 		return currentBuffer, make([]*cache.BufferEntry, 0), -1, nil
 	}
 	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
 	// get flush point to flush
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		logger.Ctx(ctx).Debug("Sync skipped: buffer is empty", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		// idle path: no new sequentially-ready entries to flush — return silently (issue #189).
 		return currentBuffer, make([]*cache.BufferEntry, 0), -1, nil
 	}
 	// get flush data
