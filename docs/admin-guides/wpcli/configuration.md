@@ -87,9 +87,16 @@ defaults:
 Values are resolved in this order (highest priority first):
 
 1. **Command-line flags** (`--endpoint`, `--timeout`, etc.)
-2. **Environment variables** (`$WOODPECKER_CLI_CONFIG`)
+2. **Environment variables** — `$WOODPECKER_ENDPOINT` (the admin endpoint;
+   overrides the cli.yaml context); `$WOODPECKER_CLI_CONFIG` (selects which
+   `cli.yaml` to load)
 3. **cli.yaml context** (the active context)
 4. **Hardcoded defaults** (admin_port=9091, timeout=30s, etc.)
+
+> Server images set `WOODPECKER_ENDPOINT=http://localhost:9091`, so `wp` runs
+> zero-config inside a pod. Because env beats the cli.yaml context, this also
+> overrides a `cli.yaml` mounted into the pod — pass `--endpoint` to target a
+> different cluster from in-pod.
 
 ## Flag-to-config mapping
 

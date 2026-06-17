@@ -53,6 +53,12 @@ RUN mkdir -p /woodpecker/bin && \
 # Copy Woodpecker binary
 COPY --chmod=755 ./bin/woodpecker /woodpecker/bin/woodpecker
 
+# Copy wp CLI binary (operational CLI; bundled for zero-config in-pod ops)
+COPY --chmod=755 ./bin/wp /woodpecker/bin/wp
+
+# Put wp on PATH so `wp ...` works from any directory in the pod
+RUN ln -sf /woodpecker/bin/wp /usr/local/bin/wp
+
 # Copy startup and health check scripts
 COPY --chmod=755 ./build/docker/scripts/start-woodpecker.sh /woodpecker/bin/start-woodpecker.sh
 COPY --chmod=755 ./build/docker/scripts/health-check.sh /woodpecker/bin/health-check.sh
@@ -76,7 +82,8 @@ ENV GOSSIP_PORT=17946 \
     MINIO_SECRET_KEY="" \
     MINIO_BUCKET="" \
     SEEDS="" \
-    SERVICE_SEEDS=""
+    SERVICE_SEEDS="" \
+    WOODPECKER_ENDPOINT="http://localhost:9091"
 
 # Expose ports (use fixed ports for better documentation)
 EXPOSE 18080 17946

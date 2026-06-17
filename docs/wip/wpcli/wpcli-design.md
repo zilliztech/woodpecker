@@ -971,6 +971,11 @@ cmdline flag  >  env var  >  current context field  >  defaults section  >  buil
 | `--no-color` | `NO_COLOR` | `defaults.no_color` | auto-detect tty |
 | `-v, --verbose` | `WOODPECKER_VERBOSE` | — | `0` |
 
+> **Note (#187):** `WOODPECKER_ENDPOINT` is implemented in
+> `cmd/wpcli/cmd/resolver.go` and is the zero-config in-pod default — all server
+> images set `WOODPECKER_ENDPOINT=http://localhost:9091`. Per the chain above it
+> sits above the cli.yaml context, so it overrides a pod-mounted `cli.yaml`.
+
 ### 3.3 Global flags
 
 ```

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/client"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
@@ -34,9 +35,8 @@ func resolveAndDiscover() (*resolved, error) {
 	}
 
 	// 2. Flag / env overrides on top of context.
-	if Globals.Endpoint != "" {
-		ctx.Endpoint = Globals.Endpoint
-	}
+	// Endpoint precedence: --endpoint flag > $WOODPECKER_ENDPOINT > cli.yaml context.
+	ctx.Endpoint = resolveEndpoint(Globals.Endpoint, os.Getenv("WOODPECKER_ENDPOINT"), ctx.Endpoint)
 	if Globals.AdminPort != 0 {
 		ctx.AdminPort = Globals.AdminPort
 	}
@@ -66,4 +66,21 @@ func resolveAndDiscover() (*resolved, error) {
 	}
 
 	return &resolved{Context: ctx, Client: c, Members: ml}, nil
+}
+
+// resolveEndpoint applies the wp endpoint precedence:
+// --endpoint flag > $WOODPECKER_ENDPOINT env > cli.yaml context.
+// It returns the first non-empty value in that order, or "" if all are empty
+// (which the caller reports as a usage error). Env is intentionally above
+// cli.yaml so the server images' baked-in WOODPECKER_ENDPOINT gives zero-config
+// in-pod ops; pass --endpoint to override from inside a pod.
+func resolveEndpoint(flagEndpoint, envEndpoint, ctxEndpoint string) string {
+	switch {
+	case flagEndpoint != "":
+		return flagEndpoint
+	case envEndpoint != "":
+		return envEndpoint
+	default:
+		return ctxEndpoint
+	}
 }
