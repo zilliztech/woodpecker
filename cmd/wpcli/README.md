@@ -13,6 +13,32 @@ See [`docs/wpcli-design.md`](../../docs/wpcli-design.md) for the full design.
 
 See [`docs/wpcli/quickstart.md`](../../docs/wpcli/quickstart.md) for a 15-minute onboarding guide.
 
+## In-pod usage (zero-config)
+
+`wp` is bundled in all server images and is on `PATH`, so you can operate a
+cluster straight from a server pod with nothing to install:
+
+```bash
+kubectl exec -it <woodpecker-pod> -- wp cluster info
+kubectl exec -it <woodpecker-pod> -- wp node list
+```
+
+This works with no flags because the images set
+`WOODPECKER_ENDPOINT=http://localhost:9091` and the admin HTTP API listens on
+`9091` inside the container.
+
+### Endpoint precedence
+
+`wp` resolves the admin endpoint in this order (highest priority first):
+
+1. `--endpoint <url>` flag
+2. `$WOODPECKER_ENDPOINT`
+3. `cli.yaml` active context
+
+Because `$WOODPECKER_ENDPOINT` is baked into the server images, a `cli.yaml`
+mounted into a pod is overridden by it; pass `--endpoint` to target a different
+cluster from inside a pod.
+
 ## Minimum config
 
 Create `~/.woodpecker/cli.yaml`:
