@@ -217,7 +217,6 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadBatchEntries")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("segment processor read batch entries", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxEntries", maxEntries))
 	reader, err := s.getOrCreateSegmentReader(ctx)
 	if err != nil {
 		return nil, err
@@ -236,11 +235,11 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 		MaxBatchEntries: maxEntries,
 	}, lastState)
 	if err != nil {
-		if werr.ErrEntryNotFound.Is(err) {
-			logger.Ctx(ctx).Debug("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
-		} else if werr.ErrFileReaderEndOfFile.Is(err) {
+		// ErrEntryNotFound is the steady-state of a caught-up tail reader; stay
+		// silent on it (issue #190) and only log genuine EOF/errors.
+		if werr.ErrFileReaderEndOfFile.Is(err) {
 			logger.Ctx(ctx).Info("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
-		} else {
+		} else if !werr.ErrEntryNotFound.Is(err) {
 			logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
 		}
 		return nil, err

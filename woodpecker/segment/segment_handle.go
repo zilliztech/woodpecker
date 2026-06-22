@@ -459,7 +459,6 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxEntries", maxEntries))
 
 	// Use direct read from object storage for sealed segments when enabled
 	if s.canDirectRead() {
@@ -629,15 +628,6 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 	// Cycle through nodes starting from the preferred index
 	for i, candidate := range candidates {
 		node := candidate.node
-		logger.Ctx(ctx).Debug("attempting to read from node",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.String("node", node),
-			zap.Int("nodeIndex", candidate.originalIndex),
-			zap.Int("attempt", i+1),
-			zap.Bool("isLastReadNode", lastReadState != nil && lastReadState.Node == node))
-
 		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
 		if err != nil {
 			logger.Ctx(ctx).Warn("failed to get client for node, trying next",
@@ -658,10 +648,9 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 
 		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
 		if err != nil {
-			if werr.ErrEntryNotFound.Is(err) {
-				logger.Ctx(ctx).Debug("read batch empty on node",
-					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node))
-			} else {
+			// ErrEntryNotFound is the steady-state of a caught-up tail reader;
+			// only log genuine read failures (issue #190).
+			if !werr.ErrEntryNotFound.Is(err) {
 				logger.Ctx(ctx).Warn("read batch failed on node",
 					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node), zap.Error(err))
 			}
@@ -691,10 +680,7 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 	}
 
 	// All nodes failed
-	if werr.ErrEntryNotFound.Is(lastError) {
-		logger.Ctx(ctx).Debug("read batch empty on all quorum nodes",
-			zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("totalNodes", nodeCount))
-	} else {
+	if !werr.ErrEntryNotFound.Is(lastError) {
 		logger.Ctx(ctx).Warn("read batch failed on all quorum nodes",
 			zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("totalNodes", nodeCount), zap.Error(lastError))
 	}
