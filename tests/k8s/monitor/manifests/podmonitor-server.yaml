@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: woodpecker-server
+  namespace: woodpecker
+  labels:
+    app.kubernetes.io/name: woodpecker
+    app.kubernetes.io/component: server
+spec:
+  namespaceSelector:
+    matchNames: [woodpecker]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: woodpecker
+      app.kubernetes.io/component: server
+      app.kubernetes.io/instance: my-woodpecker
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      honorLabels: true
