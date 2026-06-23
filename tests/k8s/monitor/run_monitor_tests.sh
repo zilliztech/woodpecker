@@ -25,7 +25,7 @@ export REPLICAS="${REPLICAS:-3}"
 export WP_IMG="${WP_IMG:-zilliztech/woodpecker:v0.1.26}"
 # Dependency images for lib.sh wp_deploy_deps (it honors these env vars). Default MinIO
 # to a locally-present tag so preload_image reuses it without any registry pull.
-export ETCD_IMG="${ETCD_IMG:-quay.io/coreos/etcd:v3.5.18}"
+export ETCD_IMG="${ETCD_IMG:-quay.io/coreos/etcd:v3.5.25}"
 export MINIO_IMG="${MINIO_IMG:-minio/minio:RELEASE.2024-12-18T13-15-44Z}"
 export MK_CPUS="${MK_CPUS:-4}" MK_MEMORY="${MK_MEMORY:-4096}"
 MON_NS="monitoring"

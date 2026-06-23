@@ -98,7 +98,7 @@ metadata:
 spec:
   containers:
     - name: etcd
-      image: ${ETCD_IMG:-quay.io/coreos/etcd:v3.5.18}
+      image: ${ETCD_IMG:-quay.io/coreos/etcd:v3.5.25}
       command: ["etcd", "--listen-client-urls=http://0.0.0.0:2379",
                 "--advertise-client-urls=http://etcd.default.svc:2379"]
       ports: [{ containerPort: 2379 }]
@@ -119,7 +119,7 @@ metadata:
 spec:
   containers:
     - name: minio
-      image: ${MINIO_IMG:-minio/minio:RELEASE.2024-06-13T22-53-53Z}
+      image: ${MINIO_IMG:-minio/minio:RELEASE.2024-12-18T13-15-44Z}
       command: ["minio", "server", "/data"]
       env:
         - { name: MINIO_ROOT_USER, value: minioadmin }
