@@ -91,6 +91,9 @@ func (d Dynamic[T]) Get() T {
 // before the client is used concurrently.
 func (d *Dynamic[T]) WithSource(source func() (T, bool)) { d.source = source }
 
+// Set overwrites the static value (e.g. defaults builder, config merge, tests).
+func (d *Dynamic[T]) Set(v T) { d.value = v }
+
 // --- YAML integration: behave exactly like a bare T on disk ---
 
 func (d *Dynamic[T]) UnmarshalYAML(node *yaml.Node) error { return node.Decode(&d.value) }
@@ -154,6 +157,27 @@ has a chance to bind sources, so validation always checks the **static
 baseline** — dynamic overrides intentionally bypass startup validation and rely
 on the runtime clamping described in §7.
 
+### 5.1 Call-site migration (cost of the type change)
+
+Changing the field *types* is a breaking change: every existing literal and read
+of the three fields must be mechanically updated. This is one-time and
+mechanical, but in scope for the plan:
+
+- **Production read sites** are few: `GetEnsembleSize` (§5), `discovery.go` (§6),
+  and the config-merge layer `cmd/external/user_config.go:297-304`, whose guards
+  become `.Get()` comparisons (e.g. `src.Client.Quorum.SelectStrategy.Strategy.Get() != ""`);
+  the field-to-field assignments stay (`Dynamic[string] = Dynamic[string]`, a
+  plain struct copy — at merge time no source is bound).
+- **Test sites** (~80 across `woodpecker/quorum/discovery_test.go`,
+  `common/config/configuration_test.go`, `woodpecker/woodpecker_client_test.go`,
+  `tests/integration/quorum_discovery_test.go`,
+  `tests/integration/e2e_service_failover_test.go`): struct literals
+  `Strategy: "random"` → `Strategy: config.NewDynamic("random")`; reads
+  `.Replicas` → `.Replicas.Get()`; assignments `.Replicas = 5` → `.Replicas.Set(5)`.
+
+Because Go compiles the whole module, the type flip and all fixes land in a
+single atomic commit (`go build ./...` must stay green).
+
 ## 6. Consumer changes (`woodpecker/quorum/discovery.go`)
 
 Drop the construction-time cache; resolve a fresh, self-consistent snapshot at
@@ -197,18 +221,33 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 }
 ```
 
-`parseAffinityMode` / `parseStrategyType` / `buildFilters` become pure helpers
-(`parseAffinity` / `parseStrategy` / `buildFilters`) taking their inputs as
-arguments instead of reading `d` and mutating it. The threaded `es/wq/aq` and
-`affinityMode`/`strategyType` values are passed down to
-`newQuorumInfo`/`requestNodesFromSeed` rather than read from struct fields.
+`parseAffinityMode` / `parseStrategyType` / `buildFilters` (and its
+`buildSingleFilter`/`buildCrossRegionFilters`/`buildCustomFilters` helpers)
+become **pure package functions** taking their inputs as arguments instead of
+reading `d` and mutating cached fields. The derived `es/wq/aq` and
+`affinityMode`/`strategyType` values are recomputed via small unexported
+`d.es()/d.wq()/d.aq()/d.affinityMode()/d.strategyType()` helpers (read fresh
+from `d.cfg` through `.Get()`), and `filters` is built once at the top of
+`SelectQuorum` (before the retry loop) and threaded into the `select*` methods.
+Building filters before the retry loop means a genuine misconfiguration returns
+an error once instead of being retried forever.
 
-Behavior parity for the parsers:
-- `parseStrategy`: unknown / empty → `RANDOM` (same as today).
-- `parseAffinity`: **relaxed** — unknown → `SOFT` with a warning, instead of
-  erroring. Rationale: it is now evaluated per call at runtime, so a typo in a
-  dynamic override must not turn into a hard failure of segment creation. The
-  static baseline is still strictly validated at startup (§5).
+Construction vs runtime validation:
+- `NewQuorumDiscovery` **keeps a strict, fail-fast validation of the static
+  config** (it calls `parseAffinity` and `buildFilters` on the static values and
+  returns their error). This preserves current behavior and the existing
+  construction-error tests (e.g. `TestQuorumDiscovery_InvalidAffinityMode`,
+  custom-placement-count mismatches).
+- The **per-call read path is tolerant** so a bad *dynamic* override can't wedge
+  writes: `parseStrategy` maps unknown/empty → `RANDOM` (as today); and at
+  runtime an unknown affinity from `parseAffinity` is logged and degraded to
+  `SOFT` rather than propagated as an error.
+
+Consistency note: scalars are read fresh per call, so a dynamic source that
+flips *mid-selection* could in principle be observed inconsistently across one
+selection. This is benign (worst case: a single segment selected with a
+transitional value) and astronomically rare given selection runs only at
+segment roll; we accept it rather than snapshot-locking the whole struct.
 
 ## 7. Semantics, safety, backward compatibility
 
