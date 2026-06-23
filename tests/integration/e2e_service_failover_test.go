@@ -760,15 +760,15 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	originalReplica := cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas
 
 	// Override quorum configuration for Case2: es=5, wq=5, aq=3
-	cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas = 5
+	cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Set(5)
 	t.Logf("Overridden quorum config for Case2: replica=%d",
-		cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+		cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
 
 	defer func() {
 		// Restore original quorum configuration
 		cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas = originalReplica
 		t.Logf("Restored original quorum config: replica=%d",
-			cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+			cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
 
 		cluster.StopMultiNodeCluster(t)
 	}()
@@ -800,7 +800,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	// Create a unique log name for this test
 	logName := "test_log_failover_case2_" + time.Now().Format("20060102150405")
 	t.Logf("Creating log: %s with quorum config from woodpecker.yaml: replica=%d",
-		logName, cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+		logName, cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
 
 	// Create log if not exists
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
@@ -901,7 +901,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	require.NotNil(t, quorumInfo, "QuorumInfo should not be nil")
 
 	t.Logf("Current segment %d has quorum nodes: %v", segmentMetadata.Metadata.SegNo, quorumInfo.Nodes)
-	expectedEnsembleSize := cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas
+	expectedEnsembleSize := cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get()
 	require.GreaterOrEqual(t, len(quorumInfo.Nodes), expectedEnsembleSize, "Should have at least %d quorum nodes", expectedEnsembleSize)
 
 	// Debug: Print cluster information
@@ -1192,7 +1192,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	t.Logf("=== CASE 2 PASSED: Writer and reader continued working seamlessly despite double node failure (nodes %v) ===",
 		targetNodeIndexes[:nodesFailCount])
 	t.Logf("Successfully wrote and read %d entries with replica=%d configuration - %d before and %d after double failover",
-		totalEntries, cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas,
+		totalEntries, cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get(),
 		entriesPhase1, entriesPhase2)
 }
 

@@ -46,9 +46,9 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 1, len(config.Woodpecker.Client.Quorum.BufferPools))
 	assert.Equal(t, "default-region-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
 	assert.Equal(t, []string{}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
-	assert.Equal(t, "soft", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
-	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
-	assert.Equal(t, "random", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
+	assert.Equal(t, "soft", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode.Get())
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
+	assert.Equal(t, "random", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy.Get())
 	assert.Equal(t, 0, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	assert.Equal(t, 3, config.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, config.Woodpecker.Client.SessionMonitor.MaxFailures)
@@ -143,9 +143,9 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 1, len(defaultConfig.Woodpecker.Client.Quorum.BufferPools))
 	assert.Equal(t, "default-pool", defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Name)
 	assert.Equal(t, []string{}, defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
-	assert.Equal(t, "soft", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
-	assert.Equal(t, "random", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
+	assert.Equal(t, "soft", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode.Get())
+	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
+	assert.Equal(t, "random", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Strategy.Get())
 	assert.Equal(t, 0, len(defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.SessionMonitor.MaxFailures)
@@ -304,9 +304,9 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, []string{"test-node1", "test-node2"}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
 	assert.Equal(t, "region-b-pool", config.Woodpecker.Client.Quorum.BufferPools[1].Name)
 	assert.Equal(t, []string{"test-node3", "test-node4", "test-node5"}, config.Woodpecker.Client.Quorum.BufferPools[1].Seeds)
-	assert.Equal(t, "hard", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
-	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
-	assert.Equal(t, "custom", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
+	assert.Equal(t, "hard", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode.Get())
+	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
+	assert.Equal(t, "custom", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy.Get())
 	assert.Equal(t, 5, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	assert.Equal(t, "replica-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Name)
 	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Region)
@@ -340,9 +340,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 			name: "Valid configuration with strategy",
 			config: QuorumConfig{
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     3,
-					Strategy:     "single-az-single-rg",
+					AffinityMode: NewDynamic("soft"),
+					Replicas:     NewDynamic(3),
+					Strategy:     NewDynamic("single-az-single-rg"),
 				},
 			},
 			expectError: false,
@@ -351,9 +351,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 			name: "Valid configuration with replicas=5",
 			config: QuorumConfig{
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     5,
-					Strategy:     "random",
+					AffinityMode: NewDynamic("soft"),
+					Replicas:     NewDynamic(5),
+					Strategy:     NewDynamic("random"),
 				},
 			},
 			expectError: false,
@@ -362,9 +362,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 			name: "Invalid affinity mode",
 			config: QuorumConfig{
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "invalid",
-					Replicas:     3,
-					Strategy:     "single-az-single-rg",
+					AffinityMode: NewDynamic("invalid"),
+					Replicas:     NewDynamic(3),
+					Strategy:     NewDynamic("single-az-single-rg"),
 				},
 			},
 			expectError: true,
@@ -375,9 +375,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 			config: QuorumConfig{
 				BufferPools: []QuorumBufferPool{}, // Empty buffer pools should cause error
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     3,
-					Strategy:     "random",
+					AffinityMode: NewDynamic("soft"),
+					Replicas:     NewDynamic(3),
+					Strategy:     NewDynamic("random"),
 				},
 			},
 			expectError: true,
@@ -391,9 +391,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 					{Name: "us-west-2", Seeds: []string{"seed2:8080"}},
 				},
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "hard",
-					Replicas:     3,
-					Strategy:     "custom",
+					AffinityMode: NewDynamic("hard"),
+					Replicas:     NewDynamic(3),
+					Strategy:     NewDynamic("custom"),
 					CustomPlacement: []CustomPlacement{
 						{
 							Name:          "replica-1",
@@ -820,7 +820,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "", Seeds: []string{"s1"}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "random",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("random"),
 			},
 		})
 		assert.ErrorContains(t, cfg.Validate(), "name cannot be empty")
@@ -830,7 +830,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "random",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("random"),
 			},
 		})
 		assert.ErrorContains(t, cfg.Validate(), "must have at least one seed")
@@ -840,7 +840,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{""}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "random",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("random"),
 			},
 		})
 		assert.ErrorContains(t, cfg.Validate(), "seed 0 cannot be empty")
@@ -850,7 +850,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "custom", CustomPlacement: []CustomPlacement{},
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"), CustomPlacement: []CustomPlacement{},
 			},
 		})
 		assert.ErrorContains(t, cfg.Validate(), "requires at least one custom placement")
@@ -860,7 +860,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "custom",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
 				CustomPlacement: []CustomPlacement{
 					{Region: "pool", Az: "az1", ResourceGroup: "rg1"},
 				},
@@ -873,7 +873,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "custom",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
 				CustomPlacement: []CustomPlacement{
 					{Region: "", Az: "az1", ResourceGroup: "rg1"},
 					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
@@ -888,7 +888,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "custom",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
 				CustomPlacement: []CustomPlacement{
 					{Region: "pool", Az: "", ResourceGroup: "rg1"},
 					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
@@ -903,7 +903,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "custom",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
 				CustomPlacement: []CustomPlacement{
 					{Region: "pool", Az: "az1", ResourceGroup: ""},
 					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
@@ -918,7 +918,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "custom",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
 				CustomPlacement: []CustomPlacement{
 					{Region: "unknown", Az: "az1", ResourceGroup: "rg1"},
 					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
@@ -933,7 +933,7 @@ func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 		cfg := makeServiceCfg(QuorumConfig{
 			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
 			SelectStrategy: QuorumSelectStrategy{
-				Replicas: 3, Strategy: "cross-region",
+				Replicas: NewDynamic(3), Strategy: NewDynamic("cross-region"),
 			},
 		})
 		assert.ErrorContains(t, cfg.Validate(), "requires at least 2 buffer pools")
@@ -945,7 +945,7 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 	// Test with replicas = 3
 	config3 := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{
-			Replicas: 3,
+			Replicas: NewDynamic(3),
 		},
 	}
 
@@ -956,7 +956,7 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 	// Test with replicas = 5
 	config5 := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{
-			Replicas: 5,
+			Replicas: NewDynamic(5),
 		},
 	}
 
@@ -967,7 +967,7 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 	// Test with invalid replicas (should default to 3)
 	configInvalid := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{
-			Replicas: 4, // Invalid value
+			Replicas: NewDynamic(4), // Invalid value
 		},
 	}
 
@@ -980,9 +980,9 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 func TestCustomPlacementConfiguration(t *testing.T) {
 	config := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{
-			AffinityMode: "hard",
-			Replicas:     5,
-			Strategy:     "custom",
+			AffinityMode: NewDynamic("hard"),
+			Replicas:     NewDynamic(5),
+			Strategy:     NewDynamic("custom"),
 			CustomPlacement: []CustomPlacement{
 				{
 					Name:          "replica-1",

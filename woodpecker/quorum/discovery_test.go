@@ -27,9 +27,9 @@ func TestQuorumDiscovery_SelectQuorumNodes_SingleRegion_Success(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -81,9 +81,9 @@ func TestQuorumDiscovery_SelectQuorumNodes_CustomPlacement_Success(t *testing.T)
 			{Name: "region-c", Seeds: []string{"seed-c:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3, // This will result in EnsembleSize=3
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3), // This will result in EnsembleSize=3
 			CustomPlacement: []config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-b", Az: "az-2", ResourceGroup: "rg-2"},
@@ -134,9 +134,9 @@ func TestQuorumDiscovery_SelectQuorumNodes_CustomPlacement_ValidationError(t *te
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3, // Mismatch: 3 required but only 1 custom placement rule
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3), // Mismatch: 3 required but only 1 custom placement rule
 			CustomPlacement: []config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 			},
@@ -157,9 +157,9 @@ func TestQuorumDiscovery_SelectQuorumNodes_NoBufferPools(t *testing.T) {
 	cfg := &config.QuorumConfig{
 		BufferPools: []config.QuorumBufferPool{},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -187,9 +187,9 @@ func TestQuorumDiscovery_SelectQuorumNodes_gRPCError(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -235,9 +235,9 @@ func TestQuorumDiscovery_StrategyTypeMapping(t *testing.T) {
 					{Name: "region-c", Seeds: []string{"seed-c-0:8080"}},
 				},
 				SelectStrategy: config.QuorumSelectStrategy{
-					Strategy:     tt.strategy,
-					AffinityMode: "soft",
-					Replicas:     1,
+					Strategy:     config.NewDynamic(tt.strategy),
+					AffinityMode: config.NewDynamic("soft"),
+					Replicas:     config.NewDynamic(1),
 				},
 			}
 
@@ -276,9 +276,9 @@ func TestQuorumDiscovery_SelectQuorumNodes_gRPCTimeout(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -314,9 +314,9 @@ func TestQuorumDiscovery_FillRemainingNodes_ContinuesAcrossPools(t *testing.T) {
 			{Name: "region-c", Seeds: []string{"seed-c:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     5, // Need 5 nodes total
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(5), // Need 5 nodes total
 		},
 	}
 
@@ -381,9 +381,9 @@ func TestQuorumDiscovery_FillRemainingNodes_FirstPoolFails_TriesNext(t *testing.
 			{Name: "region-c", Seeds: []string{"seed-c:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -437,9 +437,9 @@ func TestQuorumDiscovery_CrossRegion_DeduplicatesNodes(t *testing.T) {
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -495,9 +495,9 @@ func TestQuorumDiscovery_CrossRegion_FillDeduplicatesNodes(t *testing.T) {
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -560,9 +560,9 @@ func TestQuorumDiscovery_SingleRegion_RandomPoolSelection(t *testing.T) {
 			{Name: "pool-c", Seeds: []string{"seed-c:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -633,9 +633,9 @@ func TestQuorumDiscovery_SeedRotation_SkipsDeadSeed(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -682,9 +682,9 @@ func TestQuorumDiscovery_SeedRotation_AllSeedsDead(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -725,9 +725,9 @@ func TestQuorumDiscovery_CustomPlacement_SeedRotation(t *testing.T) {
 			{Name: "region-c", Seeds: []string{"dead-seed-c:8080", "healthy-seed-c:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3),
 			CustomPlacement: []config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-b", Az: "az-2", ResourceGroup: "rg-2"},
@@ -789,9 +789,9 @@ func TestQuorumDiscovery_CustomPlacement_DeduplicatesNodes(t *testing.T) {
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3),
 			CustomPlacement: []config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"}, // Same az+rg
@@ -838,9 +838,9 @@ func TestQuorumDiscovery_CustomPlacement_DeduplicateFails(t *testing.T) {
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3),
 			CustomPlacement: []config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
@@ -880,9 +880,9 @@ func TestQuorumDiscovery_CrossRegion_TrimExcessUnbiased(t *testing.T) {
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3, // es=3, 2 pools → pool A gets 2, pool B gets 1
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3), // es=3, 2 pools → pool A gets 2, pool B gets 1
 		},
 	}
 
@@ -940,9 +940,9 @@ func TestQuorumDiscovery_InvalidAffinityMode(t *testing.T) {
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "invalid-mode",
-			Replicas:     1,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("invalid-mode"),
+			Replicas:     config.NewDynamic(1),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -960,9 +960,9 @@ func TestQuorumDiscovery_EmptyAffinityModeDefaultsToSoft(t *testing.T) {
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "", // empty defaults to soft
-			Replicas:     1,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic(""), // empty defaults to soft
+			Replicas:     config.NewDynamic(1),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -981,9 +981,9 @@ func TestQuorumDiscovery_HardAffinityMode(t *testing.T) {
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "hard",
-			Replicas:     1,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(1),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -1002,9 +1002,9 @@ func TestQuorumDiscovery_CrossRegion_InsufficientPools(t *testing.T) {
 			// Only 1 pool - cross-region needs at least 2
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -1022,9 +1022,9 @@ func TestQuorumDiscovery_CustomPlacement_EmptyPlacement(t *testing.T) {
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:        "custom",
-			AffinityMode:    "soft",
-			Replicas:        3,
+			Strategy:        config.NewDynamic("custom"),
+			AffinityMode:    config.NewDynamic("soft"),
+			Replicas:        config.NewDynamic(3),
 			CustomPlacement: []config.CustomPlacement{}, // empty
 		},
 	}
@@ -1068,9 +1068,9 @@ func TestQuorumDiscovery_CrossRegion_HardAffinityFail(t *testing.T) {
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "hard",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -1102,9 +1102,9 @@ func TestQuorumDiscovery_CrossRegion_HardAffinity_InsufficientNodes(t *testing.T
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "hard",
-			Replicas:     5,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(5),
 		},
 	}
 
@@ -1141,9 +1141,9 @@ func TestQuorumDiscovery_SingleRegion_NoSeeds(t *testing.T) {
 			{Name: "region-a", Seeds: []string{}}, // no seeds
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     1,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(1),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -1177,7 +1177,7 @@ func TestQuorumDiscovery_FillRemainingNodes_AlreadyEnough(t *testing.T) {
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
 			SelectStrategy: config.QuorumSelectStrategy{
-				Replicas: 3,
+				Replicas: config.NewDynamic(3),
 			},
 		},
 	}
@@ -1212,7 +1212,7 @@ func TestQuorumDiscovery_FillRemainingNodes_NilSelectedSet(t *testing.T) {
 				{Name: "pool1", Seeds: []string{"seed1:8080"}},
 			},
 			SelectStrategy: config.QuorumSelectStrategy{
-				Replicas: 3,
+				Replicas: config.NewDynamic(3),
 			},
 		},
 		clientPool: mockClientPool,
@@ -1236,7 +1236,7 @@ func TestQuorumDiscovery_FillRemainingNodes_PoolNoSeeds(t *testing.T) {
 				{Name: "pool1", Seeds: []string{}}, // no seeds
 			},
 			SelectStrategy: config.QuorumSelectStrategy{
-				Replicas: 3,
+				Replicas: config.NewDynamic(3),
 			},
 		},
 	}
@@ -1265,7 +1265,7 @@ func TestQuorumDiscovery_FillRemainingNodes_RequestError(t *testing.T) {
 				{Name: "pool1", Seeds: []string{"seed1:8080"}},
 			},
 			SelectStrategy: config.QuorumSelectStrategy{
-				Replicas: 3,
+				Replicas: config.NewDynamic(3),
 			},
 		},
 		clientPool: mockClientPool,
@@ -1287,7 +1287,7 @@ func TestQuorumDiscovery_SelectSingleRegion_FiltersCountError(t *testing.T) {
 				{Name: "pool1", Seeds: []string{"seed1:8080"}},
 			},
 			SelectStrategy: config.QuorumSelectStrategy{
-				Replicas: 3,
+				Replicas: config.NewDynamic(3),
 			},
 		},
 	}
@@ -1308,7 +1308,7 @@ func TestQuorumDiscovery_SelectCrossRegion_FiltersCountError(t *testing.T) {
 				{Name: "pool2", Seeds: []string{"s2"}},
 			},
 			SelectStrategy: config.QuorumSelectStrategy{
-				Replicas: 3,
+				Replicas: config.NewDynamic(3),
 			},
 		},
 	}
@@ -1341,9 +1341,9 @@ func TestQuorumDiscovery_SelectCrossRegion_PoolNoSeeds(t *testing.T) {
 				{Name: "pool2", Seeds: []string{"seed2:8080"}},
 			},
 			SelectStrategy: config.QuorumSelectStrategy{
-				Strategy:     "cross-region",
-				AffinityMode: "soft",
-				Replicas:     3,
+				Strategy:     config.NewDynamic("cross-region"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(3),
 			},
 		},
 		clientPool: mockClientPool,
@@ -1385,9 +1385,9 @@ func TestQuorumDiscovery_SelectCrossRegion_RegionNodesZero(t *testing.T) {
 				{Name: "pool5", Seeds: []string{"s5:8080"}},
 			},
 			SelectStrategy: config.QuorumSelectStrategy{
-				Strategy:     "cross-region",
-				AffinityMode: "soft",
-				Replicas:     3, // 3 nodes across 5 pools -> pools 4,5 get regionNodes==0
+				Strategy:     config.NewDynamic("cross-region"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(3), // 3 nodes across 5 pools -> pools 4,5 get regionNodes==0
 			},
 		},
 		clientPool: mockClientPool,
@@ -1410,7 +1410,7 @@ func TestQuorumDiscovery_CustomPlacement_FiltersCountMismatch(t *testing.T) {
 					{Region: "r1"},
 					{Region: "r2"},
 				},
-				Replicas: 2,
+				Replicas: config.NewDynamic(2),
 			},
 		},
 	}
@@ -1433,7 +1433,7 @@ func TestQuorumDiscovery_CustomPlacement_PoolNotFound(t *testing.T) {
 				CustomPlacement: []config.CustomPlacement{
 					{Region: "nonexistent-region"},
 				},
-				Replicas: 1,
+				Replicas: config.NewDynamic(1),
 			},
 		},
 	}
@@ -1456,7 +1456,7 @@ func TestQuorumDiscovery_CustomPlacement_PoolNoSeeds(t *testing.T) {
 				CustomPlacement: []config.CustomPlacement{
 					{Region: "r1"},
 				},
-				Replicas: 1,
+				Replicas: config.NewDynamic(1),
 			},
 		},
 	}
@@ -1487,9 +1487,9 @@ func TestQuorumDiscovery_CustomPlacement_EmptyResult(t *testing.T) {
 				CustomPlacement: []config.CustomPlacement{
 					{Region: "r1"},
 				},
-				Strategy:     "custom",
-				AffinityMode: "soft",
-				Replicas:     1,
+				Strategy:     config.NewDynamic("custom"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(1),
 			},
 		},
 		clientPool: mockClientPool,
@@ -1521,9 +1521,9 @@ func TestQuorumDiscovery_CustomPlacement_RequestError(t *testing.T) {
 				CustomPlacement: []config.CustomPlacement{
 					{Region: "r1"},
 				},
-				Strategy:     "custom",
-				AffinityMode: "soft",
-				Replicas:     1,
+				Strategy:     config.NewDynamic("custom"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(1),
 			},
 		},
 		clientPool: mockClientPool,
@@ -1549,9 +1549,9 @@ func TestQuorumDiscovery_RequestNodesFromSeed_InsufficientNodes(t *testing.T) {
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
 			SelectStrategy: config.QuorumSelectStrategy{
-				Strategy:     "random",
-				AffinityMode: "soft",
-				Replicas:     3,
+				Strategy:     config.NewDynamic("random"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(3),
 			},
 		},
 		clientPool: mockClientPool,
@@ -1591,9 +1591,9 @@ func TestQuorumDiscovery_CustomPlacement_FinalValidation_NodeCountMismatch(t *te
 					{Region: "r1", Az: "az-1", ResourceGroup: "rg-1"},
 					{Region: "r1", Az: "az-2", ResourceGroup: "rg-2"},
 				},
-				Strategy:     "custom",
-				AffinityMode: "hard",
-				Replicas:     3, // requiredNodes=3, but only 2 placements → 2 nodes selected
+				Strategy:     config.NewDynamic("custom"),
+				AffinityMode: config.NewDynamic("hard"),
+				Replicas:     config.NewDynamic(3), // requiredNodes=3, but only 2 placements → 2 nodes selected
 			},
 		},
 		clientPool: mockClientPool,

@@ -88,9 +88,9 @@ type CustomPlacement struct {
 
 // QuorumSelectStrategy stores the quorum selection strategy configuration.
 type QuorumSelectStrategy struct {
-	AffinityMode    string            `yaml:"affinityMode"`
-	Replicas        int               `yaml:"replicas"`
-	Strategy        string            `yaml:"strategy"`
+	AffinityMode    Dynamic[string]   `yaml:"affinityMode"`
+	Replicas        Dynamic[int]      `yaml:"replicas"`
+	Strategy        Dynamic[string]   `yaml:"strategy"`
 	CustomPlacement []CustomPlacement `yaml:"customPlacement"`
 }
 
@@ -102,13 +102,14 @@ type QuorumConfig struct {
 
 // GetEnsembleSize returns the ensemble size.
 func (q *QuorumConfig) GetEnsembleSize() int {
-	if q.SelectStrategy.Replicas == 3 {
+	switch q.SelectStrategy.Replicas.Get() {
+	case 3:
+		return 3
+	case 5:
+		return 5
+	default:
 		return 3
 	}
-	if q.SelectStrategy.Replicas == 5 {
-		return 5
-	}
-	return 3
 }
 
 // GetWriteQuorumSize returns the write quorum size.
@@ -558,8 +559,8 @@ func (c *Configuration) validateQuorumConfig() error {
 
 	// Validate affinity mode (allow empty for backward compatibility)
 	validAffinityModes := map[string]bool{"soft": true, "hard": true, "": true}
-	if !validAffinityModes[q.SelectStrategy.AffinityMode] {
-		return fmt.Errorf("invalid affinity mode '%s', must be 'soft' or 'hard'", q.SelectStrategy.AffinityMode)
+	if !validAffinityModes[q.SelectStrategy.AffinityMode.Get()] {
+		return fmt.Errorf("invalid affinity mode '%s', must be 'soft' or 'hard'", q.SelectStrategy.AffinityMode.Get())
 	}
 
 	// Validate strategy (allow unknown strategies for backward compatibility - they'll default to random)
@@ -574,9 +575,9 @@ func (c *Configuration) validateQuorumConfig() error {
 		"random":              true,
 		"":                    true, // Allow empty for backward compatibility
 	}
-	if !validStrategies[q.SelectStrategy.Strategy] {
+	if !validStrategies[q.SelectStrategy.Strategy.Get()] {
 		// Log warning but don't fail for unknown strategies (backward compatibility)
-		fmt.Printf("Warning: unknown strategy '%s', will default to 'random'\n", q.SelectStrategy.Strategy)
+		fmt.Printf("Warning: unknown strategy '%s', will default to 'random'\n", q.SelectStrategy.Strategy.Get())
 	}
 
 	// Validate BufferPools
@@ -599,7 +600,7 @@ func (c *Configuration) validateQuorumConfig() error {
 	}
 
 	// Validate custom placement if strategy is custom
-	if q.SelectStrategy.Strategy == "custom" {
+	if q.SelectStrategy.Strategy.Get() == "custom" {
 		if len(q.SelectStrategy.CustomPlacement) == 0 {
 			return fmt.Errorf("custom strategy requires at least one custom placement rule")
 		}
@@ -635,7 +636,7 @@ func (c *Configuration) validateQuorumConfig() error {
 	}
 
 	// Validate cross-region strategy requirements
-	if q.SelectStrategy.Strategy == "cross-region" {
+	if q.SelectStrategy.Strategy.Get() == "cross-region" {
 		if len(q.BufferPools) < 2 {
 			return fmt.Errorf("cross-region strategy requires at least 2 buffer pools, got %d", len(q.BufferPools))
 		}
@@ -755,9 +756,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 					},
 				},
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode:    "soft",
-					Replicas:        3,
-					Strategy:        "random",
+					AffinityMode:    NewDynamic("soft"),
+					Replicas:        NewDynamic(3),
+					Strategy:        NewDynamic("random"),
 					CustomPlacement: []CustomPlacement{},
 				},
 			},

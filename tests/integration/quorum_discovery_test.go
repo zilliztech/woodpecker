@@ -56,9 +56,9 @@ func TestQuorumDiscoveryIntegration_RandomStrategy(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3, // Select 3 nodes out of 5
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3), // Select 3 nodes out of 5
 		},
 	}
 
@@ -127,9 +127,9 @@ func TestQuorumDiscoveryIntegration_SingleAZSingleRGStrategy(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "single-az-single-rg",
-			AffinityMode: "soft",
-			Replicas:     3, // Select 3 nodes out of 4
+			Strategy:     config.NewDynamic("single-az-single-rg"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3), // Select 3 nodes out of 4
 		},
 	}
 
@@ -199,9 +199,9 @@ func TestQuorumDiscoveryIntegration_CrossRegionStrategy(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3, // Select 3 nodes total across regions (only 3 and 5 are supported)
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3), // Select 3 nodes total across regions (only 3 and 5 are supported)
 		},
 	}
 
@@ -293,9 +293,9 @@ func TestQuorumDiscoveryIntegration_CustomPlacementStrategy(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3, // Must match number of custom placement rules
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3), // Must match number of custom placement rules
 			CustomPlacement: []config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-a", Az: "az-2", ResourceGroup: "rg-2"},
@@ -373,9 +373,9 @@ func TestQuorumDiscoveryIntegration_InsufficientNodes(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft", // Should still err with fewer nodes in soft mode, soft mode only used to restrict location, not for replicas
-			Replicas:     5,      // Request more nodes than available
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"), // Should still err with fewer nodes in soft mode, soft mode only used to restrict location, not for replicas
+			Replicas:     config.NewDynamic(5),      // Request more nodes than available
 		},
 	}
 
@@ -421,9 +421,9 @@ func TestQuorumDiscoveryIntegration_NodeFailureRecovery(t *testing.T) {
 			},
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 

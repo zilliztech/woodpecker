@@ -38,19 +38,19 @@ func NewQuorumDiscovery(ctx context.Context, cfg *config.QuorumConfig, clientPoo
 	// Fail-fast validation of the STATIC config (preserves current behavior and
 	// the construction-error tests). The per-call read path (SelectQuorum) is
 	// tolerant so a bad dynamic override cannot wedge writes.
-	if _, err := parseAffinity(cfg.SelectStrategy.AffinityMode); err != nil {
+	if _, err := parseAffinity(cfg.SelectStrategy.AffinityMode.Get()); err != nil {
 		logger.Ctx(ctx).Warn("Invalid affinity mode", zap.Error(err))
 		return nil, err
 	}
-	if _, err := buildFilters(ctx, cfg.SelectStrategy.Strategy, int32(cfg.GetEnsembleSize()), cfg.SelectStrategy.CustomPlacement, cfg.BufferPools); err != nil {
+	if _, err := buildFilters(ctx, cfg.SelectStrategy.Strategy.Get(), int32(cfg.GetEnsembleSize()), cfg.SelectStrategy.CustomPlacement, cfg.BufferPools); err != nil {
 		logger.Ctx(ctx).Warn("Failed to build filters", zap.Error(err))
 		return nil, err
 	}
 
 	logger.Ctx(ctx).Info("Successfully initialized quorum discovery",
 		zap.Int32("ensembleSize", int32(cfg.GetEnsembleSize())),
-		zap.String("strategy", cfg.SelectStrategy.Strategy),
-		zap.String("affinityMode", cfg.SelectStrategy.AffinityMode))
+		zap.String("strategy", cfg.SelectStrategy.Strategy.Get()),
+		zap.String("affinityMode", cfg.SelectStrategy.AffinityMode.Get()))
 	return d, nil
 }
 
@@ -61,13 +61,13 @@ func (d *quorumDiscovery) wq() int32 { return int32(d.cfg.GetWriteQuorumSize()) 
 func (d *quorumDiscovery) aq() int32 { return int32(d.cfg.GetAckQuorumSize()) }
 
 func (d *quorumDiscovery) strategyType() proto.StrategyType {
-	return parseStrategy(d.cfg.SelectStrategy.Strategy)
+	return parseStrategy(d.cfg.SelectStrategy.Strategy.Get())
 }
 
 // affinityMode is tolerant at runtime: an unknown value degrades to SOFT with a
 // warning instead of erroring (the static value is validated at construction).
 func (d *quorumDiscovery) affinityMode() proto.AffinityMode {
-	mode, err := parseAffinity(d.cfg.SelectStrategy.AffinityMode)
+	mode, err := parseAffinity(d.cfg.SelectStrategy.AffinityMode.Get())
 	if err != nil {
 		logger.Ctx(context.Background()).Warn("Unknown affinity mode at runtime, defaulting to SOFT", zap.Error(err))
 		return proto.AffinityMode_SOFT
@@ -161,8 +161,8 @@ func buildSingleFilter(es int32) []*proto.NodeFilter {
 
 func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
 	logger.Ctx(ctx).Info("Active discovery: Starting quorum node selection",
-		zap.String("strategy", d.cfg.SelectStrategy.Strategy),
-		zap.String("affinityMode", d.cfg.SelectStrategy.AffinityMode),
+		zap.String("strategy", d.cfg.SelectStrategy.Strategy.Get()),
+		zap.String("affinityMode", d.cfg.SelectStrategy.AffinityMode.Get()),
 		zap.Int32("ensembleSize", d.es()))
 
 	if len(d.cfg.BufferPools) == 0 {
@@ -171,7 +171,7 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 
 	// Build filters once (before the retry loop) so a genuine misconfiguration
 	// fails fast instead of being retried forever.
-	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy, d.es(), d.cfg.SelectStrategy.CustomPlacement, d.cfg.BufferPools)
+	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy.Get(), d.es(), d.cfg.SelectStrategy.CustomPlacement, d.cfg.BufferPools)
 	if err != nil {
 		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
 	}
@@ -179,7 +179,7 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 	var result *proto.QuorumInfo
 	err = retry.Do(ctx, func() error {
 		var selErr error
-		switch d.cfg.SelectStrategy.Strategy {
+		switch d.cfg.SelectStrategy.Strategy.Get() {
 		case "cross-region":
 			result, selErr = d.selectCrossRegionQuorum(ctx, filters)
 		case "custom":
@@ -556,7 +556,7 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 
 	logger.Ctx(ctx).Debug("Active discovery: Successfully selected nodes from seed via gRPC",
 		zap.String("seed", seed),
-		zap.String("strategy", d.cfg.SelectStrategy.Strategy),
+		zap.String("strategy", d.cfg.SelectStrategy.Strategy.Get()),
 		zap.String("strategyType", d.strategyType().String()),
 		zap.Int32("requestedNodes", filter.Limit),
 		zap.Int("returnedNodes", len(selectedNodes)),
