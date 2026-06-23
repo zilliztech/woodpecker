@@ -41,7 +41,13 @@ source "$PROJECT_ROOT/deployments/operator/test/lib.sh"
 preload_image() {
   log "preload: $1"
   docker image inspect "$1" >/dev/null 2>&1 || docker pull "$1" || fail "docker pull $1"
-  minikube -p "$CLUSTER_NAME" image load "$1" || fail "image load $1"
+  # `minikube image load` (host->node via `docker save`) cannot export distroless images
+  # under Docker Desktop's containerd image store ("blobs/... not found in tar"). When the
+  # load fails, fall back to pulling on the node directly (the node has registry access).
+  if ! minikube -p "$CLUSTER_NAME" image load "$1" 2>/dev/null; then
+    warn "image load failed for $1 (containerd store / distroless?) — pulling on node instead"
+    minikube -p "$CLUSTER_NAME" image pull "$1" || fail "node pull $1"
+  fi
 }
 
 bringup() {

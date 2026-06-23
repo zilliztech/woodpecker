@@ -10,8 +10,8 @@ metadata:
 spec:
   containers:
     - name: loadgen
-      image: golang:1.24
-      imagePullPolicy: IfNotPresent
+      image: zilliztech/woodpecker:v0.1.26
+      imagePullPolicy: Never
       command: ["/bin/bash", "-c", "sleep infinity"]
       ports:
         - name: metrics
