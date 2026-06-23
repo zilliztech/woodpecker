@@ -1018,7 +1018,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_system_cpu_usage) by (node_id)",
+              "expr": "sum(woodpecker_server_system_cpu_usage{cluster=~\"$cluster\", namespace=~\"$namespace\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}}",
               "refId": "A"
             }
@@ -1069,12 +1069,12 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_system_memory_used_bytes) by (node_id)",
+              "expr": "sum(woodpecker_server_system_memory_used_bytes{cluster=~\"$cluster\", namespace=~\"$namespace\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} used",
               "refId": "A"
             },
             {
-              "expr": "sum(woodpecker_server_system_memory_usage_ratio) by (node_id)",
+              "expr": "sum(woodpecker_server_system_memory_usage_ratio{cluster=~\"$cluster\", namespace=~\"$namespace\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} ratio",
               "refId": "B"
             }
@@ -1125,12 +1125,12 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_system_disk_used_bytes) by (node_id)",
+              "expr": "sum(woodpecker_server_system_disk_used_bytes{cluster=~\"$cluster\", namespace=~\"$namespace\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} used",
               "refId": "A"
             },
             {
-              "expr": "sum(woodpecker_server_system_disk_total_bytes) by (node_id)",
+              "expr": "sum(woodpecker_server_system_disk_total_bytes{cluster=~\"$cluster\", namespace=~\"$namespace\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} total",
               "refId": "B"
             }
@@ -1181,7 +1181,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_system_io_wait) by (node_id)",
+              "expr": "sum(woodpecker_server_system_io_wait{cluster=~\"$cluster\", namespace=~\"$namespace\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}}",
               "refId": "A"
             }
