@@ -1,0 +1,33 @@
+nodeExporter: { enabled: false }
+kubeStateMetrics: { enabled: false }
+alertmanager: { enabled: false }
+defaultRules: { create: false }
+kubeApiServer: { enabled: false }
+kubelet: { enabled: false }
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeProxy: { enabled: false }
+kubeEtcd: { enabled: false }
+coreDns: { enabled: false }
+prometheus:
+  prometheusSpec:
+    externalLabels:
+      cluster: woodpecker-minikube
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    retention: 2h
+grafana:
+  adminPassword: admin
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Admin
+    auth:
+      disable_login_form: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL

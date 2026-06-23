@@ -1,0 +1,24 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: woodpecker-client
+  namespace: woodpecker
+  labels:
+    app.kubernetes.io/name: woodpecker
+    app.kubernetes.io/component: client
+spec:
+  namespaceSelector:
+    matchNames: [woodpecker]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: woodpecker
+      app.kubernetes.io/component: client
+      app.kubernetes.io/instance: my-woodpecker
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      honorLabels: true
+      relabelings:
+        - targetLabel: cluster
+          replacement: woodpecker-minikube

@@ -63,6 +63,7 @@ linters:
       - mocks
       - tests/benchmark
       - tests/docker
+      - tests/k8s
       - tests/stability
       - bin
       - build
@@ -100,6 +101,7 @@ formatters:
       - mocks
       - tests/benchmark
       - tests/docker
+      - tests/k8s
       - tests/stability
       - bin
       - build

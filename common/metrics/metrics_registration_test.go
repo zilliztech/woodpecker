@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildMetricsNamespace(t *testing.T) {
@@ -164,4 +165,44 @@ func TestUpdateSegmentState_MultipleTransitions(t *testing.T) {
 	sealedMetric := &dto.Metric{}
 	WpClientSegmentState.WithLabelValues(namespace, logId, "Sealed").Write(sealedMetric)
 	assert.Equal(t, float64(1), sealedMetric.GetGauge().GetValue())
+}
+
+// TestMetrics_UseLogNsLabel guards the rename of the application namespace
+// label to log_ns (issue #193): the k8s scrape owns `namespace`, so the app
+// must not emit it.
+func TestMetrics_UseLogNsLabel(t *testing.T) {
+	check := func(t *testing.T, reg *prometheus.Registry, metricName string) {
+		mfs, err := reg.Gather()
+		require.NoError(t, err)
+		for _, mf := range mfs {
+			if mf.GetName() != metricName {
+				continue
+			}
+			for _, m := range mf.GetMetric() {
+				names := map[string]bool{}
+				for _, lp := range m.GetLabel() {
+					names[lp.GetName()] = true
+				}
+				require.True(t, names["log_ns"], "%s must carry log_ns", metricName)
+				require.False(t, names["namespace"], "%s must NOT carry namespace", metricName)
+				return
+			}
+		}
+		t.Fatalf("metric %s not found in registry", metricName)
+	}
+
+	t.Run("server", func(t *testing.T) {
+		WpServerRegisterOnce = sync.Once{}
+		reg := prometheus.NewRegistry()
+		RegisterServerMetricsWithRegisterer(reg)
+		WpLogStoreActiveLogs.WithLabelValues("node-1", "bucket/root").Set(1)
+		check(t, reg, "woodpecker_server_logstore_active_logs")
+	})
+	t.Run("client", func(t *testing.T) {
+		WpClientRegisterOnce = sync.Once{}
+		reg := prometheus.NewRegistry()
+		RegisterClientMetricsWithRegisterer(reg)
+		WpClientAppendRequestsTotal.WithLabelValues("bucket/root", "1").Inc()
+		check(t, reg, "woodpecker_client_append_requests_total")
+	})
 }

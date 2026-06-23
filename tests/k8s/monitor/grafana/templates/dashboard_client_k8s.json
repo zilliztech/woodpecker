@@ -15,7 +15,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -55,7 +55,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(woodpecker_client_append_requests_total{log_ns=~\"$log_ns\"}[1m])) by (log_id)",
+          "expr": "sum(rate(woodpecker_client_append_requests_total{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
           "legendFormat": "logID={{log_id}}",
           "refId": "A"
         }
@@ -66,7 +66,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -106,12 +106,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_append_latency_bucket{log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_append_latency_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Append latency P50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_append_latency_bucket{log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_append_latency_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Append latency P99",
           "refId": "B"
         }
@@ -122,7 +122,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -162,12 +162,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_append_bytes_bucket{log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_append_bytes_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Append bytes P50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_append_bytes_bucket{log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_append_bytes_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Append bytes P99",
           "refId": "B"
         }
@@ -178,7 +178,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -218,7 +218,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(woodpecker_client_read_requests_total{log_ns=~\"$log_ns\"}[1m])) by (log_id)",
+          "expr": "sum(rate(woodpecker_client_read_requests_total{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
           "legendFormat": "logID={{log_id}}",
           "refId": "A"
         }
@@ -229,7 +229,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -269,12 +269,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_read_latency_bucket{log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_read_latency_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Read latency P50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_read_latency_bucket{log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_read_latency_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Read latency P99",
           "refId": "B"
         }
@@ -285,7 +285,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -325,12 +325,12 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(woodpecker_client_reader_bytes_read{log_ns=~\"$log_ns\"}[1m])) by (log_id)",
+          "expr": "sum(rate(woodpecker_client_reader_bytes_read{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
           "legendFormat": "logID={{log_id}} read bytes",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(woodpecker_client_writer_bytes_written{log_ns=~\"$log_ns\"}[1m])) by (log_id)",
+          "expr": "sum(rate(woodpecker_client_writer_bytes_written{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
           "legendFormat": "logID={{log_id}} write bytes",
           "refId": "B"
         }
@@ -341,7 +341,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -381,7 +381,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(woodpecker_client_etcd_meta_operations_total{log_ns=~\"$log_ns\"}[1m])) by (operation, status)",
+          "expr": "sum(rate(woodpecker_client_etcd_meta_operations_total{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (operation, status)",
           "legendFormat": "op={{operation}} status={{status}}",
           "refId": "A"
         }
@@ -392,7 +392,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -432,7 +432,7 @@
       },
       "targets": [
         {
-          "expr": "sum(woodpecker_client_segment_handle_pending_append_ops{log_ns=~\"$log_ns\"}) by (log_id)",
+          "expr": "sum(woodpecker_client_segment_handle_pending_append_ops{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}) by (log_id)",
           "legendFormat": "logID={{log_id}}",
           "refId": "A"
         }
@@ -443,7 +443,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -472,7 +472,7 @@
       },
       "targets": [
         {
-          "expr": "woodpecker_client_log_name_id_mapping{log_ns=~\"$log_ns\"}",
+          "expr": "woodpecker_client_log_name_id_mapping{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "",
@@ -503,7 +503,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "__DATASOURCE_UID__"
+        "uid": "${prometheus}"
       },
       "fieldConfig": {
         "defaults": {
@@ -541,7 +541,7 @@
       },
       "targets": [
         {
-          "expr": "woodpecker_client_segment_state{log_ns=~\"$log_ns\"}",
+          "expr": "woodpecker_client_segment_state{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}",
           "legendFormat": "logID={{log_id}} {{state}}",
           "refId": "A"
         }
@@ -559,6 +559,51 @@
   "templating": {
     "list": [
       {
+        "name": "prometheus",
+        "label": "Datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "options": [],
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "query": "label_values(go_info, cluster)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "query": "label_values(woodpecker_client_append_requests_total{cluster=~\"$cluster\"}, namespace)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
         "allValue": ".*",
         "current": {
           "text": "All",
@@ -566,7 +611,7 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "__DATASOURCE_UID__"
+          "uid": "${prometheus}"
         },
         "includeAll": true,
         "multi": true,
@@ -582,6 +627,6 @@
     "to": "now"
   },
   "timezone": "browser",
-  "title": "Woodpecker - Client(Namespace)",
-  "uid": "woodpecker-client-ns"
+  "title": "Woodpecker - Client(Namespace) (k8s)",
+  "uid": "woodpecker-client-k8s"
 }
