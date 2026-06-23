@@ -22,6 +22,10 @@ import "gopkg.in/yaml.v3"
 // (YAML-parsed) value or from an optional runtime source supplied by the
 // embedding application. With no source bound, Get() returns the static value,
 // so existing behavior is preserved byte-for-byte.
+//
+// Only YAML (un)marshaling is supported; JSON is intentionally not implemented
+// (nothing in the module JSON-serializes the config). A JSON marshal of a
+// Dynamic field would emit an empty object because value/source are unexported.
 type Dynamic[T any] struct {
 	value  T                // static value from YAML / defaults
 	source func() (T, bool) // optional runtime override

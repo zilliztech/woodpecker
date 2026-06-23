@@ -169,6 +169,12 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg("no buffer pools configured")
 	}
 
+	// Derived values (es/wq/aq, strategy, affinity, filters) are read fresh from
+	// cfg here rather than cached at construction, so a dynamic source change
+	// takes effect on this (next) segment's selection. A source that flips
+	// mid-selection could be observed inconsistently across one call; this is
+	// the benign, accepted caveat documented in the design spec (§9).
+	//
 	// Build filters once (before the retry loop) so a genuine misconfiguration
 	// fails fast instead of being retried forever.
 	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy.Get(), d.es(), d.cfg.SelectStrategy.CustomPlacement, d.cfg.BufferPools)
