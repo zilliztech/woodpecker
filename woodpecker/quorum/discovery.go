@@ -28,205 +28,174 @@ var _ QuorumDiscovery = (*quorumDiscovery)(nil)
 type quorumDiscovery struct {
 	cfg        *config.QuorumConfig
 	clientPool client.LogStoreClientPool
-
-	// initialized config values
-	es           int32               // Ensemble Size
-	wq           int32               // Write Quorum
-	aq           int32               // Ack Quorum
-	affinityMode proto.AffinityMode  // Parsed affinity mode
-	strategyType proto.StrategyType  // Parsed strategy type
-	filters      []*proto.NodeFilter // Pre-built filters for node selection
 }
 
 func NewQuorumDiscovery(ctx context.Context, cfg *config.QuorumConfig, clientPool client.LogStoreClientPool) (QuorumDiscovery, error) {
 	logger.Ctx(ctx).Info("Initializing active quorum discovery")
 
-	discovery := &quorumDiscovery{
-		cfg:        cfg,
-		clientPool: clientPool,
-		es:         int32(cfg.GetEnsembleSize()),
-		wq:         int32(cfg.GetWriteQuorumSize()),
-		aq:         int32(cfg.GetAckQuorumSize()),
-	}
+	d := &quorumDiscovery{cfg: cfg, clientPool: clientPool}
 
-	// Parse and validate affinity mode
-	if err := discovery.parseAffinityMode(); err != nil {
+	// Fail-fast validation of the STATIC config (preserves current behavior and
+	// the construction-error tests). The per-call read path (SelectQuorum) is
+	// tolerant so a bad dynamic override cannot wedge writes.
+	if _, err := parseAffinity(cfg.SelectStrategy.AffinityMode); err != nil {
 		logger.Ctx(ctx).Warn("Invalid affinity mode", zap.Error(err))
 		return nil, err
 	}
-
-	// Parse and validate strategy type
-	if err := discovery.parseStrategyType(); err != nil {
-		logger.Ctx(ctx).Warn("Invalid strategy type", zap.Error(err))
-		return nil, err
-	}
-
-	// Pre-build filters based on strategy
-	if err := discovery.buildFilters(ctx); err != nil {
+	if _, err := buildFilters(ctx, cfg.SelectStrategy.Strategy, int32(cfg.GetEnsembleSize()), cfg.SelectStrategy.CustomPlacement, cfg.BufferPools); err != nil {
 		logger.Ctx(ctx).Warn("Failed to build filters", zap.Error(err))
 		return nil, err
 	}
 
 	logger.Ctx(ctx).Info("Successfully initialized quorum discovery",
-		zap.Int32("ensembleSize", discovery.es),
-		zap.Int32("writeQuorum", discovery.wq),
-		zap.Int32("ackQuorum", discovery.aq),
+		zap.Int32("ensembleSize", int32(cfg.GetEnsembleSize())),
 		zap.String("strategy", cfg.SelectStrategy.Strategy),
-		zap.String("affinityMode", cfg.SelectStrategy.AffinityMode),
-		zap.Int("filtersCount", len(discovery.filters)))
-
-	return discovery, nil
+		zap.String("affinityMode", cfg.SelectStrategy.AffinityMode))
+	return d, nil
 }
 
-// parseAffinityMode converts string affinity mode to proto enum
-func (d *quorumDiscovery) parseAffinityMode() error {
-	switch d.cfg.SelectStrategy.AffinityMode {
+// --- derived values, recomputed fresh from cfg on each read ---
+
+func (d *quorumDiscovery) es() int32 { return int32(d.cfg.GetEnsembleSize()) }
+func (d *quorumDiscovery) wq() int32 { return int32(d.cfg.GetWriteQuorumSize()) }
+func (d *quorumDiscovery) aq() int32 { return int32(d.cfg.GetAckQuorumSize()) }
+
+func (d *quorumDiscovery) strategyType() proto.StrategyType {
+	return parseStrategy(d.cfg.SelectStrategy.Strategy)
+}
+
+// affinityMode is tolerant at runtime: an unknown value degrades to SOFT with a
+// warning instead of erroring (the static value is validated at construction).
+func (d *quorumDiscovery) affinityMode() proto.AffinityMode {
+	mode, err := parseAffinity(d.cfg.SelectStrategy.AffinityMode)
+	if err != nil {
+		logger.Ctx(context.Background()).Warn("Unknown affinity mode at runtime, defaulting to SOFT", zap.Error(err))
+		return proto.AffinityMode_SOFT
+	}
+	return mode
+}
+
+// parseAffinity converts a string affinity mode to the proto enum. Empty or
+// "soft" => SOFT, "hard" => HARD, anything else => error.
+func parseAffinity(mode string) (proto.AffinityMode, error) {
+	switch mode {
 	case "hard":
-		d.affinityMode = proto.AffinityMode_HARD
-	case "soft", "": // Default to soft for empty values
-		d.affinityMode = proto.AffinityMode_SOFT
+		return proto.AffinityMode_HARD, nil
+	case "soft", "":
+		return proto.AffinityMode_SOFT, nil
 	default:
-		return fmt.Errorf("invalid affinity mode: %s, must be 'hard' or 'soft'", d.cfg.SelectStrategy.AffinityMode)
+		return proto.AffinityMode_SOFT, fmt.Errorf("invalid affinity mode: %s, must be 'hard' or 'soft'", mode)
 	}
-	return nil
 }
 
-// parseStrategyType converts string strategy to proto enum
-func (d *quorumDiscovery) parseStrategyType() error {
-	switch d.cfg.SelectStrategy.Strategy {
+// parseStrategy converts a string strategy to the proto enum. Unknown/empty
+// values default to RANDOM for backward compatibility.
+func parseStrategy(strategy string) proto.StrategyType {
+	switch strategy {
 	case "single-az-single-rg":
-		d.strategyType = proto.StrategyType_SINGLE_AZ_SINGLE_RG
+		return proto.StrategyType_SINGLE_AZ_SINGLE_RG
 	case "single-az-multi-rg":
-		d.strategyType = proto.StrategyType_SINGLE_AZ_MULTI_RG
+		return proto.StrategyType_SINGLE_AZ_MULTI_RG
 	case "multi-az-single-rg":
-		d.strategyType = proto.StrategyType_MULTI_AZ_SINGLE_RG
+		return proto.StrategyType_MULTI_AZ_SINGLE_RG
 	case "multi-az-multi-rg":
-		d.strategyType = proto.StrategyType_MULTI_AZ_MULTI_RG
+		return proto.StrategyType_MULTI_AZ_MULTI_RG
 	case "cross-region":
-		d.strategyType = proto.StrategyType_CROSS_REGION
+		return proto.StrategyType_CROSS_REGION
 	case "custom":
-		d.strategyType = proto.StrategyType_CUSTOM
+		return proto.StrategyType_CUSTOM
 	case "random-group":
-		d.strategyType = proto.StrategyType_RANDOM_GROUP
-	case "random", "": // Default to random for empty values
-		d.strategyType = proto.StrategyType_RANDOM
-	default:
-		// Default to RANDOM for unknown strategies for backward compatibility
-		d.strategyType = proto.StrategyType_RANDOM
+		return proto.StrategyType_RANDOM_GROUP
+	default: // "random", "", and any unknown value
+		return proto.StrategyType_RANDOM
 	}
-	return nil
 }
 
-// buildFilters creates the appropriate filters based on strategy
-func (d *quorumDiscovery) buildFilters(ctx context.Context) error {
-	strategy := d.cfg.SelectStrategy.Strategy
-
+// buildFilters creates node selection filters for the given strategy.
+func buildFilters(ctx context.Context, strategy string, es int32, custom []config.CustomPlacement, pools []config.QuorumBufferPool) ([]*proto.NodeFilter, error) {
 	switch strategy {
 	case "custom":
-		return d.buildCustomFilters(ctx)
+		return buildCustomFilters(ctx, es, custom)
 	case "cross-region":
-		return d.buildCrossRegionFilters(ctx)
+		return buildCrossRegionFilters(ctx, es, pools)
 	default:
-		// For single-* and multi-* strategies, and empty strategy, use a single filter with limit
-		return d.buildSingleFilter()
+		return buildSingleFilter(es), nil
 	}
 }
 
-// buildCustomFilters creates one filter per custom placement rule
-func (d *quorumDiscovery) buildCustomFilters(ctx context.Context) error {
-	requiredNodes := int(d.es)
-
-	if len(d.cfg.SelectStrategy.CustomPlacement) == 0 {
-		return fmt.Errorf("custom strategy requires CustomPlacement configuration")
+func buildCustomFilters(ctx context.Context, es int32, custom []config.CustomPlacement) ([]*proto.NodeFilter, error) {
+	requiredNodes := int(es)
+	if len(custom) == 0 {
+		return nil, fmt.Errorf("custom strategy requires CustomPlacement configuration")
 	}
-
-	if len(d.cfg.SelectStrategy.CustomPlacement) != requiredNodes {
-		return fmt.Errorf("custom placement rules count (%d) must equal required nodes count (%d)",
-			len(d.cfg.SelectStrategy.CustomPlacement), requiredNodes)
+	if len(custom) != requiredNodes {
+		return nil, fmt.Errorf("custom placement rules count (%d) must equal required nodes count (%d)", len(custom), requiredNodes)
 	}
-
-	d.filters = make([]*proto.NodeFilter, len(d.cfg.SelectStrategy.CustomPlacement))
-
-	for i, placement := range d.cfg.SelectStrategy.CustomPlacement {
-		d.filters[i] = &proto.NodeFilter{
-			Limit:         1, // Each custom placement selects exactly one node
+	filters := make([]*proto.NodeFilter, len(custom))
+	for i, placement := range custom {
+		filters[i] = &proto.NodeFilter{
+			Limit:         1,
 			Az:            placement.Az,
 			ResourceGroup: placement.ResourceGroup,
 		}
-
 		logger.Ctx(ctx).Debug("Built custom filter",
 			zap.Int("index", i),
 			zap.String("region", placement.Region),
 			zap.String("az", placement.Az),
 			zap.String("resourceGroup", placement.ResourceGroup))
 	}
-
-	return nil
+	return filters, nil
 }
 
-// buildCrossRegionFilters creates filters for cross-region strategy
-func (d *quorumDiscovery) buildCrossRegionFilters(ctx context.Context) error {
-	if len(d.cfg.BufferPools) < 2 {
-		return fmt.Errorf("cross-region strategy requires at least two buffer pools")
+func buildCrossRegionFilters(ctx context.Context, es int32, pools []config.QuorumBufferPool) ([]*proto.NodeFilter, error) {
+	if len(pools) < 2 {
+		return nil, fmt.Errorf("cross-region strategy requires at least two buffer pools")
 	}
-
-	// For cross-region, we'll use single-az-single-rg strategy per region
-	// Create one filter that will be used for each region
-	d.filters = []*proto.NodeFilter{
-		{
-			Limit: d.es, // Will be adjusted per region during selection
-		},
-	}
-
-	logger.Ctx(ctx).Debug("Built cross-region filter", zap.Int("poolsCount", len(d.cfg.BufferPools)))
-	return nil
+	logger.Ctx(ctx).Debug("Built cross-region filter", zap.Int("poolsCount", len(pools)))
+	return []*proto.NodeFilter{{Limit: es}}, nil
 }
 
-// buildSingleFilter creates a single filter for non-custom strategies
-func (d *quorumDiscovery) buildSingleFilter() error {
-	d.filters = []*proto.NodeFilter{
-		{
-			Limit: d.es, // Select all required nodes with one filter
-		},
-	}
-	return nil
+func buildSingleFilter(es int32) []*proto.NodeFilter {
+	return []*proto.NodeFilter{{Limit: es}}
 }
 
 func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
 	logger.Ctx(ctx).Info("Active discovery: Starting quorum node selection",
 		zap.String("strategy", d.cfg.SelectStrategy.Strategy),
 		zap.String("affinityMode", d.cfg.SelectStrategy.AffinityMode),
-		zap.Int32("ensembleSize", d.es),
-		zap.Int("filtersCount", len(d.filters)))
+		zap.Int32("ensembleSize", d.es()))
 
-	var result *proto.QuorumInfo
-
-	// Additional runtime validation for buffer pools
 	if len(d.cfg.BufferPools) == 0 {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg("no buffer pools configured")
 	}
 
-	// Always retry until success
-	err := retry.Do(ctx, func() error {
-		var err error
-		switch d.cfg.SelectStrategy.Strategy {
-		case "cross-region":
-			result, err = d.selectCrossRegionQuorum(ctx)
-		case "custom":
-			result, err = d.selectCustomPlacementQuorum(ctx)
-		default:
-			result, err = d.selectSingleRegionQuorum(ctx)
-		}
-		return err
-	}, retry.AttemptAlways(), retry.Sleep(200*time.Millisecond), retry.MaxSleepTime(2*time.Second))
+	// Build filters once (before the retry loop) so a genuine misconfiguration
+	// fails fast instead of being retried forever.
+	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy, d.es(), d.cfg.SelectStrategy.CustomPlacement, d.cfg.BufferPools)
 	if err != nil {
 		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
 	}
 
+	var result *proto.QuorumInfo
+	err = retry.Do(ctx, func() error {
+		var selErr error
+		switch d.cfg.SelectStrategy.Strategy {
+		case "cross-region":
+			result, selErr = d.selectCrossRegionQuorum(ctx, filters)
+		case "custom":
+			result, selErr = d.selectCustomPlacementQuorum(ctx, filters)
+		default:
+			result, selErr = d.selectSingleRegionQuorum(ctx, filters)
+		}
+		return selErr
+	}, retry.AttemptAlways(), retry.Sleep(200*time.Millisecond), retry.MaxSleepTime(2*time.Second))
+	if err != nil {
+		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
+	}
 	return result, nil
 }
 
-func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
+func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
 	// Randomly select a buffer pool for load distribution
 	pool := d.cfg.BufferPools[rand.Intn(len(d.cfg.BufferPools))]
 	if len(pool.Seeds) == 0 {
@@ -234,11 +203,11 @@ func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context) (*proto.
 	}
 
 	// Use pre-built filter (should have exactly one filter for single-region strategies)
-	if len(d.filters) != 1 {
-		return nil, fmt.Errorf("expected 1 filter for single-region strategy, got %d", len(d.filters))
+	if len(filters) != 1 {
+		return nil, fmt.Errorf("expected 1 filter for single-region strategy, got %d", len(filters))
 	}
 
-	return d.requestNodesFromPool(ctx, pool, d.filters[0], int(d.wq))
+	return d.requestNodesFromPool(ctx, pool, filters[0], int(d.wq()))
 }
 
 func (d *quorumDiscovery) newQuorumInfo(nodes []string, replicas []*proto.QuorumNode) *proto.QuorumInfo {
@@ -246,9 +215,9 @@ func (d *quorumDiscovery) newQuorumInfo(nodes []string, replicas []*proto.Quorum
 		Id:       1,
 		Nodes:    nodes,
 		Replicas: replicas,
-		Aq:       d.aq,
-		Wq:       d.wq,
-		Es:       d.es,
+		Aq:       d.aq(),
+		Wq:       d.wq(),
+		Es:       d.es(),
 	}
 }
 
@@ -283,8 +252,8 @@ func replicaForEndpoint(info *proto.QuorumInfo, endpoint string) *proto.QuorumNo
 	return nil
 }
 
-func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
-	requiredNodes := int(d.es)
+func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
+	requiredNodes := int(d.es())
 
 	// Calculate nodes per region (try to distribute evenly)
 	nodesPerRegion := requiredNodes / len(d.cfg.BufferPools)
@@ -295,11 +264,11 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 	selectedSet := make(map[string]bool) // Track selected endpoints to avoid duplicates
 
 	// Use pre-built filter as template, but adjust limit per region
-	if len(d.filters) != 1 {
-		return nil, fmt.Errorf("expected 1 filter for cross-region strategy, got %d", len(d.filters))
+	if len(filters) != 1 {
+		return nil, fmt.Errorf("expected 1 filter for cross-region strategy, got %d", len(filters))
 	}
 
-	baseFilter := d.filters[0]
+	baseFilter := filters[0]
 
 	for i, pool := range d.cfg.BufferPools {
 		if len(pool.Seeds) == 0 {
@@ -327,7 +296,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 		// Request nodes from this region (tries all seeds in the pool)
 		regionResult, err := d.requestNodesFromPool(ctx, pool, regionFilter, 0)
 		if err != nil {
-			if d.affinityMode == proto.AffinityMode_HARD {
+			if d.affinityMode() == proto.AffinityMode_HARD {
 				return nil, err
 			}
 			logger.Ctx(ctx).Warn("Failed to get nodes from region, continuing with soft affinity",
@@ -348,7 +317,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 	}
 
 	if len(allSelectedNodes) < requiredNodes {
-		if d.affinityMode == proto.AffinityMode_HARD {
+		if d.affinityMode() == proto.AffinityMode_HARD {
 			return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes across regions: got %d, required %d", len(allSelectedNodes), requiredNodes))
 		}
 		// In soft mode, try to fill remaining nodes from any available region
@@ -368,18 +337,18 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 	return d.newQuorumInfo(allSelectedNodes, allSelectedReplicas), nil
 }
 
-func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
-	requiredNodes := int(d.es)
+func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
+	requiredNodes := int(d.es())
 
 	logger.Ctx(ctx).Info("Active custom placement node selection started",
 		zap.Int("placementRulesCount", len(d.cfg.SelectStrategy.CustomPlacement)),
 		zap.Int("requiredNodes", requiredNodes),
-		zap.Int("filtersCount", len(d.filters)))
+		zap.Int("filtersCount", len(filters)))
 
 	// Validate we have the expected number of filters
-	if len(d.filters) != len(d.cfg.SelectStrategy.CustomPlacement) {
+	if len(filters) != len(d.cfg.SelectStrategy.CustomPlacement) {
 		return nil, fmt.Errorf("filters count (%d) does not match custom placement rules count (%d)",
-			len(d.filters), len(d.cfg.SelectStrategy.CustomPlacement))
+			len(filters), len(d.cfg.SelectStrategy.CustomPlacement))
 	}
 
 	var allSelectedNodes []string
@@ -412,9 +381,9 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 
 		// Request extra candidates to allow deduplication across placement rules
 		placementFilter := &proto.NodeFilter{
-			Limit:         d.es, // Request more than 1 to have alternatives if first is a duplicate
-			Az:            d.filters[i].Az,
-			ResourceGroup: d.filters[i].ResourceGroup,
+			Limit:         d.es(), // Request more than 1 to have alternatives if first is a duplicate
+			Az:            filters[i].Az,
+			ResourceGroup: filters[i].ResourceGroup,
 		}
 
 		// Use pre-built filter for this placement (tries all seeds in the pool)
@@ -472,7 +441,7 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 }
 
 func (d *quorumDiscovery) fillRemainingNodesWithReplicas(ctx context.Context, currentNodes []string, currentReplicas []*proto.QuorumNode, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
-	requiredNodes := int(d.es)
+	requiredNodes := int(d.es())
 	remainingNeeded := requiredNodes - len(currentNodes)
 	if remainingNeeded <= 0 {
 		return d.newQuorumInfo(currentNodes, currentReplicas), nil
@@ -556,8 +525,8 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 		zap.Int32("nodeCount", filter.Limit),
 		zap.String("az", filter.Az),
 		zap.String("resourceGroup", filter.ResourceGroup),
-		zap.String("affinityMode", d.affinityMode.String()),
-		zap.String("strategyType", d.strategyType.String()))
+		zap.String("affinityMode", d.affinityMode().String()),
+		zap.String("strategyType", d.strategyType().String()))
 
 	// Get gRPC client from client pool
 	grpcClient, err := d.clientPool.GetLogStoreClient(ctx, seed)
@@ -565,8 +534,8 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 		return nil, fmt.Errorf("failed to get gRPC client for seed %s: %w", seed, err)
 	}
 
-	// Make gRPC call to SelectNodes using pre-computed values
-	selectedNodes, err := grpcClient.SelectNodes(ctx, d.strategyType, d.affinityMode, []*proto.NodeFilter{filter})
+	// Make gRPC call to SelectNodes using per-call computed values
+	selectedNodes, err := grpcClient.SelectNodes(ctx, d.strategyType(), d.affinityMode(), []*proto.NodeFilter{filter})
 	if err != nil {
 		return nil, fmt.Errorf("gRPC SelectNodes call failed for seed %s: %w", seed, err)
 	}
@@ -588,7 +557,7 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 	logger.Ctx(ctx).Debug("Active discovery: Successfully selected nodes from seed via gRPC",
 		zap.String("seed", seed),
 		zap.String("strategy", d.cfg.SelectStrategy.Strategy),
-		zap.String("strategyType", d.strategyType.String()),
+		zap.String("strategyType", d.strategyType().String()),
 		zap.Int32("requestedNodes", filter.Limit),
 		zap.Int("returnedNodes", len(selectedNodes)),
 		zap.Strings("endpoints", nodeEndpoints))
