@@ -49,6 +49,9 @@ woodpecker:
       quorumBufferPools:
         - name: default-region-pool # Name of the default region pool
           seeds: [ ] # List of node addresses that can be used for quorum operations
+      # affinityMode, replicas, and strategy below can be overridden at runtime
+      # by the embedding application (via the client's Dynamic[T] source hooks);
+      # such changes take effect on the next segment and require no restart.
       # Quorum Selection Strategy: How to select nodes for quorum operations
       quorumSelectStrategy:
         # Affinity Mode: How strictly to apply node selection rules

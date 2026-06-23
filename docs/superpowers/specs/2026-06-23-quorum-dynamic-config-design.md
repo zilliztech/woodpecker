@@ -1,7 +1,7 @@
 # Dynamic quorum client config via a `Dynamic[T]` field wrapper
 
 - Date: 2026-06-23
-- Status: Proposed (design approved in brainstorming; pending spec review)
+- Status: Implemented (#195)
 - Scope: client-side **quorum** config only
 
 ## 1. Context & problem
