@@ -1608,3 +1608,66 @@ func TestQuorumDiscovery_CustomPlacement_FinalValidation_NodeCountMismatch(t *te
 	assert.Contains(t, err.Error(), "active custom placement validation failed")
 	assert.Contains(t, err.Error(), "expected 3 nodes, got 2 nodes")
 }
+
+func TestQuorumDiscovery_DynamicReplicas_NextSelectionUsesNewSize(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{{Name: "region-a", Seeds: []string{"localhost:8080"}}},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
+		},
+	}
+	replicas := 3
+	cfg.SelectStrategy.Replicas.WithSource(func() (int, bool) { return replicas, true })
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "localhost:8080").Return(mockClient, nil)
+
+	five := []*proto.NodeMeta{
+		{Endpoint: "n1:8080"}, {Endpoint: "n2:8080"}, {Endpoint: "n3:8080"},
+		{Endpoint: "n4:8080"}, {Endpoint: "n5:8080"},
+	}
+	mockClient.EXPECT().SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return(five, nil).Maybe()
+
+	d, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	require.NoError(t, err)
+
+	replicas = 5 // flip at runtime, no restart
+	result, err := d.SelectQuorum(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int32(5), result.Es)
+	assert.Equal(t, int32(5), result.Wq)
+	assert.Equal(t, int32(3), result.Aq) // (5/2)+1
+}
+
+func TestQuorumDiscovery_DynamicAffinity_UnknownDegradesToSoft(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{{Name: "region-a", Seeds: []string{"localhost:8080"}}},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"), // valid static -> ctor passes
+			Replicas:     config.NewDynamic(3),
+		},
+	}
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "localhost:8080").Return(mockClient, nil)
+	mockClient.EXPECT().SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "n1:8080"}, {Endpoint: "n2:8080"}, {Endpoint: "n3:8080"},
+	}, nil)
+
+	d, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	require.NoError(t, err)
+
+	// runtime override returns a typo; must degrade to SOFT, not error
+	cfg.SelectStrategy.AffinityMode.WithSource(func() (string, bool) { return "nonsense", true })
+
+	result, err := d.SelectQuorum(ctx)
+	require.NoError(t, err)
+	assert.Len(t, result.Nodes, 3)
+}

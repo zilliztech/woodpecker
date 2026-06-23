@@ -1191,3 +1191,17 @@ func TestNodeSelectionPolicyValidation(t *testing.T) {
 	cfg.Woodpecker.Logstore.NodeSelectionPolicy.MemSoftThreshold = 1.5
 	assert.Error(t, cfg.validateLogstoreConfig(), "memSoftThreshold > 1 should fail validation")
 }
+
+func TestQuorumConfig_DynamicReplicasAffectsEnsembleSize(t *testing.T) {
+	q := QuorumConfig{
+		SelectStrategy: QuorumSelectStrategy{Replicas: NewDynamic(3)},
+	}
+	assert.Equal(t, 3, q.GetEnsembleSize())
+
+	current := 5
+	q.SelectStrategy.Replicas.WithSource(func() (int, bool) { return current, true })
+	assert.Equal(t, 5, q.GetEnsembleSize())
+
+	current = 4 // invalid -> clamps to 3
+	assert.Equal(t, 3, q.GetEnsembleSize())
+}
