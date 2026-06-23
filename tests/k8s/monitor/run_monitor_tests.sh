@@ -23,6 +23,10 @@ export CR_NAME="${CR_NAME:-my-woodpecker}"
 export NAMESPACE="${NAMESPACE:-woodpecker}"
 export REPLICAS="${REPLICAS:-3}"
 export WP_IMG="${WP_IMG:-zilliztech/woodpecker:v0.1.26}"
+# Dependency images for lib.sh wp_deploy_deps (it honors these env vars). Default MinIO
+# to a locally-present tag so preload_image reuses it without any registry pull.
+export ETCD_IMG="${ETCD_IMG:-quay.io/coreos/etcd:v3.5.18}"
+export MINIO_IMG="${MINIO_IMG:-minio/minio:RELEASE.2024-12-18T13-15-44Z}"
 export MK_CPUS="${MK_CPUS:-4}" MK_MEMORY="${MK_MEMORY:-4096}"
 MON_NS="monitoring"
 HELM_RELEASE="kps"
@@ -31,13 +35,20 @@ NO_CLEANUP="${NO_CLEANUP:-false}"
 
 source "$PROJECT_ROOT/deployments/operator/test/lib.sh"
 
-preload_image() { log "preload: $1"; docker pull "$1" || fail "docker pull $1"; minikube -p "$CLUSTER_NAME" image load "$1" || fail "image load $1"; }
+# Reuse a host-local image when present (skip the registry pull); otherwise pull it.
+# Either way, load it into the minikube node (which can't reach registries through the
+# host's loopback proxy).
+preload_image() {
+  log "preload: $1"
+  docker image inspect "$1" >/dev/null 2>&1 || docker pull "$1" || fail "docker pull $1"
+  minikube -p "$CLUSTER_NAME" image load "$1" || fail "image load $1"
+}
 
 bringup() {
   wp_minikube_start
   kubectl label node "$CLUSTER_NAME" topology.kubernetes.io/zone=zone-a topology.kubernetes.io/region=region-local --overwrite
-  preload_image quay.io/coreos/etcd:v3.5.18
-  preload_image minio/minio:RELEASE.2024-06-13T22-53-53Z
+  preload_image "$ETCD_IMG"
+  preload_image "$MINIO_IMG"
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
   # lib.sh applies deps/CR namespace-lessly, so pin the active namespace to $NAMESPACE
   # (its seed DNS uses .$NAMESPACE.svc, so this keeps pods and DNS consistent).
