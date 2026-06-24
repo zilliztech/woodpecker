@@ -99,7 +99,7 @@ func TestIdleLogVolume(t *testing.T) {
 			if tc.needCluster {
 				const nodeCount = 3
 				cluster, ccfg, _, serviceSeeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
-				ccfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = serviceSeeds
+				ccfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, serviceSeeds)
 				cfg = ccfg
 				defer cluster.StopMultiNodeCluster(t)
 
@@ -201,7 +201,7 @@ func TestIdleTailReadLogVolume(t *testing.T) {
 			if tc.needCluster {
 				const nodeCount = 3
 				cluster, ccfg, _, serviceSeeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
-				ccfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = serviceSeeds
+				ccfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, serviceSeeds)
 				cfg = ccfg
 				defer cluster.StopMultiNodeCluster(t)
 

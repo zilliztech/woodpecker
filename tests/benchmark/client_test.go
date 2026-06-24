@@ -575,7 +575,7 @@ func TestWriteThroughput(t *testing.T) {
 				// Start cluster for service mode
 				const nodeCount = 3
 				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
-				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+				cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
 				}()
@@ -789,7 +789,7 @@ func TestReadThroughput(t *testing.T) {
 				// Start cluster for service mode
 				const nodeCount = 3
 				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
-				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+				cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
 				}()

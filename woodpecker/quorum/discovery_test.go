@@ -20,16 +20,16 @@ import (
 func TestQuorumDiscovery_SelectQuorumNodes_SingleRegion_Success(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: []string{"localhost:8080"},
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -75,20 +75,20 @@ func TestQuorumDiscovery_SelectQuorumNodes_SingleRegion_Success(t *testing.T) {
 func TestQuorumDiscovery_SelectQuorumNodes_CustomPlacement_Success(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 			{Name: "region-c", Seeds: []string{"seed-c:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3, // This will result in EnsembleSize=3
-			CustomPlacement: []config.CustomPlacement{
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3), // This will result in EnsembleSize=3
+			CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-b", Az: "az-2", ResourceGroup: "rg-2"},
 				{Region: "region-c", Az: "az-3", ResourceGroup: "rg-3"}, // Add third placement
-			},
+			}),
 		},
 	}
 
@@ -130,16 +130,16 @@ func TestQuorumDiscovery_SelectQuorumNodes_CustomPlacement_Success(t *testing.T)
 func TestQuorumDiscovery_SelectQuorumNodes_CustomPlacement_ValidationError(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3, // Mismatch: 3 required but only 1 custom placement rule
-			CustomPlacement: []config.CustomPlacement{
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3), // Mismatch: 3 required but only 1 custom placement rule
+			CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
-			},
+			}),
 		},
 	}
 
@@ -155,11 +155,11 @@ func TestQuorumDiscovery_SelectQuorumNodes_CustomPlacement_ValidationError(t *te
 func TestQuorumDiscovery_SelectQuorumNodes_NoBufferPools(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{},
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -180,16 +180,16 @@ func TestQuorumDiscovery_SelectQuorumNodes_gRPCError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: []string{"localhost:8080"},
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -229,15 +229,15 @@ func TestQuorumDiscovery_StrategyTypeMapping(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			cfg := &config.QuorumConfig{
-				BufferPools: []config.QuorumBufferPool{
+				BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 					{Name: "region-a", Seeds: []string{"seed-a-0:8080", "seed-a-1:8080", "seed-a-2:8080"}},
 					{Name: "region-b", Seeds: []string{"seed-b-0:8080", "seed-b-1:8080"}},
 					{Name: "region-c", Seeds: []string{"seed-c-0:8080"}},
-				},
+				}),
 				SelectStrategy: config.QuorumSelectStrategy{
-					Strategy:     tt.strategy,
-					AffinityMode: "soft",
-					Replicas:     1,
+					Strategy:     config.NewDynamic(tt.strategy),
+					AffinityMode: config.NewDynamic("soft"),
+					Replicas:     config.NewDynamic(1),
 				},
 			}
 
@@ -269,16 +269,16 @@ func TestQuorumDiscovery_SelectQuorumNodes_gRPCTimeout(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: []string{"localhost:8080"},
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -308,15 +308,15 @@ func TestQuorumDiscovery_FillRemainingNodes_ContinuesAcrossPools(t *testing.T) {
 	// even if it returned fewer nodes than needed. Now it continues to try other pools.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 			{Name: "region-c", Seeds: []string{"seed-c:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     5, // Need 5 nodes total
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(5), // Need 5 nodes total
 		},
 	}
 
@@ -375,15 +375,15 @@ func TestQuorumDiscovery_FillRemainingNodes_FirstPoolFails_TriesNext(t *testing.
 	// the loop continues to the next pool to get remaining nodes.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 			{Name: "region-c", Seeds: []string{"seed-c:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -432,14 +432,14 @@ func TestQuorumDiscovery_CrossRegion_DeduplicatesNodes(t *testing.T) {
 	// fillRemainingNodes queries a pool that already contributed nodes.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -490,14 +490,14 @@ func TestQuorumDiscovery_CrossRegion_FillDeduplicatesNodes(t *testing.T) {
 	// when first round gets 1 node, fill queries the same pool and gets the same node back.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -554,15 +554,15 @@ func TestQuorumDiscovery_SingleRegion_RandomPoolSelection(t *testing.T) {
 	// Now it randomly selects a pool, distributing load across pools.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "pool-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "pool-b", Seeds: []string{"seed-b:8080"}},
 			{Name: "pool-c", Seeds: []string{"seed-c:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -626,16 +626,16 @@ func TestQuorumDiscovery_SeedRotation_SkipsDeadSeed(t *testing.T) {
 	// Now requestNodesFromPool tries all seeds in shuffled order.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: []string{"dead-seed:8080", "healthy-seed:8080"},
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -675,16 +675,16 @@ func TestQuorumDiscovery_SeedRotation_AllSeedsDead(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: []string{"dead1:8080", "dead2:8080", "dead3:8080"},
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -719,20 +719,20 @@ func TestQuorumDiscovery_CustomPlacement_SeedRotation(t *testing.T) {
 	// Now it uses requestNodesFromPool which tries all seeds in shuffled order.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"dead-seed-a:8080", "healthy-seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"healthy-seed-b:8080"}},
 			{Name: "region-c", Seeds: []string{"dead-seed-c:8080", "healthy-seed-c:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3,
-			CustomPlacement: []config.CustomPlacement{
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3),
+			CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-b", Az: "az-2", ResourceGroup: "rg-2"},
 				{Region: "region-c", Az: "az-3", ResourceGroup: "rg-3"},
-			},
+			}),
 		},
 	}
 
@@ -785,18 +785,18 @@ func TestQuorumDiscovery_CustomPlacement_DeduplicatesNodes(t *testing.T) {
 	// and pick different nodes from the candidates.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3,
-			CustomPlacement: []config.CustomPlacement{
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3),
+			CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"}, // Same az+rg
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"}, // Same az+rg
-			},
+			}),
 		},
 	}
 
@@ -834,18 +834,18 @@ func TestQuorumDiscovery_CustomPlacement_DeduplicateFails(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "custom",
-			AffinityMode: "hard",
-			Replicas:     3,
-			CustomPlacement: []config.CustomPlacement{
+			Strategy:     config.NewDynamic("custom"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3),
+			CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
-			},
+			}),
 		},
 	}
 
@@ -875,14 +875,14 @@ func TestQuorumDiscovery_CrossRegion_TrimExcessUnbiased(t *testing.T) {
 	// Now it shuffles before trimming for fair distribution.
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3, // es=3, 2 pools → pool A gets 2, pool B gets 1
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3), // es=3, 2 pools → pool A gets 2, pool B gets 1
 		},
 	}
 
@@ -936,13 +936,13 @@ func TestQuorumDiscovery_CrossRegion_TrimExcessUnbiased(t *testing.T) {
 func TestQuorumDiscovery_InvalidAffinityMode(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "invalid-mode",
-			Replicas:     1,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("invalid-mode"),
+			Replicas:     config.NewDynamic(1),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -956,13 +956,13 @@ func TestQuorumDiscovery_InvalidAffinityMode(t *testing.T) {
 func TestQuorumDiscovery_EmptyAffinityModeDefaultsToSoft(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "", // empty defaults to soft
-			Replicas:     1,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic(""), // empty defaults to soft
+			Replicas:     config.NewDynamic(1),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -971,19 +971,19 @@ func TestQuorumDiscovery_EmptyAffinityModeDefaultsToSoft(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, discovery)
 	d := discovery.(*quorumDiscovery)
-	assert.Equal(t, proto.AffinityMode_SOFT, d.affinityMode)
+	assert.Equal(t, proto.AffinityMode_SOFT, d.affinityMode())
 }
 
 func TestQuorumDiscovery_HardAffinityMode(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "hard",
-			Replicas:     1,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(1),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -991,20 +991,20 @@ func TestQuorumDiscovery_HardAffinityMode(t *testing.T) {
 	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
 	assert.NoError(t, err)
 	d := discovery.(*quorumDiscovery)
-	assert.Equal(t, proto.AffinityMode_HARD, d.affinityMode)
+	assert.Equal(t, proto.AffinityMode_HARD, d.affinityMode())
 }
 
 func TestQuorumDiscovery_CrossRegion_InsufficientPools(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
 			// Only 1 pool - cross-region needs at least 2
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "soft",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -1018,14 +1018,14 @@ func TestQuorumDiscovery_CrossRegion_InsufficientPools(t *testing.T) {
 func TestQuorumDiscovery_CustomPlacement_EmptyPlacement(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:        "custom",
-			AffinityMode:    "soft",
-			Replicas:        3,
-			CustomPlacement: []config.CustomPlacement{}, // empty
+			Strategy:        config.NewDynamic("custom"),
+			AffinityMode:    config.NewDynamic("soft"),
+			Replicas:        config.NewDynamic(3),
+			CustomPlacement: config.NewDynamic([]config.CustomPlacement{}), // empty
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -1053,16 +1053,7 @@ func TestQuorumDiscovery_StrategyTypeMapping_AllStrategies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.strategy, func(t *testing.T) {
-			d := &quorumDiscovery{
-				cfg: &config.QuorumConfig{
-					SelectStrategy: config.QuorumSelectStrategy{
-						Strategy: tt.strategy,
-					},
-				},
-			}
-			err := d.parseStrategyType()
-			assert.NoError(t, err)
-			assert.Equal(t, tt.expected, d.strategyType)
+			assert.Equal(t, tt.expected, parseStrategy(tt.strategy))
 		})
 	}
 }
@@ -1072,14 +1063,14 @@ func TestQuorumDiscovery_CrossRegion_HardAffinityFail(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "hard",
-			Replicas:     3,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(3),
 		},
 	}
 
@@ -1106,14 +1097,14 @@ func TestQuorumDiscovery_CrossRegion_HardAffinity_InsufficientNodes(t *testing.T
 	defer cancel()
 
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "cross-region",
-			AffinityMode: "hard",
-			Replicas:     5,
+			Strategy:     config.NewDynamic("cross-region"),
+			AffinityMode: config.NewDynamic("hard"),
+			Replicas:     config.NewDynamic(5),
 		},
 	}
 
@@ -1146,13 +1137,13 @@ func TestQuorumDiscovery_SingleRegion_NoSeeds(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{Name: "region-a", Seeds: []string{}}, // no seeds
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     "random",
-			AffinityMode: "soft",
-			Replicas:     1,
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(1),
 		},
 	}
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -1184,17 +1175,18 @@ func TestQuorumDiscovery_Close(t *testing.T) {
 func TestQuorumDiscovery_FillRemainingNodes_AlreadyEnough(t *testing.T) {
 	// Covers fillRemainingNodes when remainingNeeded <= 0
 	d := &quorumDiscovery{
-		cfg: &config.QuorumConfig{},
-		es:  3,
-		wq:  2,
-		aq:  1,
+		cfg: &config.QuorumConfig{
+			SelectStrategy: config.QuorumSelectStrategy{
+				Replicas: config.NewDynamic(3),
+			},
+		},
 	}
 
 	ctx := context.Background()
 	currentNodes := []string{"n1", "n2", "n3"}
 	selectedSet := map[string]bool{"n1": true, "n2": true, "n3": true}
 
-	result, err := d.fillRemainingNodes(ctx, currentNodes, selectedSet)
+	result, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, selectedSet)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 3, len(result.Nodes))
@@ -1216,18 +1208,18 @@ func TestQuorumDiscovery_FillRemainingNodes_NilSelectedSet(t *testing.T) {
 
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "pool1", Seeds: []string{"seed1:8080"}},
+			}),
+			SelectStrategy: config.QuorumSelectStrategy{
+				Replicas: config.NewDynamic(3),
 			},
 		},
 		clientPool: mockClientPool,
-		es:         3,
-		wq:         2,
-		aq:         1,
 	}
 
 	currentNodes := []string{"n1:8080"}
-	result, err := d.fillRemainingNodes(ctx, currentNodes, nil) // nil selectedSet
+	result, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, nil) // nil selectedSet
 	// May succeed or fail depending on mock behavior, just exercise the nil path
 	if err == nil {
 		assert.NotNil(t, result)
@@ -1240,19 +1232,19 @@ func TestQuorumDiscovery_FillRemainingNodes_PoolNoSeeds(t *testing.T) {
 
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "pool1", Seeds: []string{}}, // no seeds
+			}),
+			SelectStrategy: config.QuorumSelectStrategy{
+				Replicas: config.NewDynamic(3),
 			},
 		},
-		es: 3,
-		wq: 2,
-		aq: 1,
 	}
 
 	currentNodes := []string{"n1:8080"}
 	selectedSet := map[string]bool{"n1:8080": true}
 
-	_, err := d.fillRemainingNodes(ctx, currentNodes, selectedSet)
+	_, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, selectedSet)
 	assert.Error(t, err) // insufficient quorum
 }
 
@@ -1269,58 +1261,60 @@ func TestQuorumDiscovery_FillRemainingNodes_RequestError(t *testing.T) {
 
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "pool1", Seeds: []string{"seed1:8080"}},
+			}),
+			SelectStrategy: config.QuorumSelectStrategy{
+				Replicas: config.NewDynamic(3),
 			},
 		},
-		clientPool:   mockClientPool,
-		strategyType: proto.StrategyType_RANDOM,
-		affinityMode: proto.AffinityMode_SOFT,
-		es:           3,
-		wq:           2,
-		aq:           1,
+		clientPool: mockClientPool,
 	}
 
 	currentNodes := []string{"n1:8080"}
 	selectedSet := map[string]bool{"n1:8080": true}
 
-	_, err := d.fillRemainingNodes(ctx, currentNodes, selectedSet)
+	_, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, selectedSet)
 	assert.Error(t, err) // insufficient quorum after pool failure
 }
 
 func TestQuorumDiscovery_SelectSingleRegion_FiltersCountError(t *testing.T) {
-	// Covers selectSingleRegionQuorum when len(d.filters) != 1
+	// Covers selectSingleRegionQuorum when len(filters) != 1
 	ctx := context.Background()
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "pool1", Seeds: []string{"seed1:8080"}},
+			}),
+			SelectStrategy: config.QuorumSelectStrategy{
+				Replicas: config.NewDynamic(3),
 			},
 		},
-		filters: []*proto.NodeFilter{}, // empty - not 1
-		es:      3,
 	}
 
-	_, err := d.selectSingleRegionQuorum(ctx)
+	emptyFilters := []*proto.NodeFilter{} // empty - not 1
+	_, err := d.selectSingleRegionQuorum(ctx, d.cfg.BufferPools.Get(), emptyFilters)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "expected 1 filter")
 }
 
 func TestQuorumDiscovery_SelectCrossRegion_FiltersCountError(t *testing.T) {
-	// Covers selectCrossRegionQuorum when len(d.filters) != 1
+	// Covers selectCrossRegionQuorum when len(filters) != 1
 	ctx := context.Background()
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "pool1", Seeds: []string{"s1"}},
 				{Name: "pool2", Seeds: []string{"s2"}},
+			}),
+			SelectStrategy: config.QuorumSelectStrategy{
+				Replicas: config.NewDynamic(3),
 			},
 		},
-		filters: []*proto.NodeFilter{{}, {}}, // 2 filters, not 1
-		es:      3,
 	}
 
-	_, err := d.selectCrossRegionQuorum(ctx)
+	twoFilters := []*proto.NodeFilter{{}, {}} // 2 filters, not 1
+	_, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), twoFilters)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "expected 1 filter")
 }
@@ -1342,58 +1336,68 @@ func TestQuorumDiscovery_SelectCrossRegion_PoolNoSeeds(t *testing.T) {
 
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "pool1", Seeds: []string{}}, // no seeds - skipped
 				{Name: "pool2", Seeds: []string{"seed2:8080"}},
+			}),
+			SelectStrategy: config.QuorumSelectStrategy{
+				Strategy:     config.NewDynamic("cross-region"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(3),
 			},
 		},
-		clientPool:   mockClientPool,
-		strategyType: proto.StrategyType_CROSS_REGION,
-		affinityMode: proto.AffinityMode_SOFT,
-		filters:      []*proto.NodeFilter{{}},
-		es:           3,
-		wq:           2,
-		aq:           1,
+		clientPool: mockClientPool,
 	}
 
-	result, err := d.selectCrossRegionQuorum(ctx)
+	filters := []*proto.NodeFilter{{}}
+	result, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), filters)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 }
 
 func TestQuorumDiscovery_SelectCrossRegion_RegionNodesZero(t *testing.T) {
 	// Covers regionNodes == 0 path when more pools than required nodes
+	// es=3 across 5 pools: nodesPerRegion=0, remainingNodes=3 => first 3 pools get 1 node, last 2 get 0
 	ctx := context.Background()
 
-	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient3 := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 
-	// Only the first pool will be asked for nodes (es=1, 3 pools -> 0,0,0 nodes + 1 remaining for first pool)
-	mockClientPool.EXPECT().GetLogStoreClient(ctx, mock.Anything).Return(mockClient, nil).Maybe()
-	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "s1:8080").Return(mockClient1, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "s2:8080").Return(mockClient2, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "s3:8080").Return(mockClient3, nil).Maybe()
+	mockClient1.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
 		Return([]*proto.NodeMeta{{Endpoint: "n1:8080"}}, nil).Maybe()
+	mockClient2.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "n2:8080"}}, nil).Maybe()
+	mockClient3.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "n3:8080"}}, nil).Maybe()
 
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "pool1", Seeds: []string{"s1:8080"}},
 				{Name: "pool2", Seeds: []string{"s2:8080"}},
 				{Name: "pool3", Seeds: []string{"s3:8080"}},
+				{Name: "pool4", Seeds: []string{"s4:8080"}},
+				{Name: "pool5", Seeds: []string{"s5:8080"}},
+			}),
+			SelectStrategy: config.QuorumSelectStrategy{
+				Strategy:     config.NewDynamic("cross-region"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(3), // 3 nodes across 5 pools -> pools 4,5 get regionNodes==0
 			},
 		},
-		clientPool:   mockClientPool,
-		strategyType: proto.StrategyType_CROSS_REGION,
-		affinityMode: proto.AffinityMode_SOFT,
-		filters:      []*proto.NodeFilter{{}},
-		es:           1, // only 1 node needed across 3 pools -> some get 0
-		wq:           1,
-		aq:           1,
+		clientPool: mockClientPool,
 	}
 
-	result, err := d.selectCrossRegionQuorum(ctx)
+	filters := []*proto.NodeFilter{{}}
+	result, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), filters)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, 1, len(result.Nodes))
+	assert.Equal(t, 3, len(result.Nodes))
 }
 
 func TestQuorumDiscovery_CustomPlacement_FiltersCountMismatch(t *testing.T) {
@@ -1402,17 +1406,17 @@ func TestQuorumDiscovery_CustomPlacement_FiltersCountMismatch(t *testing.T) {
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
 			SelectStrategy: config.QuorumSelectStrategy{
-				CustomPlacement: []config.CustomPlacement{
+				CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 					{Region: "r1"},
 					{Region: "r2"},
-				},
+				}),
+				Replicas: config.NewDynamic(2),
 			},
 		},
-		filters: []*proto.NodeFilter{{}}, // 1 filter vs 2 placements
-		es:      2,
 	}
 
-	_, err := d.selectCustomPlacementQuorum(ctx)
+	oneFilter := []*proto.NodeFilter{{}} // 1 filter vs 2 placements
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), oneFilter)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "filters count")
 }
@@ -1422,20 +1426,20 @@ func TestQuorumDiscovery_CustomPlacement_PoolNotFound(t *testing.T) {
 	ctx := context.Background()
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "other-region", Seeds: []string{"s1"}},
-			},
+			}),
 			SelectStrategy: config.QuorumSelectStrategy{
-				CustomPlacement: []config.CustomPlacement{
+				CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 					{Region: "nonexistent-region"},
-				},
+				}),
+				Replicas: config.NewDynamic(1),
 			},
 		},
-		filters: []*proto.NodeFilter{{}},
-		es:      1,
 	}
 
-	_, err := d.selectCustomPlacementQuorum(ctx)
+	filters := []*proto.NodeFilter{{}}
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "buffer pool not found")
 }
@@ -1445,20 +1449,20 @@ func TestQuorumDiscovery_CustomPlacement_PoolNoSeeds(t *testing.T) {
 	ctx := context.Background()
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "r1", Seeds: []string{}}, // no seeds
-			},
+			}),
 			SelectStrategy: config.QuorumSelectStrategy{
-				CustomPlacement: []config.CustomPlacement{
+				CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 					{Region: "r1"},
-				},
+				}),
+				Replicas: config.NewDynamic(1),
 			},
 		},
-		filters: []*proto.NodeFilter{{}},
-		es:      1,
 	}
 
-	_, err := d.selectCustomPlacementQuorum(ctx)
+	filters := []*proto.NodeFilter{{}}
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no seeds configured")
 }
@@ -1476,25 +1480,23 @@ func TestQuorumDiscovery_CustomPlacement_EmptyResult(t *testing.T) {
 
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "r1", Seeds: []string{"s1:8080"}},
-			},
+			}),
 			SelectStrategy: config.QuorumSelectStrategy{
-				CustomPlacement: []config.CustomPlacement{
+				CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 					{Region: "r1"},
-				},
+				}),
+				Strategy:     config.NewDynamic("custom"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(1),
 			},
 		},
-		clientPool:   mockClientPool,
-		strategyType: proto.StrategyType_CUSTOM,
-		affinityMode: proto.AffinityMode_SOFT,
-		filters:      []*proto.NodeFilter{{}},
-		es:           1,
-		wq:           1,
-		aq:           1,
+		clientPool: mockClientPool,
 	}
 
-	_, err := d.selectCustomPlacementQuorum(ctx)
+	filters := []*proto.NodeFilter{{}}
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient nodes")
 }
@@ -1512,25 +1514,23 @@ func TestQuorumDiscovery_CustomPlacement_RequestError(t *testing.T) {
 
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "r1", Seeds: []string{"s1:8080"}},
-			},
+			}),
 			SelectStrategy: config.QuorumSelectStrategy{
-				CustomPlacement: []config.CustomPlacement{
+				CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 					{Region: "r1"},
-				},
+				}),
+				Strategy:     config.NewDynamic("custom"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(1),
 			},
 		},
-		clientPool:   mockClientPool,
-		strategyType: proto.StrategyType_CUSTOM,
-		affinityMode: proto.AffinityMode_SOFT,
-		filters:      []*proto.NodeFilter{{}},
-		es:           1,
-		wq:           1,
-		aq:           1,
+		clientPool: mockClientPool,
 	}
 
-	_, err := d.selectCustomPlacementQuorum(ctx)
+	filters := []*proto.NodeFilter{{}}
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to select node")
 }
@@ -1547,13 +1547,14 @@ func TestQuorumDiscovery_RequestNodesFromSeed_InsufficientNodes(t *testing.T) {
 		Return([]*proto.NodeMeta{{Endpoint: "n1:8080"}}, nil) // only 1, but expected 3
 
 	d := &quorumDiscovery{
-		cfg:          &config.QuorumConfig{},
-		clientPool:   mockClientPool,
-		strategyType: proto.StrategyType_RANDOM,
-		affinityMode: proto.AffinityMode_SOFT,
-		es:           3,
-		wq:           2,
-		aq:           1,
+		cfg: &config.QuorumConfig{
+			SelectStrategy: config.QuorumSelectStrategy{
+				Strategy:     config.NewDynamic("random"),
+				AffinityMode: config.NewDynamic("soft"),
+				Replicas:     config.NewDynamic(3),
+			},
+		},
+		clientPool: mockClientPool,
 	}
 
 	filter := &proto.NodeFilter{Limit: 3}
@@ -1582,30 +1583,124 @@ func TestQuorumDiscovery_CustomPlacement_FinalValidation_NodeCountMismatch(t *te
 
 	d := &quorumDiscovery{
 		cfg: &config.QuorumConfig{
-			BufferPools: []config.QuorumBufferPool{
+			BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 				{Name: "r1", Seeds: []string{"s1:8080"}},
-			},
+			}),
 			SelectStrategy: config.QuorumSelectStrategy{
-				CustomPlacement: []config.CustomPlacement{
+				CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 					{Region: "r1", Az: "az-1", ResourceGroup: "rg-1"},
 					{Region: "r1", Az: "az-2", ResourceGroup: "rg-2"},
-				},
+				}),
+				Strategy:     config.NewDynamic("custom"),
+				AffinityMode: config.NewDynamic("hard"),
+				Replicas:     config.NewDynamic(3), // requiredNodes=3, but only 2 placements → 2 nodes selected
 			},
 		},
-		clientPool:   mockClientPool,
-		strategyType: proto.StrategyType_CUSTOM,
-		affinityMode: proto.AffinityMode_HARD,
-		filters: []*proto.NodeFilter{
-			{Limit: 1, Az: "az-1", ResourceGroup: "rg-1"},
-			{Limit: 1, Az: "az-2", ResourceGroup: "rg-2"},
-		},
-		es: 3, // requiredNodes=3, but only 2 placements → 2 nodes selected
-		wq: 2,
-		aq: 1,
+		clientPool: mockClientPool,
 	}
 
-	_, err := d.selectCustomPlacementQuorum(ctx)
+	filters := []*proto.NodeFilter{
+		{Limit: 1, Az: "az-1", ResourceGroup: "rg-1"},
+		{Limit: 1, Az: "az-2", ResourceGroup: "rg-2"},
+	}
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "active custom placement validation failed")
 	assert.Contains(t, err.Error(), "expected 3 nodes, got 2 nodes")
+}
+
+func TestQuorumDiscovery_DynamicReplicas_NextSelectionUsesNewSize(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{{Name: "region-a", Seeds: []string{"localhost:8080"}}}),
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
+		},
+	}
+	replicas := 3
+	cfg.SelectStrategy.Replicas.WithSource(func() (int, bool) { return replicas, true })
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "localhost:8080").Return(mockClient, nil)
+
+	five := []*proto.NodeMeta{
+		{Endpoint: "n1:8080"},
+		{Endpoint: "n2:8080"},
+		{Endpoint: "n3:8080"},
+		{Endpoint: "n4:8080"},
+		{Endpoint: "n5:8080"},
+	}
+	mockClient.EXPECT().SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return(five, nil).Maybe()
+
+	d, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	require.NoError(t, err)
+
+	replicas = 5 // flip at runtime, no restart
+	result, err := d.SelectQuorum(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int32(5), result.Es)
+	assert.Equal(t, int32(5), result.Wq)
+	assert.Equal(t, int32(3), result.Aq) // (5/2)+1
+}
+
+func TestQuorumDiscovery_DynamicAffinity_UnknownDegradesToSoft(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{{Name: "region-a", Seeds: []string{"localhost:8080"}}}),
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"), // valid static -> ctor passes
+			Replicas:     config.NewDynamic(3),
+		},
+	}
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "localhost:8080").Return(mockClient, nil)
+	mockClient.EXPECT().SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "n1:8080"}, {Endpoint: "n2:8080"}, {Endpoint: "n3:8080"},
+	}, nil)
+
+	d, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	require.NoError(t, err)
+
+	// runtime override returns a typo; must degrade to SOFT, not error
+	cfg.SelectStrategy.AffinityMode.WithSource(func() (string, bool) { return "nonsense", true })
+
+	result, err := d.SelectQuorum(ctx)
+	require.NoError(t, err)
+	assert.Len(t, result.Nodes, 3)
+}
+
+func TestQuorumDiscovery_DynamicBufferPools_NextSelectionUsesNewSeeds(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{{Name: "p", Seeds: []string{"old:8080"}}}),
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     config.NewDynamic("random"),
+			AffinityMode: config.NewDynamic("soft"),
+			Replicas:     config.NewDynamic(3),
+		},
+	}
+	// runtime override: a whole new pool list with a different seed
+	cfg.BufferPools.WithSource(func() ([]config.QuorumBufferPool, bool) {
+		return []config.QuorumBufferPool{{Name: "p", Seeds: []string{"new:8080"}}}, true
+	})
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	// must dial the NEW seed, not the old one
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "new:8080").Return(mockClient, nil)
+	mockClient.EXPECT().SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "n1:8080"}, {Endpoint: "n2:8080"}, {Endpoint: "n3:8080"},
+	}, nil)
+
+	d, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	require.NoError(t, err)
+	result, err := d.SelectQuorum(ctx)
+	require.NoError(t, err)
+	assert.Len(t, result.Nodes, 3)
 }

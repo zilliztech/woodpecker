@@ -46,7 +46,7 @@ func TestStagedStorageService_Normal_BasicRW(t *testing.T) {
 	// Start a 3-node cluster for quorum testing
 	const nodeCount = 3
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -162,7 +162,7 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 	// Start minimal 3-node cluster for basic quorum testing
 	const nodeCount = 3
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 
 	// Ensure proper cleanup
 	defer func() {
@@ -323,7 +323,7 @@ func TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues(t 
 	// Start a 5-node cluster for quorum testing
 	const nodeCount = 5
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 
 	// Ensure proper cleanup
 	defer func() {
@@ -754,21 +754,21 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case2")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 
 	// Save original quorum configuration and restore after test
 	originalReplica := cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas
 
 	// Override quorum configuration for Case2: es=5, wq=5, aq=3
-	cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas = 5
+	cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Set(5)
 	t.Logf("Overridden quorum config for Case2: replica=%d",
-		cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+		cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
 
 	defer func() {
 		// Restore original quorum configuration
 		cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas = originalReplica
 		t.Logf("Restored original quorum config: replica=%d",
-			cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+			cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
 
 		cluster.StopMultiNodeCluster(t)
 	}()
@@ -800,7 +800,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	// Create a unique log name for this test
 	logName := "test_log_failover_case2_" + time.Now().Format("20060102150405")
 	t.Logf("Creating log: %s with quorum config from woodpecker.yaml: replica=%d",
-		logName, cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+		logName, cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
 
 	// Create log if not exists
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
@@ -901,7 +901,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	require.NotNil(t, quorumInfo, "QuorumInfo should not be nil")
 
 	t.Logf("Current segment %d has quorum nodes: %v", segmentMetadata.Metadata.SegNo, quorumInfo.Nodes)
-	expectedEnsembleSize := cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas
+	expectedEnsembleSize := cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get()
 	require.GreaterOrEqual(t, len(quorumInfo.Nodes), expectedEnsembleSize, "Should have at least %d quorum nodes", expectedEnsembleSize)
 
 	// Debug: Print cluster information
@@ -1192,7 +1192,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	t.Logf("=== CASE 2 PASSED: Writer and reader continued working seamlessly despite double node failure (nodes %v) ===",
 		targetNodeIndexes[:nodesFailCount])
 	t.Logf("Successfully wrote and read %d entries with replica=%d configuration - %d before and %d after double failover",
-		totalEntries, cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas,
+		totalEntries, cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get(),
 		entriesPhase1, entriesPhase2)
 }
 
@@ -1220,7 +1220,7 @@ func TestStagedStorageService_Failover_Case3_NodeRestartTriggersSegmentRolling(t
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case3")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 
 	defer func() {
 		cluster.StopMultiNodeCluster(t)
@@ -1605,7 +1605,7 @@ func TestStagedStorageService_Failover_Case4_NonQuorumNodeFailure(t *testing.T) 
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case4")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -1758,7 +1758,7 @@ func TestStagedStorageService_Failover_Case5_QuorumLossAndRecovery(t *testing.T)
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case5")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -1929,7 +1929,7 @@ func TestStagedStorageService_Failover_Case6_FullClusterRestartDurability(t *tes
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case6")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 
 	time.Sleep(2 * time.Second)
 
@@ -1999,7 +1999,7 @@ func TestStagedStorageService_Failover_Case6_FullClusterRestartDurability(t *tes
 
 	// Update seeds for new client
 	newSeeds := cluster.GetSeedList()
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = newSeeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, newSeeds)
 
 	// Phase 4: Create new client and reader, verify all data is readable
 	t.Logf("Phase 4: Creating new client and reading data after full restart...")
@@ -2073,7 +2073,7 @@ func TestStagedStorageService_Failover_Case7_RollingRestart(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case7")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -2238,7 +2238,7 @@ func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testi
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case8")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -2455,7 +2455,7 @@ func TestStagedStorageService_Failover_Case9_ReaderNodeFailover(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case9")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -2631,7 +2631,7 @@ func TestStagedStorageService_Failover_Case10_PartialReplicationDuringCrash(t *t
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case10")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -2809,7 +2809,7 @@ func TestStagedStorageService_Failover_Case11_FenceWithEmptyNode(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case11")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -2977,7 +2977,7 @@ func TestStagedStorageService_Failover_Case12_LACMiscalculationAfterNodeSwap(t *
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case12")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -3160,7 +3160,7 @@ func TestStagedStorageService_Failover_Case13_EOFOnNonFirstNodeAfterDeadSkip(t *
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case13")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -3341,7 +3341,7 @@ func TestStagedStorageService_Failover_Case14_ReaderFallbackAfterEOF(t *testing.
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case14")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -3518,7 +3518,7 @@ func TestStagedStorageService_Failover_Case15_ClusterRestartWithDataLoss(t *test
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case15")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -3619,7 +3619,7 @@ func TestStagedStorageService_Failover_Case15_ClusterRestartWithDataLoss(t *test
 	// Segment 0 gets completed with LAC=0.
 	t.Logf("Phase 7: Creating new client and opening writer (triggers fence)...")
 	newSeeds := cluster.GetSeedList()
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = newSeeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, newSeeds)
 
 	etcdCli2, etcdErr := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
 	require.NoError(t, etcdErr)
@@ -3727,7 +3727,7 @@ func TestStagedStorageService_Failover_Case16_ReadAfterTwoReplicasLost(t *testin
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case16")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -3830,7 +3830,7 @@ func TestStagedStorageService_Failover_Case16_ReadAfterTwoReplicasLost(t *testin
 	// then create new woodpecker client, open log, open writer.
 	t.Logf("Phase 7: Creating new client and opening writer...")
 	newSeeds := cluster.GetSeedList()
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = newSeeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, newSeeds)
 
 	etcdCli2, etcdErr := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
 	require.NoError(t, etcdErr)
@@ -3943,7 +3943,7 @@ func TestStagedStorageService_Chaos_CompetingWritersFencing(t *testing.T) {
 
 	const nodeCount = 3
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4048,7 +4048,7 @@ func TestStagedStorageService_Chaos_ConcurrentWriterAttempts(t *testing.T) {
 
 	const nodeCount = 3
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4130,7 +4130,7 @@ func TestStagedStorageService_Chaos_FencingDuringNodeFailure(t *testing.T) {
 
 	const nodeCount = 5
 	cluster, cfg, gossipSeeds, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4234,7 +4234,7 @@ func TestStagedStorageService_Chaos_DiskFailureNodeAlive(t *testing.T) {
 
 	const nodeCount = 5 // 5 nodes for tolerance: es=3, aq=2
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4364,7 +4364,7 @@ func TestStagedStorageService_Chaos_DiskFullSimulation(t *testing.T) {
 
 	const nodeCount = 5
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4470,7 +4470,7 @@ func TestStagedStorageService_Chaos_RecoveryMultiSegmentAfterCrash(t *testing.T)
 
 	const nodeCount = 5
 	cluster, cfg, gossipSeeds, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4596,7 +4596,7 @@ func TestStagedStorageService_Chaos_ReaderDuringServerCrash(t *testing.T) {
 
 	const nodeCount = 5
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4680,7 +4680,7 @@ func TestStagedStorageService_Chaos_ConcurrentReaders(t *testing.T) {
 
 	const nodeCount = 3
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4772,7 +4772,7 @@ func TestStagedStorageService_Chaos_DiskFailureDuringActiveWrite(t *testing.T) {
 
 	const nodeCount = 5
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -4904,7 +4904,7 @@ func TestStagedStorageService_Chaos_AllNodesRestartFenceMarksLost_ConcurrentWrit
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestChaos_FenceMarksLost")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)
@@ -5158,7 +5158,7 @@ func TestStagedStorageService_Chaos_FinalizedSegmentSurvivesRestart_OldWriterRej
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestChaos_FinalizedSurvivesRestart")
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	time.Sleep(2 * time.Second)

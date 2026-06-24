@@ -47,7 +47,7 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 			cfg.Woodpecker.Storage.RootPath = tc.rootPath
 
 			// Start cluster for service mode
-			cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = tc.serviceSeeds
+			cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, tc.serviceSeeds)
 
 			// Setup etcd client for service mode
 			etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())

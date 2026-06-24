@@ -88,27 +88,28 @@ type CustomPlacement struct {
 
 // QuorumSelectStrategy stores the quorum selection strategy configuration.
 type QuorumSelectStrategy struct {
-	AffinityMode    string            `yaml:"affinityMode"`
-	Replicas        int               `yaml:"replicas"`
-	Strategy        string            `yaml:"strategy"`
-	CustomPlacement []CustomPlacement `yaml:"customPlacement"`
+	AffinityMode    Dynamic[string]            `yaml:"affinityMode"`
+	Replicas        Dynamic[int]               `yaml:"replicas"`
+	Strategy        Dynamic[string]            `yaml:"strategy"`
+	CustomPlacement Dynamic[[]CustomPlacement] `yaml:"customPlacement"`
 }
 
 // QuorumConfig stores the advanced quorum configuration.
 type QuorumConfig struct {
-	BufferPools    []QuorumBufferPool   `yaml:"quorumBufferPools"`
-	SelectStrategy QuorumSelectStrategy `yaml:"quorumSelectStrategy"`
+	BufferPools    Dynamic[[]QuorumBufferPool] `yaml:"quorumBufferPools"`
+	SelectStrategy QuorumSelectStrategy        `yaml:"quorumSelectStrategy"`
 }
 
 // GetEnsembleSize returns the ensemble size.
 func (q *QuorumConfig) GetEnsembleSize() int {
-	if q.SelectStrategy.Replicas == 3 {
+	switch q.SelectStrategy.Replicas.Get() {
+	case 3:
+		return 3
+	case 5:
+		return 5
+	default:
 		return 3
 	}
-	if q.SelectStrategy.Replicas == 5 {
-		return 5
-	}
-	return 3
 }
 
 // GetWriteQuorumSize returns the write quorum size.
@@ -119,6 +120,15 @@ func (q *QuorumConfig) GetWriteQuorumSize() int {
 // GetAckQuorumSize returns the ack quorum size.
 func (q *QuorumConfig) GetAckQuorumSize() int {
 	return (q.GetWriteQuorumSize() / 2) + 1
+}
+
+// SetBufferPoolSeeds replaces the seeds of the pool at idx in the static value.
+// NOTE: it writes the static value, so it has no effect once a dynamic
+// BufferPools source is bound (the source's value wins on the next Get()).
+func (q *QuorumConfig) SetBufferPoolSeeds(idx int, seeds []string) {
+	pools := q.BufferPools.Get()
+	pools[idx].Seeds = seeds
+	q.BufferPools.Set(pools)
 }
 
 // GRPCConfig stores the gRPC configuration for logstore.
@@ -534,6 +544,8 @@ func (c *Configuration) validateClientConfig() error {
 
 func (c *Configuration) validateQuorumConfig() error {
 	q := &c.Woodpecker.Client.Quorum
+	bufferPools := q.BufferPools.Get()
+	customPlacement := q.SelectStrategy.CustomPlacement.Get()
 
 	// Basic quorum size validation
 	ensembleSize := q.GetEnsembleSize()
@@ -558,8 +570,8 @@ func (c *Configuration) validateQuorumConfig() error {
 
 	// Validate affinity mode (allow empty for backward compatibility)
 	validAffinityModes := map[string]bool{"soft": true, "hard": true, "": true}
-	if !validAffinityModes[q.SelectStrategy.AffinityMode] {
-		return fmt.Errorf("invalid affinity mode '%s', must be 'soft' or 'hard'", q.SelectStrategy.AffinityMode)
+	if !validAffinityModes[q.SelectStrategy.AffinityMode.Get()] {
+		return fmt.Errorf("invalid affinity mode '%s', must be 'soft' or 'hard'", q.SelectStrategy.AffinityMode.Get())
 	}
 
 	// Validate strategy (allow unknown strategies for backward compatibility - they'll default to random)
@@ -574,17 +586,17 @@ func (c *Configuration) validateQuorumConfig() error {
 		"random":              true,
 		"":                    true, // Allow empty for backward compatibility
 	}
-	if !validStrategies[q.SelectStrategy.Strategy] {
+	if !validStrategies[q.SelectStrategy.Strategy.Get()] {
 		// Log warning but don't fail for unknown strategies (backward compatibility)
-		fmt.Printf("Warning: unknown strategy '%s', will default to 'random'\n", q.SelectStrategy.Strategy)
+		fmt.Printf("Warning: unknown strategy '%s', will default to 'random'\n", q.SelectStrategy.Strategy.Get())
 	}
 
 	// Validate BufferPools
-	if len(q.BufferPools) == 0 {
+	if len(bufferPools) == 0 {
 		return fmt.Errorf("at least one buffer pool must be configured")
 	}
 
-	for i, pool := range q.BufferPools {
+	for i, pool := range bufferPools {
 		if len(pool.Name) == 0 {
 			return fmt.Errorf("buffer pool %d name cannot be empty", i)
 		}
@@ -599,17 +611,17 @@ func (c *Configuration) validateQuorumConfig() error {
 	}
 
 	// Validate custom placement if strategy is custom
-	if q.SelectStrategy.Strategy == "custom" {
-		if len(q.SelectStrategy.CustomPlacement) == 0 {
+	if q.SelectStrategy.Strategy.Get() == "custom" {
+		if len(customPlacement) == 0 {
 			return fmt.Errorf("custom strategy requires at least one custom placement rule")
 		}
-		if len(q.SelectStrategy.CustomPlacement) != ensembleSize {
+		if len(customPlacement) != ensembleSize {
 			return fmt.Errorf("custom placement rules count (%d) must equal ensemble size (%d)",
-				len(q.SelectStrategy.CustomPlacement), ensembleSize)
+				len(customPlacement), ensembleSize)
 		}
 
 		// Validate each custom placement
-		for i, placement := range q.SelectStrategy.CustomPlacement {
+		for i, placement := range customPlacement {
 			if len(placement.Region) == 0 {
 				return fmt.Errorf("custom placement rule %d region cannot be empty", i)
 			}
@@ -622,7 +634,7 @@ func (c *Configuration) validateQuorumConfig() error {
 
 			// Verify that the region exists in buffer pools
 			found := false
-			for _, pool := range q.BufferPools {
+			for _, pool := range bufferPools {
 				if pool.Name == placement.Region {
 					found = true
 					break
@@ -635,9 +647,9 @@ func (c *Configuration) validateQuorumConfig() error {
 	}
 
 	// Validate cross-region strategy requirements
-	if q.SelectStrategy.Strategy == "cross-region" {
-		if len(q.BufferPools) < 2 {
-			return fmt.Errorf("cross-region strategy requires at least 2 buffer pools, got %d", len(q.BufferPools))
+	if q.SelectStrategy.Strategy.Get() == "cross-region" {
+		if len(bufferPools) < 2 {
+			return fmt.Errorf("cross-region strategy requires at least 2 buffer pools, got %d", len(bufferPools))
 		}
 	}
 
@@ -748,17 +760,17 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxInterval: DurationSeconds{Duration: Duration{duration: 5 * 1000000000}}, // 5s
 			},
 			Quorum: QuorumConfig{
-				BufferPools: []QuorumBufferPool{
+				BufferPools: NewDynamic([]QuorumBufferPool{
 					{
 						Name:  "default-pool",
 						Seeds: []string{},
 					},
-				},
+				}),
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode:    "soft",
-					Replicas:        3,
-					Strategy:        "random",
-					CustomPlacement: []CustomPlacement{},
+					AffinityMode:    NewDynamic("soft"),
+					Replicas:        NewDynamic(3),
+					Strategy:        NewDynamic("random"),
+					CustomPlacement: NewDynamic([]CustomPlacement{}),
 				},
 			},
 			SessionMonitor: SessionMonitorConfig{

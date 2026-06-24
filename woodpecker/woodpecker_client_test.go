@@ -608,13 +608,13 @@ func TestWoodpeckerClient_InitQuorumDiscovery_Success(t *testing.T) {
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
+					BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
+					}),
 					SelectStrategy: config.QuorumSelectStrategy{
-						AffinityMode: "soft",
-						Replicas:     3,
-						Strategy:     "random",
+						AffinityMode: config.NewDynamic("soft"),
+						Replicas:     config.NewDynamic(3),
+						Strategy:     config.NewDynamic("random"),
 					},
 				},
 			},
@@ -636,13 +636,13 @@ func TestWoodpeckerClient_InitQuorumDiscovery_InvalidAffinityMode(t *testing.T) 
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
+					BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
+					}),
 					SelectStrategy: config.QuorumSelectStrategy{
-						AffinityMode: "invalid_mode",
-						Replicas:     3,
-						Strategy:     "random",
+						AffinityMode: config.NewDynamic("invalid_mode"),
+						Replicas:     config.NewDynamic(3),
+						Strategy:     config.NewDynamic("random"),
 					},
 				},
 			},
@@ -702,13 +702,13 @@ func TestNewClient_InitQuorumDiscoveryError(t *testing.T) {
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
+					BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
+					}),
 					SelectStrategy: config.QuorumSelectStrategy{
-						AffinityMode: "invalid_mode", // causes initQuorumDiscovery to fail
-						Replicas:     3,
-						Strategy:     "random",
+						AffinityMode: config.NewDynamic("invalid_mode"), // causes initQuorumDiscovery to fail
+						Replicas:     config.NewDynamic(3),
+						Strategy:     config.NewDynamic("random"),
 					},
 				},
 			},
@@ -738,13 +738,13 @@ func TestNewClient_InitClientError(t *testing.T) {
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
+					BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
+					}),
 					SelectStrategy: config.QuorumSelectStrategy{
-						AffinityMode: "soft",
-						Replicas:     3,
-						Strategy:     "random",
+						AffinityMode: config.NewDynamic("soft"),
+						Replicas:     config.NewDynamic(3),
+						Strategy:     config.NewDynamic("random"),
 					},
 				},
 			},
@@ -808,13 +808,13 @@ func TestNewClient_WithEmbedEtcd(t *testing.T) {
 			Woodpecker: config.WoodpeckerConfig{
 				Client: config.ClientConfig{
 					Quorum: config.QuorumConfig{
-						BufferPools: []config.QuorumBufferPool{
+						BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 							{Name: "default-pool", Seeds: []string{"node1:8888"}},
-						},
+						}),
 						SelectStrategy: config.QuorumSelectStrategy{
-							AffinityMode: "soft",
-							Replicas:     3,
-							Strategy:     "random",
+							AffinityMode: config.NewDynamic("soft"),
+							Replicas:     config.NewDynamic(3),
+							Strategy:     config.NewDynamic("random"),
 						},
 					},
 				},
@@ -843,13 +843,13 @@ func TestNewClient_WithEmbedEtcd(t *testing.T) {
 			Woodpecker: config.WoodpeckerConfig{
 				Client: config.ClientConfig{
 					Quorum: config.QuorumConfig{
-						BufferPools: []config.QuorumBufferPool{
+						BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 							{Name: "default-pool", Seeds: []string{"node1:8888"}},
-						},
+						}),
 						SelectStrategy: config.QuorumSelectStrategy{
-							AffinityMode: "soft",
-							Replicas:     3,
-							Strategy:     "random",
+							AffinityMode: config.NewDynamic("soft"),
+							Replicas:     config.NewDynamic(3),
+							Strategy:     config.NewDynamic("random"),
 						},
 					},
 				},

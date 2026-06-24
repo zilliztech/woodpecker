@@ -67,7 +67,7 @@ func TestServiceUpgrade_DecommissionRejectsWrites(t *testing.T) {
 
 	// Start a 5-node cluster — enough nodes for quorum after 1 is decommissioned
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, 5, rootPath)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	// Pick node 0 to decommission
@@ -233,7 +233,7 @@ func TestServiceUpgrade_DecommissionWithActiveData(t *testing.T) {
 
 	// Start a 3-node cluster
 	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, 3, rootPath, cfg)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	// Write some data to create segments on the nodes
@@ -329,7 +329,7 @@ func TestServiceUpgrade_DecommissionCompleteAfterDataCleanup(t *testing.T) {
 
 	// Start 5-node cluster — need enough nodes so quorum works after 1 decommissioned
 	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, 5, rootPath, cfg)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
 	// Create woodpecker client
