@@ -291,7 +291,7 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 	}
 
 	// Quorum
-	if len(src.Client.Quorum.BufferPools) > 0 {
+	if len(src.Client.Quorum.BufferPools.Get()) > 0 {
 		dst.Client.Quorum.BufferPools = src.Client.Quorum.BufferPools
 	}
 	if src.Client.Quorum.SelectStrategy.AffinityMode.Get() != "" {
@@ -303,7 +303,7 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 	if src.Client.Quorum.SelectStrategy.Strategy.Get() != "" {
 		dst.Client.Quorum.SelectStrategy.Strategy = src.Client.Quorum.SelectStrategy.Strategy
 	}
-	if len(src.Client.Quorum.SelectStrategy.CustomPlacement) > 0 {
+	if len(src.Client.Quorum.SelectStrategy.CustomPlacement.Get()) > 0 {
 		dst.Client.Quorum.SelectStrategy.CustomPlacement = src.Client.Quorum.SelectStrategy.CustomPlacement
 	}
 

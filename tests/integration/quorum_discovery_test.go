@@ -49,12 +49,12 @@ func TestQuorumDiscoveryIntegration_RandomStrategy(t *testing.T) {
 
 	// Create QuorumDiscovery with random strategy
 	quorumConfig := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: serviceSeeds,
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
 			Strategy:     config.NewDynamic("random"),
 			AffinityMode: config.NewDynamic("soft"),
@@ -120,12 +120,12 @@ func TestQuorumDiscoveryIntegration_SingleAZSingleRGStrategy(t *testing.T) {
 
 	// Create QuorumDiscovery with single-az-single-rg strategy
 	quorumConfig := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: serviceSeeds,
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
 			Strategy:     config.NewDynamic("single-az-single-rg"),
 			AffinityMode: config.NewDynamic("soft"),
@@ -188,7 +188,7 @@ func TestQuorumDiscoveryIntegration_CrossRegionStrategy(t *testing.T) {
 
 	// Create QuorumDiscovery with cross-region strategy
 	quorumConfig := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: serviceSeeds1,
@@ -197,7 +197,7 @@ func TestQuorumDiscoveryIntegration_CrossRegionStrategy(t *testing.T) {
 				Name:  "region-b",
 				Seeds: serviceSeeds2,
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
 			Strategy:     config.NewDynamic("cross-region"),
 			AffinityMode: config.NewDynamic("soft"),
@@ -286,21 +286,21 @@ func TestQuorumDiscoveryIntegration_CustomPlacementStrategy(t *testing.T) {
 
 	// Create QuorumDiscovery with custom placement strategy
 	quorumConfig := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a", // All nodes are in the same region for simplicity
 				Seeds: serviceSeeds,
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
 			Strategy:     config.NewDynamic("custom"),
 			AffinityMode: config.NewDynamic("hard"),
 			Replicas:     config.NewDynamic(3), // Must match number of custom placement rules
-			CustomPlacement: []config.CustomPlacement{
+			CustomPlacement: config.NewDynamic([]config.CustomPlacement{
 				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
 				{Region: "region-a", Az: "az-2", ResourceGroup: "rg-2"},
 				{Region: "region-a", Az: "az-3", ResourceGroup: "rg-3"},
-			},
+			}),
 		},
 	}
 
@@ -366,12 +366,12 @@ func TestQuorumDiscoveryIntegration_InsufficientNodes(t *testing.T) {
 
 	// Create QuorumDiscovery with soft affinity mode
 	quorumConfig := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: serviceSeeds,
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
 			Strategy:     config.NewDynamic("random"),
 			AffinityMode: config.NewDynamic("soft"), // Should still err with fewer nodes in soft mode, soft mode only used to restrict location, not for replicas
@@ -414,12 +414,12 @@ func TestQuorumDiscoveryIntegration_NodeFailureRecovery(t *testing.T) {
 
 	// Create QuorumDiscovery
 	quorumConfig := &config.QuorumConfig{
-		BufferPools: []config.QuorumBufferPool{
+		BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 			{
 				Name:  "region-a",
 				Seeds: serviceSeeds,
 			},
-		},
+		}),
 		SelectStrategy: config.QuorumSelectStrategy{
 			Strategy:     config.NewDynamic("random"),
 			AffinityMode: config.NewDynamic("soft"),

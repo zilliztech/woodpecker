@@ -61,7 +61,7 @@ func TestDirectRead_SealedSegments_AfterClusterStop(t *testing.T) {
 	// Start a 3-node cluster
 	const nodeCount = 3
 	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, nodeCount, rootPath, cfg)
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 
 	ctx := context.Background()
 

@@ -42,7 +42,7 @@ func NewQuorumDiscovery(ctx context.Context, cfg *config.QuorumConfig, clientPoo
 		logger.Ctx(ctx).Warn("Invalid affinity mode", zap.Error(err))
 		return nil, err
 	}
-	if _, err := buildFilters(ctx, cfg.SelectStrategy.Strategy.Get(), int32(cfg.GetEnsembleSize()), cfg.SelectStrategy.CustomPlacement, cfg.BufferPools); err != nil {
+	if _, err := buildFilters(ctx, cfg.SelectStrategy.Strategy.Get(), int32(cfg.GetEnsembleSize()), cfg.SelectStrategy.CustomPlacement.Get(), cfg.BufferPools.Get()); err != nil {
 		logger.Ctx(ctx).Warn("Failed to build filters", zap.Error(err))
 		return nil, err
 	}
@@ -165,7 +165,10 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 		zap.String("affinityMode", d.cfg.SelectStrategy.AffinityMode.Get()),
 		zap.Int32("ensembleSize", d.es()))
 
-	if len(d.cfg.BufferPools) == 0 {
+	pools := d.cfg.BufferPools.Get()
+	custom := d.cfg.SelectStrategy.CustomPlacement.Get()
+
+	if len(pools) == 0 {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg("no buffer pools configured")
 	}
 
@@ -177,7 +180,7 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 	//
 	// Build filters once (before the retry loop) so a genuine misconfiguration
 	// fails fast instead of being retried forever.
-	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy.Get(), d.es(), d.cfg.SelectStrategy.CustomPlacement, d.cfg.BufferPools)
+	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy.Get(), d.es(), custom, pools)
 	if err != nil {
 		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
 	}
@@ -187,11 +190,11 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 		var selErr error
 		switch d.cfg.SelectStrategy.Strategy.Get() {
 		case "cross-region":
-			result, selErr = d.selectCrossRegionQuorum(ctx, filters)
+			result, selErr = d.selectCrossRegionQuorum(ctx, pools, filters)
 		case "custom":
-			result, selErr = d.selectCustomPlacementQuorum(ctx, filters)
+			result, selErr = d.selectCustomPlacementQuorum(ctx, pools, custom, filters)
 		default:
-			result, selErr = d.selectSingleRegionQuorum(ctx, filters)
+			result, selErr = d.selectSingleRegionQuorum(ctx, pools, filters)
 		}
 		return selErr
 	}, retry.AttemptAlways(), retry.Sleep(200*time.Millisecond), retry.MaxSleepTime(2*time.Second))
@@ -201,9 +204,9 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 	return result, nil
 }
 
-func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
+func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context, pools []config.QuorumBufferPool, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
 	// Randomly select a buffer pool for load distribution
-	pool := d.cfg.BufferPools[rand.Intn(len(d.cfg.BufferPools))]
+	pool := pools[rand.Intn(len(pools))]
 	if len(pool.Seeds) == 0 {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg(fmt.Sprintf("no seeds configured for pool %s", pool.Name))
 	}
@@ -258,12 +261,12 @@ func replicaForEndpoint(info *proto.QuorumInfo, endpoint string) *proto.QuorumNo
 	return nil
 }
 
-func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
+func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context, pools []config.QuorumBufferPool, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
 	requiredNodes := int(d.es())
 
 	// Calculate nodes per region (try to distribute evenly)
-	nodesPerRegion := requiredNodes / len(d.cfg.BufferPools)
-	remainingNodes := requiredNodes % len(d.cfg.BufferPools)
+	nodesPerRegion := requiredNodes / len(pools)
+	remainingNodes := requiredNodes % len(pools)
 
 	var allSelectedNodes []string
 	var allSelectedReplicas []*proto.QuorumNode
@@ -276,7 +279,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context, filters [
 
 	baseFilter := filters[0]
 
-	for i, pool := range d.cfg.BufferPools {
+	for i, pool := range pools {
 		if len(pool.Seeds) == 0 {
 			logger.Ctx(ctx).Warn("Pool has no seeds, skipping", zap.String("poolName", pool.Name))
 			continue
@@ -327,7 +330,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context, filters [
 			return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes across regions: got %d, required %d", len(allSelectedNodes), requiredNodes))
 		}
 		// In soft mode, try to fill remaining nodes from any available region
-		return d.fillRemainingNodesWithReplicas(ctx, allSelectedNodes, allSelectedReplicas, selectedSet)
+		return d.fillRemainingNodesWithReplicas(ctx, pools, allSelectedNodes, allSelectedReplicas, selectedSet)
 	}
 
 	// Trim to exact required number if we got more (random to avoid bias toward first pools)
@@ -343,25 +346,25 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context, filters [
 	return d.newQuorumInfo(allSelectedNodes, allSelectedReplicas), nil
 }
 
-func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
+func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context, pools []config.QuorumBufferPool, custom []config.CustomPlacement, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
 	requiredNodes := int(d.es())
 
 	logger.Ctx(ctx).Info("Active custom placement node selection started",
-		zap.Int("placementRulesCount", len(d.cfg.SelectStrategy.CustomPlacement)),
+		zap.Int("placementRulesCount", len(custom)),
 		zap.Int("requiredNodes", requiredNodes),
 		zap.Int("filtersCount", len(filters)))
 
 	// Validate we have the expected number of filters
-	if len(filters) != len(d.cfg.SelectStrategy.CustomPlacement) {
+	if len(filters) != len(custom) {
 		return nil, fmt.Errorf("filters count (%d) does not match custom placement rules count (%d)",
-			len(filters), len(d.cfg.SelectStrategy.CustomPlacement))
+			len(filters), len(custom))
 	}
 
 	var allSelectedNodes []string
 	var allSelectedReplicas []*proto.QuorumNode
 	selectedSet := make(map[string]bool) // Track selected endpoints to avoid duplicates
 
-	for i, placement := range d.cfg.SelectStrategy.CustomPlacement {
+	for i, placement := range custom {
 		logger.Ctx(ctx).Debug("Processing active custom placement rule",
 			zap.Int("ruleIndex", i),
 			zap.String("region", placement.Region),
@@ -370,7 +373,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context, filte
 
 		// Find the buffer pool for this placement
 		var targetPool *config.QuorumBufferPool
-		for _, pool := range d.cfg.BufferPools {
+		for _, pool := range pools {
 			if pool.Name == placement.Region {
 				targetPool = &pool
 				break
@@ -442,11 +445,11 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context, filte
 	return d.newQuorumInfo(allSelectedNodes, allSelectedReplicas), nil
 }
 
-func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes []string, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
-	return d.fillRemainingNodesWithReplicas(ctx, currentNodes, nil, selectedSet)
+func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, pools []config.QuorumBufferPool, currentNodes []string, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
+	return d.fillRemainingNodesWithReplicas(ctx, pools, currentNodes, nil, selectedSet)
 }
 
-func (d *quorumDiscovery) fillRemainingNodesWithReplicas(ctx context.Context, currentNodes []string, currentReplicas []*proto.QuorumNode, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
+func (d *quorumDiscovery) fillRemainingNodesWithReplicas(ctx context.Context, pools []config.QuorumBufferPool, currentNodes []string, currentReplicas []*proto.QuorumNode, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
 	requiredNodes := int(d.es())
 	remainingNeeded := requiredNodes - len(currentNodes)
 	if remainingNeeded <= 0 {
@@ -467,7 +470,7 @@ func (d *quorumDiscovery) fillRemainingNodesWithReplicas(ctx context.Context, cu
 	}
 
 	// Try to get remaining nodes from any available pool
-	for _, pool := range d.cfg.BufferPools {
+	for _, pool := range pools {
 		if len(pool.Seeds) == 0 {
 			continue
 		}

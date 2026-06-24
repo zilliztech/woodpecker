@@ -334,7 +334,7 @@ func (dc *DockerCluster) NewConfig(t *testing.T) *config.Configuration {
 	for _, n := range dc.Nodes[:3] { // Use first 3 nodes as seeds
 		seeds = append(seeds, fmt.Sprintf("localhost:%d", n.ServicePort))
 	}
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 
 	return cfg
 }

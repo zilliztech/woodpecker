@@ -608,9 +608,9 @@ func TestWoodpeckerClient_InitQuorumDiscovery_Success(t *testing.T) {
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
+					BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
+					}),
 					SelectStrategy: config.QuorumSelectStrategy{
 						AffinityMode: config.NewDynamic("soft"),
 						Replicas:     config.NewDynamic(3),
@@ -636,9 +636,9 @@ func TestWoodpeckerClient_InitQuorumDiscovery_InvalidAffinityMode(t *testing.T) 
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
+					BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
+					}),
 					SelectStrategy: config.QuorumSelectStrategy{
 						AffinityMode: config.NewDynamic("invalid_mode"),
 						Replicas:     config.NewDynamic(3),
@@ -702,9 +702,9 @@ func TestNewClient_InitQuorumDiscoveryError(t *testing.T) {
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
+					BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
+					}),
 					SelectStrategy: config.QuorumSelectStrategy{
 						AffinityMode: config.NewDynamic("invalid_mode"), // causes initQuorumDiscovery to fail
 						Replicas:     config.NewDynamic(3),
@@ -738,9 +738,9 @@ func TestNewClient_InitClientError(t *testing.T) {
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
+					BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
+					}),
 					SelectStrategy: config.QuorumSelectStrategy{
 						AffinityMode: config.NewDynamic("soft"),
 						Replicas:     config.NewDynamic(3),
@@ -808,9 +808,9 @@ func TestNewClient_WithEmbedEtcd(t *testing.T) {
 			Woodpecker: config.WoodpeckerConfig{
 				Client: config.ClientConfig{
 					Quorum: config.QuorumConfig{
-						BufferPools: []config.QuorumBufferPool{
+						BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 							{Name: "default-pool", Seeds: []string{"node1:8888"}},
-						},
+						}),
 						SelectStrategy: config.QuorumSelectStrategy{
 							AffinityMode: config.NewDynamic("soft"),
 							Replicas:     config.NewDynamic(3),
@@ -843,9 +843,9 @@ func TestNewClient_WithEmbedEtcd(t *testing.T) {
 			Woodpecker: config.WoodpeckerConfig{
 				Client: config.ClientConfig{
 					Quorum: config.QuorumConfig{
-						BufferPools: []config.QuorumBufferPool{
+						BufferPools: config.NewDynamic([]config.QuorumBufferPool{
 							{Name: "default-pool", Seeds: []string{"node1:8888"}},
-						},
+						}),
 						SelectStrategy: config.QuorumSelectStrategy{
 							AffinityMode: config.NewDynamic("soft"),
 							Replicas:     config.NewDynamic(3),
