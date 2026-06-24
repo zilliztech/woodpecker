@@ -1627,8 +1627,11 @@ func TestQuorumDiscovery_DynamicReplicas_NextSelectionUsesNewSize(t *testing.T) 
 	mockClientPool.EXPECT().GetLogStoreClient(ctx, "localhost:8080").Return(mockClient, nil)
 
 	five := []*proto.NodeMeta{
-		{Endpoint: "n1:8080"}, {Endpoint: "n2:8080"}, {Endpoint: "n3:8080"},
-		{Endpoint: "n4:8080"}, {Endpoint: "n5:8080"},
+		{Endpoint: "n1:8080"},
+		{Endpoint: "n2:8080"},
+		{Endpoint: "n3:8080"},
+		{Endpoint: "n4:8080"},
+		{Endpoint: "n5:8080"},
 	}
 	mockClient.EXPECT().SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return(five, nil).Maybe()
 
