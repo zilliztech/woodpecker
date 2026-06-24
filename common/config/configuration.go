@@ -123,6 +123,8 @@ func (q *QuorumConfig) GetAckQuorumSize() int {
 }
 
 // SetBufferPoolSeeds replaces the seeds of the pool at idx in the static value.
+// NOTE: it writes the static value, so it has no effect once a dynamic
+// BufferPools source is bound (the source's value wins on the next Get()).
 func (q *QuorumConfig) SetBufferPoolSeeds(idx int, seeds []string) {
 	pools := q.BufferPools.Get()
 	pools[idx].Seeds = seeds
