@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -195,6 +196,7 @@ func (s *Server) startGrpcLoop() {
 	defer s.grpcWG.Done()
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		s.shutdownUnaryInterceptor(),
+		grpc_prometheus.UnaryServerInterceptor,
 		otelgrpc.UnaryServerInterceptor(),
 	}
 	unaryInterceptors = append(unaryInterceptors, s.grpcExtraInterceptors...)
@@ -204,11 +206,14 @@ func (s *Server) startGrpcLoop() {
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			s.shutdownStreamInterceptor(),
+			grpc_prometheus.StreamServerInterceptor,
 			otelgrpc.StreamServerInterceptor(),
 		),
 	}
 	s.grpcServer = grpc.NewServer(grpcOpts...)
 	proto.RegisterLogStoreServer(s.grpcServer, s)
+	grpc_prometheus.EnableHandlingTimeHistogram()
+	grpc_prometheus.Register(s.grpcServer)
 	funcutil.CheckGrpcReady(s.ctx, s.grpcErrChan)
 	logger.Ctx(s.ctx).Info("start grpc server", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.listener.Addr().String()))
 	if err := s.grpcServer.Serve(s.listener); err != nil {
