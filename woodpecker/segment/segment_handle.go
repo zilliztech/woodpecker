@@ -125,6 +125,12 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
 	if canWrite {
 		segmentHandle.canWriteState.Store(true)
+		metrics.SetActiveSegmentNodes(
+			segmentHandle.metricsNamespace,
+			strconv.FormatInt(segmentHandle.logId, 10),
+			strconv.FormatInt(segmentHandle.segmentId, 10),
+			segmentHandle.quorumInfo.GetNodes(),
+		)
 		segmentHandle.executor.Start(ctx)
 		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
 		segmentHandle.completionMgr.Start(context.Background())
@@ -854,6 +860,14 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 	if !s.canWriteState.CompareAndSwap(true, false) {
 		return nil
 	}
+	// Segment is leaving the writable state -- drop its active-segment node series
+	// so the metric only ever reflects the current active segment of each log.
+	metrics.ClearActiveSegmentNodes(
+		s.metricsNamespace,
+		strconv.FormatInt(s.logId, 10),
+		strconv.FormatInt(s.segmentId, 10),
+		s.quorumInfo.GetNodes(),
+	)
 
 	start := time.Now()
 	logIdStr := strconv.FormatInt(s.logId, 10)
