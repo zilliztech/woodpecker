@@ -394,12 +394,12 @@ func TestServiceUpgrade_DecommissionCompleteAfterDataCleanup(t *testing.T) {
 	require.Equal(t, "decommissioning", targetNode.GetNodeStatus().State)
 	require.True(t, targetNode.GetDecommissionProgress().HasLocalData)
 
-	// Wait for gossip to propagate the decommission tag so new segments avoid this node
-	time.Sleep(2 * time.Second)
-
-	// Continue writing MORE data to force segment rolling. New segments will be placed
-	// on non-decommissioned nodes (quorum selection now filters them out). This causes
-	// the old active segment on the decommissioned node to be completed/fenced.
+	// Continue writing MORE data to force segment rolling. Once the "decommissioning" tag
+	// has propagated via gossip (see ServiceDiscovery.excludeDecommissioning), new segments
+	// are placed on non-decommissioned nodes; this completes/fences the old active segment
+	// on the decommissioned node. Gossip propagation is asynchronous, so some of these early
+	// segments may still land on the decommissioned node — that is fine, they get cleaned
+	// below once the truncation point advances past them.
 	const extraMsgs = 20
 	for i := 0; i < extraMsgs; i++ {
 		payload := make([]byte, msgSize)
@@ -414,36 +414,44 @@ func TestServiceUpgrade_DecommissionCompleteAfterDataCleanup(t *testing.T) {
 	}
 	t.Logf("Wrote %d additional messages after decommission to trigger segment rolling", extraMsgs)
 
-	// Write one final message to push data into a new segment beyond the decommissioned
-	// node's data. The auditor skips the truncation-point segment (segId >= truncatedSegmentId),
-	// so we need the truncation point to be in a segment AFTER all segments on the
-	// decommissioned node. This extra write ensures the last segment containing node3's
-	// data becomes eligible for cleanup.
-	finalPayload := make([]byte, msgSize)
-	finalResult := logWriter.Write(ctx, &log.WriteMessage{Payload: finalPayload})
-	require.NoError(t, finalResult.Err, "final post-decommission write failed")
+	// Drive the decommissioned node to drain by repeatedly advancing the truncation point.
+	//
+	// The auditor never cleans the truncation-point segment itself (it skips segId >= the
+	// truncation point). The original test wrote one final message and truncated once, then
+	// waited up to 120s for the node to drain. That raced with gossip convergence: if the
+	// truncation-point segment happened to land on the decommissioned node before its tag had
+	// propagated, that segment was never cleaned, so the node kept local data forever and
+	// never auto-transitioned to decommissioned (issue #203).
+	//
+	// Instead, keep rolling fresh segments and advancing the truncation point past them. Every
+	// segment below the truncation point is cleaned on all quorum nodes (including the
+	// decommissioned one); once gossip has converged, the new truncation-point segment lands
+	// off the decommissioned node, so its last remaining data is cleaned and it transitions to
+	// decommissioned. This is robust regardless of exactly when the decommission tag converges.
+	t.Log("Advancing truncation point until the decommissioned node drains...")
+	deadline := time.Now().Add(120 * time.Second)
+	drained := false
+	for time.Now().Before(deadline) {
+		// Roll at least one fresh segment (msgSize=1KB, 2KB segments) and truncate past it.
+		var truncateAt *log.LogMessageId
+		for i := 0; i < 3; i++ {
+			result := logWriter.Write(ctx, &log.WriteMessage{Payload: make([]byte, msgSize)})
+			require.NoError(t, result.Err, "drain-phase write failed")
+			truncateAt = result.LogMessageId
+		}
+		require.NoError(t, logHandle.Truncate(ctx, truncateAt))
 
-	// Truncate all data — mark everything as truncatable
-	truncateAt := finalResult.LogMessageId
-	t.Logf("Truncating at last entry: segmentId=%d, entryId=%d",
-		truncateAt.SegmentId, truncateAt.EntryId)
-	err = logHandle.Truncate(ctx, truncateAt)
-	require.NoError(t, err)
-
-	// Wait for: retention (2s) + auditor cycles (2s each) + cleanup execution
-	// The auditor will detect truncated segments, check retention TTL, and call CleanSegment
-	// on all quorum nodes including our decommissioning node.
-	// The decommission monitor will then detect no local data and mark decommissioned.
-	t.Log("Waiting for retention expiry + cleanup + decommission monitor...")
-
-	require.Eventually(t, func() bool {
 		state := targetNode.GetNodeStatus().State
 		progress := targetNode.GetDecommissionProgress()
-		t.Logf("  check: state=%s, hasLocalData=%v, remainingProcessors=%d, safeToTerminate=%v",
-			state, progress.HasLocalData, progress.RemainingProcessors, progress.SafeToTerminate)
-		return state == string(server.NodeStateDecommissioned)
-	}, 120*time.Second, 3*time.Second,
-		"node should auto-transition to decommissioned after data cleanup")
+		t.Logf("  check: state=%s, hasLocalData=%v, truncateAt=seg%d, remainingProcessors=%d, safeToTerminate=%v",
+			state, progress.HasLocalData, truncateAt.SegmentId, progress.RemainingProcessors, progress.SafeToTerminate)
+		if state == string(server.NodeStateDecommissioned) {
+			drained = true
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	require.True(t, drained, "node should auto-transition to decommissioned after data cleanup")
 
 	// Verify final state
 	progress := targetNode.GetDecommissionProgress()
