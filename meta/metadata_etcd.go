@@ -1750,22 +1750,22 @@ func (e *metadataProviderEtcd) DeleteLogMetadata(ctx context.Context, logName st
 	// (We hold e.Lock() throughout; do NOT call locking helpers like GetLogMeta here.)
 	logResp, err := e.client.Get(ctx1, e.keyBuilder.BuildLogKey(logName))
 	if err != nil {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(logResp.Kvs) == 0 {
 		// already deleted/freed — idempotent no-op, counts as success
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "success").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil
 	}
 	rev := logResp.Kvs[0].ModRevision
 	logMetaValue := logResp.Kvs[0].Value
 	logMeta := &proto.LogMeta{}
 	if err := pb.Unmarshal(logMetaValue, logMeta); err != nil {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	logId := logMeta.LogId
@@ -1781,19 +1781,19 @@ func (e *metadataProviderEtcd) DeleteLogMetadata(ctx context.Context, logName st
 		// If the CAS misses (log was concurrently recreated), we return nil and leave
 		// harmless orphan parked copies under logs-deleted/<name>-<ts>/ — acceptable.
 		if err := e.parkLogInBatches(ctx1, logName, logMetaValue); err != nil {
-			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
-			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "error").Inc()
+			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			return err
 		}
 
 		// Phase 2: constant-size atomic delete guarded by ModRevision CAS.
 		if err := e.casDeleteActiveSubtree(ctx1, logName, rev, e.buildActiveSubtreeDeleteOps(logName, logId)); err != nil {
-			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
-			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "error").Inc()
+			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			return err
 		}
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "success").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil
 	}
 
@@ -1801,12 +1801,12 @@ func (e *metadataProviderEtcd) DeleteLogMetadata(ctx context.Context, logName st
 	// CAS on the log key's ModRevision: if the name was deleted+recreated between
 	// our read and now, the revision differs and we must NOT clobber the new log.
 	if err := e.casDeleteActiveSubtree(ctx1, logName, rev, e.buildActiveSubtreeDeleteOps(logName, logId)); err != nil {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return err
 	}
-	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Inc()
-	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
