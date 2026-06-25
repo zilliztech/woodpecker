@@ -361,8 +361,22 @@ func (c *woodpeckerEmbedClient) SelectQuorumNodes(ctx context.Context) (*proto.Q
 // DeleteLog deletes the log with the specified name.
 // It should remove the log and its associated metadata.
 func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) error {
-	// This is just a stub - you'll need to implement this
-	return werr.ErrOperationNotSupported.WithCauseErrMsg("delete log is not supported currently")
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, logName)
+}
+
+// DeleteAllLogs deletes all logs managed by this client.
+func (c *woodpeckerEmbedClient) DeleteAllLogs(ctx context.Context) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg)
 }
 
 // LogExists checks if a log with the specified name exists.

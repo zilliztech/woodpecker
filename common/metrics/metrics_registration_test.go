@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildMetricsNamespace(t *testing.T) {
+func TestBuildLogNs(t *testing.T) {
 	t.Run("normal", func(t *testing.T) {
 		assert.Equal(t, "mybucket/myroot", BuildLogNs("mybucket", "myroot"))
 	})

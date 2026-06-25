@@ -137,3 +137,24 @@ func (b *KeyBuilder) BuildAllSegmentsCleanupStatusKey(logId int64) string {
 func (b *KeyBuilder) BuildSegmentCleanupStatusKey(logId int64, segmentId int64) string {
 	return fmt.Sprintf("%s/%d/%d", b.SegmentCleanupStatusPrefix(), logId, segmentId)
 }
+
+// LogDeletedPrefix returns the prefix for parked (soft-deleted) log metadata.
+func (b *KeyBuilder) LogDeletedPrefix() string {
+	return fmt.Sprintf("%s/logs-deleted", b.prefix)
+}
+
+// BuildLogDeletedKey builds the parked LogMeta key for a soft-deleted log.
+func (b *KeyBuilder) BuildLogDeletedKey(logName string, deletedTs int64) string {
+	return fmt.Sprintf("%s/%s-%d", b.LogDeletedPrefix(), logName, deletedTs)
+}
+
+// BuildLogDeletedSegmentKey builds a parked segment key under a soft-deleted log.
+func (b *KeyBuilder) BuildLogDeletedSegmentKey(logName string, deletedTs int64, segmentId int64) string {
+	return fmt.Sprintf("%s/%s-%d/segments/%d", b.LogDeletedPrefix(), logName, deletedTs, segmentId)
+}
+
+// BuildLogCleanupStatusPrefix returns the cleanup-status prefix for one log WITH a
+// trailing slash, so a prefix-delete of cleaning/12 cannot also match cleaning/123.
+func (b *KeyBuilder) BuildLogCleanupStatusPrefix(logId int64) string {
+	return fmt.Sprintf("%s/%d/", b.SegmentCleanupStatusPrefix(), logId)
+}

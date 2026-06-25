@@ -739,12 +739,16 @@ func TestEmbedClient_SelectQuorumNodes(t *testing.T) {
 // ============================================================
 
 func TestEmbedClient_DeleteLog(t *testing.T) {
-	c, _, _ := newTestEmbedClient(t)
+	c, mockMeta, mockPool := newTestEmbedClient(t)
 	ctx := context.Background()
 
+	// Simulate log not found (idempotent path): DeleteLog should succeed with nil.
+	notFoundErr := werr.ErrMetadataRead.WithCauseErrMsg("log not found: test-log")
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(nil, notFoundErr).Once()
+
 	err := c.DeleteLog(ctx, "test-log")
-	assert.Error(t, err)
-	assert.True(t, werr.ErrOperationNotSupported.Is(err))
+	assert.NoError(t, err)
+	_ = mockPool // not used in this path
 }
 
 // ============================================================

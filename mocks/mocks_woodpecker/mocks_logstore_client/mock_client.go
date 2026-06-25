@@ -534,6 +534,103 @@ func (_c *LogStoreClient_SegmentClean_Call) RunAndReturn(run func(context.Contex
 	return _c
 }
 
+// MarkLogDeleted provides a mock function with given fields: ctx, bucketName, rootPath, logId
+func (_m *LogStoreClient) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64) error {
+	ret := _m.Called(ctx, bucketName, rootPath, logId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MarkLogDeleted")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64) error); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStoreClient_MarkLogDeleted_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkLogDeleted'
+type LogStoreClient_MarkLogDeleted_Call struct {
+	*mock.Call
+}
+
+// MarkLogDeleted is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
+//   - logId int64
+func (_e *LogStoreClient_Expecter) MarkLogDeleted(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}) *LogStoreClient_MarkLogDeleted_Call {
+	return &LogStoreClient_MarkLogDeleted_Call{Call: _e.mock.On("MarkLogDeleted", ctx, bucketName, rootPath, logId)}
+}
+
+func (_c *LogStoreClient_MarkLogDeleted_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64)) *LogStoreClient_MarkLogDeleted_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_MarkLogDeleted_Call) Return(_a0 error) *LogStoreClient_MarkLogDeleted_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_MarkLogDeleted_Call) RunAndReturn(run func(context.Context, string, string, int64) error) *LogStoreClient_MarkLogDeleted_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// MarkInstanceDeleted provides a mock function with given fields: ctx, bucketName, rootPath
+func (_m *LogStoreClient) MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) error {
+	ret := _m.Called(ctx, bucketName, rootPath)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MarkInstanceDeleted")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
+		r0 = rf(ctx, bucketName, rootPath)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStoreClient_MarkInstanceDeleted_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkInstanceDeleted'
+type LogStoreClient_MarkInstanceDeleted_Call struct {
+	*mock.Call
+}
+
+// MarkInstanceDeleted is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
+func (_e *LogStoreClient_Expecter) MarkInstanceDeleted(ctx interface{}, bucketName interface{}, rootPath interface{}) *LogStoreClient_MarkInstanceDeleted_Call {
+	return &LogStoreClient_MarkInstanceDeleted_Call{Call: _e.mock.On("MarkInstanceDeleted", ctx, bucketName, rootPath)}
+}
+
+func (_c *LogStoreClient_MarkInstanceDeleted_Call) Run(run func(ctx context.Context, bucketName string, rootPath string)) *LogStoreClient_MarkInstanceDeleted_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_MarkInstanceDeleted_Call) Return(_a0 error) *LogStoreClient_MarkInstanceDeleted_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_MarkInstanceDeleted_Call) RunAndReturn(run func(context.Context, string, string) error) *LogStoreClient_MarkInstanceDeleted_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SegmentCompact provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId
 func (_m *LogStoreClient) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId)

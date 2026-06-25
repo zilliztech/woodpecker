@@ -140,6 +140,12 @@ func TestAll(t *testing.T) {
 	t.Run("test update reader temp info without lease", testUpdateReaderTempInfoWithoutLease)
 	t.Run("test close with nil lock entry", testCloseWithNilLockEntry)
 	t.Run("test open log with corrupted segment data", testOpenLogWithCorruptedSegmentData)
+	t.Run("test delete log metadata force true", testDeleteLogMetadata_ForceTrue)
+	t.Run("test delete log metadata force false parks subtree", testDeleteLogMetadata_ForceFalse_ParksSubtree)
+	t.Run("test delete log metadata idempotent", testDeleteLogMetadata_Idempotent)
+	t.Run("test delete log metadata force false large segment count", testDeleteLogMetadata_ForceFalse_ManySegments)
+	t.Run("test delete log metadata force false double delete", testDeleteLogMetadata_ForceFalse_DoubleDelete)
+	t.Run("test store segment metadata rejects after log deleted", testStoreSegmentMetadata_RejectsAfterLogDeleted)
 }
 
 func testInitIfNecessary(t *testing.T) {
@@ -2447,4 +2453,310 @@ func testOpenLogWithCorruptedSegmentData(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, logMeta)
 	assert.Nil(t, segMetas)
+}
+
+// testDeleteLogMetadata_ForceTrue verifies that DeleteLogMetadata(force=true) hard-deletes
+// the target log's metadata (log key, segments, reader, and cleanup keys) while leaving a
+// sibling log whose name shares the same prefix completely untouched.
+func testDeleteLogMetadata_ForceTrue(t *testing.T) {
+	prefix := "del-force-true-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	// Clear legacy keys to ensure detectEffectiveMetadataPrefix chooses our prefix.
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	// Get the effective key builder from the provider so we always use the right prefix.
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	// Create "foo" and its sibling "foobar" (shares "foo" as a string prefix).
+	require.NoError(t, provider.CreateLog(context.Background(), "foo"))
+	require.NoError(t, provider.CreateLog(context.Background(), "foobar"))
+
+	// Capture foo's LogId before deletion.
+	fooMeta, err := provider.GetLogMeta(context.Background(), "foo")
+	require.NoError(t, err)
+	oldFooLogId := fooMeta.Metadata.LogId
+
+	// Give "foo" a segment via StoreSegmentMetadata.
+	seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}}
+	require.NoError(t, provider.StoreSegmentMetadata(context.Background(), "foo", oldFooLogId, seg))
+
+	// Add a reader-temp-info key and a cleanup-status key using etcdCli directly.
+	readerKey := kb.BuildLogReaderTempInfoKey(oldFooLogId, "reader-1")
+	_, err = etcdCli.Put(context.Background(), readerKey, "reader-val")
+	require.NoError(t, err)
+	cleanupKey := kb.BuildSegmentCleanupStatusKey(oldFooLogId, 1)
+	_, err = etcdCli.Put(context.Background(), cleanupKey, "cleanup-val")
+	require.NoError(t, err)
+
+	// Delete "foo" with force=true.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), "foo", true))
+
+	// GetLogMeta("foo") must now error.
+	_, err = provider.GetLogMeta(context.Background(), "foo")
+	assert.Error(t, err, "expected GetLogMeta to error after force-delete")
+
+	// "foo" segments must be gone.
+	segResp, err := etcdCli.Get(context.Background(), kb.BuildSegmentInstanceKey("foo", ""), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(segResp.Kvs), "segments for 'foo' should be deleted")
+
+	// "foo" reader temp infos must be gone.
+	readerResp, err := etcdCli.Get(context.Background(), kb.BuildLogAllReaderTempInfosKey(oldFooLogId), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(readerResp.Kvs), "reader temp infos for 'foo' should be deleted")
+
+	// "foo" cleanup status must be gone.
+	cleanupResp, err := etcdCli.Get(context.Background(), kb.BuildLogCleanupStatusPrefix(oldFooLogId), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(cleanupResp.Kvs), "cleanup status for 'foo' should be deleted")
+
+	// CRITICAL: "foobar" must be completely untouched.
+	foobarMeta, err := provider.GetLogMeta(context.Background(), "foobar")
+	require.NoError(t, err, "foobar must survive deletion of foo")
+	assert.NotNil(t, foobarMeta)
+
+	// Re-create "foo" and assert the new LogId is strictly greater than the old one.
+	require.NoError(t, provider.CreateLog(context.Background(), "foo"))
+	newFooMeta, err := provider.GetLogMeta(context.Background(), "foo")
+	require.NoError(t, err)
+	assert.Greater(t, newFooMeta.Metadata.LogId, oldFooLogId,
+		"re-created 'foo' must have a strictly greater LogId than the deleted one")
+}
+
+// testDeleteLogMetadata_ForceFalse_ParksSubtree verifies that DeleteLogMetadata(force=false)
+// copies the log meta and its segments under logs-deleted/ before removing the active keys.
+func testDeleteLogMetadata_ForceFalse_ParksSubtree(t *testing.T) {
+	prefix := "del-force-false-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	require.NoError(t, provider.CreateLog(context.Background(), "log1"))
+
+	logMeta, err := provider.GetLogMeta(context.Background(), "log1")
+	require.NoError(t, err)
+	logId := logMeta.Metadata.LogId
+
+	// Give "log1" a segment.
+	seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 2, State: proto.SegmentState_Active}}
+	require.NoError(t, provider.StoreSegmentMetadata(context.Background(), "log1", logId, seg))
+
+	// Soft-delete "log1".
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), "log1", false))
+
+	// GetLogMeta must now error.
+	_, err = provider.GetLogMeta(context.Background(), "log1")
+	assert.Error(t, err, "expected GetLogMeta to error after soft-delete")
+
+	// ListLogs must not contain "log1".
+	logs, err := provider.ListLogs(context.Background())
+	require.NoError(t, err)
+	assert.NotContains(t, logs, "log1", "log1 should not appear in ListLogs after soft-delete")
+
+	// Under logs-deleted/ there must be BOTH a parked LogMeta key AND a parked segment key.
+	parkedResp, err := etcdCli.Get(context.Background(), kb.LogDeletedPrefix(), clientv3.WithPrefix())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(parkedResp.Kvs), 2,
+		"expected at least 2 parked keys (LogMeta + segment) under logs-deleted/")
+
+	// Distinguish LogMeta park key from segment park key.
+	var foundLogMetaKey, foundSegmentKey bool
+	for _, kv := range parkedResp.Kvs {
+		k := string(kv.Key)
+		if strings.Contains(k, "/segments/") {
+			foundSegmentKey = true
+		} else {
+			foundLogMetaKey = true
+		}
+	}
+	assert.True(t, foundLogMetaKey, "expected a parked LogMeta key under logs-deleted/")
+	assert.True(t, foundSegmentKey, "expected a parked segment key under logs-deleted/")
+
+	// Re-creating "log1" should succeed.
+	require.NoError(t, provider.CreateLog(context.Background(), "log1"))
+}
+
+// testDeleteLogMetadata_Idempotent verifies that DeleteLogMetadata returns nil when the
+// log does not exist and that double-deleting a log also returns nil.
+func testDeleteLogMetadata_Idempotent(t *testing.T) {
+	prefix := "del-idempotent-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	// Deleting a non-existent log (force=true) must return nil.
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "ghost", true),
+		"deleting non-existent log with force=true must be a no-op")
+	// Deleting a non-existent log (force=false) must return nil.
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "ghost", false),
+		"deleting non-existent log with force=false must be a no-op")
+
+	// Create a log, delete it twice (force=true); both calls must return nil.
+	require.NoError(t, provider.CreateLog(context.Background(), "twice"))
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "twice", true), "first delete must succeed")
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "twice", true), "second delete must be idempotent")
+}
+
+// testDeleteLogMetadata_ForceFalse_ManySegments verifies that DeleteLogMetadata(force=false)
+// succeeds even when the log has 130 segments — exceeding etcd's default --max-txn-ops=128.
+// Before the fix, the single park+delete transaction would fail with a txn-too-large error.
+func testDeleteLogMetadata_ForceFalse_ManySegments(t *testing.T) {
+	prefix := "del-many-segs-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	const logName = "large-log"
+	const segmentCount = 130
+
+	require.NoError(t, provider.CreateLog(context.Background(), logName))
+
+	logMeta, err := provider.GetLogMeta(context.Background(), logName)
+	require.NoError(t, err)
+	logId := logMeta.Metadata.LogId
+
+	// Store 130 segments (SegNo 0..129).
+	for i := 0; i < segmentCount; i++ {
+		seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: int64(i), State: proto.SegmentState_Active}}
+		require.NoError(t, provider.StoreSegmentMetadata(context.Background(), logName, logId, seg),
+			"failed to store segment %d", i)
+	}
+
+	// This must NOT fail even though 1 LogMeta + 130 segments = 131 park puts,
+	// which would exceed etcd's --max-txn-ops=128 in the old single-txn approach.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), logName, false),
+		"DeleteLogMetadata(force=false) must succeed with %d segments", segmentCount)
+
+	// Active log must be gone.
+	_, err = provider.GetLogMeta(context.Background(), logName)
+	assert.Error(t, err, "active log must be absent after soft-delete")
+
+	logs, err := provider.ListLogs(context.Background())
+	require.NoError(t, err)
+	assert.NotContains(t, logs, logName, "log must not appear in ListLogs after soft-delete")
+
+	// Under logs-deleted/ there must be exactly 130 parked segment keys + 1 parked LogMeta key.
+	parkedResp, err := etcdCli.Get(context.Background(), kb.LogDeletedPrefix(), clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	var parkedSegmentCount, parkedLogMetaCount int
+	for _, kv := range parkedResp.Kvs {
+		if strings.Contains(string(kv.Key), "/segments/") {
+			parkedSegmentCount++
+		} else {
+			parkedLogMetaCount++
+		}
+	}
+	assert.Equal(t, segmentCount, parkedSegmentCount,
+		"expected %d parked segment keys under logs-deleted/", segmentCount)
+	assert.Equal(t, 1, parkedLogMetaCount,
+		"expected exactly 1 parked LogMeta key under logs-deleted/")
+}
+
+// testDeleteLogMetadata_ForceFalse_DoubleDelete verifies that two successive soft-deletes
+// of the same log name produce two distinct parked LogMeta keys under logs-deleted/,
+// proving that the nanosecond-granularity timestamp keeps both generations.
+func testDeleteLogMetadata_ForceFalse_DoubleDelete(t *testing.T) {
+	prefix := "del-double-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	// First generation: create "dd", soft-delete it.
+	require.NoError(t, provider.CreateLog(context.Background(), "dd"))
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "dd", false),
+		"first soft-delete must succeed")
+
+	// Active "dd" must be gone.
+	_, err = provider.GetLogMeta(context.Background(), "dd")
+	assert.Error(t, err, "active log must be absent after first soft-delete")
+
+	// Second generation: recreate "dd", soft-delete again.
+	require.NoError(t, provider.CreateLog(context.Background(), "dd"))
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "dd", false),
+		"second soft-delete must succeed")
+
+	// Active "dd" must still be gone.
+	_, err = provider.GetLogMeta(context.Background(), "dd")
+	assert.Error(t, err, "active log must be absent after second soft-delete")
+
+	// Both generations must have left a parked LogMeta key under logs-deleted/.
+	parkedResp, err := etcdCli.Get(context.Background(), kb.LogDeletedPrefix(), clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	var parkedLogMetaCount int
+	for _, kv := range parkedResp.Kvs {
+		if !strings.Contains(string(kv.Key), "/segments/") {
+			parkedLogMetaCount++
+		}
+	}
+	assert.GreaterOrEqual(t, parkedLogMetaCount, 2,
+		"expected at least 2 parked LogMeta keys (one per generation) under logs-deleted/")
+}
+
+// testStoreSegmentMetadata_RejectsAfterLogDeleted verifies that StoreSegmentMetadata
+// returns an error when the parent log has already been deleted, preventing a
+// phantom resurrection of the log as a listing entry.
+func testStoreSegmentMetadata_RejectsAfterLogDeleted(t *testing.T) {
+	prefix := "resurrect-guard-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	// Create the "ghost" log.
+	require.NoError(t, provider.CreateLog(context.Background(), "ghost"))
+
+	// Read back the logId so we have a realistic call signature.
+	ghostMeta, err := provider.GetLogMeta(context.Background(), "ghost")
+	require.NoError(t, err)
+	logId := ghostMeta.Metadata.LogId
+
+	// Hard-delete the log.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), "ghost", true))
+
+	// StoreSegmentMetadata must fail because the parent log is gone.
+	seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}}
+	storeErr := provider.StoreSegmentMetadata(context.Background(), "ghost", logId, seg)
+	assert.Error(t, storeErr, "StoreSegmentMetadata must return an error after the parent log has been deleted")
+	assert.Truef(t, werr.ErrMetadataKeyNotExists.Is(storeErr),
+		"expected a parent-log-not-exists error (not segment-already-exists), got: %v", storeErr)
+
+	// No logs/ghost/segments/ key may exist (no resurrection).
+	segResp, err := etcdCli.Get(context.Background(), kb.BuildSegmentInstanceKey("ghost", ""), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(segResp.Kvs), "no segment key must exist under deleted log 'ghost'")
 }

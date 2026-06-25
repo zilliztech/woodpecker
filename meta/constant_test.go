@@ -163,3 +163,12 @@ func TestKeyBuilderWithConfiguredPrefix(t *testing.T) {
 	assert.Equal(t, "lakebase/wp/logs/mylog", builder.BuildLogKey("mylog"))
 	assert.Equal(t, "lakebase/wp/cleaning/1/2", builder.BuildSegmentCleanupStatusKey(1, 2))
 }
+
+func TestKeyBuilder_DeletedLogKeys(t *testing.T) {
+	builder := NewKeyBuilder(LegacyServicePrefix)
+
+	assert.Equal(t, "woodpecker/logs-deleted", builder.LogDeletedPrefix())
+	assert.Equal(t, "woodpecker/logs-deleted/mylog-1700000000", builder.BuildLogDeletedKey("mylog", 1700000000))
+	assert.Equal(t, "woodpecker/logs-deleted/mylog-1700000000/segments/5", builder.BuildLogDeletedSegmentKey("mylog", 1700000000, 5))
+	assert.Equal(t, "woodpecker/cleaning/12/", builder.BuildLogCleanupStatusPrefix(12))
+}

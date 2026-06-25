@@ -65,6 +65,8 @@ type LogStore interface {
 	GetActiveProcessorCount() int
 	RejectNewWrites()
 	HasLocalSegmentData() bool
+	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error
+	EvictInstance(ctx context.Context, bucketName string, rootPath string) error
 }
 
 var _ LogStore = (*logStore)(nil)
@@ -80,9 +82,13 @@ type logStore struct {
 	spMu              sync.RWMutex
 	segmentProcessors map[string]map[int64]processor.SegmentProcessor // bucketName/rootPath/logId,segmentId -> segmentProcessor
 
-	// Background cleanup goroutine management
-	cleanupWg    sync.WaitGroup
-	cleanupDone  chan struct{}
+	// Logs/instances marked for deletion: serving is rejected and processors are evicted.
+	// Guarded by spMu (same lock as segmentProcessors).
+	// Entries are only added here; they are pruned by the maintenance reclaim task (a later plan).
+	deletingLogs      map[string]struct{} // logKey set
+	deletingInstances map[string]struct{} // instanceKey set
+
+	maintenance  *NodeMaintenanceManager
 	stopped      atomic.Bool
 	rejectWrites atomic.Bool // separate from stopped: only blocks new writes during decommission, not reads
 }
@@ -96,10 +102,14 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 		storageClient:     storageClient,
 		syncScheduler:     stagedstorage.NewSyncScheduler(runtime.NumCPU() * 2),
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
+		deletingLogs:      make(map[string]struct{}),
+		deletingInstances: make(map[string]struct{}),
 		address:           net.GetIP(""),
-		cleanupDone:       make(chan struct{}),
 	}
 	logStore.stopped.Store(true)
+	logStore.maintenance = NewNodeMaintenanceManager(ctx)
+	logStore.maintenance.Register(newIdleProcessorCleanupTask(logStore))
+	logStore.maintenance.Register(newDeletedLogReclaimTask(logStore, cfg.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Duration.Duration()))
 
 	logger.Ctx(ctx).Info("LogStore created successfully",
 		zap.String("address", logStore.address))
@@ -111,11 +121,13 @@ func (l *logStore) Start() error {
 	logger.Ctx(l.ctx).Info("Starting LogStore service",
 		zap.String("address", l.address))
 
-	// Start background cleanup goroutine
-	l.startBackgroundCleanup()
-
 	metrics.WpLogStoreRunningTotal.WithLabelValues(metrics.NodeID).Inc()
 
+	if err := l.rebuildDeletingSetsFromMarkers(); err != nil {
+		return err
+	}
+
+	l.maintenance.Start()
 	l.stopped.Store(false)
 	logger.Ctx(l.ctx).Info("LogStore service started successfully",
 		zap.String("address", l.address))
@@ -133,8 +145,8 @@ func (l *logStore) Stop() error {
 		logger.Ctx(l.ctx).Debug("LogStore service is already stopped")
 	}
 
-	// Stop background cleanup goroutine and wait for it to finish
-	l.stopBackgroundCleanup()
+	// Stop maintenance manager and wait for it to finish
+	l.maintenance.Stop()
 
 	// Clean up all segment processors with a timeout to avoid indefinite blocking
 	l.spMu.Lock()
@@ -222,6 +234,11 @@ func GetLogKey(bucketName string, rootPath string, logId int64) string {
 	return fmt.Sprintf("%s/%s/%d", bucketName, rootPath, logId)
 }
 
+// GetInstanceKey returns the key prefix shared by all logs under a bucket/rootPath instance.
+func GetInstanceKey(bucketName string, rootPath string) string {
+	return fmt.Sprintf("%s/%s", bucketName, rootPath)
+}
+
 func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (processor.SegmentProcessor, error) {
 	logKey := GetLogKey(bucketName, rootPath, logId)
 	ns := bucketName + "/" + rootPath
@@ -245,6 +262,14 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 		if segProcessor, segExists := processors[segmentId]; segExists {
 			return segProcessor, nil
 		}
+	}
+
+	// Reject serving a log/instance that is being deleted.
+	if _, deleting := l.deletingLogs[logKey]; deleting {
+		return nil, werr.ErrLogBeingDeleted
+	}
+	if _, deleting := l.deletingInstances[GetInstanceKey(bucketName, rootPath)]; deleting {
+		return nil, werr.ErrLogBeingDeleted
 	}
 
 	logger.Ctx(ctx).Info("Creating new segment processor",
@@ -573,6 +598,11 @@ func (l *logStore) HasLocalSegmentData() bool {
 			return nil // skip unreadable entries
 		}
 		if d.IsDir() {
+			// Skip ONLY the top-level marker dir, not any user dir that happens to be
+			// named ".deleted" deeper under rootPath.
+			if path == filepath.Join(rootPath, deleteMarkerDir) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if d.Name() == "data.log" {
@@ -585,6 +615,92 @@ func (l *logStore) HasLocalSegmentData() bool {
 		return nil
 	})
 	return found
+}
+
+func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error {
+	if root := l.cfg.Woodpecker.Storage.RootPath; root != "" {
+		if err := writeDeleteMarker(root, deleteMarker{
+			Bucket: bucketName, RootPath: rootPath, LogId: logId, DeletedAt: time.Now().Unix(),
+		}); err != nil {
+			return werr.ErrMarkDeleteFailed.WithCauseErr(err)
+		}
+	}
+	logKey := GetLogKey(bucketName, rootPath, logId)
+	ns := GetInstanceKey(bucketName, rootPath)
+	l.spMu.Lock()
+	l.deletingLogs[logKey] = struct{}{}
+	procs := l.segmentProcessors[logKey]
+	delete(l.segmentProcessors, logKey)
+	if len(procs) > 0 {
+		metrics.WpLogStoreActiveLogs.WithLabelValues(metrics.NodeID, ns).Dec()
+	}
+	l.spMu.Unlock()
+	for segmentId, proc := range procs {
+		l.closeSegmentProcessor(ctx, logKey, segmentId, proc)
+	}
+	logger.Ctx(ctx).Info("evicted log", zap.String("logKey", logKey), zap.Int("closedProcessors", len(procs)))
+	return nil
+}
+
+func (l *logStore) EvictInstance(ctx context.Context, bucketName string, rootPath string) error {
+	if root := l.cfg.Woodpecker.Storage.RootPath; root != "" {
+		if err := writeDeleteMarker(root, deleteMarker{
+			Bucket: bucketName, RootPath: rootPath, Instance: true, DeletedAt: time.Now().Unix(),
+		}); err != nil {
+			return werr.ErrMarkDeleteFailed.WithCauseErr(err)
+		}
+	}
+	instanceKey := GetInstanceKey(bucketName, rootPath)
+	prefix := instanceKey + "/"
+	l.spMu.Lock()
+	l.deletingInstances[instanceKey] = struct{}{}
+	type item struct {
+		logKey    string
+		segmentId int64
+		proc      processor.SegmentProcessor
+	}
+	var collected []item
+	for logKey, procs := range l.segmentProcessors {
+		if !strings.HasPrefix(logKey, prefix) {
+			continue
+		}
+		for segmentId, proc := range procs {
+			collected = append(collected, item{logKey, segmentId, proc})
+		}
+		delete(l.segmentProcessors, logKey)
+		metrics.WpLogStoreActiveLogs.WithLabelValues(metrics.NodeID, instanceKey).Dec()
+	}
+	l.spMu.Unlock()
+	for _, it := range collected {
+		l.closeSegmentProcessor(ctx, it.logKey, it.segmentId, it.proc)
+	}
+	logger.Ctx(ctx).Info("evicted instance", zap.String("instanceKey", instanceKey), zap.Int("closedProcessors", len(collected)))
+	return nil
+}
+
+// rebuildDeletingSetsFromMarkers repopulates deletingLogs/deletingInstances from on-disk
+// markers. Called from Start() BEFORE stopped.Store(false) so a marked log is never served
+// after a restart.
+func (l *logStore) rebuildDeletingSetsFromMarkers() error {
+	root := l.cfg.Woodpecker.Storage.RootPath
+	if root == "" {
+		return nil
+	}
+	markers, err := scanDeleteMarkers(root)
+	if err != nil {
+		return err
+	}
+	l.spMu.Lock()
+	defer l.spMu.Unlock()
+	for _, m := range markers {
+		if m.Instance {
+			l.deletingInstances[GetInstanceKey(m.Bucket, m.RootPath)] = struct{}{}
+		} else {
+			l.deletingLogs[GetLogKey(m.Bucket, m.RootPath, m.LogId)] = struct{}{}
+		}
+	}
+	logger.Ctx(l.ctx).Info("rebuilt deleting sets from markers", zap.Int("markerCount", len(markers)))
+	return nil
 }
 
 // closeSegmentProcessor closes a segment processor and updates metrics
@@ -736,53 +852,6 @@ func (l *logStore) RemoveSegmentProcessor(ctx context.Context, bucketName string
 		logger.Ctx(ctx).Info("Log not found for segment processor removal",
 			zap.String("logKey", logKey),
 			zap.Int64("segmentId", segmentId))
-	}
-}
-
-// startBackgroundCleanup starts the background cleanup goroutine
-func (l *logStore) startBackgroundCleanup() {
-	logger.Ctx(l.ctx).Info("Starting background segment processor cleanup goroutine")
-
-	l.cleanupWg.Add(1)
-	go l.backgroundCleanupLoop()
-}
-
-// stopBackgroundCleanup stops the background cleanup goroutine and waits for it to finish
-func (l *logStore) stopBackgroundCleanup() {
-	logger.Ctx(l.ctx).Info("Stopping background segment processor cleanup goroutine")
-
-	close(l.cleanupDone)
-	l.cleanupWg.Wait()
-
-	logger.Ctx(l.ctx).Info("Background segment processor cleanup goroutine stopped")
-}
-
-// backgroundCleanupLoop runs the background cleanup logic
-func (l *logStore) backgroundCleanupLoop() {
-	defer l.cleanupWg.Done()
-
-	// Cleanup configuration from config
-	cleanupInterval := time.Duration(l.cfg.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds()) * time.Second
-	maxIdleTime := time.Duration(l.cfg.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds()) * time.Second
-
-	ticker := time.NewTicker(cleanupInterval)
-	defer ticker.Stop()
-
-	logger.Ctx(l.ctx).Info("Background cleanup goroutine started",
-		zap.Duration("cleanupInterval", cleanupInterval),
-		zap.Duration("maxIdleTime", maxIdleTime))
-
-	for {
-		select {
-		case <-l.cleanupDone:
-			logger.Ctx(l.ctx).Info("Background cleanup goroutine received shutdown signal")
-			return
-		case <-l.ctx.Done():
-			logger.Ctx(l.ctx).Info("Background cleanup goroutine context cancelled")
-			return
-		case <-ticker.C:
-			l.performBackgroundCleanup(maxIdleTime)
-		}
 	}
 }
 
