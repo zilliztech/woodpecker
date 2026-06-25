@@ -602,7 +602,7 @@ func newTestReader(mockClient *mocks_objectstorage.ObjectStorage) *MinioFileRead
 		logId:          logId,
 		segmentId:      segId,
 		logIdStr:       strconv.FormatInt(logId, 10),
-		nsStr:          "test-bucket/test-base",
+		logNs:          "test-bucket/test-base",
 		client:         mockClient,
 		bucket:         "test-bucket",
 		segmentFileKey: "test-base/1/0",
@@ -1745,7 +1745,7 @@ func TestNewMinioFileReaderAdv_Success_NoFooter(t *testing.T) {
 	assert.Equal(t, int64(0), reader.segmentId)
 	assert.Equal(t, "base/1/0", reader.segmentFileKey)
 	assert.Equal(t, "test-bucket", reader.bucket)
-	assert.Equal(t, "test-bucket/base", reader.nsStr)
+	assert.Equal(t, "test-bucket/base", reader.logNs)
 	assert.Equal(t, "1", reader.logIdStr)
 	assert.False(t, reader.closed.Load())
 	assert.False(t, reader.isCompleted.Load())

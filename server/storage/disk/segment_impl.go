@@ -48,7 +48,7 @@ type DiskSegmentImpl struct {
 	segmentId       int64
 	segmentDir      string
 	segmentFilePath string
-	nsStr           string // for metrics only
+	logNs           string // for metrics only
 	logIdStr        string // for metrics only
 }
 
@@ -63,7 +63,7 @@ func NewDiskSegmentImpl(ctx context.Context, baseDir string, logId int64, segId 
 		segmentId:       segId,
 		segmentDir:      segmentDir,
 		segmentFilePath: filePath,
-		nsStr:           baseDir,
+		logNs:           baseDir,
 		logIdStr:        strconv.FormatInt(logId, 10),
 	}
 	return segmentImpl
@@ -116,11 +116,11 @@ func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, e
 
 	// Update metrics
 	if len(deleteErrors) > 0 {
-		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 	} else {
-		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "success").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "success").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	}
 
 	logger.Ctx(ctx).Info("Completed fragment deletion",

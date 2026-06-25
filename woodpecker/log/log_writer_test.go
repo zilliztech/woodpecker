@@ -63,7 +63,7 @@ func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segm
 		logHandle:          logHandle,
 		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
 		cfg:                cfg,
-		metricsNamespace:   "",
+		logNs:              "",
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
 	}
@@ -620,7 +620,7 @@ func createTestSessionWriter(t *testing.T, logHandle LogHandle, cleanupMgr segme
 		logHandle:          logHandle,
 		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
 		cfg:                cfg,
-		metricsNamespace:   "",
+		logNs:              "",
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
 		sessionLock:        sessionLock,

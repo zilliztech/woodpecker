@@ -47,7 +47,7 @@ type LocalFileReaderAdv struct {
 	logId        int64
 	segId        int64
 	logIdStr     string // for metrics only
-	nsStr        string // for metrics only
+	logNs        string // for metrics only
 	filePath     string
 	maxBatchSize int64
 
@@ -119,7 +119,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 		logId:        logId,
 		segId:        segId,
 		logIdStr:     strconv.FormatInt(logId, 10),
-		nsStr:        baseDir,
+		logNs:        baseDir,
 		filePath:     filePath,
 		maxBatchSize: maxBatchSize,
 		file:         file,
@@ -140,7 +140,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 		return nil, fmt.Errorf("try parse footer and indexes: %w", parseFooterErr)
 	}
 
-	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.nsStr, reader.logIdStr).Inc()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.logNs, reader.logIdStr).Inc()
 	logger.Ctx(ctx).Debug("local file readerAdv created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("currentFileSize", currentSize),
@@ -611,8 +611,8 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) erro
 		zap.Int64("fileSize", currentFileSize),
 		zap.Int64("scannedOffset", currentOffset))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr, "loadAll", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -764,7 +764,7 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	}
 
 	if len(entries) == 0 {
-		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Debug("no entry extracted",
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
@@ -790,8 +790,8 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Add(float64(readBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState
@@ -900,7 +900,7 @@ func (r *LocalFileReaderAdv) Close(ctx context.Context) error {
 		}
 		r.file = nil
 	}
-	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Dec()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }

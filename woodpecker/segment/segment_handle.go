@@ -112,7 +112,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 		quorumInfo:          segmentMeta.Metadata.Quorum,
 		executor:            NewSequentialExecutor(executeRequestMaxQueueSize),
 		cfg:                 cfg,
-		metricsNamespace:    metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		logNs:               metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		objectStorageClient: objectStorageClient,
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
@@ -126,7 +126,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	if canWrite {
 		segmentHandle.canWriteState.Store(true)
 		metrics.SetActiveSegmentNodes(
-			segmentHandle.metricsNamespace,
+			segmentHandle.logNs,
 			strconv.FormatInt(segmentHandle.logId, 10),
 			strconv.FormatInt(segmentHandle.segmentId, 10),
 			segmentHandle.quorumInfo.GetNodes(),
@@ -164,9 +164,9 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 				"127.0.0.1",
 			},
 		},
-		executor:         NewSequentialExecutor(executeRequestMaxQueueSize),
-		cfg:              cfg,
-		metricsNamespace: metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		executor: NewSequentialExecutor(executeRequestMaxQueueSize),
+		cfg:      cfg,
+		logNs:    metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
@@ -197,7 +197,7 @@ type segmentHandleImpl struct {
 	ClientPool       client.LogStoreClientPool
 	quorumInfo       *proto.QuorumInfo
 	cfg              *config.Configuration
-	metricsNamespace string
+	logNs            string
 
 	sync.RWMutex
 	lastPushed       atomic.Int64
@@ -281,8 +281,8 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	s.appendOpsQueue.PushBack(appendOp)
 	s.submittedSize.Add(int64(len(bytes)))
 	logIdStr := strconv.FormatInt(s.logId, 10)
-	metrics.WpClientAppendRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
-	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
+	metrics.WpClientAppendRequestsTotal.WithLabelValues(s.logNs, logIdStr).Inc()
+	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, logIdStr).Inc()
 }
 
 func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, entryId int64, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
@@ -351,7 +351,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
 		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 
 	// when seg rolling state mark, if no pending appendOps, trigger completion
@@ -422,7 +422,7 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 				zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
 			s.appendOpsQueue.Remove(element)
 			op.FastFail(ctx, werr.ErrAppendOpRetrySubmitFailed)
-			metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
+			metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 			continue
 		}
 		logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
@@ -445,7 +445,7 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 		op := element.Value.(*AppendOp)
 		op.FastFail(ctx, err)
 		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 
 	// mark rolling to prevent later append, and trigger rolling segment before all appendOps in queue
@@ -485,11 +485,11 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 					zap.Int64("segId", s.segmentId), zap.Int64("from", from),
 					zap.Error(err))
 			}
-			metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr, status).Inc()
+			metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.logNs, logIdStr, status).Inc()
 			return nil, err
 		}
-		metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "success").Inc()
-		metrics.WpClientDirectReadLatency.WithLabelValues(s.metricsNamespace, logIdStr).Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.logNs, logIdStr, "success").Inc()
+		metrics.WpClientDirectReadLatency.WithLabelValues(s.logNs, logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Debug("direct read batch success",
 			zap.String("logName", s.logName), zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId), zap.Int64("from", from),
@@ -745,8 +745,8 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 			continue
 		}
 
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "get_lac", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "get_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "get_lac", "success").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "get_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return lac, nil
 	}
 
@@ -757,8 +757,8 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 		zap.Int64("segId", s.segmentId),
 		zap.Int("totalNodes", nodeCount),
 		zap.Error(lastError))
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "get_lac", "error").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "get_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "get_lac", "error").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "get_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
 	return -1, lastError
 }
 
@@ -792,13 +792,13 @@ func (s *segmentHandleImpl) refreshAndGetMetadataUnsafe(ctx context.Context) err
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId),
 			zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "refresh_meta", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "refresh_meta", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "refresh_meta", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "refresh_meta", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 	s.segmentMetaCache.Store(newMeta)
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "refresh_meta", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "refresh_meta", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "refresh_meta", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "refresh_meta", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
@@ -863,7 +863,7 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 	// Segment is leaving the writable state -- drop its active-segment node series
 	// so the metric only ever reflects the current active segment of each log.
 	metrics.ClearActiveSegmentNodes(
-		s.metricsNamespace,
+		s.logNs,
 		strconv.FormatInt(s.logId, 10),
 		strconv.FormatInt(s.segmentId, 10),
 		s.quorumInfo.GetNodes(),
@@ -904,20 +904,20 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		// new append will fail with ErrSegmentFenced, and application client should reopen new logWriter instead.
 		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d meta update revision invalid", s.segmentId))
 		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime), zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "close", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "close", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 
 	if err != nil {
 		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime), zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "close", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "close", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
 		logger.Ctx(ctx).Info("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime))
 		s.segmentMetaCache.Store(newSegMeta)
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "close", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "close", "success").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
 }
@@ -951,7 +951,7 @@ func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEnt
 	// Clear the queue
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 	logger.Ctx(ctx).Debug("fastFailAppendOps finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("fastFailOps", len(elementsToRemove)), zap.Int("successCount", successCount), zap.Int("failCount", failCount), zap.Error(err))
 }
@@ -1023,8 +1023,8 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 			zap.Error(err))
 		return 0
 	}
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "get_blocks_count", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "get_blocks_count", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "get_blocks_count", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "get_blocks_count", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return currentBlockCounts
 }
 
@@ -1512,8 +1512,8 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 	// Send FenceSegment requests to all quorum nodes in parallel
 	lastEntryId, fencedErr := s.fenceSegmentQuorum(ctx, quorumInfo)
 	if fencedErr != nil {
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "fence", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "fence", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("quorum fence segment failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -1524,8 +1524,8 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 
 	completeErr := s.completeSegmentQuorum(ctx, quorumInfo, lastEntryId)
 	if completeErr != nil {
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "complete", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "complete", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "complete", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "complete", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("quorum complete segment failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -1589,8 +1589,8 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 		zap.Int64("lastEntryId", lastEntryId),
 		zap.Duration("duration", time.Since(start)))
 	s.fencedState.Store(true) // Set fenced state to prevent new append operations
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "fence", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "fence", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return lastEntryId, nil
 }
 
@@ -1681,8 +1681,8 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 			zap.Int64("segmentId", s.segmentId),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(compactErr))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "compact_to_sealed", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "compact_to_sealed", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return compactErr
 	}
 
@@ -1737,8 +1737,8 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		zap.Int64("finalSize", compactSegMetaInfo.Size),
 		zap.String("finalState", "Sealed"))
 
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "compact_to_sealed", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "compact_to_sealed", "success").Observe(float64(compactionDuration.Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "success").Observe(float64(compactionDuration.Milliseconds()))
 	return updateMetaErr
 }
 

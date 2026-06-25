@@ -48,7 +48,7 @@ type SegmentImpl struct {
 	segmentId      int64
 	segmentFileKey string
 	logIdStr       string // for metrics label only
-	nsStr          string // for metrics namespace label
+	logNs          string // for metrics log_ns label
 }
 
 // NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
@@ -63,7 +63,7 @@ func NewSegmentImpl(ctx context.Context, bucket string, baseDir string, logId in
 		segmentFileKey: segmentFileKey,
 		bucket:         bucket,
 		logIdStr:       strconv.FormatInt(logId, 10),
-		nsStr:          bucket + "/" + baseDir,
+		logNs:          bucket + "/" + baseDir,
 	}
 	return segmentImpl
 }
@@ -127,7 +127,7 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 			objectsToDelete = append(objectsToDelete, objectToDelete{path: objInfo.FilePath, size: objInfo.Size})
 		}
 		return true // continue walking
-	}, s.nsStr, s.logIdStr)
+	}, s.logNs, s.logIdStr)
 	if walkErr != nil {
 		logger.Ctx(ctx).Warn("error listing blocks during deletion",
 			zap.String("segmentFileKey", s.segmentFileKey),
@@ -142,7 +142,7 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 
 	// Delete objects
 	for _, obj := range objectsToDelete {
-		err := s.client.RemoveObject(ctx, s.bucket, obj.path, s.nsStr, s.logIdStr)
+		err := s.client.RemoveObject(ctx, s.bucket, obj.path, s.logNs, s.logIdStr)
 		if err != nil {
 			// Log error but continue with other deletions
 			logger.Ctx(ctx).Warn("failed to delete block",
@@ -155,8 +155,8 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 				zap.String("segmentFileKey", s.segmentFileKey),
 				zap.String("objectKey", obj.path))
 			deletedCount++
-			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, s.nsStr, s.logIdStr).Sub(float64(obj.size))
-			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, s.nsStr, s.logIdStr).Dec()
+			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, s.logNs, s.logIdStr).Sub(float64(obj.size))
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, s.logNs, s.logIdStr).Dec()
 		}
 	}
 

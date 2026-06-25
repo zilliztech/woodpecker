@@ -28,14 +28,14 @@ import (
 
 func TestBuildMetricsNamespace(t *testing.T) {
 	t.Run("normal", func(t *testing.T) {
-		assert.Equal(t, "mybucket/myroot", BuildMetricsNamespace("mybucket", "myroot"))
+		assert.Equal(t, "mybucket/myroot", BuildLogNs("mybucket", "myroot"))
 	})
 	t.Run("empty", func(t *testing.T) {
-		assert.Equal(t, "/", BuildMetricsNamespace("", ""))
+		assert.Equal(t, "/", BuildLogNs("", ""))
 	})
 	t.Run("single_empty", func(t *testing.T) {
-		assert.Equal(t, "bucket/", BuildMetricsNamespace("bucket", ""))
-		assert.Equal(t, "/root", BuildMetricsNamespace("", "root"))
+		assert.Equal(t, "bucket/", BuildLogNs("bucket", ""))
+		assert.Equal(t, "/root", BuildLogNs("", "root"))
 	})
 }
 
@@ -116,54 +116,54 @@ func TestRegisterServerMetrics_OnlyOnce(t *testing.T) {
 
 func TestUpdateSegmentState(t *testing.T) {
 	// Initialize gauge values first
-	namespace := "test-ns"
+	logNs := "test-ns"
 	logId := "1"
 	oldState := "Active"
 	newState := "Completed"
 
 	// Set initial state
-	WpClientSegmentState.WithLabelValues(namespace, logId, oldState).Set(5)
-	WpClientSegmentState.WithLabelValues(namespace, logId, newState).Set(0)
+	WpClientSegmentState.WithLabelValues(logNs, logId, oldState).Set(5)
+	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Set(0)
 
 	// Call UpdateSegmentState
-	UpdateSegmentState(namespace, logId, oldState, newState)
+	UpdateSegmentState(logNs, logId, oldState, newState)
 
 	// Read old state gauge - should be 4 (5 - 1)
 	oldMetric := &dto.Metric{}
-	WpClientSegmentState.WithLabelValues(namespace, logId, oldState).Write(oldMetric)
+	WpClientSegmentState.WithLabelValues(logNs, logId, oldState).Write(oldMetric)
 	assert.Equal(t, float64(4), oldMetric.GetGauge().GetValue())
 
 	// Read new state gauge - should be 1 (0 + 1)
 	newMetric := &dto.Metric{}
-	WpClientSegmentState.WithLabelValues(namespace, logId, newState).Write(newMetric)
+	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Write(newMetric)
 	assert.Equal(t, float64(1), newMetric.GetGauge().GetValue())
 }
 
 func TestUpdateSegmentState_MultipleTransitions(t *testing.T) {
-	namespace := "test-multi"
+	logNs := "test-multi"
 	logId := "2"
 
-	WpClientSegmentState.WithLabelValues(namespace, logId, "Active").Set(10)
-	WpClientSegmentState.WithLabelValues(namespace, logId, "Completed").Set(0)
-	WpClientSegmentState.WithLabelValues(namespace, logId, "Sealed").Set(0)
+	WpClientSegmentState.WithLabelValues(logNs, logId, "Active").Set(10)
+	WpClientSegmentState.WithLabelValues(logNs, logId, "Completed").Set(0)
+	WpClientSegmentState.WithLabelValues(logNs, logId, "Sealed").Set(0)
 
 	// Active -> Completed
-	UpdateSegmentState(namespace, logId, "Active", "Completed")
+	UpdateSegmentState(logNs, logId, "Active", "Completed")
 	// Active -> Completed again
-	UpdateSegmentState(namespace, logId, "Active", "Completed")
+	UpdateSegmentState(logNs, logId, "Active", "Completed")
 	// Completed -> Sealed
-	UpdateSegmentState(namespace, logId, "Completed", "Sealed")
+	UpdateSegmentState(logNs, logId, "Completed", "Sealed")
 
 	activeMetric := &dto.Metric{}
-	WpClientSegmentState.WithLabelValues(namespace, logId, "Active").Write(activeMetric)
+	WpClientSegmentState.WithLabelValues(logNs, logId, "Active").Write(activeMetric)
 	assert.Equal(t, float64(8), activeMetric.GetGauge().GetValue())
 
 	completedMetric := &dto.Metric{}
-	WpClientSegmentState.WithLabelValues(namespace, logId, "Completed").Write(completedMetric)
+	WpClientSegmentState.WithLabelValues(logNs, logId, "Completed").Write(completedMetric)
 	assert.Equal(t, float64(1), completedMetric.GetGauge().GetValue())
 
 	sealedMetric := &dto.Metric{}
-	WpClientSegmentState.WithLabelValues(namespace, logId, "Sealed").Write(sealedMetric)
+	WpClientSegmentState.WithLabelValues(logNs, logId, "Sealed").Write(sealedMetric)
 	assert.Equal(t, float64(1), sealedMetric.GetGauge().GetValue())
 }
 

@@ -58,7 +58,7 @@ type StagedSegmentImpl struct {
 	segmentFileKey string
 	client         objectstorage.ObjectStorage
 	logIdStr       string // for metrics label only
-	nsStr          string // for metrics namespace label
+	logNs          string // for metrics log_ns label
 }
 
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
@@ -84,7 +84,7 @@ func NewStagedSegmentImpl(ctx context.Context, bucket string, rootPath string, l
 		segmentFileKey:  segmentFileKey,
 		client:          storageCli,
 		logIdStr:        strconv.FormatInt(logId, 10),
-		nsStr:           bucket + "/" + rootPath,
+		logNs:           bucket + "/" + rootPath,
 	}
 	return segmentImpl
 }
@@ -130,11 +130,11 @@ func (rs *StagedSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int,
 
 	// Update metrics
 	if len(allErrors) > 0 {
-		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 	} else {
-		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "success").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "success").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	}
 
 	logger.Ctx(ctx).Info("Completed quorum segment deletion",
@@ -201,7 +201,7 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 			objectsToDelete = append(objectsToDelete, objectToDelete{path: objInfo.FilePath, size: objInfo.Size})
 		}
 		return true // continue walking
-	}, rs.nsStr, rs.logIdStr)
+	}, rs.logNs, rs.logIdStr)
 	if walkErr != nil {
 		logger.Ctx(ctx).Warn("error listing blocks during deletion",
 			zap.String("segmentFileKey", rs.segmentFileKey),
@@ -216,7 +216,7 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 
 	// Delete objects
 	for _, obj := range objectsToDelete {
-		err := rs.client.RemoveObject(ctx, rs.bucket, obj.path, rs.nsStr, rs.logIdStr)
+		err := rs.client.RemoveObject(ctx, rs.bucket, obj.path, rs.logNs, rs.logIdStr)
 		if err != nil {
 			// Log error but continue with other deletions
 			logger.Ctx(ctx).Warn("failed to delete block",
@@ -229,8 +229,8 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 				zap.String("segmentFileKey", rs.segmentFileKey),
 				zap.String("objectKey", obj.path))
 			deletedCount++
-			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Sub(float64(obj.size))
-			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Dec()
+			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(obj.size))
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
 		}
 	}
 
@@ -317,8 +317,8 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 					zap.String("filePath", filePath))
 				deletedCount++
 				if isDataFile {
-					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Sub(float64(fileSize))
-					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Dec()
+					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(fileSize))
+					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
 				}
 			}
 		}

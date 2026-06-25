@@ -40,18 +40,18 @@ const (
 // Compile-time assertion that Tracker is an OpObserver.
 var _ metrics.OpObserver = (*Tracker)(nil)
 
-// namespace is woodpecker's per-tenant scope — a (bucketName, rootPath) pair,
-// the same identity metrics.BuildMetricsNamespace renders as "bucket/rootPath".
-type namespace struct {
+// logNs is woodpecker's per-tenant scope — a (bucketName, rootPath) pair,
+// the same identity metrics.BuildLogNs renders as "bucket/rootPath".
+type logNs struct {
 	bucketName string
 	rootPath   string
 }
 
-// logKey is the full per-log identity: a namespace plus the log ID. It is a
+// logKey is the full per-log identity: a logNs plus the log ID. It is a
 // comparable struct used directly as a native map key, so lookups hash it in
 // place without boxing or allocation (unlike an interface-keyed sync.Map).
 type logKey struct {
-	ns    namespace
+	ns    logNs
 	logID int64
 }
 
@@ -161,7 +161,7 @@ func (t *Tracker) OnOpEnd(op *metrics.Op, _ uint64, elapsed time.Duration, statu
 // --- internal record methods (unit-testable without metrics.Op) ---
 
 func (t *Tracker) get(bucketName, rootPath string, logID int64) *logHealth {
-	key := logKey{ns: namespace{bucketName: bucketName, rootPath: rootPath}, logID: logID}
+	key := logKey{ns: logNs{bucketName: bucketName, rootPath: rootPath}, logID: logID}
 	// Fast path: lock-free, allocation-free read of the current snapshot.
 	if lh := (*t.logs.Load())[key]; lh != nil {
 		return lh

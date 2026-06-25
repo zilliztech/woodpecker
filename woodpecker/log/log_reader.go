@@ -54,13 +54,13 @@ var _ LogReader = (*logBatchReaderImpl)(nil)
 
 // An efficient reader that loads fragments and yields elements one by one during traversal.
 type logBatchReaderImpl struct {
-	logName          string
-	logId            int64
-	logIdStr         string // for metrics label only
-	logHandle        LogHandle
-	from             *LogMessageId
-	readerName       string
-	metricsNamespace string
+	logName    string
+	logId      int64
+	logIdStr   string // for metrics label only
+	logHandle  LogHandle
+	from       *LogMessageId
+	readerName string
+	logNs      string
 
 	pendingReadSegmentId int64
 	pendingReadEntryId   int64
@@ -81,7 +81,7 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		pendingReadSegmentId: from.SegmentId,
 		pendingReadEntryId:   from.EntryId,
 		readerName:           readerName,
-		metricsNamespace:     metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		logNs:                metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
@@ -99,7 +99,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 	start := time.Now()
 
 	if l.logHandle == nil {
-		metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, werr.ErrInternalError.WithCauseErrMsg("log handle is not initialized")
 	}
 
@@ -111,7 +111,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// Check if context is done
 		select {
 		case <-ctx.Done():
-			metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, ctx.Err()
 		default:
 			// Continue with read operation
@@ -122,7 +122,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			readEntryData := l.batch.Entries[l.next]
 			logMsg, err := l.unmarshalAndCreateLogMessage(ctx, readEntryData.Values, readEntryData.SegId, readEntryData.EntryId)
 			if err != nil {
-				metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
+				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 				// clear cache to avoid re-processing corrupted data
 				l.batch = nil
 				l.next = 0
@@ -131,10 +131,10 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.pendingReadEntryId += 1
 			l.next += 1
 			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
-			metrics.WpClientReadEntriesTotal.WithLabelValues(l.metricsNamespace, l.logIdStr).Inc()
-			metrics.WpLogReaderBytesRead.WithLabelValues(l.metricsNamespace, l.logIdStr, l.readerName).Add(float64(len(readEntryData.Values)))
-			metrics.WpClientReadLatency.WithLabelValues(l.metricsNamespace, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
-			metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpClientReadEntriesTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
+			metrics.WpLogReaderBytesRead.WithLabelValues(l.logNs, l.logIdStr, l.readerName).Add(float64(len(readEntryData.Values)))
+			metrics.WpClientReadLatency.WithLabelValues(l.logNs, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return logMsg, nil
 		}
 
@@ -143,14 +143,14 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		if err != nil && werr.ErrSegmentNotFound.Is(err) {
 			// segment not found, wait and try again
 			if waitErr := l.waitWithContext(ctx); waitErr != nil {
-				metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
+				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 				return nil, waitErr
 			}
 			continue
 		}
 		if err != nil {
 			// A segment reading error is returned to the application caller, who should decide whether to attempt the call again
-			metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, werr.ErrLogReaderReadFailed.WithCauseErr(err)
 		}
 
@@ -169,7 +169,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			lastReadState = l.batch.LastReadState
 		}
 		batchResult, readBatchErr := segHandle.ReadBatchAdv(ctx, entryId, DefaultBatchEntriesLimit, lastReadState)
-		metrics.WpClientReadRequestsTotal.WithLabelValues(l.metricsNamespace, l.logIdStr).Inc()
+		metrics.WpClientReadRequestsTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
 		if readBatchErr != nil {
 			// Check if it's end of file error - this is the only reliable way to know segment is finished
 			if werr.ErrFileReaderEndOfFile.Is(readBatchErr) {
@@ -183,14 +183,14 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			if werr.ErrEntryNotFound.Is(readBatchErr) {
 				// just wait and retry
 				if waitErr := l.waitWithContext(ctx); waitErr != nil {
-					metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
+					metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 					return nil, waitErr
 				}
 				continue
 			}
 
 			// For other errors, return them directly
-			metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			logger.Ctx(ctx).Warn("read entries error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(readBatchErr))
 			return nil, readBatchErr
 		}
@@ -203,7 +203,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		oneEntry := l.batch.Entries[l.next]
 		logMsg, err := l.unmarshalAndCreateLogMessage(ctx, oneEntry.Values, segId, entryId)
 		if err != nil {
-			metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			// clear cache to avoid re-processing corrupted data
 			l.batch = nil
 			l.next = 0
@@ -217,10 +217,10 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		l.lastRead = time.Now().UnixMilli() // Update last read timestamp
 
 		// update metrics
-		metrics.WpClientReadEntriesTotal.WithLabelValues(l.metricsNamespace, l.logIdStr).Inc()
-		metrics.WpLogReaderBytesRead.WithLabelValues(l.metricsNamespace, l.logIdStr, l.readerName).Add(float64(len(oneEntry.Values)))
-		metrics.WpClientReadLatency.WithLabelValues(l.metricsNamespace, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
-		metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpClientReadEntriesTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
+		metrics.WpLogReaderBytesRead.WithLabelValues(l.logNs, l.logIdStr, l.readerName).Add(float64(len(oneEntry.Values)))
+		metrics.WpClientReadLatency.WithLabelValues(l.logNs, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return logMsg, nil
 	}
 }
@@ -241,7 +241,7 @@ func (l *logBatchReaderImpl) Close(ctx context.Context) error {
 		status = "error"
 	}
 
-	metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
 	return err
 }
 

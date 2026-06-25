@@ -240,24 +240,24 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 }
 
 // UpdateSegmentState transitions the segment state gauge: decrements the old state count
-// and increments the new state count for the given namespace and log.
-func UpdateSegmentState(namespace, logId, oldState, newState string) {
-	WpClientSegmentState.WithLabelValues(namespace, logId, oldState).Dec()
-	WpClientSegmentState.WithLabelValues(namespace, logId, newState).Inc()
+// and increments the new state count for the given logNs and log.
+func UpdateSegmentState(logNs, logId, oldState, newState string) {
+	WpClientSegmentState.WithLabelValues(logNs, logId, oldState).Dec()
+	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Inc()
 }
 
 // SetActiveSegmentNodes marks each node of an active (writable) segment's quorum
 // with a value of 1 (one series per node). Call when a segment becomes writable.
-func SetActiveSegmentNodes(namespace, logId, segmentId string, nodes []string) {
+func SetActiveSegmentNodes(logNs, logId, segmentId string, nodes []string) {
 	for _, node := range nodes {
-		WpActiveSegmentNode.WithLabelValues(namespace, logId, segmentId, node).Set(1)
+		WpActiveSegmentNode.WithLabelValues(logNs, logId, segmentId, node).Set(1)
 	}
 }
 
 // ClearActiveSegmentNodes deletes the per-node series for an active segment.
 // Call when the segment leaves the writable state (completed / rolling / closed).
-func ClearActiveSegmentNodes(namespace, logId, segmentId string, nodes []string) {
+func ClearActiveSegmentNodes(logNs, logId, segmentId string, nodes []string) {
 	for _, node := range nodes {
-		WpActiveSegmentNode.DeleteLabelValues(namespace, logId, segmentId, node)
+		WpActiveSegmentNode.DeleteLabelValues(logNs, logId, segmentId, node)
 	}
 }
