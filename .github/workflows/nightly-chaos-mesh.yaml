@@ -21,6 +21,11 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           kubectl version --client
       - name: Run network-chaos suite
+        env:
+          # ubuntu-latest hosted runners have 4 vCPU; the script defaults minikube to 6,
+          # which fails instantly with RSRC_INSUFFICIENT_CORES (exit 29). Pin to the
+          # runner's capacity. See #199.
+          MK_CPUS: "4"
         run: ./tests/chaos_mesh/run_network_chaos.sh
       - name: Upload chaos artifacts on failure
         if: failure()
