@@ -27,6 +27,11 @@ import (
 type LogStoreClient interface {
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
 	AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	// AppendEntries appends a batch of consecutive entries in a single request (client-side group commit).
+	// resultChs[i] receives the durability result for entries[i]. It returns the buffered entry IDs once the
+	// whole batch is buffered (a single send round-trip), and an error if the buffer phase fails. The per-entry
+	// Synced/Failed results are delivered asynchronously into resultChs as durability completes.
+	AppendEntries(ctx context.Context, bucketName string, rootPath string, logId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error)
 	// ReadEntriesBatchAdv reads a batch of entries from the specified log segment and returns the entries and an error if any.
 	ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	// CompleteSegment finalize the specified log segment and returns an error if any.

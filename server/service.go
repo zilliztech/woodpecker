@@ -452,6 +452,83 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 	return sendErr // Return nil for normal closure, not the context error
 }
 
+// AddEntries is the batched counterpart of AddEntry (client-side group commit).
+// It buffers every entry first and streams back one Buffered response per entry
+// (so the whole batch is admitted in a single client round-trip), then streams
+// one Synced/Failed response per entry as durability completes. Every response
+// is keyed by entry_id so the client can route it to the right pending append.
+func (s *Server) AddEntries(request *proto.AddEntriesRequest, serverStream grpc.ServerStreamingServer[proto.AddEntriesResponse]) error {
+	streamCtx := serverStream.Context()
+	n := len(request.Entries)
+	if n == 0 {
+		return nil
+	}
+
+	// Phase 1: buffer all entries and acknowledge each as Buffered.
+	resultChs := make([]channel.ResultChannel, n)
+	for i, reqEntry := range request.Entries {
+		entry := &proto.LogEntry{
+			SegId:   reqEntry.SegId,
+			EntryId: reqEntry.EntryId,
+			Values:  reqEntry.Values,
+		}
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("srv-batch/%d/%d/%d", request.LogId, reqEntry.SegId, reqEntry.EntryId))
+		bufferedId, err := s.logStore.AddEntry(streamCtx, request.BucketName, request.RootPath, request.LogId, entry, resultCh)
+		if err != nil {
+			sendErr := serverStream.Send(&proto.AddEntriesResponse{
+				State:   proto.AddEntryState_Failed,
+				EntryId: reqEntry.EntryId,
+				Status:  werr.Status(err),
+			})
+			if sendErr != nil {
+				logger.Ctx(streamCtx).Warn("failed to send batch buffered-error response", zap.Error(sendErr))
+			}
+			return err
+		}
+		resultChs[i] = resultCh
+		if sendErr := serverStream.Send(&proto.AddEntriesResponse{
+			State:   proto.AddEntryState_Buffered,
+			EntryId: bufferedId,
+			Status:  werr.Success(),
+		}); sendErr != nil {
+			logger.Ctx(streamCtx).Warn("failed to send batch buffered response", zap.Error(sendErr))
+			return sendErr
+		}
+	}
+
+	// Phase 2: wait for each entry to be durably synced (entries flush in
+	// entry-id order, so reading in order adds no head-of-line latency beyond
+	// the natural durability order) and stream back its result keyed by
+	// entry_id.
+	for i, reqEntry := range request.Entries {
+		result, err := resultChs[i].ReadResult(streamCtx)
+		if err != nil {
+			sendErr := serverStream.Send(&proto.AddEntriesResponse{
+				State:   proto.AddEntryState_Failed,
+				EntryId: reqEntry.EntryId,
+				Status:  werr.Status(err),
+			})
+			return sendErr
+		}
+		if result.Err != nil {
+			sendErr := serverStream.Send(&proto.AddEntriesResponse{
+				State:   proto.AddEntryState_Failed,
+				EntryId: reqEntry.EntryId,
+				Status:  werr.Status(result.Err),
+			})
+			return sendErr
+		}
+		if sendErr := serverStream.Send(&proto.AddEntriesResponse{
+			State:   proto.AddEntryState_Synced,
+			EntryId: reqEntry.EntryId,
+			Status:  werr.Success(),
+		}); sendErr != nil {
+			return sendErr
+		}
+	}
+	return nil
+}
+
 func (s *Server) GetBatchEntriesAdv(ctx context.Context, request *proto.GetBatchEntriesAdvRequest) (*proto.GetBatchEntriesAdvResponse, error) {
 	result, err := s.logStore.GetBatchEntriesAdv(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, request.FromEntryId, request.MaxEntries, request.LastReadState)
 	if err != nil {

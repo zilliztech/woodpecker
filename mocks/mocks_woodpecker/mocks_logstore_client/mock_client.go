@@ -86,6 +86,69 @@ func (_c *LogStoreClient_AppendEntry_Call) RunAndReturn(run func(context.Context
 	return _c
 }
 
+// AppendEntries provides a mock function with given fields: ctx, bucketName, rootPath, logId, entries, resultChs
+func (_m *LogStoreClient) AppendEntries(ctx context.Context, bucketName string, rootPath string, logId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, entries, resultChs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AppendEntries")
+	}
+
+	var r0 []int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, []*proto.LogEntry, []channel.ResultChannel) ([]int64, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, entries, resultChs)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, []*proto.LogEntry, []channel.ResultChannel) []int64); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, entries, resultChs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]int64)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, []*proto.LogEntry, []channel.ResultChannel) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, entries, resultChs)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStoreClient_AppendEntries_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AppendEntries'
+type LogStoreClient_AppendEntries_Call struct {
+	*mock.Call
+}
+
+// AppendEntries is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
+//   - logId int64
+//   - entries []*proto.LogEntry
+//   - resultChs []channel.ResultChannel
+func (_e *LogStoreClient_Expecter) AppendEntries(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, entries interface{}, resultChs interface{}) *LogStoreClient_AppendEntries_Call {
+	return &LogStoreClient_AppendEntries_Call{Call: _e.mock.On("AppendEntries", ctx, bucketName, rootPath, logId, entries, resultChs)}
+}
+
+func (_c *LogStoreClient_AppendEntries_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel)) *LogStoreClient_AppendEntries_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].([]*proto.LogEntry), args[5].([]channel.ResultChannel))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_AppendEntries_Call) Return(_a0 []int64, _a1 error) *LogStoreClient_AppendEntries_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStoreClient_AppendEntries_Call) RunAndReturn(run func(context.Context, string, string, int64, []*proto.LogEntry, []channel.ResultChannel) ([]int64, error)) *LogStoreClient_AppendEntries_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Close provides a mock function with given fields: ctx
 func (_m *LogStoreClient) Close(ctx context.Context) error {
 	ret := _m.Called(ctx)
