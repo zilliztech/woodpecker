@@ -41,6 +41,13 @@ type SegmentRollingPolicyConfig struct {
 type SegmentAppendConfig struct {
 	QueueSize  int `yaml:"queueSize"`
 	MaxRetries int `yaml:"maxRetries"`
+	// MaxBatchEntries is the maximum number of consecutive append ops coalesced
+	// into a single AddEntries request (client-side group commit). The batch is
+	// opportunistic: it only coalesces ops already waiting in the queue, so it
+	// adds no latency at low load. Values <= 1 disable batching.
+	MaxBatchEntries int `yaml:"maxBatchEntries"`
+	// MaxBatchBytes caps the total payload of a coalesced batch. 0 = no byte limit.
+	MaxBatchBytes ByteSize `yaml:"maxBatchBytes"`
 }
 
 // DirectReadConfig stores the direct read configuration for sealed segments.
@@ -768,6 +775,11 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentAppend: SegmentAppendConfig{
 				QueueSize:  100,
 				MaxRetries: 2,
+				// Client-side group commit is opt-in: 1 disables batching (default).
+				// Raise MaxBatchEntries (and optionally MaxBatchBytes) to coalesce
+				// consecutive appends into a single AddEntries request.
+				MaxBatchEntries: 1,
+				MaxBatchBytes:   ByteSize(1048576), // 1MB (only applies when MaxBatchEntries > 1)
 			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
 				MaxSize:     ByteSize(100000000),

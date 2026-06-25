@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	LogStore_AddEntry_FullMethodName                   = "/woodpecker.proto.logstore.LogStore/AddEntry"
+	LogStore_AddEntries_FullMethodName                 = "/woodpecker.proto.logstore.LogStore/AddEntries"
 	LogStore_GetBatchEntriesAdv_FullMethodName         = "/woodpecker.proto.logstore.LogStore/GetBatchEntriesAdv"
 	LogStore_FenceSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/FenceSegment"
 	LogStore_CompleteSegment_FullMethodName            = "/woodpecker.proto.logstore.LogStore/CompleteSegment"
@@ -47,6 +48,11 @@ const (
 type LogStoreClient interface {
 	// Write APIs
 	AddEntry(ctx context.Context, in *AddEntryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AddEntryResponse], error)
+	// AddEntries appends a batch of consecutive entries in a single request
+	// (client-side group commit). The server streams back one Buffered response
+	// per entry, then one Synced/Failed response per entry as durability
+	// completes; every response is keyed by entry_id.
+	AddEntries(ctx context.Context, in *AddEntriesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AddEntriesResponse], error)
 	// Read APIs
 	GetBatchEntriesAdv(ctx context.Context, in *GetBatchEntriesAdvRequest, opts ...grpc.CallOption) (*GetBatchEntriesAdvResponse, error)
 	// Segment state transitions
@@ -94,6 +100,25 @@ func (c *logStoreClient) AddEntry(ctx context.Context, in *AddEntryRequest, opts
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type LogStore_AddEntryClient = grpc.ServerStreamingClient[AddEntryResponse]
+
+func (c *logStoreClient) AddEntries(ctx context.Context, in *AddEntriesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AddEntriesResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &LogStore_ServiceDesc.Streams[1], LogStore_AddEntries_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[AddEntriesRequest, AddEntriesResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LogStore_AddEntriesClient = grpc.ServerStreamingClient[AddEntriesResponse]
 
 func (c *logStoreClient) GetBatchEntriesAdv(ctx context.Context, in *GetBatchEntriesAdvRequest, opts ...grpc.CallOption) (*GetBatchEntriesAdvResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -216,6 +241,11 @@ func (c *logStoreClient) SelectNodes(ctx context.Context, in *SelectNodesRequest
 type LogStoreServer interface {
 	// Write APIs
 	AddEntry(*AddEntryRequest, grpc.ServerStreamingServer[AddEntryResponse]) error
+	// AddEntries appends a batch of consecutive entries in a single request
+	// (client-side group commit). The server streams back one Buffered response
+	// per entry, then one Synced/Failed response per entry as durability
+	// completes; every response is keyed by entry_id.
+	AddEntries(*AddEntriesRequest, grpc.ServerStreamingServer[AddEntriesResponse]) error
 	// Read APIs
 	GetBatchEntriesAdv(context.Context, *GetBatchEntriesAdvRequest) (*GetBatchEntriesAdvResponse, error)
 	// Segment state transitions
@@ -246,6 +276,9 @@ type UnimplementedLogStoreServer struct{}
 
 func (UnimplementedLogStoreServer) AddEntry(*AddEntryRequest, grpc.ServerStreamingServer[AddEntryResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method AddEntry not implemented")
+}
+func (UnimplementedLogStoreServer) AddEntries(*AddEntriesRequest, grpc.ServerStreamingServer[AddEntriesResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method AddEntries not implemented")
 }
 func (UnimplementedLogStoreServer) GetBatchEntriesAdv(context.Context, *GetBatchEntriesAdvRequest) (*GetBatchEntriesAdvResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBatchEntriesAdv not implemented")
@@ -310,6 +343,17 @@ func _LogStore_AddEntry_Handler(srv interface{}, stream grpc.ServerStream) error
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type LogStore_AddEntryServer = grpc.ServerStreamingServer[AddEntryResponse]
+
+func _LogStore_AddEntries_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(AddEntriesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(LogStoreServer).AddEntries(m, &grpc.GenericServerStream[AddEntriesRequest, AddEntriesResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LogStore_AddEntriesServer = grpc.ServerStreamingServer[AddEntriesResponse]
 
 func _LogStore_GetBatchEntriesAdv_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetBatchEntriesAdvRequest)
@@ -565,6 +609,11 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "AddEntry",
 			Handler:       _LogStore_AddEntry_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "AddEntries",
+			Handler:       _LogStore_AddEntries_Handler,
 			ServerStreams: true,
 		},
 	},

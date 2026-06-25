@@ -144,6 +144,95 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 	return addEntryFirstResponse.GetEntryId(), statusErr
 }
 
+// AppendEntries sends a batch of entries over a single AddEntries stream
+// (client-side group commit). It reads one Buffered response per entry
+// synchronously — that is the single send round-trip the batch amortizes — then
+// reads the per-entry Synced/Failed responses asynchronously and routes each to
+// its result sink (resultChs[i], keyed by entry id). On a stream error the
+// remaining un-acked sinks are failed so their callbacks don't block.
+func (l *logStoreClientRemote) AppendEntries(ctx context.Context, bucketName string, rootPath string, logId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) (bufferedIds []int64, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
+	n := len(entries)
+	if n == 0 {
+		return nil, nil
+	}
+	l.mu.RLock()
+	if l.closed {
+		l.mu.RUnlock()
+		return nil, fmt.Errorf("client is closed")
+	}
+	l.mu.RUnlock()
+
+	chByEntry := make(map[int64]channel.ResultChannel, n)
+	for i, e := range entries {
+		chByEntry[e.EntryId] = resultChs[i]
+	}
+
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	respStream, err := l.innerClient.AddEntries(streamCtx, &proto.AddEntriesRequest{
+		BucketName: bucketName,
+		RootPath:   rootPath,
+		LogId:      logId,
+		Entries:    entries,
+	})
+	if err != nil {
+		streamCancel()
+		return nil, err
+	}
+
+	// Phase 1: one Buffered response per entry (the amortized send round-trip).
+	bufferedIds = make([]int64, 0, n)
+	for i := 0; i < n; i++ {
+		resp, recvErr := respStream.Recv()
+		if recvErr != nil {
+			streamCancel()
+			return bufferedIds, recvErr
+		}
+		if resp.GetState() == proto.AddEntryState_Failed {
+			statusErr := werr.Error(resp.GetStatus())
+			if statusErr == nil {
+				statusErr = werr.ErrUnknownError
+			}
+			streamCancel()
+			return bufferedIds, statusErr
+		}
+		bufferedIds = append(bufferedIds, resp.GetEntryId())
+	}
+
+	// Phase 2: route per-entry Synced/Failed results to their sinks.
+	go func() {
+		defer streamCancel()
+		for len(chByEntry) > 0 {
+			resp, recvErr := respStream.Recv()
+			if recvErr != nil {
+				for _, ch := range chByEntry {
+					if ch != nil {
+						_ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: -1, Err: recvErr})
+					}
+				}
+				return
+			}
+			eid := resp.GetEntryId()
+			ch, ok := chByEntry[eid]
+			if !ok {
+				continue
+			}
+			if resp.GetState() == proto.AddEntryState_Synced {
+				_ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: eid})
+			} else {
+				statusErr := werr.Error(resp.GetStatus())
+				if statusErr == nil {
+					statusErr = werr.ErrUnknownError
+				}
+				_ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: -1, Err: statusErr})
+			}
+			delete(chByEntry, eid)
+		}
+	}()
+
+	return bufferedIds, nil
+}
+
 func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (result *proto.BatchReadResult, err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.GetBatchEntriesAdv(ctx, &proto.GetBatchEntriesAdvRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, FromEntryId: fromEntryId, MaxEntries: maxEntries, LastReadState: lastReadState})
