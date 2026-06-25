@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1155,4 +1156,47 @@ func testSimpleQuorum(t *testing.T, nodeCount, ackQuorum, successCount int, expe
 		assert.False(t, op.completed.Load(), "Operation should not be completed")
 		assert.Less(t, op.ackSet.Count(), ackQuorum, fmt.Sprintf("Less than %d nodes should have acked (insufficient for quorum)", ackQuorum))
 	}
+}
+
+// TestAppendOp_Execute_ParallelFanout verifies that Execute() issues the
+// per-replica sends concurrently rather than sequentially. Each AppendEntry
+// blocks for sendDelay; if the sends were serialized the call would take
+// ~ensembleSize*sendDelay, whereas a parallel fan-out takes ~sendDelay.
+func TestAppendOp_Execute_ParallelFanout(t *testing.T) {
+	const sendDelay = 80 * time.Millisecond
+
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    3,
+		Aq:    2,
+		Es:    3,
+		Nodes: []string{"node1", "node2", "node3"},
+	}
+
+	var sends atomic.Int32
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().IsRemoteClient().Return(true)
+	mockClient.EXPECT().
+		AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, _ int64, _ *proto.LogEntry, _ channel.ResultChannel) {
+			sends.Add(1)
+			time.Sleep(sendDelay)
+		}).
+		Return(int64(3), nil)
+
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+
+	start := time.Now()
+	op.Execute()
+	elapsed := time.Since(start)
+
+	assert.Equal(t, int32(3), sends.Load(), "all replicas should be contacted")
+	assert.Equal(t, 3, len(op.resultChannels))
+	assert.Less(t, elapsed, 2*sendDelay, "per-replica sends should run concurrently (sequential would be ~ensembleSize*sendDelay)")
+
+	cleanupAppendOp(t, op)
 }
