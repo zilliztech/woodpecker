@@ -10,3 +10,8 @@ exclude:
   - vendor/gems/
   - vendor/ruby/
   - wip
+  # Internal AI-agent planning/spec artifacts (writing-plans skill output).
+  # Not user-facing docs, and they contain double-curly-brace sequences (PromQL/
+  # Grafana templating, Python f-string brace-escaping) that Jekyll's Liquid
+  # engine fails to parse, which breaks the Pages build. See issue #204.
+  - superpowers
