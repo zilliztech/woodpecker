@@ -39,8 +39,8 @@ var NodeID = func() string {
 	return "embed"
 }()
 
-// BuildMetricsNamespace returns the metrics namespace string from bucket name and root path.
-func BuildMetricsNamespace(bucketName, rootPath string) string {
+// BuildLogNs returns the metrics log_ns string from bucket name and root path.
+func BuildLogNs(bucketName, rootPath string) string {
 	return bucketName + "/" + rootPath
 }
 

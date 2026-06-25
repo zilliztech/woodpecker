@@ -1139,7 +1139,7 @@ func TestLocalFileWriter_RecoverFromExisting_StatError(t *testing.T) {
 		logId:           1,
 		segmentId:       0,
 		logIdStr:        "1",
-		nsStr:           dir,
+		logNs:           dir,
 		blockIndexes:    make([]*codec.IndexRecord, 0),
 		flushTaskChan:   make(chan *blockFlushTask, 10),
 		runCtx:          runCtx,

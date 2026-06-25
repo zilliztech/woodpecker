@@ -188,9 +188,9 @@ func TestLogReader_GetName(t *testing.T) {
 
 func TestLogReader_ReadNext_NilLogHandle(t *testing.T) {
 	reader := &logBatchReaderImpl{
-		logHandle:        nil,
-		logIdStr:         "1",
-		metricsNamespace: "",
+		logHandle: nil,
+		logIdStr:  "1",
+		logNs:     "",
 	}
 
 	ctx := context.Background()
@@ -212,7 +212,7 @@ func TestLogReader_ReadNext_ContextCancelled(t *testing.T) {
 		pendingReadSegmentId: 0,
 		pendingReadEntryId:   0,
 		readerName:           "test-reader",
-		metricsNamespace:     "",
+		logNs:                "",
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
@@ -247,7 +247,7 @@ func TestLogReader_ReadNext_FromCachedBatch(t *testing.T) {
 		pendingReadSegmentId: 0,
 		pendingReadEntryId:   0,
 		readerName:           "test-reader",
-		metricsNamespace:     "",
+		logNs:                "",
 		batch: &proto.BatchReadResult{
 			Entries: []*proto.LogEntry{
 				{SegId: 0, EntryId: 0, Values: data},
@@ -282,7 +282,7 @@ func TestLogReader_ReadNext_CachedBatchCorruptedData(t *testing.T) {
 		pendingReadSegmentId: 0,
 		pendingReadEntryId:   0,
 		readerName:           "test-reader",
-		metricsNamespace:     "",
+		logNs:                "",
 		batch: &proto.BatchReadResult{
 			Entries: []*proto.LogEntry{
 				{SegId: 0, EntryId: 0, Values: []byte("corrupted data that is not protobuf")},
@@ -325,7 +325,7 @@ func TestLogReader_ReadNext_FreshBatchRead(t *testing.T) {
 		pendingReadEntryId:   0,
 		currentSegmentHandle: mockSegHandle,
 		readerName:           "test-reader",
-		metricsNamespace:     "",
+		logNs:                "",
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
@@ -386,7 +386,7 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 		pendingReadEntryId:   5,
 		currentSegmentHandle: mockSegHandle0,
 		readerName:           "test-reader",
-		metricsNamespace:     "",
+		logNs:                "",
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
@@ -998,12 +998,12 @@ func TestLogReader_Close(t *testing.T) {
 		mockMetadata := mocks_meta.NewMetadataProvider(t)
 
 		reader := &logBatchReaderImpl{
-			logName:          "test-log",
-			logId:            1,
-			logIdStr:         "1",
-			logHandle:        mockLogHandle,
-			readerName:       "test-reader",
-			metricsNamespace: "",
+			logName:    "test-log",
+			logId:      1,
+			logIdStr:   "1",
+			logHandle:  mockLogHandle,
+			readerName: "test-reader",
+			logNs:      "",
 		}
 
 		mockLogHandle.On("GetMetadataProvider").Return(mockMetadata)
@@ -1020,12 +1020,12 @@ func TestLogReader_Close(t *testing.T) {
 		mockMetadata := mocks_meta.NewMetadataProvider(t)
 
 		reader := &logBatchReaderImpl{
-			logName:          "test-log",
-			logId:            1,
-			logIdStr:         "1",
-			logHandle:        mockLogHandle,
-			readerName:       "test-reader",
-			metricsNamespace: "",
+			logName:    "test-log",
+			logId:      1,
+			logIdStr:   "1",
+			logHandle:  mockLogHandle,
+			readerName: "test-reader",
+			logNs:      "",
 		}
 
 		mockLogHandle.On("GetMetadataProvider").Return(mockMetadata)
@@ -1052,7 +1052,7 @@ func TestLogReader_ReadNext_EntryNotFound_ContextCancelled(t *testing.T) {
 		pendingReadEntryId:   0,
 		currentSegmentHandle: mockSegHandle,
 		readerName:           "test-reader",
-		metricsNamespace:     "",
+		logNs:                "",
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
@@ -1099,7 +1099,7 @@ func TestLogReader_ReadNext_OtherReadError(t *testing.T) {
 		pendingReadEntryId:   0,
 		currentSegmentHandle: mockSegHandle,
 		readerName:           "test-reader",
-		metricsNamespace:     "",
+		logNs:                "",
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
@@ -1146,7 +1146,7 @@ func TestLogReader_ReadNext_MultipleBatchEntries(t *testing.T) {
 		pendingReadSegmentId: 0,
 		pendingReadEntryId:   0,
 		readerName:           "test-reader",
-		metricsNamespace:     "",
+		logNs:                "",
 		batch: &proto.BatchReadResult{
 			Entries: []*proto.LogEntry{
 				{SegId: 0, EntryId: 0, Values: data1},

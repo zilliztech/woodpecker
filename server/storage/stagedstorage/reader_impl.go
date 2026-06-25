@@ -53,7 +53,7 @@ type StagedFileReaderAdv struct {
 	logId    int64
 	segId    int64
 	logIdStr string // for metrics only
-	nsStr    string // for metrics only
+	logNs    string // for metrics only
 	filePath string
 
 	// object access, only used for compacted object access
@@ -140,7 +140,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 		logId:           logId,
 		segId:           segId,
 		logIdStr:        strconv.FormatInt(logId, 10),
-		nsStr:           bucket + "/" + rootPath,
+		logNs:           bucket + "/" + rootPath,
 		filePath:        filePath,
 		maxBatchSize:    maxBatchSize,
 		file:            file,
@@ -167,7 +167,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 		return nil, fmt.Errorf("try parse footer and indexes: %w", parseFooterErr)
 	}
 
-	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.nsStr, reader.logIdStr).Inc()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.logNs, reader.logIdStr).Inc()
 	logger.Ctx(ctx).Debug("staged file reader created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("currentFileSize", currentSize),
@@ -230,7 +230,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 		zap.String("footerKey", footerKey))
 
 	// Check if footer exists
-	objSize, _, err := r.storageCli.StatObject(ctx, r.bucket, footerKey, r.nsStr, r.logIdStr)
+	objSize, _, err := r.storageCli.StatObject(ctx, r.bucket, footerKey, r.logNs, r.logIdStr)
 	if err != nil {
 		if minioHandler.IsObjectNotExists(err) {
 			logger.Ctx(ctx).Debug("no compacted footer found in minio",
@@ -244,7 +244,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	}
 
 	// Read the entire footer file
-	reader, err := r.storageCli.GetObject(ctx, r.bucket, footerKey, 0, objSize, r.nsStr, r.logIdStr)
+	reader, err := r.storageCli.GetObject(ctx, r.bucket, footerKey, 0, objSize, r.logNs, r.logIdStr)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to get footer object from minio",
 			zap.String("footerKey", footerKey),
@@ -853,8 +853,8 @@ func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) err
 		zap.Int64("fileSize", currentFileSize),
 		zap.Int64("scannedOffset", currentOffset))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr, "loadAll", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -1044,7 +1044,7 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 	}
 
 	if len(entries) == 0 {
-		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Debug("no entry extracted",
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
@@ -1081,8 +1081,8 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Add(float64(readBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState
@@ -1196,7 +1196,7 @@ func (r *StagedFileReaderAdv) Close(ctx context.Context) error {
 	if r.pool != nil {
 		r.pool.Release()
 	}
-	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Dec()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }
@@ -1353,8 +1353,8 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 		LastReadState: lastReadState,
 	}
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Add(float64(readBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	logger.Ctx(ctx).Info("completed concurrent reading compacted data from minio",
 		zap.Int("entriesCount", len(entries)),
@@ -1445,14 +1445,14 @@ func (r *StagedFileReaderAdv) readBlockFromMinioByKey(ctx context.Context, objKe
 		zap.String("objKey", objKey))
 
 	// Read the block object
-	reader, err := r.storageCli.GetObject(ctx, r.bucket, objKey, 0, objSize, r.nsStr, r.logIdStr)
+	reader, err := r.storageCli.GetObject(ctx, r.bucket, objKey, 0, objSize, r.logNs, r.logIdStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block object: %w", err)
 	}
 	defer reader.Close()
 
 	// Read all data using ReadObjectFull to ensure consistent metrics tracking
-	blockData, err := minioHandler.ReadObjectFull(ctx, reader, objSize, r.nsStr, r.logIdStr)
+	blockData, err := minioHandler.ReadObjectFull(ctx, reader, objSize, r.logNs, r.logIdStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read block data: %w", err)
 	}

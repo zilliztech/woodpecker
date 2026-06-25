@@ -47,7 +47,7 @@ type SequentialBuffer struct {
 	logId     int64
 	segmentId int64
 	logIdStr  string // for metrics only
-	nsStr     string // for metrics only
+	logNs     string // for metrics only
 
 	Entries                 []*BufferEntry // entries with data and notification channels
 	MaxEntries              int64          // max amount of entries
@@ -63,7 +63,7 @@ func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEn
 		logId:        logId,
 		segmentId:    segmentId,
 		logIdStr:     strconv.FormatInt(logId, 10),
-		nsStr:        operatingNamespace,
+		logNs:        operatingNamespace,
 		Entries:      make([]*BufferEntry, maxEntries),
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
@@ -83,7 +83,7 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 		logId:        logId,
 		segmentId:    segmentId,
 		logIdStr:     strconv.FormatInt(logId, 10),
-		nsStr:        operatingNamespace,
+		logNs:        operatingNamespace,
 		Entries:      entries,
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
@@ -196,7 +196,7 @@ func (b *SequentialBuffer) NotifyEntriesInRange(ctx context.Context, startEntryI
 		if entry != nil && entry.NotifyChan != nil {
 			// Track buffer wait latency
 			if !entry.EnqueueTime.IsZero() {
-				metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, b.nsStr, b.logIdStr).
+				metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, b.logNs, b.logIdStr).
 					Observe(float64(time.Since(entry.EnqueueTime).Milliseconds()))
 			}
 
@@ -254,7 +254,7 @@ func (b *SequentialBuffer) NotifyAllPendingEntries(ctx context.Context, result i
 		if entry != nil && entry.NotifyChan != nil {
 			// Track buffer wait latency
 			if !entry.EnqueueTime.IsZero() {
-				metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, b.nsStr, b.logIdStr).
+				metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, b.logNs, b.logIdStr).
 					Observe(float64(time.Since(entry.EnqueueTime).Milliseconds()))
 			}
 
@@ -403,10 +403,10 @@ func (b *SequentialBuffer) notifyAllPendingEntriesUnsafe(ctx context.Context, re
 // NotifyPendingEntryDirectly notifies a single entry directly with the specified result
 // For successful entries (result >= 0), the entry receives the entryId
 // For failed entries (result < 0), the entry receives the error result
-func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64, notifyChan channel.ResultChannel, result int64, resultErr error, nsStr string, enqueueTime time.Time) {
+func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64, notifyChan channel.ResultChannel, result int64, resultErr error, logNs string, enqueueTime time.Time) {
 	// Track buffer wait latency
-	if !enqueueTime.IsZero() && nsStr != "" {
-		metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, nsStr, strconv.FormatInt(logId, 10)).
+	if !enqueueTime.IsZero() && logNs != "" {
+		metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, logNs, strconv.FormatInt(logId, 10)).
 			Observe(float64(time.Since(enqueueTime).Milliseconds()))
 	}
 

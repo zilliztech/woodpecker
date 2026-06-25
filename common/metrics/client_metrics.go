@@ -156,6 +156,17 @@ var (
 		Help:      "Number of pending append operations in segment handles",
 	}, []string{"log_ns", "log_id"})
 
+	// Active (writable) segment -> quorum node membership. One series per node of
+	// the current active segment; value is always 1. Series are deleted when the
+	// segment leaves the writable state, so a query reflects only the currently
+	// active segment of each log (used to verify node switching/failover).
+	WpActiveSegmentNode = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "active_segment_node",
+		Help:      "Quorum node membership of each log's current active (writable) segment (value always 1, one series per node)",
+	}, []string{"log_ns", "log_id", "segment_id", "node"})
+
 	// Direct read metrics (client reads sealed segments directly from object storage)
 	WpClientDirectReadRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
@@ -217,6 +228,8 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSegmentHandleOperationsTotal)
 		registerer.MustRegister(WpSegmentHandleOperationLatency)
 		registerer.MustRegister(WpSegmentHandlePendingAppendOps)
+		// Active segment node membership
+		registerer.MustRegister(WpActiveSegmentNode)
 		// Direct read metrics
 		registerer.MustRegister(WpClientDirectReadRequestsTotal)
 		registerer.MustRegister(WpClientDirectReadLatency)
@@ -227,8 +240,24 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 }
 
 // UpdateSegmentState transitions the segment state gauge: decrements the old state count
-// and increments the new state count for the given namespace and log.
-func UpdateSegmentState(namespace, logId, oldState, newState string) {
-	WpClientSegmentState.WithLabelValues(namespace, logId, oldState).Dec()
-	WpClientSegmentState.WithLabelValues(namespace, logId, newState).Inc()
+// and increments the new state count for the given logNs and log.
+func UpdateSegmentState(logNs, logId, oldState, newState string) {
+	WpClientSegmentState.WithLabelValues(logNs, logId, oldState).Dec()
+	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Inc()
+}
+
+// SetActiveSegmentNodes marks each node of an active (writable) segment's quorum
+// with a value of 1 (one series per node). Call when a segment becomes writable.
+func SetActiveSegmentNodes(logNs, logId, segmentId string, nodes []string) {
+	for _, node := range nodes {
+		WpActiveSegmentNode.WithLabelValues(logNs, logId, segmentId, node).Set(1)
+	}
+}
+
+// ClearActiveSegmentNodes deletes the per-node series for an active segment.
+// Call when the segment leaves the writable state (completed / rolling / closed).
+func ClearActiveSegmentNodes(logNs, logId, segmentId string, nodes []string) {
+	for _, node := range nodes {
+		WpActiveSegmentNode.DeleteLabelValues(logNs, logId, segmentId, node)
+	}
 }

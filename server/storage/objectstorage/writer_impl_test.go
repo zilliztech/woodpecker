@@ -85,7 +85,7 @@ func newTestMinioFileWriter() *MinioFileWriter {
 		segmentId:           0,
 		logIdStr:            "1",
 		segmentIdStr:        "0",
-		nsStr:               "test-bucket/test-base",
+		logNs:               "test-bucket/test-base",
 		segmentFileKey:      "test-base/1/0",
 		bucket:              "test-bucket",
 		maxBufferSize:       syncPolicyConfig.MaxBytes.Int64(),
@@ -115,7 +115,7 @@ func newTestMinioFileWriter() *MinioFileWriter {
 	w.lastSyncTimestamp.Store(time.Now().UnixMilli())
 	w.lastModifiedTime.Store(time.Now().UnixMilli())
 
-	newBuffer := cache.NewSequentialBuffer(1, 0, 0, maxBufferEntries, w.nsStr)
+	newBuffer := cache.NewSequentialBuffer(1, 0, 0, maxBufferEntries, w.logNs)
 	w.buffer.Store(newBuffer)
 
 	return w
@@ -1865,7 +1865,7 @@ func TestMinioFileWriter_Compact_MetricsAccuracy(t *testing.T) {
 
 	// Read gauge values before compaction
 	getGauge := func(gv *prometheus.GaugeVec) float64 {
-		g, _ := gv.GetMetricWithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr)
+		g, _ := gv.GetMetricWithLabelValues(metrics.NodeID, w.logNs, w.logIdStr)
 		m := &dto.Metric{}
 		_ = g.Write(m)
 		return m.GetGauge().GetValue()
@@ -2522,7 +2522,7 @@ func TestMinioFileWriter_WriteDataAsync_BufferFullTriggerSync(t *testing.T) {
 	w.maxBufferEntries = 3
 
 	// Create a new buffer with MaxEntries=3
-	newBuffer := cache.NewSequentialBuffer(1, 0, 0, 3, w.nsStr)
+	newBuffer := cache.NewSequentialBuffer(1, 0, 0, 3, w.logNs)
 	w.buffer.Store(newBuffer)
 
 	ch := newMockResultChannel()
@@ -2550,7 +2550,7 @@ func TestMinioFileWriter_WriteDataAsync_BufferFullSyncError(t *testing.T) {
 	w := newTestMinioFileWriter()
 	w.maxBufferEntries = 3
 
-	newBuffer := cache.NewSequentialBuffer(1, 0, 0, 3, w.nsStr)
+	newBuffer := cache.NewSequentialBuffer(1, 0, 0, 3, w.logNs)
 	w.buffer.Store(newBuffer)
 
 	ch := newMockResultChannel()

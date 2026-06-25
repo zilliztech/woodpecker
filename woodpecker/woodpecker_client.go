@@ -223,7 +223,7 @@ func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName 
 		return nil, err
 	}
 	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc, objectStorageClient)
-	metrics.WpLogNameIdMapping.WithLabelValues(metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath), logName).Set(float64(logMeta.Metadata.GetLogId()))
+	metrics.WpLogNameIdMapping.WithLabelValues(metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath), logName).Set(float64(logMeta.Metadata.GetLogId()))
 	return newLogHandle, nil
 }
 
