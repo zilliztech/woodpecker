@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
@@ -40,8 +41,9 @@ import (
 //
 // Run: go test ./woodpecker/segment/ -run '^$' -bench BenchmarkGroupCommit -benchtime=2s
 func BenchmarkGroupCommit(b *testing.B) {
+	_ = logger.SetLevel("warn")      // keep per-op debug logging out of the measured path
 	const rtt = 1 * time.Millisecond // representative per-entry buffered round-trip
-	for _, k := range []int{1, 4, 16, 64} {
+	for _, k := range []int{1, 4, 8, 16, 32, 64, 128, 256} {
 		b.Run(fmt.Sprintf("rtt=1ms/maxBatch=%d", k), func(b *testing.B) {
 			benchGroupCommit(b, k, rtt)
 		})
