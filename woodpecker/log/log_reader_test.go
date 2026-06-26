@@ -657,11 +657,13 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("SkipTruncatedSegment", func(t *testing.T) {
+	t.Run("ReadTruncatedSegmentNotGCed", func(t *testing.T) {
+		// A segment that is logically Truncated but still physically present must be
+		// read directly from the requested position. It is only skipped once it has
+		// been physically GC'd (ErrSegmentNotFound). See issue #209.
 		mockLogHandle := &testLogHandleMock{}
 		mockLogHandle.Test(t)
 		mockTruncatedSegHandle := mocks_segment_handle.NewSegmentHandle(t)
-		mockActiveSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
 			logName:              "test-log",
@@ -670,39 +672,110 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 			logHandle:            mockLogHandle,
 			readerName:           "test-reader",
 			pendingReadSegmentId: 0,
-			pendingReadEntryId:   0,
+			pendingReadEntryId:   3,
 		}
 
-		// Segment 0 is truncated
+		// Segment 0 is marked Truncated but still exists -> must be returned as-is
 		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(0)).Return(mockTruncatedSegHandle, nil)
 		mockTruncatedSegHandle.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
 			Metadata: &proto.SegmentMetadata{
-				State: proto.SegmentState_Truncated,
+				State:       proto.SegmentState_Truncated,
+				LastEntryId: 10,
 			},
 		})
 		mockTruncatedSegHandle.EXPECT().GetId(mock.Anything).Return(int64(0)).Maybe()
 
-		// Segment 1 is active
-		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(1)).Return(mockActiveSegHandle, nil)
-		mockActiveSegHandle.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
+		ctx := context.Background()
+		segHandle, segId, entryId, err := reader.findNextReadableSegment(ctx, 0)
+		assert.NotNil(t, segHandle)
+		assert.Equal(t, int64(0), segId)
+		assert.Equal(t, int64(3), entryId) // unchanged: read directly from the requested position
+		assert.NoError(t, err)
+		// The segment is still present, so no truncation-point lookup is needed.
+		mockLogHandle.AssertNotCalled(t, "GetTruncatedRecordId", mock.Anything)
+	})
+
+	t.Run("SkipGCedSegmentToOldestLiveSegment", func(t *testing.T) {
+		// Requested position falls on physically GC'd segments (ErrSegmentNotFound)
+		// below the truncation point -> skip forward to the oldest segment that still
+		// exists and continue from its first entry. See issue #209.
+		mockLogHandle := &testLogHandleMock{}
+		mockLogHandle.Test(t)
+		mockLiveSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+		reader := &logBatchReaderImpl{
+			logName:              "test-log",
+			logId:                1,
+			logIdStr:             "1",
+			logHandle:            mockLogHandle,
+			readerName:           "test-reader",
+			pendingReadSegmentId: 0,
+			pendingReadEntryId:   7,
+		}
+
+		// Truncation point at segment 5; segments 0 and 1 are GC'd, segment 2 is live.
+		mockLogHandle.On("GetTruncatedRecordId", mock.Anything).Return(&LogMessageId{SegmentId: 5, EntryId: 100}, nil)
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(0)).Return(nil, werr.ErrSegmentNotFound)
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(1)).Return(nil, werr.ErrSegmentNotFound)
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(2)).Return(mockLiveSegHandle, nil)
+		mockLiveSegHandle.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
 			Metadata: &proto.SegmentMetadata{
 				State:       proto.SegmentState_Active,
-				LastEntryId: 5,
+				LastEntryId: 20,
 			},
 		})
-		mockActiveSegHandle.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+		mockLiveSegHandle.EXPECT().GetId(mock.Anything).Return(int64(2)).Maybe()
 
 		ctx := context.Background()
-		segHandle, segId, entryId, err := reader.findNextReadableSegment(ctx, 1)
+		segHandle, segId, entryId, err := reader.findNextReadableSegment(ctx, 5)
 		assert.NotNil(t, segHandle)
-		assert.Equal(t, int64(1), segId)
-		assert.Equal(t, int64(0), entryId) // reset to 0 because we moved to next segment
+		assert.Equal(t, int64(2), segId)
+		assert.Equal(t, int64(0), entryId) // reset to 0 because we advanced past GC'd segments
 		assert.NoError(t, err)
 	})
 
-	t.Run("SegmentNotFoundError", func(t *testing.T) {
+	t.Run("WaitWhenMissingSegmentBeyondTruncationPoint", func(t *testing.T) {
+		// A missing segment that is *beyond* the truncation point is "not written yet"
+		// (future) -> wait, do NOT skip forward even if a later segment already exists.
+		// This preserves normal tail-read behavior. See issue #209.
 		mockLogHandle := &testLogHandleMock{}
 		mockLogHandle.Test(t)
+		mockSeg7 := mocks_segment_handle.NewSegmentHandle(t)
+
+		reader := &logBatchReaderImpl{
+			logName:              "test-log",
+			logId:                1,
+			logIdStr:             "1",
+			logHandle:            mockLogHandle,
+			readerName:           "test-reader",
+			pendingReadSegmentId: 6,
+			pendingReadEntryId:   0,
+		}
+
+		mockLogHandle.On("GetTruncatedRecordId", mock.Anything).Return(&LogMessageId{SegmentId: 3, EntryId: 50}, nil)
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(6)).Return(nil, werr.ErrSegmentNotFound)
+		// Segment 7 exists but must NOT be reached, because 6 > truncatedPoint(3).
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(7)).Return(mockSeg7, nil).Maybe()
+		mockSeg7.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
+			Metadata: &proto.SegmentMetadata{State: proto.SegmentState_Active, LastEntryId: 5},
+		}).Maybe()
+		mockSeg7.EXPECT().GetId(mock.Anything).Return(int64(7)).Maybe()
+
+		ctx := context.Background()
+		segHandle, segId, entryId, err := reader.findNextReadableSegment(ctx, 7)
+		assert.Nil(t, segHandle)
+		assert.Equal(t, int64(-1), segId)
+		assert.Equal(t, int64(-1), entryId)
+		assert.True(t, werr.ErrSegmentNotFound.Is(err))
+	})
+
+	t.Run("NoTruncationPointMissingSegmentWaits", func(t *testing.T) {
+		// When the log was never truncated (truncated point == -1) there is no GC
+		// region; a missing segment is "not written yet" -> wait, do not move the read
+		// position (unchanged legacy behavior). See issue #209.
+		mockLogHandle := &testLogHandleMock{}
+		mockLogHandle.Test(t)
+		mockSeg1 := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
 			logName:              "test-log",
@@ -714,17 +787,116 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 			pendingReadEntryId:   0,
 		}
 
-		// Segment 0 not found (skip), segment 1 also not found
+		mockLogHandle.On("GetTruncatedRecordId", mock.Anything).Return(&LogMessageId{SegmentId: -1, EntryId: -1}, nil)
 		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(0)).Return(nil, werr.ErrSegmentNotFound)
-		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(1)).Return(nil, werr.ErrSegmentNotFound)
+		// Segment 1 exists but must NOT be reached because there is no GC region.
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(1)).Return(mockSeg1, nil).Maybe()
+		mockSeg1.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
+			Metadata: &proto.SegmentMetadata{State: proto.SegmentState_Active, LastEntryId: 5},
+		}).Maybe()
+		mockSeg1.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
 
 		ctx := context.Background()
 		segHandle, segId, entryId, err := reader.findNextReadableSegment(ctx, 1)
 		assert.Nil(t, segHandle)
 		assert.Equal(t, int64(-1), segId)
 		assert.Equal(t, int64(-1), entryId)
-		assert.Error(t, err)
 		assert.True(t, werr.ErrSegmentNotFound.Is(err))
+	})
+
+	t.Run("TruncationSegmentItselfGCedSkipsForward", func(t *testing.T) {
+		// Boundary: the missing segment id == truncated point's segment id. After the
+		// truncation point advances, the old truncation segment can itself be GC'd, so
+		// a missing segment AT the truncation point must skip forward (<=, not <).
+		// See issue #209.
+		mockLogHandle := &testLogHandleMock{}
+		mockLogHandle.Test(t)
+		mockSeg6 := mocks_segment_handle.NewSegmentHandle(t)
+
+		reader := &logBatchReaderImpl{
+			logName:              "test-log",
+			logId:                1,
+			logIdStr:             "1",
+			logHandle:            mockLogHandle,
+			readerName:           "test-reader",
+			pendingReadSegmentId: 5,
+			pendingReadEntryId:   2,
+		}
+
+		mockLogHandle.On("GetTruncatedRecordId", mock.Anything).Return(&LogMessageId{SegmentId: 5, EntryId: 0}, nil)
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(5)).Return(nil, werr.ErrSegmentNotFound)
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(6)).Return(mockSeg6, nil)
+		mockSeg6.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
+			Metadata: &proto.SegmentMetadata{State: proto.SegmentState_Active, LastEntryId: 5},
+		})
+		mockSeg6.EXPECT().GetId(mock.Anything).Return(int64(6)).Maybe()
+
+		ctx := context.Background()
+		segHandle, segId, entryId, err := reader.findNextReadableSegment(ctx, 6)
+		assert.NotNil(t, segHandle)
+		assert.Equal(t, int64(6), segId)
+		assert.Equal(t, int64(0), entryId)
+		assert.NoError(t, err)
+	})
+
+	t.Run("GetTruncatedRecordIdErrorFallsBackToSkip", func(t *testing.T) {
+		// If the truncation point cannot be read, degrade to skipping the missing
+		// segment (legacy bounded-scan behavior) rather than blocking forever.
+		mockLogHandle := &testLogHandleMock{}
+		mockLogHandle.Test(t)
+		mockSeg1 := mocks_segment_handle.NewSegmentHandle(t)
+
+		reader := &logBatchReaderImpl{
+			logName:              "test-log",
+			logId:                1,
+			logIdStr:             "1",
+			logHandle:            mockLogHandle,
+			readerName:           "test-reader",
+			pendingReadSegmentId: 0,
+			pendingReadEntryId:   0,
+		}
+
+		mockLogHandle.On("GetTruncatedRecordId", mock.Anything).Return(nil, werr.ErrInternalError)
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(0)).Return(nil, werr.ErrSegmentNotFound)
+		mockLogHandle.On("GetExistsReadonlySegmentHandle", mock.Anything, int64(1)).Return(mockSeg1, nil)
+		mockSeg1.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
+			Metadata: &proto.SegmentMetadata{State: proto.SegmentState_Active, LastEntryId: 5},
+		})
+		mockSeg1.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+
+		ctx := context.Background()
+		segHandle, segId, entryId, err := reader.findNextReadableSegment(ctx, 1)
+		assert.NotNil(t, segHandle)
+		assert.Equal(t, int64(1), segId)
+		assert.Equal(t, int64(0), entryId)
+		assert.NoError(t, err)
+	})
+
+	t.Run("IdleReaderBeyondLatestDoesNotFetchTruncationPoint", func(t *testing.T) {
+		// pending(5) > latest(4): the scan loop never runs, so an idle tail reader must
+		// return ErrSegmentNotFound WITHOUT reading the truncation point (no per-poll
+		// etcd read, cf. #189/#190).
+		mockLogHandle := &testLogHandleMock{}
+		mockLogHandle.Test(t)
+
+		reader := &logBatchReaderImpl{
+			logName:              "test-log",
+			logId:                1,
+			logIdStr:             "1",
+			logHandle:            mockLogHandle,
+			readerName:           "test-reader",
+			pendingReadSegmentId: 5,
+			pendingReadEntryId:   0,
+		}
+
+		ctx := context.Background()
+		segHandle, segId, entryId, err := reader.findNextReadableSegment(ctx, 4)
+		assert.Nil(t, segHandle)
+		assert.Equal(t, int64(-1), segId)
+		assert.Equal(t, int64(-1), entryId)
+		assert.True(t, werr.ErrSegmentNotFound.Is(err))
+		mockLogHandle.AssertNotCalled(t, "GetTruncatedRecordId", mock.Anything)
+		mockLogHandle.AssertNotCalled(t, "GetExistsReadonlySegmentHandle", mock.Anything, mock.Anything)
 	})
 
 	t.Run("GetSegmentHandleReturnsOtherError", func(t *testing.T) {

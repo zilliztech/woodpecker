@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/proto"
@@ -660,6 +661,144 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 			assert.NoError(t, err)
 
 			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+		})
+	}
+}
+
+// TestReopenAtTruncatedButNotGCedPosition verifies that a reader explicitly reopened at
+// a specific position inside a segment that is logically Truncated but not yet physically
+// GC'd reads from exactly that position, instead of being force-advanced to the truncation
+// point. Regression test for issue #209.
+func TestReopenAtTruncatedButNotGCedPosition(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestReopenAtTruncatedButNotGCedPosition")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{name: "LocalFsStorage", storageType: "local", rootPath: rootPath},
+		{name: "ObjectStorage", storageType: "", rootPath: ""},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+			// Small segment size to force multiple segments.
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize = 1024 * 2 // 2KB
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+
+			logName := "truncate_reopen_truncated_pos_" + t.Name() + "_" + time.Now().Format("20060102150405")
+			err = client.CreateLog(context.Background(), logName)
+			assert.NoError(t, err)
+			logHandle, err := client.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			logWriter, err := logHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, err)
+
+			const totalMsgs = 10
+			const msgSize = 1024 // 1KB per message -> ~2 messages per 2KB segment
+			writtenIds := make([]*log.LogMessageId, totalMsgs)
+			for i := 0; i < totalMsgs; i++ {
+				payload := make([]byte, msgSize)
+				for j := 0; j < msgSize; j++ {
+					payload[j] = byte(i % 256)
+				}
+				result := logWriter.Write(context.Background(), &log.WriteMessage{
+					Payload:    payload,
+					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
+				})
+				assert.NoError(t, result.Err)
+				writtenIds[i] = result.LogMessageId
+			}
+
+			// Specific read position: the first message of segment 1. We deliberately avoid
+			// segment 0 / entry 0 because (0,0) collides with the "earliest" sentinel and
+			// would legitimately be force-adjusted to the truncation point on open.
+			var specificPos *log.LogMessageId
+			specificIdx := -1
+			for i := 0; i < totalMsgs; i++ {
+				if writtenIds[i].SegmentId == 1 {
+					specificPos = writtenIds[i]
+					specificIdx = i
+					break
+				}
+			}
+			require.NotNil(t, specificPos, "expected at least one message in segment 1")
+			require.False(t, specificPos.SegmentId == 0 && specificPos.EntryId == 0)
+
+			// Truncation point: a message in a segment strictly after specificPos's segment,
+			// so specificPos's whole segment is below the truncation point and gets marked
+			// Truncated (yet kept; it is not the truncation segment itself).
+			var truncatePoint *log.LogMessageId
+			for i := 0; i < totalMsgs; i++ {
+				if writtenIds[i].SegmentId > specificPos.SegmentId {
+					truncatePoint = writtenIds[i]
+					break
+				}
+			}
+			require.NotNil(t, truncatePoint, "expected a message in a later segment")
+			require.Greater(t, truncatePoint.SegmentId, specificPos.SegmentId)
+
+			// Truncate, then deterministically persist the pre-truncation segments' Truncated
+			// state to the metadata store.
+			err = logHandle.Truncate(context.Background(), truncatePoint)
+			assert.NoError(t, err)
+			err = logHandle.CheckAndSetSegmentTruncatedIfNeed(context.Background())
+			assert.NoError(t, err)
+
+			// Restart the client so the reader gets FRESH segment handles that reflect the
+			// persisted Truncated state. (Without a restart, the in-process segment handle's
+			// cached metadata still reads as non-truncated and would mask the bug; the real
+			// "reopen" scenario uses fresh handles.) Default TTL is 72h, so nothing is GC'd.
+			err = logWriter.Close(context.Background())
+			assert.NoError(t, err)
+			stopErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopErr, "close embed LogStore instance error")
+
+			newClient, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+			newLogHandle, err := newClient.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Confirm specificPos's segment is Truncated but still physically present.
+			segments, err := newLogHandle.GetSegments(context.Background())
+			assert.NoError(t, err)
+			seg, ok := segments[specificPos.SegmentId]
+			require.True(t, ok, "truncated segment %d must still exist (not yet GC'd)", specificPos.SegmentId)
+			assert.Equal(t, proto.SegmentState_Truncated, seg.Metadata.State,
+				"segment %d should be marked Truncated", specificPos.SegmentId)
+
+			// Reopen a NEW reader at the explicit truncated-but-not-GC'd position.
+			reader, err := newLogHandle.OpenLogReader(context.Background(), specificPos, "reopen-at-truncated-pos-reader")
+			assert.NoError(t, err)
+
+			msg, err := reader.ReadNext(context.Background())
+			assert.NoError(t, err)
+			require.NotNil(t, msg)
+
+			// Must read from exactly the requested position, NOT the truncation point.
+			assert.Equal(t, specificPos.SegmentId, msg.Id.SegmentId,
+				"reader must start at the requested (truncated-but-present) segment, not be advanced")
+			assert.Equal(t, specificPos.EntryId, msg.Id.EntryId,
+				"reader must start at the requested entry, not the truncation point")
+			assert.Equal(t, fmt.Sprintf("%d", specificIdx), msg.Properties["index"])
+
+			err = reader.Close(context.Background())
+			assert.NoError(t, err)
+
 			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
 			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
