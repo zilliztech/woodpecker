@@ -18,6 +18,7 @@ package log
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"time"
 
@@ -369,11 +370,31 @@ func (l *logBatchReaderImpl) isEntryInCurrentSegment(ctx context.Context) bool {
 	return true
 }
 
-// findNextReadableSegment finds the next segment that can be read from
+// findNextReadableSegment finds the next segment that can be read from.
+//
+// A segment that is logically Truncated but still physically present is readable:
+// truncation only adjusts the start position at open time (see
+// logHandleImpl.adjustPendingReadPointIfTruncated). The only thing that forces a
+// runtime position move is physical GC, detected via ErrSegmentNotFound. (issue #209)
+//
+// When a segment is missing we distinguish "GC'd" from "not written yet" using the
+// truncation point: a missing segment whose id <= truncatedSegmentId has been GC'd
+// (cleanup only deletes segments up to the truncation point, and the truncation
+// segment itself can be GC'd once the point advances), so we skip forward to the
+// oldest segment that still exists; a missing segment beyond the truncation point is
+// not written yet, so we stop and let the caller wait. When the log was never
+// truncated (truncatedSegmentId < 0) there is no GC region, so a missing segment is
+// always treated as not-yet-written.
 func (l *logBatchReaderImpl) findNextReadableSegment(ctx context.Context, latestSegmentId int64) (segment.SegmentHandle, int64, int64, error) {
 	// Start searching from the next segment (entry ID will be 0)
 	nextSegmentId := l.pendingReadSegmentId
 	nextEntryId := l.pendingReadEntryId
+
+	// truncatedSegmentId is fetched lazily, only on the first ErrSegmentNotFound, so
+	// that idle tail readers (pending > latest, loop body never runs) do not read meta
+	// on every poll (cf. #189/#190).
+	var truncatedSegmentId int64 = -1
+	truncatedFetched := false
 
 	for nextSegmentId <= latestSegmentId {
 		segHandle, err := l.logHandle.GetExistsReadonlySegmentHandle(context.Background(), nextSegmentId)
@@ -388,27 +409,29 @@ func (l *logBatchReaderImpl) findNextReadableSegment(ctx context.Context, latest
 		}
 
 		if err != nil && werr.ErrSegmentNotFound.Is(err) {
-			// Segment doesn't exist, try next one
-			nextSegmentId++
-			continue
+			// Segment metadata is gone. Decide whether it was physically GC'd (skip
+			// forward) or simply not written yet (stop and let the caller wait).
+			if !truncatedFetched {
+				truncatedSegmentId = l.fetchTruncatedSegmentIdForSkip(ctx)
+				truncatedFetched = true
+			}
+			if truncatedSegmentId >= 0 && nextSegmentId <= truncatedSegmentId {
+				// Within the GC-able range and missing -> it has been cleaned. Probe
+				// forward to the next segment.
+				nextSegmentId++
+				continue
+			}
+			// Beyond the truncation point (or never truncated): treat as not-yet-written
+			// and let the caller wait for it without moving the read position.
+			break
 		}
 
 		// assert segHandle != nil
 		if segHandle != nil {
 			m := segHandle.GetMetadata(context.Background())
 
-			// Skip truncated segments
-			if m.Metadata.State == proto.SegmentState_Truncated {
-				logger.Ctx(ctx).Debug("skip truncated segment",
-					zap.String("logName", l.logName),
-					zap.Int64("logId", l.logId),
-					zap.Int64("segmentId", segHandle.GetId(ctx)),
-					zap.String("readerName", l.readerName))
-				nextSegmentId++
-				continue
-			}
-
-			// Found a readable segment (completed or active)
+			// NOTE: a Truncated-but-still-present segment is readable and must NOT be
+			// skipped here; logical truncation is enforced only at open time. (#209)
 			logger.Ctx(ctx).Debug("found readable segment",
 				zap.String("logName", l.logName),
 				zap.Int64("logId", l.logId),
@@ -416,6 +439,16 @@ func (l *logBatchReaderImpl) findNextReadableSegment(ctx context.Context, latest
 				zap.String("state", m.Metadata.State.String()),
 				zap.String("readerName", l.readerName))
 			if nextSegmentId > l.pendingReadSegmentId {
+				// We advanced past one or more physically cleaned (GC'd) segments to
+				// satisfy this read. Surface the forced position move for audit. (#209)
+				logger.Ctx(ctx).Warn("requested read position is in a cleaned(GC'd) range, skipping forward to the oldest available segment",
+					zap.String("logName", l.logName),
+					zap.Int64("logId", l.logId),
+					zap.String("readerName", l.readerName),
+					zap.Int64("requestedSegmentId", l.pendingReadSegmentId),
+					zap.Int64("requestedEntryId", l.pendingReadEntryId),
+					zap.Int64("resumeSegmentId", nextSegmentId),
+					zap.String("resumeSegmentState", m.Metadata.State.String()))
 				// move to nextSegment's first entryId
 				nextEntryId = 0
 			}
@@ -429,6 +462,23 @@ func (l *logBatchReaderImpl) findNextReadableSegment(ctx context.Context, latest
 	// No existing segment found, wait for future segment (silent: this is the
 	// steady-state of an idle tail reader and must not log on every poll, issue #190).
 	return nil, -1, -1, werr.ErrSegmentNotFound.WithCauseErrMsg("no existing readable segment found")
+}
+
+// fetchTruncatedSegmentIdForSkip returns the current truncation point's segment id,
+// used to decide whether a missing segment was physically GC'd. If the truncation
+// point cannot be read, it degrades to the legacy bounded scan (skip the missing
+// segment within [pending, latest]) instead of blocking, by returning math.MaxInt64.
+func (l *logBatchReaderImpl) fetchTruncatedSegmentIdForSkip(ctx context.Context) int64 {
+	truncatedId, err := l.logHandle.GetTruncatedRecordId(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("failed to get truncation point while resolving a missing segment, falling back to skip",
+			zap.String("logName", l.logName),
+			zap.Int64("logId", l.logId),
+			zap.String("readerName", l.readerName),
+			zap.Error(err))
+		return math.MaxInt64
+	}
+	return truncatedId.SegmentId
 }
 
 func (l *logBatchReaderImpl) GetName() string {
