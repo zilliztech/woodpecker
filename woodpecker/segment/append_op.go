@@ -117,10 +117,37 @@ func (op *AppendOp) Execute() {
 		op.resultChannels = make([]channel.ResultChannel, len(op.quorumInfo.Nodes))
 	}
 
-	for i := 0; i < len(op.quorumInfo.Nodes); i++ {
-		// send request to the node
-		op.sendWriteRequestRetry(ctx, i)
+	// Fan out the per-replica sends concurrently.
+	//
+	// Each sendWriteRequestRetry blocks inside cli.AppendEntry until that
+	// replica returns its first (Buffered) response. Issuing them sequentially
+	// made an op's critical path the SUM of the per-replica round-trips, which
+	// caps single-log append throughput at roughly 1/(ensembleSize * RTT). The
+	// durable acks are already handled asynchronously (see receivedAckCallback),
+	// so only these initial sends were serialized.
+	//
+	// Sending to all replicas in parallel makes the critical path the MAX
+	// round-trip instead of the sum, lifting single-log throughput by up to the
+	// ensemble size. Each goroutine only touches its own serverIndex slot
+	// (resultChannels[i], channelErrors[i], channelAttempts[i]), so there is no
+	// shared-state race. Ordering is unaffected: entry IDs are pre-assigned in
+	// AppendAsync and acknowledged in order by SendAppendSuccessCallbacks.
+	nodeCount := len(op.quorumInfo.Nodes)
+	if nodeCount == 1 {
+		// Fast path: avoid goroutine/WaitGroup overhead for a single replica.
+		op.sendWriteRequestRetry(ctx, 0)
+		return
 	}
+	var wg sync.WaitGroup
+	wg.Add(nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		go func(serverIndex int) {
+			defer wg.Done()
+			// send request to the node
+			op.sendWriteRequestRetry(ctx, serverIndex)
+		}(i)
+	}
+	wg.Wait()
 }
 
 // sendWriteRequestRetry used for retry single request
