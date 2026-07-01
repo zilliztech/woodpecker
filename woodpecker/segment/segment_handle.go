@@ -100,6 +100,8 @@ type SegmentHandle interface {
 
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool, objectStorageClient storageclient.ObjectStorage) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
+	maxBatchEntries := cfg.Woodpecker.Client.SegmentAppend.MaxBatchEntries
+	maxBatchBytes := cfg.Woodpecker.Client.SegmentAppend.MaxBatchBytes.Int64()
 	segmentHandle := &segmentHandleImpl{
 		bucketName:          cfg.Minio.BucketName,
 		rootPath:            cfg.Minio.RootPath,
@@ -110,7 +112,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 		ClientPool:          clientPool,
 		appendOpsQueue:      list.New(),
 		quorumInfo:          segmentMeta.Metadata.Quorum,
-		executor:            NewSequentialExecutor(executeRequestMaxQueueSize),
+		executor:            NewBatchingSequentialExecutor(executeRequestMaxQueueSize, maxBatchEntries, maxBatchBytes),
 		cfg:                 cfg,
 		logNs:               metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		objectStorageClient: objectStorageClient,

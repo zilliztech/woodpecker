@@ -51,6 +51,14 @@ func (m *mockProtoLogStoreClient) AddEntry(ctx context.Context, in *proto.AddEnt
 	return args.Get(0).(grpc.ServerStreamingClient[proto.AddEntryResponse]), args.Error(1)
 }
 
+func (m *mockProtoLogStoreClient) AddEntries(ctx context.Context, in *proto.AddEntriesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[proto.AddEntriesResponse], error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(grpc.ServerStreamingClient[proto.AddEntriesResponse]), args.Error(1)
+}
+
 func (m *mockProtoLogStoreClient) GetBatchEntriesAdv(ctx context.Context, in *proto.GetBatchEntriesAdvRequest, opts ...grpc.CallOption) (*proto.GetBatchEntriesAdvResponse, error) {
 	args := m.Called(ctx, in)
 	if args.Get(0) == nil {
