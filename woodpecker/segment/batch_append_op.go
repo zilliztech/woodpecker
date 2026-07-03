@@ -128,11 +128,18 @@ func (b *BatchAppendOp) sendBatchToNode(ctx context.Context, entries []*proto.Lo
 		return
 	}
 
-	// Send succeeded: hand each op its per-replica result sink so its own
-	// callback waits for and processes the durability ack.
-	for i, op := range b.ops {
-		go op.receivedAckCallback(ctx, startRequestTime, op.entryId, resultChs[i], nil, nodeIdx, serverAddr)
-	}
+	// Send succeeded: ONE goroutine per node drains the per-entry durability
+	// acks IN ORDER (the server streams them in entry-id / flush order) and
+	// applies quorum inline, instead of spawning a receivedAckCallback goroutine
+	// per op. For a batch of N entries this is 1 goroutine per node instead of N.
+	go func() {
+		readCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // TODO configurable
+		defer cancel()
+		for i, op := range b.ops {
+			result, readErr := resultChs[i].ReadResult(readCtx)
+			op.applyNodeAck(ctx, startRequestTime, result, readErr, nodeIdx, serverAddr)
+		}
+	}()
 }
 
 // failNode marks every op in the batch as failed on the given replica, routing

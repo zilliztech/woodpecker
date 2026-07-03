@@ -262,6 +262,37 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		zap.Int64("syncedId", syncedResult.SyncedId), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.String("serverAddr", serverAddr))
 }
 
+// applyNodeAck processes a single node's durability result for this op: quorum
+// counting and, on reaching Aq, the in-order SendAppendSuccessCallbacks. It is
+// the post-read half of receivedAckCallback, factored out so the batch path can
+// drive many ops' acks from ONE per-node goroutine (reading the results in
+// entry-id order) instead of spawning a goroutine per op.
+func (op *AppendOp) applyNodeAck(ctx context.Context, startRequestTime time.Time, result *channel.AppendResult, readErr error, serverIndex int, serverAddr string) {
+	if op.fastCalled.Load() {
+		return
+	}
+	if readErr != nil {
+		op.channelErrors[serverIndex] = readErr
+		op.handle.HandleAppendRequestFailure(ctx, op.entryId, readErr, serverIndex, serverAddr)
+		return
+	}
+	if result.SyncedId == -1 || result.Err != nil {
+		op.channelErrors[serverIndex] = result.Err
+		op.handle.HandleAppendRequestFailure(ctx, op.entryId, result.Err, serverIndex, serverAddr)
+		return
+	}
+	if result.SyncedId >= op.entryId {
+		if op.ackSet.SetAndCount(serverIndex) >= int(op.quorumInfo.Aq) {
+			if op.completed.CompareAndSwap(false, true) {
+				op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)
+				cost := time.Since(startRequestTime)
+				metrics.WpClientAppendLatency.WithLabelValues(op.logNs, strconv.FormatInt(op.logId, 10)).Observe(float64(cost.Milliseconds()))
+				metrics.WpClientAppendBytes.WithLabelValues(op.logNs, strconv.FormatInt(op.logId, 10)).Observe(float64(len(op.value)))
+			}
+		}
+	}
+}
+
 func (op *AppendOp) FastFail(ctx context.Context, err error) {
 	logger.Ctx(ctx).Debug("FastFail start calling",
 		zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(err))
