@@ -50,6 +50,10 @@ type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
 	AddEntry(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error)
+	// AddEntryBatch buffers a run of consecutive entries in a single call,
+	// amortizing per-entry span/metrics/lock overhead. Returns the buffered id
+	// per entry (same order as input).
+	AddEntryBatch(ctx context.Context, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error)
 	ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	Fence(ctx context.Context) (int64, error)
 	Complete(ctx context.Context, lac int64) (int64, error)
@@ -211,6 +215,47 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *proto.LogEntry, 
 	}
 
 	return bufferedSeqNo, nil
+}
+
+// batchWriter is implemented by writers that support a batched buffer append
+// (currently the staged writer). Declared here so the processor can use the
+// batched path without widening the storage.Writer interface for every impl.
+type batchWriter interface {
+	WriteDataBatchAsync(ctx context.Context, entryIds []int64, datas [][]byte, resultChs []channel.ResultChannel) ([]int64, error)
+}
+
+func (s *segmentProcessor) AddEntryBatch(ctx context.Context, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "AddEntryBatch")
+	defer sp.End()
+	s.updateAccessTime()
+
+	writer, err := s.getOrCreateSegmentWriter(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fast path: staged writer buffers the whole batch under one lock.
+	if bw, ok := writer.(batchWriter); ok {
+		ids := make([]int64, len(entries))
+		datas := make([][]byte, len(entries))
+		for i, e := range entries {
+			ids[i] = e.EntryId
+			datas[i] = e.Values
+		}
+		return bw.WriteDataBatchAsync(ctx, ids, datas, resultChs)
+	}
+
+	// Fallback: writers without a batch path (disk/object) loop per entry.
+	results := make([]int64, len(entries))
+	for i, e := range entries {
+		id, werr := writer.WriteDataAsync(ctx, e.EntryId, e.Values, resultChs[i])
+		if werr != nil {
+			results[i] = id
+			return results, werr
+		}
+		results[i] = id
+	}
+	return results, nil
 }
 
 func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
