@@ -456,6 +456,18 @@ func (f *fakeLogStore) AddEntry(ctx context.Context, bucketName, rootPath string
 	return f.addEntryFn(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 }
 
+func (f *fakeLogStore) AddEntryBatch(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	ids := make([]int64, len(entries))
+	for i, e := range entries {
+		id, err := f.addEntryFn(ctx, bucketName, rootPath, logId, e, resultChs[i])
+		ids[i] = id
+		if err != nil {
+			return ids, err
+		}
+	}
+	return ids, nil
+}
+
 func (f *fakeLogStore) GetBatchEntriesAdv(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, fromEntryId, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	return f.getBatchFn(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 }

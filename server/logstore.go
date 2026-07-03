@@ -54,6 +54,10 @@ type LogStore interface {
 	SetAddress(address string)
 	GetAddress() string
 	AddEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	// AddEntryBatch buffers a run of consecutive entries (same segment) in one
+	// call, amortizing the per-entry processor/writer/buffer overhead. Returns
+	// the buffered id per entry (same order as input).
+	AddEntryBatch(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error)
 	GetBatchEntriesAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error)
@@ -228,6 +232,38 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 		return -1, err
 	}
 	return entryId, nil
+}
+
+func (l *logStore) AddEntryBatch(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	if l.stopped.Load() || l.rejectWrites.Load() {
+		return nil, werr.ErrLogStoreShutdown
+	}
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntryBatch")
+	defer sp.End()
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
+	op := metrics.StartOp("logstore.add_entry_batch", nil, nil, metrics.WithInstance(bucketName, rootPath), metrics.WithLogSegment(logId, segmentId))
+	status := "success"
+	defer func() {
+		op.End(status)
+		elapsed := float64(time.Since(op.StartedAt()).Milliseconds())
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(metrics.NodeID, ns, logIdStr, "add_entry_batch", status).Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(metrics.NodeID, ns, logIdStr, "add_entry_batch", status).Observe(elapsed)
+	}()
+
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
+	if err != nil {
+		status = "error_get_processor"
+		logger.Ctx(ctx).Warn("add entry batch failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
+		return nil, err
+	}
+	ids, err := segmentProcessor.AddEntryBatch(ctx, entries, resultChs)
+	if err != nil {
+		status = "error"
+		logger.Ctx(ctx).Warn("add entry batch failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
+		return ids, err
+	}
+	return ids, nil
 }
 
 func GetLogKey(bucketName string, rootPath string, logId int64) string {

@@ -824,6 +824,86 @@ func (w *StagedFileWriter) notifyFlushSuccess(entries []*cache.BufferEntry) {
 	}
 }
 
+// WriteDataBatchAsync is the batched counterpart of WriteDataAsync: it buffers
+// a run of consecutive entries under a SINGLE w.mu acquisition + a single buffer
+// batch-append + a single sync check, amortizing the per-entry lock churn and
+// plumbing that otherwise dominates the AddEntries handler. entryIds must be in
+// ascending order. Returns the buffered id for each input entry (same order).
+func (w *StagedFileWriter) WriteDataBatchAsync(ctx context.Context, entryIds []int64, datas [][]byte, resultChs []channel.ResultChannel) ([]int64, error) {
+	n := len(entryIds)
+	if n == 0 {
+		return nil, nil
+	}
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryIds[0], len(datas[0])); err != nil {
+		return []int64{id}, err
+	}
+
+	results := make([]int64, n)
+	type directNotify struct {
+		entryId int64
+		ch      channel.ResultChannel
+	}
+	var directs []directNotify
+
+	w.mu.Lock()
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryIds[0], len(datas[0])); err != nil {
+		w.mu.Unlock()
+		return []int64{id}, err
+	}
+	currentBuffer := w.buffer.Load()
+	if currentBuffer == nil {
+		w.mu.Unlock()
+		return results, werr.ErrFileWriterAlreadyClosed
+	}
+	lastWritten := w.lastEntryID.Load()
+	lastFlushing := w.lastSubmittedFlushingEntryID.Load()
+	// Append each fresh entry via the proven per-entry buffer path, but under a
+	// SINGLE w.mu (and a single sync check below). Reusing WriteEntryWithNotify
+	// keeps the exact ExpectedNextEntryId / roll semantics of WriteDataAsync.
+	for i, entryId := range entryIds {
+		results[i] = entryId
+		if len(datas[i]) == 0 {
+			w.mu.Unlock()
+			return results, werr.ErrEmptyPayload
+		}
+		if entryId <= lastWritten {
+			if resultChs[i] != nil {
+				directs = append(directs, directNotify{entryId, resultChs[i]})
+			}
+			continue
+		}
+		if entryId <= lastFlushing {
+			continue
+		}
+		id, err := currentBuffer.WriteEntryWithNotify(entryId, datas[i], resultChs[i])
+		if err != nil {
+			w.mu.Unlock()
+			return results, err
+		}
+		results[i] = id
+	}
+
+	bufferSize := currentBuffer.DataSize.Load()
+	entryCount := currentBuffer.GetExpectedNextEntryId() - currentBuffer.GetFirstEntryId()
+	w.mu.Unlock()
+
+	for _, d := range directs {
+		cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, d.entryId, d.ch, d.entryId, nil, "", time.Time{})
+	}
+
+	if bufferSize >= w.maxFlushSize || entryCount >= w.maxBufferEntries {
+		if triggerSyncErr := w.Sync(ctx); triggerSyncErr != nil {
+			logger.Ctx(ctx).Warn("batch reached max buffer size, but trigger sync failed",
+				zap.Int64("bufferSize", bufferSize), zap.Int64("entryCount", entryCount), zap.Error(triggerSyncErr))
+		}
+	}
+	// The staged writer has no background ticker; the interval-based flush is
+	// driven from the write path. Schedule it for the sub-threshold case so
+	// buffered entries are not stranded (same as WriteDataAsync).
+	w.scheduleDelayedSyncCheck(w.getSyncCheckInterval())
+	return results, nil
+}
+
 // WriteDataAsync writes data asynchronously using buffer
 func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "WriteDataAsync")

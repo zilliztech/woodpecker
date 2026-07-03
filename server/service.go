@@ -464,31 +464,41 @@ func (s *Server) AddEntries(request *proto.AddEntriesRequest, serverStream grpc.
 		return nil
 	}
 
-	// Phase 1: buffer all entries and acknowledge each as Buffered.
+	// Phase 1: buffer the whole batch in ONE call (amortizes per-entry
+	// processor/writer/buffer lock churn + plumbing), then acknowledge each as
+	// Buffered.
 	resultChs := make([]channel.ResultChannel, n)
+	entries := make([]*proto.LogEntry, n)
 	for i, reqEntry := range request.Entries {
-		entry := &proto.LogEntry{
+		entries[i] = &proto.LogEntry{
 			SegId:   reqEntry.SegId,
 			EntryId: reqEntry.EntryId,
 			Values:  reqEntry.Values,
 		}
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("srv-batch/%d/%d/%d", request.LogId, reqEntry.SegId, reqEntry.EntryId))
-		bufferedId, err := s.logStore.AddEntry(streamCtx, request.BucketName, request.RootPath, request.LogId, entry, resultCh)
-		if err != nil {
-			sendErr := serverStream.Send(&proto.AddEntriesResponse{
-				State:   proto.AddEntryState_Failed,
-				EntryId: reqEntry.EntryId,
-				Status:  werr.Status(err),
-			})
-			if sendErr != nil {
-				logger.Ctx(streamCtx).Warn("failed to send batch buffered-error response", zap.Error(sendErr))
-			}
-			return err
+		resultChs[i] = channel.NewLocalResultChannel(fmt.Sprintf("srv-batch/%d/%d/%d", request.LogId, reqEntry.SegId, reqEntry.EntryId))
+	}
+	bufferedIds, err := s.logStore.AddEntryBatch(streamCtx, request.BucketName, request.RootPath, request.LogId, request.Entries[0].SegId, entries, resultChs)
+	if err != nil {
+		// Fail the whole RPC; the client retries the batch (already-buffered
+		// entries are handled by the writer's dedup on re-send).
+		failedId := request.Entries[0].EntryId
+		if len(bufferedIds) < n {
+			failedId = request.Entries[len(bufferedIds)].EntryId
 		}
-		resultChs[i] = resultCh
+		sendErr := serverStream.Send(&proto.AddEntriesResponse{
+			State:   proto.AddEntryState_Failed,
+			EntryId: failedId,
+			Status:  werr.Status(err),
+		})
+		if sendErr != nil {
+			logger.Ctx(streamCtx).Warn("failed to send batch buffered-error response", zap.Error(sendErr))
+		}
+		return err
+	}
+	for i := range request.Entries {
 		if sendErr := serverStream.Send(&proto.AddEntriesResponse{
 			State:   proto.AddEntryState_Buffered,
-			EntryId: bufferedId,
+			EntryId: bufferedIds[i],
 			Status:  werr.Success(),
 		}); sendErr != nil {
 			logger.Ctx(streamCtx).Warn("failed to send batch buffered response", zap.Error(sendErr))
