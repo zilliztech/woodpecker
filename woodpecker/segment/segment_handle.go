@@ -116,7 +116,10 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 		cfg:                 cfg,
 		logNs:               metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		objectStorageClient: objectStorageClient,
+		lacSyncNotify:       make(chan struct{}, 1),
+		lacSyncStop:         make(chan struct{}),
 	}
+	segmentHandle.lacSyncLatest.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.commitedSize.Store(segmentMeta.Metadata.Size)
@@ -136,6 +139,8 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 		segmentHandle.executor.Start(ctx)
 		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
 		segmentHandle.completionMgr.Start(context.Background())
+		segmentHandle.lacSyncStarted.Store(true)
+		go segmentHandle.lacSyncLoop()
 	}
 	return segmentHandle
 }
@@ -166,10 +171,13 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 				"127.0.0.1",
 			},
 		},
-		executor: NewSequentialExecutor(executeRequestMaxQueueSize),
-		cfg:      cfg,
-		logNs:    metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		executor:      NewSequentialExecutor(executeRequestMaxQueueSize),
+		cfg:           cfg,
+		logNs:         metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		lacSyncNotify: make(chan struct{}, 1),
+		lacSyncStop:   make(chan struct{}),
 	}
+	segmentHandle.lacSyncLatest.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.commitedSize.Store(segmentMeta.Metadata.Size)
@@ -182,6 +190,8 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 	if writable {
 		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
 		segmentHandle.completionMgr.Start(context.Background())
+		segmentHandle.lacSyncStarted.Store(true)
+		go segmentHandle.lacSyncLoop()
 	}
 	return segmentHandle
 }
@@ -215,6 +225,18 @@ type segmentHandleImpl struct {
 
 	executor      *SequentialExecutor
 	completionMgr *completionManager // nil for readonly segments
+
+	// LAC sync coalescing: instead of spawning a fresh syncLACToQuorumAsync
+	// goroutine (which fans out an UpdateLastAddConfirmed RPC per quorum node)
+	// on every ack round, one background syncer pushes only the LATEST LAC.
+	// LAC is monotonic and this path is fire-and-forget/advisory, so pushing
+	// the latest value is observably equivalent to pushing every value, while
+	// collapsing the ~per-entry goroutine+RPC storm to ~one in-flight push.
+	lacSyncLatest   atomic.Int64
+	lacSyncNotify   chan struct{}
+	lacSyncStop     chan struct{}
+	lacSyncStopOnce sync.Once
+	lacSyncStarted  atomic.Bool // false for readonly/test handles: fall back to per-call fan-out
 
 	doingCompact atomic.Bool
 
@@ -879,6 +901,9 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 	// shutdown segment executor
 	s.executor.Stop(ctx)
 
+	// stop the background LAC syncer (idempotent)
+	s.lacSyncStopOnce.Do(func() { close(s.lacSyncStop) })
+
 	// update metadata as completed
 	currentSegmentMeta := s.segmentMetaCache.Load()
 	if currentSegmentMeta.Metadata.State != proto.SegmentState_Active {
@@ -1145,8 +1170,52 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 }
 
 func (s *segmentHandleImpl) syncLAC(ctx context.Context, lac int64) {
-	// Asynchronously sync LAC updates to all quorum nodes
-	go s.syncLACToQuorumAsync(ctx, lac)
+	if !s.lacSyncStarted.Load() {
+		// Readonly/test handle with no background syncer: preserve the legacy
+		// per-call fan-out so behavior is unchanged for those paths.
+		go s.syncLACToQuorumAsync(ctx, lac)
+		return
+	}
+	// Coalesce: record the highest LAC (monotonic) and wake the single background
+	// syncer, instead of spawning a fresh fan-out goroutine per ack round. A
+	// full notify channel means a push is already pending/in-flight and will pick
+	// up this newer value, so dropping the extra wake is safe.
+	for {
+		cur := s.lacSyncLatest.Load()
+		if lac <= cur {
+			break
+		}
+		if s.lacSyncLatest.CompareAndSwap(cur, lac) {
+			break
+		}
+	}
+	select {
+	case s.lacSyncNotify <- struct{}{}:
+	default:
+	}
+}
+
+// lacSyncLoop is the single background LAC syncer for a writable segment. It
+// runs one syncLACToQuorumAsync at a time for the latest LAC; while a push is
+// in flight, newer LAC values coalesce into lacSyncLatest and trigger exactly
+// one follow-up push. Exits when lacSyncStop is closed (segment close).
+func (s *segmentHandleImpl) lacSyncLoop() {
+	var lastPushed int64 = -1
+	for {
+		select {
+		case <-s.lacSyncStop:
+			// No final push needed: the authoritative final LAC is recorded via
+			// segment completion (CompleteSegment); this advisory path is best-effort.
+			return
+		case <-s.lacSyncNotify:
+			lac := s.lacSyncLatest.Load()
+			if lac <= lastPushed {
+				continue
+			}
+			lastPushed = lac
+			s.syncLACToQuorumAsync(context.Background(), lac)
+		}
+	}
 }
 
 // syncLACToQuorumAsync asynchronously syncs LAC to all quorum nodes
