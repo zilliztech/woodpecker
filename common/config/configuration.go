@@ -44,9 +44,12 @@ type SegmentAppendConfig struct {
 	// MaxBatchEntries is the maximum number of consecutive append ops coalesced
 	// into a single AddEntries request (client-side group commit). The batch is
 	// opportunistic: it only coalesces ops already waiting in the queue, so it
-	// adds no latency at low load. Values <= 1 disable batching.
+	// adds no latency at low load. Enabled by default (see the default config);
+	// set to <= 1 to disable batching and send one AddEntry per append.
 	MaxBatchEntries int `yaml:"maxBatchEntries"`
-	// MaxBatchBytes caps the total payload of a coalesced batch. 0 = no byte limit.
+	// MaxBatchBytes caps the total payload of a coalesced batch (whichever of
+	// MaxBatchEntries / MaxBatchBytes is reached first bounds the batch).
+	// 0 = no byte limit. Ignored when MaxBatchEntries <= 1.
 	MaxBatchBytes ByteSize `yaml:"maxBatchBytes"`
 }
 
@@ -775,11 +778,13 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentAppend: SegmentAppendConfig{
 				QueueSize:  100,
 				MaxRetries: 2,
-				// Client-side group commit is opt-in: 1 disables batching (default).
-				// Raise MaxBatchEntries (and optionally MaxBatchBytes) to coalesce
-				// consecutive appends into a single AddEntries request.
-				MaxBatchEntries: 1,
-				MaxBatchBytes:   ByteSize(1048576), // 1MB (only applies when MaxBatchEntries > 1)
+				// Client-side group commit is ON by default: consecutive appends
+				// already queued are coalesced into one AddEntries request, bounded
+				// by MaxBatchEntries entries or MaxBatchBytes bytes (whichever first).
+				// Batching is opportunistic (drains only what is already queued), so
+				// it adds no latency at low load. Set MaxBatchEntries to 1 to disable.
+				MaxBatchEntries: 1000,
+				MaxBatchBytes:   ByteSize(2000000), // 2MB
 			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
 				MaxSize:     ByteSize(100000000),
