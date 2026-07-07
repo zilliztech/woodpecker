@@ -487,7 +487,7 @@ func (s *Server) AddEntries(request *proto.AddEntriesRequest, serverStream grpc.
 		}
 		sendErr := serverStream.Send(&proto.AddEntriesResponse{
 			State:   proto.AddEntryState_Failed,
-			EntryId: failedId,
+			EntryId: []int64{failedId},
 			Status:  werr.Status(err),
 		})
 		if sendErr != nil {
@@ -495,44 +495,66 @@ func (s *Server) AddEntries(request *proto.AddEntriesRequest, serverStream grpc.
 		}
 		return err
 	}
-	for i := range request.Entries {
-		if sendErr := serverStream.Send(&proto.AddEntriesResponse{
-			State:   proto.AddEntryState_Buffered,
-			EntryId: bufferedIds[i],
-			Status:  werr.Success(),
-		}); sendErr != nil {
-			logger.Ctx(streamCtx).Warn("failed to send batch buffered response", zap.Error(sendErr))
-			return sendErr
-		}
+	// One Buffered ack for the whole batch: every id shares state=Buffered /
+	// status=Success, so send them in a single frame instead of one per entry.
+	if sendErr := serverStream.Send(&proto.AddEntriesResponse{
+		State:   proto.AddEntryState_Buffered,
+		EntryId: bufferedIds,
+		Status:  werr.Success(),
+	}); sendErr != nil {
+		logger.Ctx(streamCtx).Warn("failed to send batch buffered response", zap.Error(sendErr))
+		return sendErr
 	}
 
-	// Phase 2: wait for each entry to be durably synced (entries flush in
-	// entry-id order, so reading in order adds no head-of-line latency beyond
-	// the natural durability order) and stream back its result keyed by
-	// entry_id.
-	for i, reqEntry := range request.Entries {
-		result, err := resultChs[i].ReadResult(streamCtx)
-		if err != nil {
-			sendErr := serverStream.Send(&proto.AddEntriesResponse{
-				State:   proto.AddEntryState_Failed,
-				EntryId: reqEntry.EntryId,
-				Status:  werr.Status(err),
-			})
-			return sendErr
+	// Phase 2: stream Synced acks. Entries flush in entry-id order, so block for
+	// the next entry, then opportunistically drain every following entry that is
+	// already durable (same or earlier flush) and acknowledge the whole ready run
+	// in one Synced frame — no added latency, far fewer frames than per-entry.
+	sendSynced := func(ids []int64) error {
+		return serverStream.Send(&proto.AddEntriesResponse{
+			State:   proto.AddEntryState_Synced,
+			EntryId: ids,
+			Status:  werr.Success(),
+		})
+	}
+	sendFailed := func(id int64, cause error) error {
+		return serverStream.Send(&proto.AddEntriesResponse{
+			State:   proto.AddEntryState_Failed,
+			EntryId: []int64{id},
+			Status:  werr.Status(cause),
+		})
+	}
+	for i := 0; i < n; {
+		result, rerr := resultChs[i].ReadResult(streamCtx)
+		if rerr != nil {
+			return sendFailed(request.Entries[i].EntryId, rerr)
 		}
 		if result.Err != nil {
-			sendErr := serverStream.Send(&proto.AddEntriesResponse{
-				State:   proto.AddEntryState_Failed,
-				EntryId: reqEntry.EntryId,
-				Status:  werr.Status(result.Err),
-			})
-			return sendErr
+			return sendFailed(request.Entries[i].EntryId, result.Err)
 		}
-		if sendErr := serverStream.Send(&proto.AddEntriesResponse{
-			State:   proto.AddEntryState_Synced,
-			EntryId: reqEntry.EntryId,
-			Status:  werr.Success(),
-		}); sendErr != nil {
+		syncedIds := []int64{request.Entries[i].EntryId}
+		i++
+		// Non-blocking drain of already-durable followers into the same frame.
+		for i < n {
+			lch, ok := resultChs[i].(*channel.LocalResultChannel)
+			if !ok {
+				break // unexpected channel type: fall back to per-entry blocking read
+			}
+			r, ready := lch.TryReadResult()
+			if !ready {
+				break // next entry not durable yet: this flush's run ends here
+			}
+			if r.Err != nil {
+				// Ack the durable run we have, then fail this entry (ends the RPC).
+				if sendErr := sendSynced(syncedIds); sendErr != nil {
+					return sendErr
+				}
+				return sendFailed(request.Entries[i].EntryId, r.Err)
+			}
+			syncedIds = append(syncedIds, request.Entries[i].EntryId)
+			i++
+		}
+		if sendErr := sendSynced(syncedIds); sendErr != nil {
 			return sendErr
 		}
 	}

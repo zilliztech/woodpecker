@@ -180,26 +180,27 @@ func (l *logStoreClientRemote) AppendEntries(ctx context.Context, bucketName str
 		return nil, err
 	}
 
-	// Phase 1: one Buffered response per entry (the amortized send round-trip).
-	bufferedIds = make([]int64, 0, n)
-	for i := 0; i < n; i++ {
-		resp, recvErr := respStream.Recv()
-		if recvErr != nil {
-			streamCancel()
-			return bufferedIds, recvErr
-		}
-		if resp.GetState() == proto.AddEntryState_Failed {
-			statusErr := werr.Error(resp.GetStatus())
-			if statusErr == nil {
-				statusErr = werr.ErrUnknownError
-			}
-			streamCancel()
-			return bufferedIds, statusErr
-		}
-		bufferedIds = append(bufferedIds, resp.GetEntryId())
+	// Phase 1: a single Buffered frame carries every id in the batch (the
+	// amortized send round-trip). A Failed frame here means the batch failed to
+	// buffer as a whole.
+	resp, recvErr := respStream.Recv()
+	if recvErr != nil {
+		streamCancel()
+		return nil, recvErr
 	}
+	if resp.GetState() == proto.AddEntryState_Failed {
+		statusErr := werr.Error(resp.GetStatus())
+		if statusErr == nil {
+			statusErr = werr.ErrUnknownError
+		}
+		streamCancel()
+		return resp.GetEntryId(), statusErr
+	}
+	bufferedIds = resp.GetEntryId()
 
-	// Phase 2: route per-entry Synced/Failed results to their sinks.
+	// Phase 2: route Synced/Failed results to their sinks. Each frame now carries
+	// a group of ids that share one state/status (a flushed run, or one failure),
+	// so resolve the state once and fan out to every id in the frame.
 	go func() {
 		defer streamCancel()
 		for len(chByEntry) > 0 {
@@ -212,21 +213,25 @@ func (l *logStoreClientRemote) AppendEntries(ctx context.Context, bucketName str
 				}
 				return
 			}
-			eid := resp.GetEntryId()
-			ch, ok := chByEntry[eid]
-			if !ok {
-				continue
-			}
-			if resp.GetState() == proto.AddEntryState_Synced {
-				_ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: eid})
-			} else {
-				statusErr := werr.Error(resp.GetStatus())
-				if statusErr == nil {
+			synced := resp.GetState() == proto.AddEntryState_Synced
+			var statusErr error
+			if !synced {
+				if statusErr = werr.Error(resp.GetStatus()); statusErr == nil {
 					statusErr = werr.ErrUnknownError
 				}
-				_ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: -1, Err: statusErr})
 			}
-			delete(chByEntry, eid)
+			for _, eid := range resp.GetEntryId() {
+				ch, ok := chByEntry[eid]
+				if !ok {
+					continue
+				}
+				if synced {
+					_ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: eid})
+				} else {
+					_ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: -1, Err: statusErr})
+				}
+				delete(chByEntry, eid)
+			}
 		}
 	}()
 

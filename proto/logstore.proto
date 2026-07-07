@@ -118,8 +118,12 @@ message AddEntriesRequest {
 }
 
 message AddEntriesResponse {
+  // One response acknowledges a group of entries that all reached the same
+  // state: status and state are shared, entry_id lists every entry they apply to.
+  // Buffered: one response for the whole batch. Synced: one response per flushed
+  // run of entries. Failed: the single entry that failed (fails the whole RPC).
   Status status = 1;
-  int64 entry_id = 2; // the entry this response refers to
+  repeated int64 entry_id = 2; // the entries this response refers to
   AddEntryState state = 3;
 }
 

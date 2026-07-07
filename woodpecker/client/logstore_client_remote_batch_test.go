@@ -70,12 +70,12 @@ func TestRemoteClient_AppendEntries_Demux(t *testing.T) {
 	}
 
 	responses := []*proto.AddEntriesResponse{
-		{State: proto.AddEntryState_Buffered, EntryId: 10},
-		{State: proto.AddEntryState_Buffered, EntryId: 11},
-		{State: proto.AddEntryState_Buffered, EntryId: 12},
-		{State: proto.AddEntryState_Synced, EntryId: 12},
-		{State: proto.AddEntryState_Synced, EntryId: 10},
-		{State: proto.AddEntryState_Synced, EntryId: 11},
+		// One Buffered frame carries the whole batch's ids.
+		{State: proto.AddEntryState_Buffered, EntryId: []int64{10, 11, 12}},
+		// Synced acks arrive as grouped, out-of-order frames (a multi-id run plus a
+		// singleton) to exercise the keyed fan-out demux.
+		{State: proto.AddEntryState_Synced, EntryId: []int64{12, 10}},
+		{State: proto.AddEntryState_Synced, EntryId: []int64{11}},
 	}
 	mockClient.On("AddEntries", mock.Anything, mock.AnythingOfType("*proto.AddEntriesRequest")).
 		Return(&mockAddEntriesStream{responses: responses}, nil)
@@ -109,11 +109,10 @@ func TestRemoteClient_AppendEntries_StreamErrorFailsRemaining(t *testing.T) {
 		resultChs[i] = channel.NewLocalResultChannel(fmt.Sprintf("e%d", 20+i))
 	}
 
-	// Both Buffered, then only one Synced before the stream ends (io.EOF).
+	// Whole batch Buffered, then only one entry Synced before the stream ends (io.EOF).
 	responses := []*proto.AddEntriesResponse{
-		{State: proto.AddEntryState_Buffered, EntryId: 20},
-		{State: proto.AddEntryState_Buffered, EntryId: 21},
-		{State: proto.AddEntryState_Synced, EntryId: 20},
+		{State: proto.AddEntryState_Buffered, EntryId: []int64{20, 21}},
+		{State: proto.AddEntryState_Synced, EntryId: []int64{20}},
 	}
 	mockClient.On("AddEntries", mock.Anything, mock.AnythingOfType("*proto.AddEntriesRequest")).
 		Return(&mockAddEntriesStream{responses: responses}, nil)

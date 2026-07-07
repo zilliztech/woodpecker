@@ -96,6 +96,23 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 	}
 }
 
+// TryReadResult reads a result without blocking: it returns (result, true) when
+// one is immediately available, or (nil, false) when nothing is ready yet or the
+// channel is closed. It lets a consumer opportunistically drain entries that are
+// already durable (e.g. flushed together) so they can be acknowledged as a group
+// without waiting on the next, not-yet-ready entry.
+func (l *LocalResultChannel) TryReadResult() (*AppendResult, bool) {
+	select {
+	case r, ok := <-l.ch:
+		if !ok {
+			return nil, false
+		}
+		return r, true
+	default:
+		return nil, false
+	}
+}
+
 func (l *LocalResultChannel) Close(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

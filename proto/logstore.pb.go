@@ -767,10 +767,14 @@ func (x *AddEntriesRequest) GetEntries() []*LogEntry {
 }
 
 type AddEntriesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	EntryId       int64                  `protobuf:"varint,2,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"` // the entry this response refers to
-	State         AddEntryState          `protobuf:"varint,3,opt,name=state,proto3,enum=woodpecker.proto.logstore.AddEntryState" json:"state,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One response acknowledges a group of entries that all reached the same
+	// state: status and state are shared, entry_id lists every entry they apply to.
+	// Buffered: one response for the whole batch. Synced: one response per flushed
+	// run of entries. Failed: the single entry that failed (fails the whole RPC).
+	Status        *Status       `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	EntryId       []int64       `protobuf:"varint,2,rep,packed,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"` // the entries this response refers to
+	State         AddEntryState `protobuf:"varint,3,opt,name=state,proto3,enum=woodpecker.proto.logstore.AddEntryState" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -812,11 +816,11 @@ func (x *AddEntriesResponse) GetStatus() *Status {
 	return nil
 }
 
-func (x *AddEntriesResponse) GetEntryId() int64 {
+func (x *AddEntriesResponse) GetEntryId() []int64 {
 	if x != nil {
 		return x.EntryId
 	}
-	return 0
+	return nil
 }
 
 func (x *AddEntriesResponse) GetState() AddEntryState {
@@ -2574,7 +2578,7 @@ var file_logstore_proto_rawDesc = []byte{
 	0x20, 0x01, 0x28, 0x0b, 0x32, 0x21, 0x2e, 0x77, 0x6f, 0x6f, 0x64, 0x70, 0x65, 0x63, 0x6b, 0x65,
 	0x72, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x6c, 0x6f, 0x67, 0x73, 0x74, 0x6f, 0x72, 0x65,
 	0x2e, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12,
-	0x19, 0x0a, 0x08, 0x65, 0x6e, 0x74, 0x72, 0x79, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28,
+	0x19, 0x0a, 0x08, 0x65, 0x6e, 0x74, 0x72, 0x79, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x03, 0x28,
 	0x03, 0x52, 0x07, 0x65, 0x6e, 0x74, 0x72, 0x79, 0x49, 0x64, 0x12, 0x3e, 0x0a, 0x05, 0x73, 0x74,
 	0x61, 0x74, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x28, 0x2e, 0x77, 0x6f, 0x6f, 0x64,
 	0x70, 0x65, 0x63, 0x6b, 0x65, 0x72, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x6c, 0x6f, 0x67,
