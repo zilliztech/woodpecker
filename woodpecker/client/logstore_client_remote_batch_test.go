@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -133,4 +134,69 @@ func TestRemoteClient_AppendEntries_StreamErrorFailsRemaining(t *testing.T) {
 	cancel2()
 	assert.NoError(t, rerr1)
 	assert.Error(t, res1.Err, "un-acked entry must be failed on stream end")
+}
+
+// TestRemoteClient_AppendEntries_BufferFailed verifies a Failed frame in the
+// buffered phase makes AppendEntries return an error (the batch failed to buffer).
+func TestRemoteClient_AppendEntries_BufferFailed(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	const n = 2
+	entries := make([]*proto.LogEntry, n)
+	resultChs := make([]channel.ResultChannel, n)
+	for i := 0; i < n; i++ {
+		entries[i] = &proto.LogEntry{SegId: 2, EntryId: int64(30 + i), Values: []byte("v")}
+		resultChs[i] = channel.NewLocalResultChannel(fmt.Sprintf("e%d", 30+i))
+	}
+
+	responses := []*proto.AddEntriesResponse{
+		{State: proto.AddEntryState_Failed, EntryId: []int64{30}, Status: werr.Status(werr.ErrLogStoreShutdown)},
+	}
+	mockClient.On("AddEntries", mock.Anything, mock.AnythingOfType("*proto.AddEntriesRequest")).
+		Return(&mockAddEntriesStream{responses: responses}, nil)
+
+	_, err := client.AppendEntries(ctx, "bucket", "root", 1, entries, resultChs)
+	assert.Error(t, err)
+}
+
+// TestRemoteClient_AppendEntries_SyncedFailed verifies a Failed frame in the
+// synced phase routes the specific error to that entry's channel, while a
+// separately-Synced entry still succeeds.
+func TestRemoteClient_AppendEntries_SyncedFailed(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	const n = 2
+	entries := make([]*proto.LogEntry, n)
+	resultChs := make([]channel.ResultChannel, n)
+	for i := 0; i < n; i++ {
+		entries[i] = &proto.LogEntry{SegId: 2, EntryId: int64(40 + i), Values: []byte("v")}
+		resultChs[i] = channel.NewLocalResultChannel(fmt.Sprintf("e%d", 40+i))
+	}
+
+	responses := []*proto.AddEntriesResponse{
+		{State: proto.AddEntryState_Buffered, EntryId: []int64{40, 41}},
+		{State: proto.AddEntryState_Synced, EntryId: []int64{40}},
+		{State: proto.AddEntryState_Failed, EntryId: []int64{41}, Status: werr.Status(werr.ErrLogStoreShutdown)},
+	}
+	mockClient.On("AddEntries", mock.Anything, mock.AnythingOfType("*proto.AddEntriesRequest")).
+		Return(&mockAddEntriesStream{responses: responses}, nil)
+
+	_, err := client.AppendEntries(ctx, "bucket", "root", 1, entries, resultChs)
+	assert.NoError(t, err)
+
+	// 40 synced ok
+	rc0, cancel0 := context.WithTimeout(ctx, 2*time.Second)
+	res0, rerr0 := resultChs[0].ReadResult(rc0)
+	cancel0()
+	assert.NoError(t, rerr0)
+	assert.NoError(t, res0.Err)
+
+	// 41 routed as failed with the specific error (not just stream EOF)
+	rc1, cancel1 := context.WithTimeout(ctx, 2*time.Second)
+	res1, rerr1 := resultChs[1].ReadResult(rc1)
+	cancel1()
+	assert.NoError(t, rerr1)
+	assert.Error(t, res1.Err)
 }

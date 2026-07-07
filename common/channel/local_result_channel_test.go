@@ -653,3 +653,30 @@ func TestLocalResultChannel_RecommendedUsagePattern(t *testing.T) {
 	err = rc.SendResult(ctx, result)
 	assert.Error(t, err)
 }
+
+func TestLocalResultChannel_TryReadResult(t *testing.T) {
+	ch := NewLocalResultChannel("try-read")
+
+	// nothing queued: non-blocking, returns (nil, false)
+	r, ok := ch.TryReadResult()
+	assert.False(t, ok)
+	assert.Nil(t, r)
+
+	// a queued result is returned without blocking
+	assert.NoError(t, ch.SendResult(context.Background(), &AppendResult{SyncedId: 7}))
+	r, ok = ch.TryReadResult()
+	assert.True(t, ok)
+	assert.NotNil(t, r)
+	assert.Equal(t, int64(7), r.SyncedId)
+
+	// drained: empty again
+	r, ok = ch.TryReadResult()
+	assert.False(t, ok)
+	assert.Nil(t, r)
+
+	// closed channel: (nil, false), no panic
+	assert.NoError(t, ch.Close(context.Background()))
+	r, ok = ch.TryReadResult()
+	assert.False(t, ok)
+	assert.Nil(t, r)
+}
