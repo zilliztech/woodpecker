@@ -34,15 +34,34 @@ type SequentialExecutor struct {
 	mu             sync.RWMutex
 	closed         bool
 	started        bool
+
+	// maxBatchEntries / maxBatchBytes control client-side group commit: when
+	// maxBatchEntries > 1 the worker opportunistically coalesces consecutive
+	// AppendOps already waiting in the queue into a single BatchAppendOp. <= 1
+	// disables batching (the worker runs one op per iteration, as before).
+	maxBatchEntries int
+	maxBatchBytes   int64
 }
 
-// NewSequentialExecutor initializes a SequentialExecutor
+// NewSequentialExecutor initializes a SequentialExecutor with batching disabled.
 func NewSequentialExecutor(bufferSize int) *SequentialExecutor {
+	return NewBatchingSequentialExecutor(bufferSize, 1, 0)
+}
+
+// NewBatchingSequentialExecutor initializes a SequentialExecutor that
+// opportunistically coalesces up to maxBatchEntries consecutive AppendOps
+// (bounded by maxBatchBytes, 0 = unbounded) into a single batched request.
+func NewBatchingSequentialExecutor(bufferSize int, maxBatchEntries int, maxBatchBytes int64) *SequentialExecutor {
+	if maxBatchEntries < 1 {
+		maxBatchEntries = 1
+	}
 	return &SequentialExecutor{
-		operationQueue: make(chan Operation, bufferSize),
-		done:           make(chan struct{}),
-		closed:         false,
-		started:        false,
+		operationQueue:  make(chan Operation, bufferSize),
+		done:            make(chan struct{}),
+		closed:          false,
+		started:         false,
+		maxBatchEntries: maxBatchEntries,
+		maxBatchBytes:   maxBatchBytes,
 	}
 }
 
@@ -66,7 +85,7 @@ func (se *SequentialExecutor) worker() {
 	for {
 		select {
 		case op := <-se.operationQueue:
-			se.executeOp(op)
+			se.executeMaybeBatched(op)
 		case <-se.done:
 			se.drainQueue()
 			return
@@ -85,6 +104,65 @@ func (se *SequentialExecutor) executeOp(op Operation) {
 		}
 	}()
 	op.Execute()
+}
+
+// executeMaybeBatched runs first, opportunistically coalescing it with other
+// AppendOps already waiting in the queue into a single BatchAppendOp when
+// batching is enabled. It only drains ops that are already queued (non-blocking),
+// so it never adds latency: at low load every batch has size 1 and behaves
+// exactly like executeOp. Non-AppendOp operations (e.g. retries) are never
+// batched.
+func (se *SequentialExecutor) executeMaybeBatched(first Operation) {
+	firstAppend, ok := first.(*AppendOp)
+	if !ok || se.maxBatchEntries <= 1 {
+		se.executeOp(first)
+		return
+	}
+
+	batch := []*AppendOp{firstAppend}
+	batchBytes := int64(len(firstAppend.value))
+	for len(batch) < se.maxBatchEntries {
+		if se.maxBatchBytes > 0 && batchBytes >= se.maxBatchBytes {
+			break
+		}
+		select {
+		case next := <-se.operationQueue:
+			nextAppend, ok := next.(*AppendOp)
+			if !ok {
+				// A non-append op breaks the batch: flush what we have, then run it.
+				se.executeAppendBatch(batch)
+				se.executeOp(next)
+				return
+			}
+			batch = append(batch, nextAppend)
+			batchBytes += int64(len(nextAppend.value))
+		default:
+			// Nothing else queued right now; flush the current batch.
+			se.executeAppendBatch(batch)
+			return
+		}
+	}
+	se.executeAppendBatch(batch)
+}
+
+// executeAppendBatch executes a coalesced batch of AppendOps with panic recovery,
+// calling wg.Done once per op. A batch of one falls back to the single-op path.
+func (se *SequentialExecutor) executeAppendBatch(batch []*AppendOp) {
+	if len(batch) == 1 {
+		se.executeOp(batch[0])
+		return
+	}
+	defer func() {
+		for range batch {
+			se.wg.Done()
+		}
+		if r := recover(); r != nil {
+			logger.Ctx(context.Background()).Warn("Batch append execution panicked",
+				zap.Int("batchSize", len(batch)),
+				zap.Any("panic", r))
+		}
+	}()
+	NewBatchAppendOp(batch).Execute()
 }
 
 // drainQueue processes any remaining operations in the queue after done is closed.

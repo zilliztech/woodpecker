@@ -28,6 +28,31 @@ func (_m *SegmentProcessor) EXPECT() *SegmentProcessor_Expecter {
 }
 
 // AddEntry provides a mock function with given fields: ctx, entry, resultCh
+func (_m *SegmentProcessor) AddEntryBatch(ctx context.Context, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	ret := _m.Called(ctx, entries, resultChs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AddEntryBatch")
+	}
+
+	var r0 []int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) ([]int64, error)); ok {
+		return rf(ctx, entries, resultChs)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) []int64); ok {
+		r0 = rf(ctx, entries, resultChs)
+	} else if ret.Get(0) != nil {
+		r0 = ret.Get(0).([]int64)
+	}
+	if rf, ok := ret.Get(1).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) error); ok {
+		r1 = rf(ctx, entries, resultChs)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
 func (_m *SegmentProcessor) AddEntry(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
 	ret := _m.Called(ctx, entry, resultCh)
 

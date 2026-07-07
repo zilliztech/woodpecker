@@ -50,6 +50,11 @@ message BatchReadResult {
 service LogStore {
   // Write APIs
   rpc AddEntry(AddEntryRequest) returns (stream AddEntryResponse);
+  // AddEntries appends a batch of consecutive entries in a single request
+  // (client-side group commit). The server streams back one Buffered response
+  // per entry, then one Synced/Failed response per entry as durability
+  // completes; every response is keyed by entry_id.
+  rpc AddEntries(AddEntriesRequest) returns (stream AddEntriesResponse);
 
   // Read APIs
   rpc GetBatchEntriesAdv(GetBatchEntriesAdvRequest) returns (GetBatchEntriesAdvResponse);
@@ -103,6 +108,23 @@ enum AddEntryState {
   Buffered = 0;
   Synced = 1;
   Failed = 2;
+}
+
+message AddEntriesRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  repeated LogEntry entries = 4;
+}
+
+message AddEntriesResponse {
+  // One response acknowledges a group of entries that all reached the same
+  // state: status and state are shared, entry_id lists every entry they apply to.
+  // Buffered: one response for the whole batch. Synced: one response per flushed
+  // run of entries. Failed: the single entry that failed (fails the whole RPC).
+  Status status = 1;
+  repeated int64 entry_id = 2; // the entries this response refers to
+  AddEntryState state = 3;
 }
 
 // Advanced batch read

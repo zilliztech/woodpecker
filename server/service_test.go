@@ -456,6 +456,18 @@ func (f *fakeLogStore) AddEntry(ctx context.Context, bucketName, rootPath string
 	return f.addEntryFn(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 }
 
+func (f *fakeLogStore) AddEntryBatch(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	ids := make([]int64, len(entries))
+	for i, e := range entries {
+		id, err := f.addEntryFn(ctx, bucketName, rootPath, logId, e, resultChs[i])
+		ids[i] = id
+		if err != nil {
+			return ids, err
+		}
+	}
+	return ids, nil
+}
+
 func (f *fakeLogStore) GetBatchEntriesAdv(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, fromEntryId, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	return f.getBatchFn(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 }
@@ -1702,4 +1714,118 @@ func TestServer_MarkInstanceDeleted_Error(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEqual(t, int32(0), resp.Status.Code)
 	assert.NotNil(t, werr.Error(resp.GetStatus()))
+}
+
+// === AddEntries (batched) Tests ===
+
+// mockAddEntriesStream implements grpc.ServerStreamingServer[proto.AddEntriesResponse].
+type mockAddEntriesStream struct {
+	grpc.ServerStream
+	ctx       context.Context
+	responses []*proto.AddEntriesResponse
+	sendErr   error
+}
+
+func (m *mockAddEntriesStream) Send(resp *proto.AddEntriesResponse) error {
+	if m.sendErr != nil {
+		return m.sendErr
+	}
+	m.responses = append(m.responses, resp)
+	return nil
+}
+func (m *mockAddEntriesStream) Context() context.Context     { return m.ctx }
+func (m *mockAddEntriesStream) SetHeader(metadata.MD) error  { return nil }
+func (m *mockAddEntriesStream) SendHeader(metadata.MD) error { return nil }
+func (m *mockAddEntriesStream) SetTrailer(metadata.MD)       {}
+func (m *mockAddEntriesStream) SendMsg(interface{}) error    { return nil }
+func (m *mockAddEntriesStream) RecvMsg(interface{}) error    { return nil }
+
+func addEntriesReq(ids ...int64) *proto.AddEntriesRequest {
+	entries := make([]*proto.LogEntry, len(ids))
+	for i, id := range ids {
+		entries[i] = &proto.LogEntry{SegId: 0, EntryId: id, Values: []byte("v")}
+	}
+	return &proto.AddEntriesRequest{BucketName: "b", RootPath: "r", LogId: 1, Entries: entries}
+}
+
+// AddEntries acks the whole batch as one Buffered frame, then Synced frame(s)
+// covering every entry.
+func TestServer_AddEntries_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			// buffer + immediately mark durable (the cap-1 channel has room)
+			_ = resultCh.SendResult(ctx, &channel.AppendResult{SyncedId: entry.EntryId})
+			return entry.EntryId, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntriesStream{ctx: context.Background()}
+	err := s.AddEntries(addEntriesReq(0, 1, 2), stream)
+	assert.NoError(t, err)
+	require.GreaterOrEqual(t, len(stream.responses), 2)
+
+	// first frame: the whole batch Buffered
+	assert.Equal(t, proto.AddEntryState_Buffered, stream.responses[0].State)
+	assert.ElementsMatch(t, []int64{0, 1, 2}, stream.responses[0].EntryId)
+
+	// remaining frames: Synced, covering every id exactly once
+	var synced []int64
+	for _, r := range stream.responses[1:] {
+		assert.Equal(t, proto.AddEntryState_Synced, r.State)
+		synced = append(synced, r.EntryId...)
+	}
+	assert.ElementsMatch(t, []int64{0, 1, 2}, synced)
+}
+
+// A buffering failure fails the whole RPC with a single Failed frame.
+func TestServer_AddEntries_BufferError(t *testing.T) {
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			if entry.EntryId == 1 {
+				return -1, werr.ErrLogStoreShutdown
+			}
+			return entry.EntryId, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntriesStream{ctx: context.Background()}
+	err := s.AddEntries(addEntriesReq(0, 1, 2), stream)
+	assert.Error(t, err)
+	require.Len(t, stream.responses, 1)
+	assert.Equal(t, proto.AddEntryState_Failed, stream.responses[0].State)
+}
+
+// A durability failure on one entry stops the RPC with a Failed frame after
+// acking the entries that were already durable.
+func TestServer_AddEntries_SyncError(t *testing.T) {
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			if entry.EntryId == 1 {
+				_ = resultCh.SendResult(ctx, &channel.AppendResult{SyncedId: -1, Err: werr.ErrLogStoreShutdown})
+			} else {
+				_ = resultCh.SendResult(ctx, &channel.AppendResult{SyncedId: entry.EntryId})
+			}
+			return entry.EntryId, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntriesStream{ctx: context.Background()}
+	// failure is reported via a Failed frame, not a returned error
+	err := s.AddEntries(addEntriesReq(0, 1, 2), stream)
+	assert.NoError(t, err)
+
+	var sawFailed bool
+	for _, r := range stream.responses {
+		if r.State == proto.AddEntryState_Failed {
+			sawFailed = true
+			assert.Equal(t, []int64{1}, r.EntryId)
+		}
+	}
+	assert.True(t, sawFailed, "a Failed frame must be sent for the durability failure")
 }

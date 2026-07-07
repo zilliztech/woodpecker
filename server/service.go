@@ -452,6 +452,115 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 	return sendErr // Return nil for normal closure, not the context error
 }
 
+// AddEntries is the batched counterpart of AddEntry (client-side group commit).
+// It buffers every entry first and streams back one Buffered response per entry
+// (so the whole batch is admitted in a single client round-trip), then streams
+// one Synced/Failed response per entry as durability completes. Every response
+// is keyed by entry_id so the client can route it to the right pending append.
+func (s *Server) AddEntries(request *proto.AddEntriesRequest, serverStream grpc.ServerStreamingServer[proto.AddEntriesResponse]) error {
+	streamCtx := serverStream.Context()
+	n := len(request.Entries)
+	if n == 0 {
+		return nil
+	}
+
+	// Phase 1: buffer the whole batch in ONE call (amortizes per-entry
+	// processor/writer/buffer lock churn + plumbing), then acknowledge each as
+	// Buffered.
+	resultChs := make([]channel.ResultChannel, n)
+	entries := make([]*proto.LogEntry, n)
+	for i, reqEntry := range request.Entries {
+		entries[i] = &proto.LogEntry{
+			SegId:   reqEntry.SegId,
+			EntryId: reqEntry.EntryId,
+			Values:  reqEntry.Values,
+		}
+		resultChs[i] = channel.NewLocalResultChannel(fmt.Sprintf("srv-batch/%d/%d/%d", request.LogId, reqEntry.SegId, reqEntry.EntryId))
+	}
+	bufferedIds, err := s.logStore.AddEntryBatch(streamCtx, request.BucketName, request.RootPath, request.LogId, request.Entries[0].SegId, entries, resultChs)
+	if err != nil {
+		// Fail the whole RPC; the client retries the batch (already-buffered
+		// entries are handled by the writer's dedup on re-send).
+		failedId := request.Entries[0].EntryId
+		if len(bufferedIds) < n {
+			failedId = request.Entries[len(bufferedIds)].EntryId
+		}
+		sendErr := serverStream.Send(&proto.AddEntriesResponse{
+			State:   proto.AddEntryState_Failed,
+			EntryId: []int64{failedId},
+			Status:  werr.Status(err),
+		})
+		if sendErr != nil {
+			logger.Ctx(streamCtx).Warn("failed to send batch buffered-error response", zap.Error(sendErr))
+		}
+		return err
+	}
+	// One Buffered ack for the whole batch: every id shares state=Buffered /
+	// status=Success, so send them in a single frame instead of one per entry.
+	if sendErr := serverStream.Send(&proto.AddEntriesResponse{
+		State:   proto.AddEntryState_Buffered,
+		EntryId: bufferedIds,
+		Status:  werr.Success(),
+	}); sendErr != nil {
+		logger.Ctx(streamCtx).Warn("failed to send batch buffered response", zap.Error(sendErr))
+		return sendErr
+	}
+
+	// Phase 2: stream Synced acks. Entries flush in entry-id order, so block for
+	// the next entry, then opportunistically drain every following entry that is
+	// already durable (same or earlier flush) and acknowledge the whole ready run
+	// in one Synced frame — no added latency, far fewer frames than per-entry.
+	sendSynced := func(ids []int64) error {
+		return serverStream.Send(&proto.AddEntriesResponse{
+			State:   proto.AddEntryState_Synced,
+			EntryId: ids,
+			Status:  werr.Success(),
+		})
+	}
+	sendFailed := func(id int64, cause error) error {
+		return serverStream.Send(&proto.AddEntriesResponse{
+			State:   proto.AddEntryState_Failed,
+			EntryId: []int64{id},
+			Status:  werr.Status(cause),
+		})
+	}
+	for i := 0; i < n; {
+		result, rerr := resultChs[i].ReadResult(streamCtx)
+		if rerr != nil {
+			return sendFailed(request.Entries[i].EntryId, rerr)
+		}
+		if result.Err != nil {
+			return sendFailed(request.Entries[i].EntryId, result.Err)
+		}
+		syncedIds := []int64{request.Entries[i].EntryId}
+		i++
+		// Non-blocking drain of already-durable followers into the same frame.
+		for i < n {
+			lch, ok := resultChs[i].(*channel.LocalResultChannel)
+			if !ok {
+				break // unexpected channel type: fall back to per-entry blocking read
+			}
+			r, ready := lch.TryReadResult()
+			if !ready {
+				break // next entry not durable yet: this flush's run ends here
+			}
+			if r.Err != nil {
+				// Ack the durable run we have, then fail this entry (ends the RPC).
+				if sendErr := sendSynced(syncedIds); sendErr != nil {
+					return sendErr
+				}
+				return sendFailed(request.Entries[i].EntryId, r.Err)
+			}
+			syncedIds = append(syncedIds, request.Entries[i].EntryId)
+			i++
+		}
+		if sendErr := sendSynced(syncedIds); sendErr != nil {
+			return sendErr
+		}
+	}
+	return nil
+}
+
 func (s *Server) GetBatchEntriesAdv(ctx context.Context, request *proto.GetBatchEntriesAdvRequest) (*proto.GetBatchEntriesAdvResponse, error) {
 	result, err := s.logStore.GetBatchEntriesAdv(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, request.FromEntryId, request.MaxEntries, request.LastReadState)
 	if err != nil {

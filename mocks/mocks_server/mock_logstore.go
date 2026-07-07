@@ -26,6 +26,31 @@ func (_m *LogStore) EXPECT() *LogStore_Expecter {
 }
 
 // AddEntry provides a mock function with given fields: ctx, bucketName, rootPath, logId, entry, syncedResultCh
+func (_m *LogStore) AddEntryBatch(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId, entries, resultChs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AddEntryBatch")
+	}
+
+	var r0 []int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, []*proto.LogEntry, []channel.ResultChannel) ([]int64, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, segmentId, entries, resultChs)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, []*proto.LogEntry, []channel.ResultChannel) []int64); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId, entries, resultChs)
+	} else if ret.Get(0) != nil {
+		r0 = ret.Get(0).([]int64)
+	}
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64, []*proto.LogEntry, []channel.ResultChannel) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, segmentId, entries, resultChs)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
 func (_m *LogStore) AddEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	ret := _m.Called(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 

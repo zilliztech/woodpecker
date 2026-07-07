@@ -731,6 +731,9 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 	cfg.Woodpecker.Client.SegmentAppend.QueueSize = 10
 	cfg.Woodpecker.Client.SegmentAppend.MaxRetries = 2
+	// This test exercises the single-entry send path (mocks per-entry AppendEntry),
+	// so disable group commit here (default is on).
+	cfg.Woodpecker.Client.SegmentAppend.MaxBatchEntries = 1
 	cfg.Log.Level = "debug"
 	logger.InitLogger(cfg)
 	_ = tracer.InitTracer(cfg, "test", 1001)

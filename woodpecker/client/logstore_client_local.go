@@ -40,6 +40,21 @@ func (l *logStoreClientLocal) AppendEntry(ctx context.Context, bucketName string
 	return l.store.AddEntry(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 }
 
+func (l *logStoreClientLocal) AppendEntries(ctx context.Context, bucketName string, rootPath string, logId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	// Embedded mode has no network round-trip to amortize, so just buffer each
+	// entry; the per-entry result channels are notified by the writer on flush,
+	// exactly as in the single-entry path.
+	bufferedIds := make([]int64, len(entries))
+	for i, entry := range entries {
+		id, err := l.store.AddEntry(ctx, bucketName, rootPath, logId, entry, resultChs[i])
+		if err != nil {
+			return bufferedIds, err
+		}
+		bufferedIds[i] = id
+	}
+	return bufferedIds, nil
+}
+
 func (l *logStoreClientLocal) ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	return l.store.GetBatchEntriesAdv(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 }

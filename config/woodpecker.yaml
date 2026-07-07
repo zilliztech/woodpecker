@@ -26,6 +26,8 @@ woodpecker:
     segmentAppend:
       queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
       maxRetries: 3 # Maximum number of retries for segment append operations
+      maxBatchEntries: 1000 # Client-side group commit: max consecutive appends coalesced into one AddEntries request. Opportunistic (only batches already-queued ops, adds no latency at low load). Set to 1 to disable batching.
+      maxBatchBytes: 2000000 # Max total payload (bytes) of a coalesced batch, default 2MB; whichever of maxBatchEntries/maxBatchBytes is hit first bounds the batch. Ignored when maxBatchEntries <= 1.
     segmentRollingPolicy:
       maxSize: 256000000 # Maximum segment size in bytes, default is 2GB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
