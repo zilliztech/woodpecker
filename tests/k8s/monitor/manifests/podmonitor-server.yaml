@@ -19,6 +19,3 @@ spec:
       path: /metrics
       interval: 15s
       honorLabels: true
-      relabelings:
-        - targetLabel: cluster
-          replacement: woodpecker-minikube

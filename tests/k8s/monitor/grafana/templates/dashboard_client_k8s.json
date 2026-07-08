@@ -55,7 +55,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(woodpecker_client_append_requests_total{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
+          "expr": "sum(rate(woodpecker_client_append_requests_total{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
           "legendFormat": "logID={{log_id}}",
           "refId": "A"
         }
@@ -106,12 +106,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_append_latency_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_append_latency_bucket{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Append latency P50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_append_latency_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_append_latency_bucket{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Append latency P99",
           "refId": "B"
         }
@@ -162,12 +162,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_append_bytes_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_append_bytes_bucket{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Append bytes P50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_append_bytes_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_append_bytes_bucket{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Append bytes P99",
           "refId": "B"
         }
@@ -218,7 +218,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(woodpecker_client_read_requests_total{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
+          "expr": "sum(rate(woodpecker_client_read_requests_total{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
           "legendFormat": "logID={{log_id}}",
           "refId": "A"
         }
@@ -269,12 +269,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_read_latency_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.5, sum(rate(woodpecker_client_read_latency_bucket{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Read latency P50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_read_latency_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
+          "expr": "histogram_quantile(0.99, sum(rate(woodpecker_client_read_latency_bucket{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id, le))",
           "legendFormat": "logID={{log_id}} Read latency P99",
           "refId": "B"
         }
@@ -325,12 +325,12 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(woodpecker_client_reader_bytes_read{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
+          "expr": "sum(rate(woodpecker_client_reader_bytes_read{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
           "legendFormat": "logID={{log_id}} read bytes",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(woodpecker_client_writer_bytes_written{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
+          "expr": "sum(rate(woodpecker_client_writer_bytes_written{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (log_id)",
           "legendFormat": "logID={{log_id}} write bytes",
           "refId": "B"
         }
@@ -381,7 +381,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(woodpecker_client_etcd_meta_operations_total{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (operation, status)",
+          "expr": "sum(rate(woodpecker_client_etcd_meta_operations_total{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}[1m])) by (operation, status)",
           "legendFormat": "op={{operation}} status={{status}}",
           "refId": "A"
         }
@@ -432,7 +432,7 @@
       },
       "targets": [
         {
-          "expr": "sum(woodpecker_client_segment_handle_pending_append_ops{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}) by (log_id)",
+          "expr": "sum(woodpecker_client_segment_handle_pending_append_ops{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}) by (log_id)",
           "legendFormat": "logID={{log_id}}",
           "refId": "A"
         }
@@ -472,7 +472,7 @@
       },
       "targets": [
         {
-          "expr": "woodpecker_client_log_name_id_mapping{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}",
+          "expr": "woodpecker_client_log_name_id_mapping{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "",
@@ -541,7 +541,7 @@
       },
       "targets": [
         {
-          "expr": "woodpecker_client_segment_state{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}",
+          "expr": "woodpecker_client_segment_state{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}",
           "legendFormat": "logID={{log_id}} {{state}}",
           "refId": "A"
         }
@@ -581,7 +581,7 @@
       },
       "targets": [
         {
-          "expr": "woodpecker_client_active_segment_node{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"}",
+          "expr": "woodpecker_client_active_segment_node{namespace=~\"$namespace\", log_ns=~\"$log_ns\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "",
@@ -599,7 +599,6 @@
               "instance": true,
               "job": true,
               "namespace": true,
-              "cluster": true,
               "Value": true
             },
             "renameByName": {
@@ -653,7 +652,7 @@
       },
       "targets": [
         {
-          "expr": "count by (node) (woodpecker_client_active_segment_node{cluster=~\"$cluster\", namespace=~\"$namespace\", log_ns=~\"$log_ns\"})",
+          "expr": "count by (node) (woodpecker_client_active_segment_node{namespace=~\"$namespace\", log_ns=~\"$log_ns\"})",
           "legendFormat": "{{node}}",
           "refId": "A"
         }
@@ -714,7 +713,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(grpc_server_started_total{cluster=~\"$cluster\", namespace=~\"$namespace\"}[1m])) by (grpc_method)",
+              "expr": "sum(rate(grpc_server_started_total{namespace=~\"$namespace\"}[1m])) by (grpc_method)",
               "legendFormat": "method={{grpc_method}}",
               "refId": "A"
             }
@@ -765,7 +764,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(grpc_server_handled_total{cluster=~\"$cluster\", namespace=~\"$namespace\", grpc_code!=\"OK\"}[1m])) by (grpc_method, grpc_code)",
+              "expr": "sum(rate(grpc_server_handled_total{namespace=~\"$namespace\", grpc_code!=\"OK\"}[1m])) by (grpc_method, grpc_code)",
               "legendFormat": "method={{grpc_method}} code={{grpc_code}}",
               "refId": "A"
             }
@@ -816,12 +815,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(grpc_server_handling_seconds_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\"}[1m])) by (grpc_method, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(grpc_server_handling_seconds_bucket{namespace=~\"$namespace\"}[1m])) by (grpc_method, le))",
               "legendFormat": "method={{grpc_method}} P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket{cluster=~\"$cluster\", namespace=~\"$namespace\"}[1m])) by (grpc_method, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket{namespace=~\"$namespace\"}[1m])) by (grpc_method, le))",
               "legendFormat": "method={{grpc_method}} P99",
               "refId": "B"
             }
@@ -856,29 +855,13 @@
         "multi": false
       },
       {
-        "name": "cluster",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${prometheus}"
-        },
-        "query": "label_values(go_info, cluster)",
-        "refresh": 2,
-        "includeAll": true,
-        "multi": true,
-        "current": {
-          "text": "All",
-          "value": "$__all"
-        }
-      },
-      {
         "name": "namespace",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "${prometheus}"
         },
-        "query": "label_values(woodpecker_client_append_requests_total{cluster=~\"$cluster\"}, namespace)",
+        "query": "label_values(go_info, namespace)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -900,7 +883,7 @@
         "includeAll": true,
         "multi": true,
         "name": "log_ns",
-        "query": "label_values(woodpecker_client_append_requests_total, log_ns)",
+        "query": "label_values(woodpecker_client_append_requests_total{namespace=~\"$namespace\"}, log_ns)",
         "refresh": 2,
         "type": "query"
       }

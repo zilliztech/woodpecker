@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-// TestK8sMonitor_Metrics verifies scrape targets and the cluster/namespace/log_ns
+// TestK8sMonitor_Metrics verifies scrape targets and the namespace/log_ns
 // label scheme against a Prometheus reachable at $WP_K8S_PROM_URL (a kubectl
 // port-forward set up by run_monitor_tests.sh). Skipped when unset so the package
 // stays `go test ./...`-safe without a live cluster.
@@ -71,9 +71,6 @@ func TestK8sMonitor_Metrics(t *testing.T) {
 			t.Fatal("no logstore_active_logs series")
 		}
 		for _, m := range series {
-			if m["cluster"] != "woodpecker-minikube" {
-				t.Errorf("cluster=%q, want woodpecker-minikube", m["cluster"])
-			}
 			if m["namespace"] != "woodpecker" {
 				t.Errorf("namespace=%q, want k8s namespace woodpecker", m["namespace"])
 			}

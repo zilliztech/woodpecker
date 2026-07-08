@@ -11,8 +11,6 @@ kubeEtcd: { enabled: false }
 coreDns: { enabled: false }
 prometheus:
   prometheusSpec:
-    externalLabels:
-      cluster: woodpecker-minikube
     podMonitorSelectorNilUsesHelmValues: false
     serviceMonitorSelectorNilUsesHelmValues: false
     ruleSelectorNilUsesHelmValues: false

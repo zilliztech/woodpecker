@@ -43,11 +43,14 @@ func TestK8sDashboards_Valid(t *testing.T) {
 		if !strings.Contains(s, "${prometheus}") {
 			t.Errorf("%s: missing ${prometheus} datasource var", f)
 		}
+		if strings.Contains(s, "$cluster") {
+			t.Errorf("%s: stray $cluster reference", f)
+		}
 		names := map[string]bool{}
 		for _, v := range obj["templating"].(map[string]any)["list"].([]any) {
 			names[v.(map[string]any)["name"].(string)] = true
 		}
-		for _, want := range []string{"prometheus", "cluster", "namespace", "log_ns"} {
+		for _, want := range []string{"prometheus", "namespace", "log_ns"} {
 			if !names[want] {
 				t.Errorf("%s: missing template var %q", f, want)
 			}
