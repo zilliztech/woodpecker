@@ -848,6 +848,10 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 	}
 
 	segmentsTruncated := 0
+	var truncatedSegments []struct {
+		segId    int64
+		oldState proto.SegmentState
+	}
 	for segId, segMetadata := range segments {
 		// Skip segments at or after truncation point
 		if segId > logMeta.Metadata.TruncatedSegmentId {
@@ -878,11 +882,26 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 			// Continue with other segments, we'll log the error but not fail the operation
 		} else {
 			segmentsTruncated++
+			truncatedSegments = append(truncatedSegments, struct {
+				segId    int64
+				oldState proto.SegmentState
+			}{segId, oldState})
 		}
-
-		logger.Ctx(ctx).Debug("Marked segment as truncated",
+	}
+	if segmentsTruncated > 0 {
+		sort.Slice(truncatedSegments, func(i, j int) bool { return truncatedSegments[i].segId < truncatedSegments[j].segId })
+		segmentIds := make([]int64, 0, len(truncatedSegments))
+		fromStates := make([]string, 0, len(truncatedSegments))
+		for _, s := range truncatedSegments {
+			segmentIds = append(segmentIds, s.segId)
+			fromStates = append(fromStates, s.oldState.String())
+		}
+		logger.Ctx(ctx).Info("Marked segments as truncated",
 			zap.String("logName", l.Name),
-			zap.Int64("segmentId", segId))
+			zap.Int64("logId", l.Id),
+			zap.Int64s("segmentIds", segmentIds),
+			zap.Strings("fromStates", fromStates),
+			zap.Int64("truncationPointSegmentId", logMeta.Metadata.TruncatedSegmentId))
 	}
 
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(l.logNs, logIdStr, "check_segment_truncated", "success").Inc()

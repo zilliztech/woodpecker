@@ -151,9 +151,10 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 				zap.Error(err))
 			errorCount++
 		} else {
-			logger.Ctx(ctx).Debug("successfully deleted block",
+			logger.Ctx(ctx).Info("successfully deleted block",
 				zap.String("segmentFileKey", s.segmentFileKey),
-				zap.String("objectKey", obj.path))
+				zap.String("objectKey", obj.path),
+				zap.Int64("size", obj.size))
 			deletedCount++
 			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, s.logNs, s.logIdStr).Sub(float64(obj.size))
 			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, s.logNs, s.logIdStr).Dec()

@@ -20,6 +20,10 @@ package management
 import (
 	"encoding/json"
 	"net/http"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 // NewNodeStatusHandler returns an http.HandlerFunc for GET /admin/node/status.
@@ -43,7 +47,11 @@ func NewNodeDecommissionHandler(decommission func() error) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		logger.Ctx(r.Context()).Info("node decommission requested",
+			zap.String("remoteAddr", r.RemoteAddr))
 		if err := decommission(); err != nil {
+			logger.Ctx(r.Context()).Warn("node decommission request rejected",
+				zap.String("remoteAddr", r.RemoteAddr), zap.Error(err))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -62,7 +70,11 @@ func NewNodeCancelDecommissionHandler(cancel func() error) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		logger.Ctx(r.Context()).Info("node decommission cancel requested",
+			zap.String("remoteAddr", r.RemoteAddr))
 		if err := cancel(); err != nil {
+			logger.Ctx(r.Context()).Warn("node decommission cancel rejected",
+				zap.String("remoteAddr", r.RemoteAddr), zap.Error(err))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

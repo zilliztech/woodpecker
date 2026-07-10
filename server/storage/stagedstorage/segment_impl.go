@@ -225,9 +225,10 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 				zap.Error(err))
 			errorCount++
 		} else {
-			logger.Ctx(ctx).Debug("successfully deleted block",
+			logger.Ctx(ctx).Info("successfully deleted block",
 				zap.String("segmentFileKey", rs.segmentFileKey),
-				zap.String("objectKey", obj.path))
+				zap.String("objectKey", obj.path),
+				zap.Int64("size", obj.size))
 			deletedCount++
 			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(obj.size))
 			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
@@ -313,7 +314,7 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 					zap.Error(err))
 				deleteErrors = append(deleteErrors, err)
 			} else {
-				logger.Ctx(ctx).Debug("Successfully deleted local file",
+				logger.Ctx(ctx).Info("Successfully deleted local file",
 					zap.String("filePath", filePath))
 				deletedCount++
 				if isDataFile {

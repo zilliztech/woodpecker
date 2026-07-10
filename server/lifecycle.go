@@ -18,12 +18,17 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 const nodeStateFileName = "node_state.json"
@@ -103,10 +108,14 @@ func (m *NodeLifecycleManager) StartDecommission() error {
 	switch m.state {
 	case NodeStateActive:
 		m.state = NodeStateDecommissioning
-		return m.persistStateLocked()
+		err := m.persistStateLocked()
+		m.logTransitionLocked("start decommission", NodeStateActive, err)
+		return err
 	case NodeStateDecommissioning:
+		logger.Ctx(context.Background()).Debug("start decommission: already decommissioning, no-op")
 		return nil // idempotent
 	case NodeStateDecommissioned:
+		logger.Ctx(context.Background()).Warn("start decommission rejected: node already decommissioned")
 		return fmt.Errorf("node already decommissioned")
 	}
 	return fmt.Errorf("unknown state: %s", m.state)
@@ -117,8 +126,11 @@ func (m *NodeLifecycleManager) StartDecommission() error {
 func (m *NodeLifecycleManager) MarkDecommissioned() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	from := m.state
 	m.state = NodeStateDecommissioned
-	return m.persistStateLocked()
+	err := m.persistStateLocked()
+	m.logTransitionLocked("mark decommissioned", from, err)
+	return err
 }
 
 // CancelDecommission transitions the node from decommissioning back to active.
@@ -131,11 +143,15 @@ func (m *NodeLifecycleManager) CancelDecommission() error {
 	defer m.mu.Unlock()
 	switch m.state {
 	case NodeStateActive:
+		logger.Ctx(context.Background()).Debug("cancel decommission: already active, no-op")
 		return nil // idempotent
 	case NodeStateDecommissioning:
 		m.state = NodeStateActive
-		return m.persistStateLocked()
+		err := m.persistStateLocked()
+		m.logTransitionLocked("cancel decommission", NodeStateDecommissioning, err)
+		return err
 	case NodeStateDecommissioned:
+		logger.Ctx(context.Background()).Warn("cancel decommission rejected: node already decommissioned")
 		return fmt.Errorf("cannot cancel: node already decommissioned")
 	}
 	return fmt.Errorf("unknown state: %s", m.state)
@@ -146,6 +162,7 @@ func (m *NodeLifecycleManager) CancelDecommission() error {
 func (m *NodeLifecycleManager) ClearState() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	from := m.state
 	m.state = NodeStateActive
 	if m.stateFilePath == "" {
 		return nil
@@ -154,6 +171,9 @@ func (m *NodeLifecycleManager) ClearState() error {
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove state file: %w", err)
 	}
+	logger.Ctx(context.Background()).Info("node lifecycle state cleared",
+		zap.String("from", string(from)),
+		zap.String("stateFile", m.stateFilePath))
 	return nil
 }
 
@@ -195,7 +215,28 @@ func (m *NodeLifecycleManager) loadState() error {
 	default:
 		return fmt.Errorf("unknown state %q in %s", persisted.State, m.stateFilePath)
 	}
+	if m.state != NodeStateActive {
+		logger.Ctx(context.Background()).Info("restored persisted node lifecycle state",
+			zap.String("state", string(m.state)),
+			zap.Int64("persistedAtMs", persisted.Timestamp),
+			zap.String("stateFile", m.stateFilePath))
+	}
 	return nil
+}
+
+// logTransitionLocked emits the audit line for a real state transition.
+// Must be called while holding m.mu, after persistStateLocked.
+func (m *NodeLifecycleManager) logTransitionLocked(action string, from NodeState, persistErr error) {
+	fields := []zap.Field{
+		zap.String("from", string(from)),
+		zap.String("to", string(m.state)),
+	}
+	if persistErr != nil {
+		logger.Ctx(context.Background()).Warn("node lifecycle transition failed to persist: "+action,
+			append(fields, zap.Error(persistErr))...)
+		return
+	}
+	logger.Ctx(context.Background()).Info("node lifecycle transition: "+action, fields...)
 }
 
 // persistStateLocked writes the current state to the state file.

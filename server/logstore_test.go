@@ -1174,7 +1174,7 @@ func TestLogStore_EvictLog_PersistsMarker(t *testing.T) {
 
 	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId))
 
-	markers, err := scanDeleteMarkers(root)
+	markers, err := scanDeleteMarkers(context.Background(), root)
 	require.NoError(t, err)
 	require.Len(t, markers, 1)
 	assert.Equal(t, testLogId, markers[0].LogId)
@@ -1185,7 +1185,7 @@ func TestLogStore_RebuildDeletingSetsFromMarkers(t *testing.T) {
 	root := t.TempDir()
 
 	// Pre-seed a marker as if a previous run had evicted the log
-	require.NoError(t, writeDeleteMarker(root, deleteMarker{
+	require.NoError(t, writeDeleteMarker(context.Background(), root, deleteMarker{
 		Bucket:    testBucketName,
 		RootPath:  testRootPath,
 		LogId:     testLogId,
@@ -1214,7 +1214,7 @@ func TestLogStore_HasLocalSegmentData_IgnoresMarkers(t *testing.T) {
 	ls := NewLogStore(ctx, cfg, nil)
 
 	// Write a delete marker — it should NOT be counted as segment data
-	require.NoError(t, writeDeleteMarker(root, deleteMarker{
+	require.NoError(t, writeDeleteMarker(context.Background(), root, deleteMarker{
 		Bucket:    testBucketName,
 		RootPath:  testRootPath,
 		LogId:     testLogId,

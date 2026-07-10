@@ -186,14 +186,25 @@ func (r *deletedLogReclaimTask) Run(ctx context.Context) error {
 	if root == "" {
 		return nil
 	}
-	markers, err := scanDeleteMarkers(root)
+	markers, err := scanDeleteMarkers(ctx, root)
 	if err != nil {
 		return err
 	}
 	cutoff := time.Now().Add(-r.grace).Unix()
+	inGrace := 0
+	earliestDue := int64(0)
 	for _, m := range markers {
 		if m.DeletedAt > cutoff {
-			continue // still within grace
+			// still within grace
+			inGrace++
+			if due := m.DeletedAt + int64(r.grace.Seconds()); earliestDue == 0 || due < earliestDue {
+				earliestDue = due
+			}
+			logger.Ctx(ctx).Debug("reclaim: marker still within grace period, skipping",
+				zap.String("bucket", m.Bucket), zap.String("rootPath", m.RootPath),
+				zap.Int64("logId", m.LogId), zap.Bool("instance", m.Instance),
+				zap.Int64("deletedAt", m.DeletedAt), zap.Int64("cutoff", cutoff))
+			continue
 		}
 		var dir, key string
 		if m.Instance {
@@ -209,12 +220,14 @@ func (r *deletedLogReclaimTask) Run(ctx context.Context) error {
 					zap.String("dir", dir), zap.Error(rmErr))
 				continue // keep the marker so we retry; do not prune the gate
 			}
+			logger.Ctx(ctx).Info("reclaim: removed local data directory",
+				zap.String("dir", dir), zap.String("key", key), zap.Bool("instance", m.Instance))
 		}
 		// Remove the marker and prune the in-memory gate ATOMICALLY under spMu so a
 		// concurrent EvictLog (which re-adds the gate under spMu) cannot interleave and
 		// leave a marker-on-disk-but-no-gate state (which would silently resume serving).
 		r.store.spMu.Lock()
-		if rmErr := removeDeleteMarker(root, m); rmErr != nil {
+		if rmErr := removeDeleteMarker(ctx, root, m); rmErr != nil {
 			r.store.spMu.Unlock()
 			logger.Ctx(ctx).Warn("reclaim: failed to remove marker; will retry next pass", zap.Error(rmErr))
 			continue
@@ -226,6 +239,12 @@ func (r *deletedLogReclaimTask) Run(ctx context.Context) error {
 		}
 		r.store.spMu.Unlock()
 		logger.Ctx(ctx).Info("reclaimed deleted log/instance local data", zap.String("key", key), zap.Bool("instance", m.Instance))
+	}
+	if inGrace > 0 {
+		logger.Ctx(ctx).Info("reclaim pass: markers still within grace period",
+			zap.Int("count", inGrace),
+			zap.Int64("earliestDueUnix", earliestDue),
+			zap.Duration("gracePeriod", r.grace))
 	}
 	return nil
 }
