@@ -2771,7 +2771,7 @@
         "includeAll": true,
         "multi": true,
         "name": "log_ns",
-        "query": "query_result(max by (log_ns) (woodpecker_server_logstore_active_logs{job=~\"woodpecker-node[0-9]+|woodpecker/woodpecker-server\", log_ns=~\".+\"}))",
+        "query": "query_result(max by (log_ns) (woodpecker_server_logstore_active_logs{log_ns=~\".+\"}))",
         "refresh": 2,
         "regex": "/log_ns=\"([^\"]+)\"/",
         "type": "query"
@@ -2789,13 +2789,13 @@
         "includeAll": true,
         "multi": true,
         "name": "log_id",
-        "query": "query_result(max by (log_id) (woodpecker_server_logstore_active_segments{job=~\"woodpecker-node[0-9]+|woodpecker/woodpecker-server\", log_ns=~\"$log_ns\", log_id=~\".+\"}))",
+        "query": "query_result(max by (log_id) (woodpecker_server_logstore_active_segments{log_ns=~\"$log_ns\", log_id=~\".+\"}))",
         "refresh": 2,
         "regex": "/log_id=\"([^\"]+)\"/",
         "type": "query"
       },
       {
-        "allValue": "woodpecker-node[0-9]+|woodpecker/woodpecker-server",
+        "allValue": ".*",
         "current": {
           "text": "All",
           "value": "$__all"
@@ -2808,7 +2808,7 @@
         "includeAll": true,
         "multi": true,
         "name": "server_job",
-        "query": "label_values(go_goroutines{job=~\"woodpecker-node[0-9]+|woodpecker/woodpecker-server\"}, job)",
+        "query": "label_values(woodpecker_server_logstore_instances_total, job)",
         "refresh": 2,
         "type": "query"
       }

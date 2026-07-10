@@ -36,15 +36,19 @@ resources before running:
 MK_CPUS=6 MK_MEMORY=8192 ./run_monitor_tests.sh
 ```
 
-## Label Scheme: `cluster` / `namespace` / `log_ns`
+## Label Scheme: `namespace` / `log_ns`
 
-Woodpecker metrics carry three key labels:
+Woodpecker metrics carry two key labels:
 
 | Label | Value | Source |
 |-------|-------|--------|
-| `cluster` | `woodpecker-minikube` | set in `kube-prometheus-values.yaml` via `externalLabels` |
 | `namespace` | Kubernetes namespace (e.g. `woodpecker`) | injected by kube-prometheus-stack from the PodMonitor namespace |
 | `log_ns` | Woodpecker logical log namespace (e.g. `my-log`) | emitted by the server/client as a metric label |
+
+Dashboards derive everything else from these: the `namespace` dropdown is
+discovered via `go_info`, and the hidden `server_job` variable resolves the
+PodMonitor-assigned `job` label within the selected namespace (also via
+`go_info`), so no job name or cluster name is hardcoded.
 
 ### Breaking-change note for production dashboards
 
@@ -74,6 +78,5 @@ The test checks:
 3. **ServerMetrics** — core server metrics are present and non-zero.
 4. **ClientMetrics** — core client metrics are present and non-zero.
 5. **LabelScheme** — every `woodpecker_server_logstore_active_logs` series
-   carries `cluster=woodpecker-minikube`, `namespace=woodpecker`, a non-empty
-   `log_ns`, and no `exported_namespace` (which would indicate a relabeling
-   conflict).
+   carries `namespace=woodpecker`, a non-empty `log_ns`, and no
+   `exported_namespace` (which would indicate a relabeling conflict).
