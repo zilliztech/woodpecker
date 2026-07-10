@@ -18,6 +18,7 @@
 package server
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,11 +29,11 @@ func TestDeleteMarker_WriteScanRoundtrip(t *testing.T) {
 	root := t.TempDir()
 
 	// Write 3 markers: two log markers and one instance marker
-	require.NoError(t, writeDeleteMarker(root, deleteMarker{Bucket: "b", RootPath: "r", LogId: 7, DeletedAt: 111}))
-	require.NoError(t, writeDeleteMarker(root, deleteMarker{Bucket: "b", RootPath: "r", LogId: 8, DeletedAt: 222}))
-	require.NoError(t, writeDeleteMarker(root, deleteMarker{Bucket: "b", RootPath: "r2", Instance: true, DeletedAt: 333}))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, deleteMarker{Bucket: "b", RootPath: "r", LogId: 7, DeletedAt: 111}))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, deleteMarker{Bucket: "b", RootPath: "r", LogId: 8, DeletedAt: 222}))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, deleteMarker{Bucket: "b", RootPath: "r2", Instance: true, DeletedAt: 333}))
 
-	markers, err := scanDeleteMarkers(root)
+	markers, err := scanDeleteMarkers(context.Background(), root)
 	require.NoError(t, err)
 	assert.Len(t, markers, 3)
 
@@ -57,11 +58,11 @@ func TestDeleteMarker_CreateIfAbsentKeepsDeletedAt(t *testing.T) {
 	root := t.TempDir()
 
 	// Write initial marker
-	require.NoError(t, writeDeleteMarker(root, deleteMarker{Bucket: "b", RootPath: "r", LogId: 7, DeletedAt: 111}))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, deleteMarker{Bucket: "b", RootPath: "r", LogId: 7, DeletedAt: 111}))
 	// Attempt to overwrite with a different DeletedAt — should be a no-op
-	require.NoError(t, writeDeleteMarker(root, deleteMarker{Bucket: "b", RootPath: "r", LogId: 7, DeletedAt: 999}))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, deleteMarker{Bucket: "b", RootPath: "r", LogId: 7, DeletedAt: 999}))
 
-	markers, err := scanDeleteMarkers(root)
+	markers, err := scanDeleteMarkers(context.Background(), root)
 	require.NoError(t, err)
 	require.Len(t, markers, 1)
 	// Original DeletedAt must be preserved
@@ -70,7 +71,7 @@ func TestDeleteMarker_CreateIfAbsentKeepsDeletedAt(t *testing.T) {
 
 func TestScanDeleteMarkers_EmptyRoot(t *testing.T) {
 	root := t.TempDir()
-	markers, err := scanDeleteMarkers(root)
+	markers, err := scanDeleteMarkers(context.Background(), root)
 	require.NoError(t, err)
 	assert.Empty(t, markers)
 }

@@ -848,6 +848,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 	}
 
 	segmentsTruncated := 0
+	var truncatedSegmentIds []int64
 	for segId, segMetadata := range segments {
 		// Skip segments at or after truncation point
 		if segId > logMeta.Metadata.TruncatedSegmentId {
@@ -878,11 +879,16 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 			// Continue with other segments, we'll log the error but not fail the operation
 		} else {
 			segmentsTruncated++
+			truncatedSegmentIds = append(truncatedSegmentIds, segId)
 		}
-
-		logger.Ctx(ctx).Debug("Marked segment as truncated",
+	}
+	if segmentsTruncated > 0 {
+		sort.Slice(truncatedSegmentIds, func(i, j int) bool { return truncatedSegmentIds[i] < truncatedSegmentIds[j] })
+		logger.Ctx(ctx).Info("Marked segments as truncated",
 			zap.String("logName", l.Name),
-			zap.Int64("segmentId", segId))
+			zap.Int64("logId", l.Id),
+			zap.Int64s("segmentIds", truncatedSegmentIds),
+			zap.Int64("truncationPointSegmentId", logMeta.Metadata.TruncatedSegmentId))
 	}
 
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(l.logNs, logIdStr, "check_segment_truncated", "success").Inc()

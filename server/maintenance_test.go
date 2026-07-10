@@ -199,7 +199,7 @@ func TestDeletedLogReclaimTask_ReclaimsPastGraceOnly(t *testing.T) {
 
 	// --- OLD log (logId 7, deleted 2 hours ago — past grace) ---
 	oldMarker := deleteMarker{Bucket: "b", RootPath: "r", LogId: 7, DeletedAt: now.Add(-2 * time.Hour).Unix()}
-	require.NoError(t, writeDeleteMarker(root, oldMarker))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, oldMarker))
 	oldDir := localLogDataDir(store.cfg, "b", "r", 7)
 	require.NotEmpty(t, oldDir)
 	require.NoError(t, os.MkdirAll(oldDir, 0o755))
@@ -211,7 +211,7 @@ func TestDeletedLogReclaimTask_ReclaimsPastGraceOnly(t *testing.T) {
 
 	// --- FRESH log (logId 8, deleted just now — within grace) ---
 	freshMarker := deleteMarker{Bucket: "b", RootPath: "r", LogId: 8, DeletedAt: now.Unix()}
-	require.NoError(t, writeDeleteMarker(root, freshMarker))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, freshMarker))
 	freshDir := localLogDataDir(store.cfg, "b", "r", 8)
 	require.NotEmpty(t, freshDir)
 	require.NoError(t, os.MkdirAll(freshDir, 0o755))
@@ -250,7 +250,7 @@ func TestDeletedLogReclaimTask_ReclaimsPastGraceOnly(t *testing.T) {
 	assert.True(t, freshPresent, "fresh log gate entry should still be present")
 
 	// FRESH log: marker must still be present (scanDeleteMarkers returns exactly 1).
-	remaining, err := scanDeleteMarkers(root)
+	remaining, err := scanDeleteMarkers(context.Background(), root)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1, "exactly one marker (fresh) should remain")
 	assert.Equal(t, int64(8), remaining[0].LogId)
@@ -276,7 +276,7 @@ func TestDeletedLogReclaimTask_ReclaimsInstance(t *testing.T) {
 		Instance:  true,
 		DeletedAt: time.Now().Add(-2 * time.Hour).Unix(),
 	}
-	require.NoError(t, writeDeleteMarker(root, m))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, m))
 
 	// Create the local instance data directory with a data file inside.
 	instanceDir := localInstanceDataDir(store.cfg, "b", "r")
@@ -305,7 +305,7 @@ func TestDeletedLogReclaimTask_ReclaimsInstance(t *testing.T) {
 	assert.False(t, present, "deletingInstances gate entry should have been pruned")
 
 	// Marker file must be gone.
-	remaining, err := scanDeleteMarkers(root)
+	remaining, err := scanDeleteMarkers(context.Background(), root)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "no markers should remain after reclaim")
 }
@@ -335,7 +335,7 @@ func TestDeletedLogReclaimTask_MinioModeNoLocalButPrunes(t *testing.T) {
 		Instance:  false,
 		DeletedAt: time.Now().Add(-2 * time.Hour).Unix(),
 	}
-	require.NoError(t, writeDeleteMarker(root, m))
+	require.NoError(t, writeDeleteMarker(context.Background(), root, m))
 
 	// Confirm minio mode returns no local dir (sanity-check of the test assumption).
 	dir := localLogDataDir(store.cfg, "b", "r", 5)
@@ -352,7 +352,7 @@ func TestDeletedLogReclaimTask_MinioModeNoLocalButPrunes(t *testing.T) {
 	require.NoError(t, task.Run(ctx))
 
 	// Marker file must be gone.
-	remaining, err := scanDeleteMarkers(root)
+	remaining, err := scanDeleteMarkers(context.Background(), root)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "marker should have been removed even in minio mode")
 

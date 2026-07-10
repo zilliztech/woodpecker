@@ -18,11 +18,16 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 // deleteMarkerDir is the subdirectory under the storage root holding delete markers.
@@ -53,9 +58,11 @@ func markerPath(storageRoot string, m deleteMarker) string {
 
 // writeDeleteMarker persists a marker. Create-if-absent: if the marker already exists it is
 // left untouched (the grace clock / DeletedAt is stable across re-marks). fsync'd for durability.
-func writeDeleteMarker(storageRoot string, m deleteMarker) error {
+func writeDeleteMarker(ctx context.Context, storageRoot string, m deleteMarker) error {
 	p := markerPath(storageRoot, m)
 	if _, err := os.Stat(p); err == nil {
+		logger.Ctx(ctx).Debug("delete marker already exists, keeping original",
+			zap.String("path", p))
 		return nil // already marked — keep the original
 	} else if !os.IsNotExist(err) {
 		return err
@@ -97,21 +104,43 @@ func writeDeleteMarker(storageRoot string, m deleteMarker) error {
 		dir.Close()
 		return err
 	}
-	return dir.Close()
+	if err := dir.Close(); err != nil {
+		return err
+	}
+	logger.Ctx(ctx).Info("delete marker created",
+		zap.String("path", p),
+		zap.String("bucket", m.Bucket),
+		zap.String("rootPath", m.RootPath),
+		zap.Int64("logId", m.LogId),
+		zap.Bool("instance", m.Instance),
+		zap.Int64("deletedAt", m.DeletedAt))
+	return nil
 }
 
 // removeDeleteMarker deletes a marker file. Absent file is not an error.
-func removeDeleteMarker(storageRoot string, m deleteMarker) error {
-	err := os.Remove(markerPath(storageRoot, m))
+func removeDeleteMarker(ctx context.Context, storageRoot string, m deleteMarker) error {
+	p := markerPath(storageRoot, m)
+	err := os.Remove(p)
 	if os.IsNotExist(err) {
+		logger.Ctx(ctx).Debug("delete marker already absent", zap.String("path", p))
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	logger.Ctx(ctx).Info("delete marker removed",
+		zap.String("path", p),
+		zap.String("bucket", m.Bucket),
+		zap.String("rootPath", m.RootPath),
+		zap.Int64("logId", m.LogId),
+		zap.Bool("instance", m.Instance))
+	return nil
 }
 
 // scanDeleteMarkers walks the marker dir and returns every marker, parsed from file content.
-// A missing marker dir yields an empty slice (not an error).
-func scanDeleteMarkers(storageRoot string) ([]deleteMarker, error) {
+// A missing marker dir yields an empty slice (not an error). Unreadable or corrupt marker
+// files are skipped with a WARN — they would otherwise linger on disk invisibly.
+func scanDeleteMarkers(ctx context.Context, storageRoot string) ([]deleteMarker, error) {
 	dir := filepath.Join(storageRoot, deleteMarkerDir)
 	var markers []deleteMarker
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -119,6 +148,8 @@ func scanDeleteMarkers(storageRoot string) ([]deleteMarker, error) {
 			if os.IsNotExist(err) {
 				return filepath.SkipAll
 			}
+			logger.Ctx(ctx).Warn("delete marker scan: cannot access path, skipping",
+				zap.String("path", path), zap.Error(err))
 			return nil
 		}
 		if d.IsDir() || filepath.Ext(path) != ".json" {
@@ -129,10 +160,14 @@ func scanDeleteMarkers(storageRoot string) ([]deleteMarker, error) {
 		// is not a concern here.
 		data, rerr := os.ReadFile(path) //nolint:gosec
 		if rerr != nil {
+			logger.Ctx(ctx).Warn("delete marker scan: unreadable marker file, skipping",
+				zap.String("path", path), zap.Error(rerr))
 			return nil
 		}
 		var m deleteMarker
-		if json.Unmarshal(data, &m) != nil {
+		if uerr := json.Unmarshal(data, &m); uerr != nil {
+			logger.Ctx(ctx).Warn("delete marker scan: corrupt marker file, skipping",
+				zap.String("path", path), zap.Error(uerr))
 			return nil
 		}
 		markers = append(markers, m)

@@ -798,6 +798,9 @@ func (s *Server) Decommission() error {
 		node.UpdateMeta(map[string]interface{}{
 			"tags": updatedTags,
 		})
+		logger.Ctx(s.ctx).Info("broadcast node status via gossip",
+			zap.String("nodeID", s.serverConfig.NodeID),
+			zap.String("status", "decommissioning"))
 	}
 	// Start background monitor to auto-mark decommissioned when drained
 	s.startDecommissionMonitor()

@@ -20,6 +20,10 @@ package management
 import (
 	"encoding/json"
 	"net/http"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 // NewLogDeleteHandler returns an http.HandlerFunc for POST /admin/log/delete.
@@ -41,6 +45,11 @@ func NewLogDeleteHandler(markDeleted func(bucketName, rootPath string, logId int
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body: " + err.Error()})
 			return
 		}
+		logger.Ctx(r.Context()).Info("log delete requested",
+			zap.String("remoteAddr", r.RemoteAddr),
+			zap.String("bucketName", body.BucketName),
+			zap.String("rootPath", body.RootPath),
+			zap.Int64("logId", body.LogId))
 		if err := markDeleted(body.BucketName, body.RootPath, body.LogId); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -70,6 +79,10 @@ func NewInstanceDeleteHandler(markDeleted func(bucketName, rootPath string) erro
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body: " + err.Error()})
 			return
 		}
+		logger.Ctx(r.Context()).Info("instance delete requested",
+			zap.String("remoteAddr", r.RemoteAddr),
+			zap.String("bucketName", body.BucketName),
+			zap.String("rootPath", body.RootPath))
 		if err := markDeleted(body.BucketName, body.RootPath); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)

@@ -500,7 +500,9 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 	// Process segments in ascending order by segment ID
 	var segmentIdsToClean []int64
 	truncatedSegmentCount := 0
-	protectedSegmentCount := 0
+	readerProtectedCount := 0
+	ttlProtectedCount := 0
+	ttlCutoffMs := time.Now().UnixMilli() - int64(l.cfg.Woodpecker.Logstore.RetentionPolicy.TTL*1000)
 
 	for segId, segMeta := range segments {
 		// Only consider segments that are truncated
@@ -516,7 +518,7 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 				zap.String("logName", logName),
 				zap.Int64("logId", logId),
 				zap.Int64("segmentId", segId))
-			protectedSegmentCount++
+			readerProtectedCount++
 			continue
 		}
 
@@ -528,12 +530,12 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 		if segMeta.Metadata.SealedTime > lastActiveTime {
 			lastActiveTime = segMeta.Metadata.SealedTime
 		}
-		if lastActiveTime+int64(l.cfg.Woodpecker.Logstore.RetentionPolicy.TTL*1000) > time.Now().UnixMilli() {
+		if lastActiveTime > ttlCutoffMs {
 			logger.Ctx(ctx).Debug("Skipping truncated segment still within ttl protection",
 				zap.String("logName", logName),
 				zap.Int64("logId", logId),
 				zap.Int64("segmentId", segId))
-			protectedSegmentCount++
+			ttlProtectedCount++
 			continue
 		}
 
@@ -550,7 +552,10 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 		zap.Int64("logId", logId),
 		zap.Int("totalTruncatedSegments", truncatedSegmentCount),
 		zap.Int("segmentsEligibleForCleanup", len(segmentIdsToClean)),
-		zap.Int("segmentsProtectedByReaders", protectedSegmentCount))
+		zap.Int("segmentsProtectedByReaders", readerProtectedCount),
+		zap.Int("segmentsProtectedByTTL", ttlProtectedCount),
+		zap.Int64("minSegmentIdInUse", minTruncatedSegmentId),
+		zap.Int64("ttlCutoffMs", ttlCutoffMs))
 
 	if len(segmentIdsToClean) == 0 {
 		logger.Ctx(ctx).Info("No truncated segments eligible for cleanup",

@@ -203,7 +203,11 @@ func (l *logStore) GetAddress() string {
 }
 
 func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
-	if l.stopped.Load() || l.rejectWrites.Load() {
+	if l.stopped.Load() {
+		return -1, werr.ErrLogStoreShutdown
+	}
+	if l.rejectWrites.Load() {
+		metrics.WpLogStoreRejectedWritesTotal.WithLabelValues(metrics.NodeID).Inc()
 		return -1, werr.ErrLogStoreShutdown
 	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
@@ -235,7 +239,11 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 }
 
 func (l *logStore) AddEntryBatch(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
-	if l.stopped.Load() || l.rejectWrites.Load() {
+	if l.stopped.Load() {
+		return nil, werr.ErrLogStoreShutdown
+	}
+	if l.rejectWrites.Load() {
+		metrics.WpLogStoreRejectedWritesTotal.WithLabelValues(metrics.NodeID).Inc()
 		return nil, werr.ErrLogStoreShutdown
 	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntryBatch")
@@ -617,7 +625,10 @@ func (l *logStore) GetActiveProcessorCount() int {
 // RejectNewWrites sets a flag to reject new write operations while allowing
 // reads and segment completions to continue (for graceful decommission).
 func (l *logStore) RejectNewWrites() {
-	l.rejectWrites.Store(true)
+	if !l.rejectWrites.Swap(true) {
+		logger.Ctx(context.Background()).Info("log store now rejecting new writes (decommission)",
+			zap.String("nodeID", metrics.NodeID))
+	}
 }
 
 // HasLocalSegmentData scans the data directory for any remaining segment data files (data.log).
@@ -655,7 +666,7 @@ func (l *logStore) HasLocalSegmentData() bool {
 
 func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error {
 	if root := l.cfg.Woodpecker.Storage.RootPath; root != "" {
-		if err := writeDeleteMarker(root, deleteMarker{
+		if err := writeDeleteMarker(ctx, root, deleteMarker{
 			Bucket: bucketName, RootPath: rootPath, LogId: logId, DeletedAt: time.Now().Unix(),
 		}); err != nil {
 			return werr.ErrMarkDeleteFailed.WithCauseErr(err)
@@ -680,7 +691,7 @@ func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath str
 
 func (l *logStore) EvictInstance(ctx context.Context, bucketName string, rootPath string) error {
 	if root := l.cfg.Woodpecker.Storage.RootPath; root != "" {
-		if err := writeDeleteMarker(root, deleteMarker{
+		if err := writeDeleteMarker(ctx, root, deleteMarker{
 			Bucket: bucketName, RootPath: rootPath, Instance: true, DeletedAt: time.Now().Unix(),
 		}); err != nil {
 			return werr.ErrMarkDeleteFailed.WithCauseErr(err)
@@ -722,7 +733,7 @@ func (l *logStore) rebuildDeletingSetsFromMarkers() error {
 	if root == "" {
 		return nil
 	}
-	markers, err := scanDeleteMarkers(root)
+	markers, err := scanDeleteMarkers(l.ctx, root)
 	if err != nil {
 		return err
 	}

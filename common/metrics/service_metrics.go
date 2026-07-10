@@ -224,6 +224,43 @@ var (
 		Help:      "Current number of local segment files",
 	}, []string{"node_id", "log_ns", "log_id"})
 
+	// Deletion audit counters (issue #219): cumulative totals of data actually
+	// deleted, so deletions stay auditable from monitoring after the fact
+	// (the stored gauges above only track the current level).
+	WpObjectStorageDeletedObjectsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "object_storage_deleted_objects_total",
+		Help:      "Total number of objects deleted from object storage",
+	}, []string{"node_id", "log_ns", "log_id"})
+	WpObjectStorageDeletedBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "object_storage_deleted_bytes_total",
+		Help:      "Total bytes of objects deleted from object storage",
+	}, []string{"node_id", "log_ns", "log_id"})
+	WpFileDeletedFilesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "file_deleted_files_total",
+		Help:      "Total number of local segment files deleted",
+	}, []string{"node_id", "log_ns", "log_id"})
+	WpFileDeletedBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "file_deleted_bytes_total",
+		Help:      "Total bytes of local segment files deleted",
+	}, []string{"node_id", "log_ns", "log_id"})
+
+	// WpLogStoreRejectedWritesTotal counts write requests rejected while the node
+	// is decommissioning (issue #219) — per-request rejections are not logged.
+	WpLogStoreRejectedWritesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_rejected_writes_total",
+		Help:      "Total write requests rejected because the node is decommissioning",
+	}, []string{"node_id"})
+
 	WpSyncSchedulerScheduled = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
@@ -296,6 +333,12 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpObjectStorageStoredObjects)
 		registerer.MustRegister(WpFileStoredBytes)
 		registerer.MustRegister(WpFileStoredCount)
+		// Deletion audit counters (issue #219)
+		registerer.MustRegister(WpObjectStorageDeletedObjectsTotal)
+		registerer.MustRegister(WpObjectStorageDeletedBytesTotal)
+		registerer.MustRegister(WpFileDeletedFilesTotal)
+		registerer.MustRegister(WpFileDeletedBytesTotal)
+		registerer.MustRegister(WpLogStoreRejectedWritesTotal)
 		registerer.MustRegister(WpSyncSchedulerScheduled)
 		registerer.MustRegister(WpSyncSchedulerRunning)
 		registerer.MustRegister(WpSyncSchedulerWaiting)
