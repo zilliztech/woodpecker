@@ -172,7 +172,7 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	if callbacks.Decommission != nil {
 		Register(&Handler{
 			Path:        AdminNodeDecommissionPath,
-			HandlerFunc: management.WithAuditLog(AdminNodeDecommissionPath, management.NewNodeDecommissionHandler(callbacks.Decommission)),
+			HandlerFunc: management.NewNodeDecommissionHandler(callbacks.Decommission),
 		})
 	}
 	if callbacks.GetDecommissionProgress != nil {
@@ -184,7 +184,7 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	if callbacks.CancelDecommission != nil {
 		Register(&Handler{
 			Path:        AdminNodeDecommissionCancelPath,
-			HandlerFunc: management.WithAuditLog(AdminNodeDecommissionCancelPath, management.NewNodeCancelDecommissionHandler(callbacks.CancelDecommission)),
+			HandlerFunc: management.NewNodeCancelDecommissionHandler(callbacks.CancelDecommission),
 		})
 	}
 	if callbacks.GetConfig != nil {
@@ -222,19 +222,19 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	if callbacks.Logstore.ForceFlush != nil {
 		Register(&Handler{
 			Path:        AdminLogstoreFlushPath,
-			HandlerFunc: management.WithAuditLog(AdminLogstoreFlushPath, management.NewLogstoreFlushHandler(callbacks.Logstore.ForceFlush)),
+			HandlerFunc: management.NewLogstoreFlushHandler(callbacks.Logstore.ForceFlush),
 		})
 	}
 	if callbacks.Logstore.ForceFence != nil {
 		Register(&Handler{
 			Path:        AdminLogstoreFencePath,
-			HandlerFunc: management.WithAuditLog(AdminLogstoreFencePath, management.NewLogstoreFenceHandler(callbacks.Logstore.ForceFence)),
+			HandlerFunc: management.NewLogstoreFenceHandler(callbacks.Logstore.ForceFence),
 		})
 	}
 	if callbacks.Logstore.ForceCompact != nil {
 		Register(&Handler{
 			Path:        AdminLogstoreCompactPath,
-			HandlerFunc: management.WithAuditLog(AdminLogstoreCompactPath, management.NewLogstoreCompactHandler(callbacks.Logstore.ForceCompact)),
+			HandlerFunc: management.NewLogstoreCompactHandler(callbacks.Logstore.ForceCompact),
 		})
 	}
 
@@ -242,13 +242,13 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	if callbacks.MarkLogDeleted != nil {
 		Register(&Handler{
 			Path:        AdminLogDeletePath,
-			HandlerFunc: management.WithAuditLog(AdminLogDeletePath, management.NewLogDeleteHandler(callbacks.MarkLogDeleted)),
+			HandlerFunc: management.NewLogDeleteHandler(callbacks.MarkLogDeleted),
 		})
 	}
 	if callbacks.MarkInstanceDeleted != nil {
 		Register(&Handler{
 			Path:        AdminInstanceDeletePath,
-			HandlerFunc: management.WithAuditLog(AdminInstanceDeletePath, management.NewInstanceDeleteHandler(callbacks.MarkInstanceDeleted)),
+			HandlerFunc: management.NewInstanceDeleteHandler(callbacks.MarkInstanceDeleted),
 		})
 	}
 

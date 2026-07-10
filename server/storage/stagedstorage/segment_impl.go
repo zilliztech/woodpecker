@@ -215,8 +215,6 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 		zap.Int("flag", flag))
 
 	// Delete objects
-	var deletedKeys []string
-	var deletedBytes int64
 	for _, obj := range objectsToDelete {
 		err := rs.client.RemoveObject(ctx, rs.bucket, obj.path, rs.logNs, rs.logIdStr)
 		if err != nil {
@@ -227,21 +225,19 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 				zap.Error(err))
 			errorCount++
 		} else {
+			logger.Ctx(ctx).Info("successfully deleted block",
+				zap.String("segmentFileKey", rs.segmentFileKey),
+				zap.String("objectKey", obj.path),
+				zap.Int64("size", obj.size))
 			deletedCount++
-			deletedBytes += obj.size
-			deletedKeys = append(deletedKeys, obj.path)
 			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(obj.size))
 			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
-			metrics.WpObjectStorageDeletedObjectsTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Inc()
-			metrics.WpObjectStorageDeletedBytesTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Add(float64(obj.size))
 		}
 	}
-	storage.LogDeletedObjectKeys(ctx, "deleted segment blocks", rs.segmentFileKey, deletedKeys)
 
 	logger.Ctx(ctx).Info("segment blocks deletion completed",
 		zap.String("segmentFileKey", rs.segmentFileKey),
 		zap.Int("deletedCount", deletedCount),
-		zap.Int64("deletedBytes", deletedBytes),
 		zap.Int("errorCount", errorCount),
 		zap.Int("flag", flag))
 
@@ -274,8 +270,6 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 
 	var deleteErrors []error
 	deletedCount := 0
-	var deletedPaths []string
-	var deletedBytes int64
 
 	// Filter and delete segment files
 	for _, entry := range entries {
@@ -305,10 +299,12 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 			filePath := filepath.Join(rs.segmentDir, fileName)
 			isDataFile := fileName == "data.log"
 
-			// Get file size before deleting
+			// Get file size before deleting (only needed for data files)
 			var fileSize int64
-			if info, infoErr := entry.Info(); infoErr == nil {
-				fileSize = info.Size()
+			if isDataFile {
+				if info, infoErr := entry.Info(); infoErr == nil {
+					fileSize = info.Size()
+				}
 			}
 
 			// Delete file
@@ -318,11 +314,9 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 					zap.Error(err))
 				deleteErrors = append(deleteErrors, err)
 			} else {
+				logger.Ctx(ctx).Info("Successfully deleted local file",
+					zap.String("filePath", filePath))
 				deletedCount++
-				deletedBytes += fileSize
-				deletedPaths = append(deletedPaths, filePath)
-				metrics.WpFileDeletedFilesTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Inc()
-				metrics.WpFileDeletedBytesTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Add(float64(fileSize))
 				if isDataFile {
 					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(fileSize))
 					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
@@ -330,12 +324,10 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 			}
 		}
 	}
-	storage.LogDeletedObjectKeys(ctx, "deleted local segment files", rs.segmentFileKey, deletedPaths)
 
 	logger.Ctx(ctx).Info("local files deletion completed",
 		zap.String("segmentDir", rs.segmentDir),
 		zap.Int("deletedCount", deletedCount),
-		zap.Int64("deletedBytes", deletedBytes),
 		zap.Int("errorCount", len(deleteErrors)))
 
 	if len(deleteErrors) > 0 {

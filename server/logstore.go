@@ -203,11 +203,7 @@ func (l *logStore) GetAddress() string {
 }
 
 func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
-	if l.stopped.Load() {
-		return -1, werr.ErrLogStoreShutdown
-	}
-	if l.rejectWrites.Load() {
-		metrics.WpLogStoreRejectedWritesTotal.WithLabelValues(metrics.NodeID).Inc()
+	if l.stopped.Load() || l.rejectWrites.Load() {
 		return -1, werr.ErrLogStoreShutdown
 	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
@@ -239,11 +235,7 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 }
 
 func (l *logStore) AddEntryBatch(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
-	if l.stopped.Load() {
-		return nil, werr.ErrLogStoreShutdown
-	}
-	if l.rejectWrites.Load() {
-		metrics.WpLogStoreRejectedWritesTotal.WithLabelValues(metrics.NodeID).Inc()
+	if l.stopped.Load() || l.rejectWrites.Load() {
 		return nil, werr.ErrLogStoreShutdown
 	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntryBatch")
