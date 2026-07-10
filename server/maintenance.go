@@ -200,7 +200,7 @@ func (r *deletedLogReclaimTask) Run(ctx context.Context) error {
 			if due := m.DeletedAt + int64(r.grace.Seconds()); earliestDue == 0 || due < earliestDue {
 				earliestDue = due
 			}
-			logger.Ctx(ctx).Debug("reclaim: marker still within grace period, skipping",
+			logger.Ctx(ctx).Info("reclaim: marker still within grace period, skipping",
 				zap.String("bucket", m.Bucket), zap.String("rootPath", m.RootPath),
 				zap.Int64("logId", m.LogId), zap.Bool("instance", m.Instance),
 				zap.Int64("deletedAt", m.DeletedAt), zap.Int64("cutoff", cutoff))

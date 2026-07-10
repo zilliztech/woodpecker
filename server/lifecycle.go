@@ -20,6 +20,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,7 +113,7 @@ func (m *NodeLifecycleManager) StartDecommission() error {
 		m.logTransitionLocked("start decommission", NodeStateActive, err)
 		return err
 	case NodeStateDecommissioning:
-		logger.Ctx(context.Background()).Debug("start decommission: already decommissioning, no-op")
+		logger.Ctx(context.Background()).Info("start decommission: already decommissioning, no-op")
 		return nil // idempotent
 	case NodeStateDecommissioned:
 		logger.Ctx(context.Background()).Warn("start decommission rejected: node already decommissioned")
@@ -121,16 +122,37 @@ func (m *NodeLifecycleManager) StartDecommission() error {
 	return fmt.Errorf("unknown state: %s", m.state)
 }
 
-// MarkDecommissioned transitions the node to the decommissioned state.
-// Returns an error if persisting the state fails.
+// ErrNotDecommissioning is returned by MarkDecommissioned when the node is not
+// in the decommissioning state — typically because the decommission was
+// cancelled after the monitor's last state check.
+var ErrNotDecommissioning = errors.New("node is not decommissioning")
+
+// MarkDecommissioned transitions the node from decommissioning to decommissioned.
+// Only the decommissioning → decommissioned transition is allowed: a cancelled
+// (active) node must never be moved to the terminal decommissioned state by a
+// stale monitor. Idempotent if already decommissioned. Returns an error if
+// persisting the state fails (the in-memory state is rolled back so the caller
+// can retry).
 func (m *NodeLifecycleManager) MarkDecommissioned() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	from := m.state
-	m.state = NodeStateDecommissioned
-	err := m.persistStateLocked()
-	m.logTransitionLocked("mark decommissioned", from, err)
-	return err
+	switch m.state {
+	case NodeStateDecommissioning:
+		m.state = NodeStateDecommissioned
+		err := m.persistStateLocked()
+		m.logTransitionLocked("mark decommissioned", NodeStateDecommissioning, err)
+		if err != nil {
+			// Roll back so the monitor retries the transition (and its persistence).
+			m.state = NodeStateDecommissioning
+		}
+		return err
+	case NodeStateDecommissioned:
+		return nil // idempotent
+	default:
+		logger.Ctx(context.Background()).Warn("mark decommissioned rejected: node is not decommissioning",
+			zap.String("state", string(m.state)))
+		return ErrNotDecommissioning
+	}
 }
 
 // CancelDecommission transitions the node from decommissioning back to active.
@@ -143,7 +165,7 @@ func (m *NodeLifecycleManager) CancelDecommission() error {
 	defer m.mu.Unlock()
 	switch m.state {
 	case NodeStateActive:
-		logger.Ctx(context.Background()).Debug("cancel decommission: already active, no-op")
+		logger.Ctx(context.Background()).Info("cancel decommission: already active, no-op")
 		return nil // idempotent
 	case NodeStateDecommissioning:
 		m.state = NodeStateActive

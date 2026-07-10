@@ -68,6 +68,7 @@ type LogStore interface {
 	CleanSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error
 	GetActiveProcessorCount() int
 	RejectNewWrites()
+	AllowNewWrites()
 	HasLocalSegmentData() bool
 	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error
 	EvictInstance(ctx context.Context, bucketName string, rootPath string) error
@@ -619,6 +620,15 @@ func (l *logStore) GetActiveProcessorCount() int {
 func (l *logStore) RejectNewWrites() {
 	if !l.rejectWrites.Swap(true) {
 		logger.Ctx(context.Background()).Info("log store now rejecting new writes (decommission)",
+			zap.String("nodeID", metrics.NodeID))
+	}
+}
+
+// AllowNewWrites clears the write-rejection flag set by RejectNewWrites,
+// restoring normal write acceptance after a cancelled decommission.
+func (l *logStore) AllowNewWrites() {
+	if l.rejectWrites.Swap(false) {
+		logger.Ctx(context.Background()).Info("log store accepting new writes again (decommission cancelled)",
 			zap.String("nodeID", metrics.NodeID))
 	}
 }

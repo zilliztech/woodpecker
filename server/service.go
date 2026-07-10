@@ -19,6 +19,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -56,7 +57,8 @@ type Server struct {
 	grpcWG                sync.WaitGroup
 	gossipWG              sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
 	decommWG              sync.WaitGroup // tracks decommission monitor goroutine
-	decommOnce            sync.Once      // ensures monitor starts at most once
+	decommMu              sync.Mutex     // guards decommRunning
+	decommRunning         bool           // whether the decommission monitor goroutine is live
 	grpcErrChan           chan error
 	startupErrCh          chan error // Channel to propagate async startup errors
 	grpcServer            *grpc.Server
@@ -771,8 +773,35 @@ func (s *Server) GetNodeStatus() NodeStatus {
 }
 
 // CancelDecommission cancels an in-progress decommission and returns the node to active.
+// Besides the lifecycle state transition it undoes the side effects of Decommission():
+// it resumes accepting new writes and re-broadcasts the active status via gossip so
+// other nodes re-include this node in quorum selection. The background monitor
+// observes the state change and exits on its next tick.
 func (s *Server) CancelDecommission() error {
-	return s.lifecycle.CancelDecommission()
+	if err := s.lifecycle.CancelDecommission(); err != nil {
+		return err
+	}
+	// Resume accepting new writes
+	s.logStore.AllowNewWrites()
+	// Broadcast active status via gossip so other nodes stop filtering this node out
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node != nil {
+		currentMeta := node.GetMeta()
+		updatedTags := make(map[string]string)
+		for k, v := range currentMeta.Tags {
+			updatedTags[k] = v
+		}
+		updatedTags["status"] = "active"
+		node.UpdateMeta(map[string]interface{}{
+			"tags": updatedTags,
+		})
+		logger.Ctx(s.ctx).Info("broadcast node status via gossip",
+			zap.String("nodeID", s.serverConfig.NodeID),
+			zap.String("status", "active"))
+	}
+	return nil
 }
 
 // Decommission marks the node for retirement. It stops accepting new writes
@@ -819,27 +848,42 @@ func (s *Server) GetDecommissionProgress() DecommissionProgress {
 	return s.lifecycle.GetProgress(remaining, hasData)
 }
 
-const decommissionCheckInterval = 5 * time.Second
+// decommissionCheckInterval is how often the decommission monitor re-checks
+// local data. A var (not const) so tests can shorten it.
+var decommissionCheckInterval = 5 * time.Second
 
-// startDecommissionMonitor starts a background goroutine (at most once) that
-// periodically checks whether all segment processors have drained. When the
-// count reaches zero, it automatically transitions the node to decommissioned.
+// startDecommissionMonitor starts a background goroutine (at most one live at a
+// time) that periodically checks whether all local segment data has drained.
+// When it has, the node automatically transitions to decommissioned. After the
+// monitor exits (completion or cancel), a later re-decommission starts a new one.
 func (s *Server) startDecommissionMonitor() {
-	s.decommOnce.Do(func() {
-		s.decommWG.Add(1)
-		go s.decommissionMonitorLoop()
-	})
+	s.decommMu.Lock()
+	defer s.decommMu.Unlock()
+	if s.decommRunning {
+		return
+	}
+	s.decommRunning = true
+	s.decommWG.Add(1)
+	checkInterval := decommissionCheckInterval // snapshot synchronously with the caller
+	go func() {
+		defer func() {
+			s.decommMu.Lock()
+			s.decommRunning = false
+			s.decommMu.Unlock()
+		}()
+		s.decommissionMonitorLoop(checkInterval)
+	}()
 }
 
-func (s *Server) decommissionMonitorLoop() {
+func (s *Server) decommissionMonitorLoop(checkInterval time.Duration) {
 	defer s.decommWG.Done()
 
-	ticker := time.NewTicker(decommissionCheckInterval)
+	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
 	logger.Ctx(s.ctx).Info("decommission monitor started",
 		zap.String("nodeID", s.serverConfig.NodeID),
-		zap.Duration("checkInterval", decommissionCheckInterval))
+		zap.Duration("checkInterval", checkInterval))
 
 	for {
 		select {
@@ -847,6 +891,12 @@ func (s *Server) decommissionMonitorLoop() {
 			logger.Ctx(s.ctx).Info("decommission monitor stopped (context cancelled)")
 			return
 		case <-ticker.C:
+			if !s.lifecycle.IsDecommissioning() {
+				logger.Ctx(s.ctx).Info("decommission monitor stopped (node no longer decommissioning)",
+					zap.String("nodeID", s.serverConfig.NodeID),
+					zap.String("state", string(s.lifecycle.GetState())))
+				return
+			}
 			hasData := s.logStore.HasLocalSegmentData()
 			logger.Ctx(s.ctx).Info("decommission monitor check",
 				zap.String("nodeID", s.serverConfig.NodeID),
@@ -855,6 +905,12 @@ func (s *Server) decommissionMonitorLoop() {
 
 			if !hasData {
 				if err := s.lifecycle.MarkDecommissioned(); err != nil {
+					if errors.Is(err, ErrNotDecommissioning) {
+						// Decommission was cancelled between the state check and the mark.
+						logger.Ctx(s.ctx).Info("decommission monitor stopped (decommission cancelled)",
+							zap.String("nodeID", s.serverConfig.NodeID))
+						return
+					}
 					logger.Ctx(s.ctx).Warn("failed to persist decommissioned state, will retry",
 						zap.String("nodeID", s.serverConfig.NodeID),
 						zap.Error(err))

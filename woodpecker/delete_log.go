@@ -84,6 +84,16 @@ func deleteLogUnsafe(
 	bucketName := cfg.Minio.BucketName
 	rootPath := cfg.Minio.RootPath
 
+	nodes := make([]string, 0, len(nodeSet))
+	for node := range nodeSet {
+		nodes = append(nodes, node)
+	}
+	logger.Ctx(ctx).Info("deleteLogUnsafe: deleting log, marking on all quorum nodes",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int("segmentCount", len(segMetas)),
+		zap.Strings("nodes", nodes))
+
 	for node := range nodeSet {
 		lsClient, getErr := pool.GetLogStoreClient(ctx, node)
 		if getErr != nil {
