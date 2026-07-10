@@ -61,7 +61,7 @@ func markerPath(storageRoot string, m deleteMarker) string {
 func writeDeleteMarker(ctx context.Context, storageRoot string, m deleteMarker) error {
 	p := markerPath(storageRoot, m)
 	if _, err := os.Stat(p); err == nil {
-		logger.Ctx(ctx).Debug("delete marker already exists, keeping original",
+		logger.Ctx(ctx).Info("delete marker already exists, keeping original",
 			zap.String("path", p))
 		return nil // already marked — keep the original
 	} else if !os.IsNotExist(err) {
@@ -122,7 +122,7 @@ func removeDeleteMarker(ctx context.Context, storageRoot string, m deleteMarker)
 	p := markerPath(storageRoot, m)
 	err := os.Remove(p)
 	if os.IsNotExist(err) {
-		logger.Ctx(ctx).Debug("delete marker already absent", zap.String("path", p))
+		logger.Ctx(ctx).Info("delete marker already absent", zap.String("path", p))
 		return nil
 	}
 	if err != nil {

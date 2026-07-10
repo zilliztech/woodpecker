@@ -113,7 +113,7 @@ func (m *NodeLifecycleManager) StartDecommission() error {
 		m.logTransitionLocked("start decommission", NodeStateActive, err)
 		return err
 	case NodeStateDecommissioning:
-		logger.Ctx(context.Background()).Debug("start decommission: already decommissioning, no-op")
+		logger.Ctx(context.Background()).Info("start decommission: already decommissioning, no-op")
 		return nil // idempotent
 	case NodeStateDecommissioned:
 		logger.Ctx(context.Background()).Warn("start decommission rejected: node already decommissioned")
@@ -165,7 +165,7 @@ func (m *NodeLifecycleManager) CancelDecommission() error {
 	defer m.mu.Unlock()
 	switch m.state {
 	case NodeStateActive:
-		logger.Ctx(context.Background()).Debug("cancel decommission: already active, no-op")
+		logger.Ctx(context.Background()).Info("cancel decommission: already active, no-op")
 		return nil // idempotent
 	case NodeStateDecommissioning:
 		m.state = NodeStateActive
