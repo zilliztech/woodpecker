@@ -85,8 +85,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 60, config.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, config.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, config.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
-	assert.Equal(t, 259200, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())  // 72h = 259200s
-	assert.Equal(t, 600, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds()) // 10m = 600s
+	assert.Equal(t, 5, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())     // near-real-time reclaim
+	assert.Equal(t, 2, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds()) // near-real-time reclaim
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", config.Log.Level)
@@ -186,8 +186,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 60, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
-	assert.Equal(t, 259200, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())  // 72h = 259200s
-	assert.Equal(t, 600, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds()) // 10m = 600s
+	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())     // near-real-time reclaim
+	assert.Equal(t, 2, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds()) // near-real-time reclaim
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", defaultConfig.Log.Level)
