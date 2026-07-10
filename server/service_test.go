@@ -502,6 +502,7 @@ func (f *fakeLogStore) CleanSegment(ctx context.Context, bucketName, rootPath st
 
 func (f *fakeLogStore) GetActiveProcessorCount() int { return 0 }
 func (f *fakeLogStore) RejectNewWrites()             {}
+func (f *fakeLogStore) AllowNewWrites()              {}
 func (f *fakeLogStore) HasLocalSegmentData() bool    { return false }
 func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64) error {
 	if f.evictLogFn != nil {
@@ -1646,6 +1647,107 @@ func TestServer_DecommissionAutoComplete(t *testing.T) {
 	// Cleanup: cancel context to stop monitor (already stopped, but for safety)
 	srv.cancel()
 	srv.decommWG.Wait()
+}
+
+// setShortDecommissionInterval shortens the decommission monitor tick for tests
+// and restores the default on cleanup.
+func setShortDecommissionInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := decommissionCheckInterval
+	decommissionCheckInterval = d
+	t.Cleanup(func() { decommissionCheckInterval = old })
+}
+
+// TestServer_CancelDecommission_RestoresWrites verifies that cancelling a
+// decommission resumes write acceptance (issue #220: the rejectWrites flag
+// used to stay set until restart).
+func TestServer_CancelDecommission_RestoresWrites(t *testing.T) {
+	ctx := context.Background()
+	srv := createTestServer(ctx, &membership.ServerConfig{
+		NodeID:        "test-cancel-writes",
+		ResourceGroup: "default",
+		AZ:            "default",
+		Tags:          map[string]string{"role": "logstore"},
+	})
+	defer srv.cancel()
+
+	require.NoError(t, srv.Decommission())
+
+	// Writes are rejected while decommissioning
+	require.True(t, srv.logStore.(*logStore).rejectWrites.Load())
+	_, err := srv.logStore.AddEntry(ctx, "b", "r", 1, &proto.LogEntry{SegId: 0, EntryId: 0}, nil)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+
+	// Cancel restores the active state AND write acceptance
+	require.NoError(t, srv.CancelDecommission())
+	assert.Equal(t, NodeStateActive, srv.lifecycle.GetState())
+	assert.False(t, srv.logStore.(*logStore).rejectWrites.Load(),
+		"cancel must clear the write-rejection flag")
+}
+
+// TestServer_CancelDecommission_MonitorDoesNotMark verifies that after a
+// cancel, the background monitor observes the state change and exits instead
+// of marking the (drained/empty) node decommissioned (issue #220).
+func TestServer_CancelDecommission_MonitorDoesNotMark(t *testing.T) {
+	setShortDecommissionInterval(t, 50*time.Millisecond)
+	ctx := context.Background()
+	srv := createTestServer(ctx, &membership.ServerConfig{
+		NodeID:        "test-cancel-monitor",
+		ResourceGroup: "default",
+		AZ:            "default",
+		Tags:          map[string]string{"role": "logstore"},
+	})
+	defer srv.cancel()
+
+	require.NoError(t, srv.Decommission())
+	require.NoError(t, srv.CancelDecommission())
+
+	// The empty node would be marked decommissioned within one tick if the
+	// monitor ignored the cancel. Give it several ticks: state must stay active.
+	assert.Never(t, func() bool {
+		return srv.lifecycle.GetState() == NodeStateDecommissioned
+	}, 500*time.Millisecond, 50*time.Millisecond,
+		"a cancelled node must never be auto-marked decommissioned")
+	assert.Equal(t, NodeStateActive, srv.lifecycle.GetState())
+
+	// The monitor goroutine must have exited after observing the cancel.
+	assert.Eventually(t, func() bool {
+		srv.decommMu.Lock()
+		defer srv.decommMu.Unlock()
+		return !srv.decommRunning
+	}, 2*time.Second, 20*time.Millisecond, "monitor should exit after cancel")
+}
+
+// TestServer_DecommissionAfterCancel_RestartsMonitor verifies that decommission
+// works again after a cancel: a fresh monitor starts (the old sync.Once guard
+// made this impossible) and completes the drain (issue #220).
+func TestServer_DecommissionAfterCancel_RestartsMonitor(t *testing.T) {
+	setShortDecommissionInterval(t, 50*time.Millisecond)
+	ctx := context.Background()
+	srv := createTestServer(ctx, &membership.ServerConfig{
+		NodeID:        "test-redecomm",
+		ResourceGroup: "default",
+		AZ:            "default",
+		Tags:          map[string]string{"role": "logstore"},
+	})
+	defer srv.cancel()
+
+	require.NoError(t, srv.Decommission())
+	require.NoError(t, srv.CancelDecommission())
+
+	// Wait for the first monitor to exit
+	require.Eventually(t, func() bool {
+		srv.decommMu.Lock()
+		defer srv.decommMu.Unlock()
+		return !srv.decommRunning
+	}, 2*time.Second, 20*time.Millisecond)
+
+	// Re-decommission: a new monitor must start and complete on the empty node
+	require.NoError(t, srv.Decommission())
+	assert.Eventually(t, func() bool {
+		return srv.lifecycle.GetState() == NodeStateDecommissioned
+	}, 5*time.Second, 50*time.Millisecond,
+		"re-decommission after cancel should start a fresh monitor and complete")
 }
 
 func TestServer_MarkLogDeleted_Success(t *testing.T) {

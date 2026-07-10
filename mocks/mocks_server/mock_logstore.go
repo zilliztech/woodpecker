@@ -790,6 +790,11 @@ func (_m *LogStore) RejectNewWrites() {
 	_m.Called()
 }
 
+// AllowNewWrites provides a mock function with no fields
+func (_m *LogStore) AllowNewWrites() {
+	_m.Called()
+}
+
 // EvictLog provides a mock function with given fields: ctx, bucketName, rootPath, logId
 func (_m *LogStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error {
 	ret := _m.Called(ctx, bucketName, rootPath, logId)

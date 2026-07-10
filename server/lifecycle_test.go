@@ -60,6 +60,37 @@ func TestNodeLifecycleManager_DecommissionAlreadyDone(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestNodeLifecycleManager_MarkDecommissionedRequiresDecommissioning(t *testing.T) {
+	m := NewNodeLifecycleManager()
+
+	// From active: rejected — a cancelled node must never be moved to the
+	// terminal decommissioned state by a stale monitor (issue #220).
+	err := m.MarkDecommissioned()
+	assert.ErrorIs(t, err, ErrNotDecommissioning)
+	assert.Equal(t, NodeStateActive, m.GetState())
+
+	// From decommissioning: allowed
+	assert.NoError(t, m.StartDecommission())
+	assert.NoError(t, m.MarkDecommissioned())
+	assert.Equal(t, NodeStateDecommissioned, m.GetState())
+
+	// From decommissioned: idempotent no-op
+	assert.NoError(t, m.MarkDecommissioned())
+	assert.Equal(t, NodeStateDecommissioned, m.GetState())
+}
+
+func TestNodeLifecycleManager_CancelThenMarkRejected(t *testing.T) {
+	m := NewNodeLifecycleManager()
+	require.NoError(t, m.StartDecommission())
+	require.NoError(t, m.CancelDecommission())
+	assert.Equal(t, NodeStateActive, m.GetState())
+
+	// A monitor racing with the cancel must not be able to mark the node.
+	err := m.MarkDecommissioned()
+	assert.ErrorIs(t, err, ErrNotDecommissioning)
+	assert.Equal(t, NodeStateActive, m.GetState())
+}
+
 func TestNodeLifecycleManager_Progress(t *testing.T) {
 	m := NewNodeLifecycleManager()
 	m.StartDecommission()
