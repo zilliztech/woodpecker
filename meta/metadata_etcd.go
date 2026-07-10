@@ -1013,7 +1013,8 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 		zap.String("logName", logName),
 		zap.Int64("logId", logId),
 		zap.Int64("segmentId", segmentId),
-		zap.String("segmentKey", segmentKey))
+		zap.String("segmentKey", segmentKey),
+		zap.String("oldState", oldState.String()))
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_segment_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -1802,7 +1803,9 @@ func (e *metadataProviderEtcd) DeleteLogMetadata(ctx context.Context, logName st
 		logger.Ctx(ctx).Info("Deleted log metadata",
 			zap.String("logName", logName),
 			zap.Int64("logId", logId),
-			zap.Bool("force", false))
+			zap.Bool("force", false),
+			zap.Int64("truncatedSegmentId", logMeta.TruncatedSegmentId),
+			zap.Int64("truncatedEntryId", logMeta.TruncatedEntryId))
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "success").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil
@@ -1819,7 +1822,9 @@ func (e *metadataProviderEtcd) DeleteLogMetadata(ctx context.Context, logName st
 	logger.Ctx(ctx).Info("Deleted log metadata",
 		zap.String("logName", logName),
 		zap.Int64("logId", logId),
-		zap.Bool("force", true))
+		zap.Bool("force", true),
+		zap.Int64("truncatedSegmentId", logMeta.TruncatedSegmentId),
+		zap.Int64("truncatedEntryId", logMeta.TruncatedEntryId))
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_log_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
