@@ -1218,10 +1218,24 @@ func (s *segmentHandleImpl) lacSyncLoop() {
 	}
 }
 
+// lacSyncTimeout bounds a single LAC-sync fan-out so a hung node (connected but
+// unresponsive) can't wedge the single background LAC syncer forever. Package var
+// so tests can shrink it. TODO make configurable (like the 30s waits in the
+// append path).
+var lacSyncTimeout = 30 * time.Second
+
 // syncLACToQuorumAsync asynchronously syncs LAC to all quorum nodes
 func (s *segmentHandleImpl) syncLACToQuorumAsync(ctx context.Context, lac int64) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "syncLACToQuorumAsync")
 	defer sp.End()
+
+	// Bound the fan-out: the caller (lacSyncLoop) passes a deadline-less context,
+	// so without this a node that is connected but unresponsive would block the
+	// collection loop forever and stall LAC for the whole segment. On timeout the
+	// collection loop's ctx.Done() case unblocks and cancel() releases any
+	// still-in-flight per-node RPCs (their results land in the buffered channel).
+	ctx, cancel := context.WithTimeout(ctx, lacSyncTimeout)
+	defer cancel()
 
 	// Get quorum info
 	quorumInfo, err := s.GetQuorumInfo(ctx)
