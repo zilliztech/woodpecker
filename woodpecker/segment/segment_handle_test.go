@@ -6281,3 +6281,60 @@ func TestFenceSegmentQuorum_CtxTimeout(t *testing.T) {
 	assert.Equal(t, int64(-1), lastEntryId)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
+
+// TestSyncLACToQuorumAsync_BoundedWhenNodeHangs is a regression test for issue
+// #225 (#2): the background LAC syncer calls syncLACToQuorumAsync with a
+// deadline-less context, so a node that is connected but never responds
+// (UpdateLastAddConfirmed hangs) permanently wedges the syncer and LAC stops
+// advancing for the whole segment. syncLACToQuorumAsync must bound its fan-out
+// and return even when a node never replies.
+func TestSyncLACToQuorumAsync_BoundedWhenNodeHangs(t *testing.T) {
+	// Shrink the fan-out timeout so the test doesn't wait the production default.
+	oldTimeout := lacSyncTimeout
+	lacSyncTimeout = 200 * time.Millisecond
+	defer func() { lacSyncTimeout = oldTimeout }()
+
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	// A node that is connected but never responds: block until the request
+	// context is cancelled, which the fan-out timeout is responsible for doing.
+	mockClient.EXPECT().
+		UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(rpcCtx context.Context, _ string, _ string, _ int64, _ int64, _ int64) error {
+			<-rpcCtx.Done()
+			return rpcCtx.Err()
+		}).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum:      &proto.QuorumInfo{Id: 1, Es: 1, Wq: 1, Aq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	// canWrite=false: don't start the background loop/executor; call the fan-out directly.
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil).(*segmentHandleImpl)
+
+	done := make(chan struct{})
+	go func() {
+		sh.syncLACToQuorumAsync(context.Background(), 5)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("syncLACToQuorumAsync did not return: a hung node wedged the LAC syncer")
+	}
+}
