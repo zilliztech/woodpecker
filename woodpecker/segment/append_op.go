@@ -172,14 +172,19 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 	defer sp.End()
 	startRequestTime := time.Now()
 
-	if len(op.resultChannels) > serverIndex && op.resultChannels[serverIndex] == nil {
-		// create new result channel for this server if not exists
-		if cli.IsRemoteClient() {
-			resultChannel := channel.NewRemoteResultChannel(op.Identifier())
-			op.resultChannels[serverIndex] = resultChannel
-		} else {
-			resultChannel := channel.NewLocalResultChannel(op.Identifier())
-			op.resultChannels[serverIndex] = resultChannel
+	if len(op.resultChannels) > serverIndex {
+		// (Re)create the result channel when the slot is empty or holds a channel
+		// whose type doesn't match the client. The batch path installs a
+		// LocalResultChannel here; a remote client's single-entry AppendEntry
+		// requires a RemoteResultChannel and rejects a LocalResultChannel with
+		// ErrInternalError. A matching channel is reused (retry idempotency).
+		_, isRemoteChannel := op.resultChannels[serverIndex].(*channel.RemoteResultChannel)
+		if op.resultChannels[serverIndex] == nil || isRemoteChannel != cli.IsRemoteClient() {
+			if cli.IsRemoteClient() {
+				op.resultChannels[serverIndex] = channel.NewRemoteResultChannel(op.Identifier())
+			} else {
+				op.resultChannels[serverIndex] = channel.NewLocalResultChannel(op.Identifier())
+			}
 		}
 	}
 

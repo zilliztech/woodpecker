@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
@@ -47,6 +48,61 @@ func cleanupAppendOp(t *testing.T, op *AppendOp) {
 	}
 	// Give goroutines time to see fastCalled and exit
 	time.Sleep(100 * time.Millisecond)
+}
+
+// TestAppendOp_Retry_RebuildsResultChannelForRemoteClient is a regression test for
+// issue #225 (#1): the group-commit batch path installs a LocalResultChannel in
+// op.resultChannels[serverIndex]. A subsequent single-entry retry must NOT reuse
+// that Local channel against a remote client — the remote AppendEntry requires a
+// RemoteResultChannel and rejects a Local one with ErrInternalError, which would
+// make every retry deterministically fail and force a segment roll. The retry must
+// instead rebuild a fresh channel whose type matches the client.
+func TestAppendOp_Retry_RebuildsResultChannelForRemoteClient(t *testing.T) {
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"},
+	}
+	op := NewAppendOp("bucket", "root", 1, 2, 10, []byte("v"),
+		func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo)
+
+	// Simulate the batch path having installed a LocalResultChannel in the slot.
+	op.resultChannels = make([]channel.ResultChannel, 1)
+	op.resultChannels[0] = channel.NewLocalResultChannel(op.Identifier())
+
+	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+
+	var captured channel.ResultChannel
+	mockClient.EXPECT().
+		AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ int64, _ *proto.LogEntry, ch channel.ResultChannel) (int64, error) {
+			captured = ch
+			// Return a retryable error so the background receivedAckCallback takes the
+			// synchronous-error path and returns immediately (no ReadResult wait).
+			return -1, werr.ErrInternalError
+		})
+
+	// receivedAckCallback runs in a background goroutine; signal when it finishes so
+	// the mock is not exercised after the test returns.
+	done := make(chan struct{})
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(context.Context, int64, error, int, string) { close(done) }).Return().Once()
+
+	op.sendWriteRequestRetry(context.Background(), 0)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("receivedAckCallback did not complete")
+	}
+
+	_, isRemote := captured.(*channel.RemoteResultChannel)
+	assert.True(t, isRemote,
+		"retry must rebuild a RemoteResultChannel for a remote client, not reuse the batch's LocalResultChannel")
 }
 
 func TestNewAppendOp(t *testing.T) {
@@ -630,9 +686,12 @@ func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
-	// Manually set up result channels with one nil channel (simulating partial failure)
+	// Manually set up result channels with one nil channel (simulating partial failure).
+	// The existing channel must match the client type (remote here) — a matching
+	// channel is reused, whereas a mismatched one is rebuilt (see the retry
+	// channel-type regression test).
 	op.resultChannels = make([]channel.ResultChannel, 2)
-	op.resultChannels[0] = channel.NewLocalResultChannel("test-channel-0")
+	op.resultChannels[0] = channel.NewRemoteResultChannel("test-channel-0")
 	op.resultChannels[1] = nil // This should be recreated
 
 	originalChannel0 := op.resultChannels[0]
@@ -642,7 +701,7 @@ func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
 
 	// Verify that existing non-nil channel is preserved and nil channel is created
 	assert.Equal(t, 2, len(op.resultChannels))
-	assert.Same(t, originalChannel0, op.resultChannels[0], "Existing non-nil channel should be preserved")
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Existing matching channel should be preserved")
 	assert.NotNil(t, op.resultChannels[1], "Nil channel should be created")
 }
 
