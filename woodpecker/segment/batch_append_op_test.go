@@ -18,6 +18,7 @@ package segment
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,4 +177,131 @@ func TestSequentialExecutor_CoalescesAppendOps(t *testing.T) {
 
 	assert.Equal(t, int32(len(quorumInfo.Nodes)), appendEntriesCalls.Load(),
 		"the whole batch should send one AppendEntries per replica")
+}
+
+// waitWG waits for wg with a timeout, failing the test rather than hanging.
+func waitWG(t *testing.T, wg *sync.WaitGroup, d time.Duration) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatal("timed out waiting for async callbacks")
+	}
+}
+
+func newBatchOps(t *testing.T, n int, pool *mocks_logstore_client.LogStoreClientPool, handle *mocks_segment_handle.SegmentHandle, quorumInfo *proto.QuorumInfo) []*AppendOp {
+	t.Helper()
+	ops := make([]*AppendOp, n)
+	for i := 0; i < n; i++ {
+		ops[i] = NewAppendOp("a-bucket", "files", 1, 2, int64(10+i), []byte("v"),
+			func(int64, int64, error) {}, pool, handle, quorumInfo)
+	}
+	return ops
+}
+
+// TestBatchAppendOp_InstallsLocalResultChannelInOpSlot pins the precondition that
+// the retry channel-type fix relies on: a successful batch leaves a
+// LocalResultChannel in each op's per-replica slot. If this ever changes, the
+// retry rebuild (TestAppendOp_Retry_RebuildsResultChannelForRemoteClient) is
+// testing a scenario that can no longer occur.
+func TestBatchAppendOp_InstallsLocalResultChannelInOpSlot(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
+
+	const batchN = 2
+	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo)
+
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().
+		AppendEntries(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ int64, entries []*proto.LogEntry, chs []channel.ResultChannel) ([]int64, error) {
+			ids := make([]int64, len(entries))
+			for i, e := range entries {
+				ids[i] = e.EntryId
+				ch := chs[i]
+				eid := e.EntryId
+				go func() { _ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: eid}) }()
+			}
+			return ids, nil
+		})
+
+	var wg sync.WaitGroup
+	wg.Add(batchN)
+	for i := 0; i < batchN; i++ {
+		mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(10+i)).
+			Run(func(context.Context, int64) { wg.Done() }).Return().Once()
+	}
+
+	NewBatchAppendOp(ops).Execute()
+	waitWG(t, &wg, 5*time.Second)
+
+	for i, op := range ops {
+		assert.NotNil(t, op.resultChannels[0], "op %d should have a channel in slot 0", i)
+		_, isLocal := op.resultChannels[0].(*channel.LocalResultChannel)
+		assert.True(t, isLocal, "op %d slot should hold a LocalResultChannel after batch send", i)
+	}
+}
+
+// TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure covers the send-side
+// failure where the client pool can't produce a client: every op in the batch
+// must be routed through HandleAppendRequestFailure for that node, with the
+// error recorded per op.
+func TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
+
+	const batchN = 3
+	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo)
+
+	clientErr := errors.New("no client available")
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, clientErr)
+
+	var wg sync.WaitGroup
+	wg.Add(batchN)
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, clientErr, 0, "node1").
+		Run(func(context.Context, int64, error, int, string) { wg.Done() }).Return().Times(batchN)
+
+	NewBatchAppendOp(ops).Execute()
+	waitWG(t, &wg, 5*time.Second)
+
+	for i, op := range ops {
+		assert.Equal(t, clientErr, op.channelErrors[0], "op %d should record the client error", i)
+	}
+}
+
+// TestBatchAppendOp_AppendEntriesError_AllOpsRoutedToFailure covers the batch RPC
+// itself failing: every op must be routed through HandleAppendRequestFailure.
+func TestBatchAppendOp_AppendEntriesError_AllOpsRoutedToFailure(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
+
+	const batchN = 3
+	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo)
+
+	sendErr := errors.New("append entries failed")
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().
+		AppendEntries(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, sendErr)
+
+	var wg sync.WaitGroup
+	wg.Add(batchN)
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, sendErr, 0, "node1").
+		Run(func(context.Context, int64, error, int, string) { wg.Done() }).Return().Times(batchN)
+
+	NewBatchAppendOp(ops).Execute()
+	waitWG(t, &wg, 5*time.Second)
+
+	for i, op := range ops {
+		assert.Equal(t, sendErr, op.channelErrors[0], "op %d should record the send error", i)
+	}
 }

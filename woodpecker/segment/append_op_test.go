@@ -105,6 +105,82 @@ func TestAppendOp_Retry_RebuildsResultChannelForRemoteClient(t *testing.T) {
 		"retry must rebuild a RemoteResultChannel for a remote client, not reuse the batch's LocalResultChannel")
 }
 
+// newApplyNodeAckOp builds an AppendOp wired only for applyNodeAck unit tests
+// (no client pool needed; applyNodeAck only touches the handle and op state).
+func newApplyNodeAckOp(t *testing.T, quorumInfo *proto.QuorumInfo) (*AppendOp, *mocks_segment_handle.SegmentHandle) {
+	t.Helper()
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("v"),
+		func(int64, int64, error) {}, nil, mockHandle, quorumInfo)
+	return op, mockHandle
+}
+
+// TestAppendOp_applyNodeAck_ReadError_RoutesToFailure covers the batch drain
+// handing applyNodeAck a read error (e.g. the shared-timeout DeadlineExceeded):
+// the op must route it through HandleAppendRequestFailure and record the error.
+func TestAppendOp_applyNodeAck_ReadError_RoutesToFailure(t *testing.T) {
+	op, mockHandle := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}})
+	readErr := werr.ErrSegmentHandleWriteFailed
+	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), readErr, 0, "node1").Return().Once()
+
+	op.applyNodeAck(context.Background(), time.Now(), nil, readErr, 0, "node1")
+
+	assert.Equal(t, readErr, op.channelErrors[0])
+	assert.False(t, op.completed.Load())
+}
+
+// TestAppendOp_applyNodeAck_FailedResult_RoutesToFailure covers a per-entry
+// Failed durability result (SyncedId == -1 / Err set) being routed to failure.
+func TestAppendOp_applyNodeAck_FailedResult_RoutesToFailure(t *testing.T) {
+	op, mockHandle := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}})
+	failErr := werr.ErrSegmentFenced
+	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), failErr, 0, "node1").Return().Once()
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: -1, Err: failErr}, nil, 0, "node1")
+
+	assert.Equal(t, failErr, op.channelErrors[0])
+	assert.False(t, op.completed.Load())
+}
+
+// TestAppendOp_applyNodeAck_FastCalled_NoOp verifies that once the op has been
+// fast-completed (FastFail/FastSuccess), a late node ack is dropped: neither a
+// failure nor a success callback fires. The strict mock (no expectations) fails
+// the test if any handle method is called.
+func TestAppendOp_applyNodeAck_FastCalled_NoOp(t *testing.T) {
+	op, _ := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}})
+	op.fastCalled.Store(true)
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, 0, "node1")
+	op.applyNodeAck(context.Background(), time.Now(), nil, werr.ErrSegmentFenced, 0, "node1")
+
+	assert.False(t, op.completed.Load())
+}
+
+// TestAppendOp_applyNodeAck_QuorumReached_Success covers a single-replica quorum:
+// one synced ack reaches Aq and acknowledges the entry exactly once.
+func TestAppendOp_applyNodeAck_QuorumReached_Success(t *testing.T) {
+	op, mockHandle := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}})
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Return().Once()
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, 0, "node1")
+
+	assert.True(t, op.completed.Load())
+}
+
+// TestAppendOp_applyNodeAck_BelowQuorumThenReached covers Aq=2: the first node's
+// ack does not acknowledge (below quorum), the second reaches quorum and fires
+// SendAppendSuccessCallbacks exactly once.
+func TestAppendOp_applyNodeAck_BelowQuorumThenReached(t *testing.T) {
+	op, mockHandle := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 2, Aq: 2, Es: 2, Nodes: []string{"node1", "node2"}})
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Return().Once()
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, 0, "node1")
+	assert.False(t, op.completed.Load(), "single ack must not reach Aq=2")
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, 1, "node2")
+	assert.True(t, op.completed.Load(), "second ack reaches Aq=2")
+}
+
 func TestNewAppendOp(t *testing.T) {
 	logId := int64(1)
 	segmentId := int64(2)
