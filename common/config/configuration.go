@@ -363,9 +363,13 @@ type ProcessorCleanupPolicyConfig struct {
 // (delete-marker reclaim, and future cleaner/gc tasks).
 type MaintenanceStrategyConfig struct {
 	// DeleteGracePeriod is how long after a log/instance is marked deleted before its
-	// LOCAL data is reclaimed (object storage is never auto-reclaimed). Default 72h.
+	// LOCAL data is reclaimed (object storage is never auto-reclaimed). Default 5s:
+	// reclaim is near-real-time — calling the delete API means the caller has already
+	// confirmed the data is no longer needed. The short non-zero grace only preserves
+	// the marker's crash-safety (marker durably on disk before any data is removed).
 	DeleteGracePeriod DurationSeconds `yaml:"deleteGracePeriod"`
 	// DeleteReclaimInterval is how often the reclaim task scans delete markers.
+	// Default 2s, so deleted data disappears within ~grace+interval of the request.
 	DeleteReclaimInterval DurationSeconds `yaml:"deleteReclaimInterval"`
 }
 
@@ -858,8 +862,8 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}},  // 15s
 			},
 			MaintenanceStrategy: MaintenanceStrategyConfig{
-				DeleteGracePeriod:     DurationSeconds{Duration: Duration{duration: 72 * time.Hour}},
-				DeleteReclaimInterval: DurationSeconds{Duration: Duration{duration: 10 * time.Minute}},
+				DeleteGracePeriod:     DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
+				DeleteReclaimInterval: DurationSeconds{Duration: Duration{duration: 2 * time.Second}},
 			},
 			NodeSelectionPolicy: NodeSelectionPolicyConfig{
 				LoadAwareEnabled:   true,
