@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -173,6 +174,112 @@ func newRemoteClientWithMock(_ *testing.T) (*logStoreClientRemote, *mockProtoLog
 	mockClient := &mockProtoLogStoreClient{}
 	client := &logStoreClientRemote{innerClient: mockClient}
 	return client, mockClient
+}
+
+// silentAddEntryStream models a server that accepted the AddEntry stream but
+// never sends the first response. Like real gRPC, Recv unblocks only when the
+// stream's context is cancelled. The stream context is captured from the
+// AddEntry call via the mock's Run hook.
+type silentAddEntryStream struct {
+	ctx context.Context
+}
+
+func (s *silentAddEntryStream) Recv() (*proto.AddEntryResponse, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *silentAddEntryStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *silentAddEntryStream) Trailer() metadata.MD         { return nil }
+func (s *silentAddEntryStream) CloseSend() error             { return nil }
+func (s *silentAddEntryStream) Context() context.Context     { return s.ctx }
+func (s *silentAddEntryStream) SendMsg(m any) error          { return nil }
+func (s *silentAddEntryStream) RecvMsg(m any) error          { return nil }
+
+// silentAddEntriesStream is the AddEntries counterpart of silentAddEntryStream.
+type silentAddEntriesStream struct {
+	ctx context.Context
+}
+
+func (s *silentAddEntriesStream) Recv() (*proto.AddEntriesResponse, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *silentAddEntriesStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *silentAddEntriesStream) Trailer() metadata.MD         { return nil }
+func (s *silentAddEntriesStream) CloseSend() error             { return nil }
+func (s *silentAddEntriesStream) Context() context.Context     { return s.ctx }
+func (s *silentAddEntriesStream) SendMsg(m any) error          { return nil }
+func (s *silentAddEntriesStream) RecvMsg(m any) error          { return nil }
+
+// TestRemoteClient_AppendEntry_FirstResponseTimeout is a regression test for
+// issue #232: the synchronous wait for the first AddEntry response must be
+// bounded. With a deadline-less caller context (which is what the append path
+// passes) and a server that accepts the stream but stays silent, AppendEntry
+// previously blocked forever — wedging the per-segment executor worker.
+func TestRemoteClient_AppendEntry_FirstResponseTimeout(t *testing.T) {
+	oldTimeout := appendFirstResponseTimeout
+	appendFirstResponseTimeout = 200 * time.Millisecond
+	defer func() { appendFirstResponseTimeout = oldTimeout }()
+
+	client, mockClient := newRemoteClientWithMock(t)
+	stream := &silentAddEntryStream{}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { stream.ctx = args.Get(0).(context.Context) }).
+		Return(stream, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.AppendEntry(context.Background(), "bucket", "root", 1,
+			&proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("v")},
+			channel.NewRemoteResultChannel("ch"))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		assert.Error(t, err, "a silent first response must surface as an error")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AppendEntry is not bounded: still blocked on a silent server")
+	}
+}
+
+// TestRemoteClient_AppendEntries_FirstResponseTimeout is the batched (group
+// commit) counterpart: the phase-1 wait for the batch's Buffered frame must be
+// bounded as well.
+func TestRemoteClient_AppendEntries_FirstResponseTimeout(t *testing.T) {
+	oldTimeout := appendFirstResponseTimeout
+	appendFirstResponseTimeout = 200 * time.Millisecond
+	defer func() { appendFirstResponseTimeout = oldTimeout }()
+
+	client, mockClient := newRemoteClientWithMock(t)
+	stream := &silentAddEntriesStream{}
+	mockClient.On("AddEntries", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { stream.ctx = args.Get(0).(context.Context) }).
+		Return(stream, nil)
+
+	entries := []*proto.LogEntry{
+		{SegId: 1, EntryId: 0, Values: []byte("v0")},
+		{SegId: 1, EntryId: 1, Values: []byte("v1")},
+	}
+	resultChs := []channel.ResultChannel{
+		channel.NewLocalResultChannel("e0"),
+		channel.NewLocalResultChannel("e1"),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.AppendEntries(context.Background(), "bucket", "root", 1, entries, resultChs)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		assert.Error(t, err, "a silent buffered frame must surface as an error")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AppendEntries is not bounded: still blocked on a silent server")
+	}
 }
 
 // ============================================================================
