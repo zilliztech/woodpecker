@@ -118,3 +118,19 @@ func Test_GetUsedMemoryCount_Positive(t *testing.T) {
 	used := GetUsedMemoryCount()
 	assert.Greater(t, used, uint64(0))
 }
+
+func TestGetDiskStats(t *testing.T) {
+	used, total, free, err := GetDiskStats("/tmp")
+	assert.NoError(t, err)
+	assert.Greater(t, total, uint64(0))
+	assert.Greater(t, used+free, uint64(0))
+	assert.LessOrEqual(t, used, total)
+}
+
+func TestGetDiskStats_NotExist(t *testing.T) {
+	used, total, free, err := GetDiskStats("/definitely/not/exist/wp-215")
+	assert.NoError(t, err)
+	assert.Zero(t, used)
+	assert.Zero(t, total)
+	assert.Zero(t, free)
+}

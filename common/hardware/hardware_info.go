@@ -110,6 +110,21 @@ func GetDiskUsage(path string) (float64, float64, error) {
 	return usedGB, totalGB, nil
 }
 
+// GetDiskStats returns used/total/free bytes for the filesystem containing path.
+// free is the space available to unprivileged processes (statfs Bavail): on ext4
+// this excludes root-reserved blocks, so compute a df-style usage ratio as
+// used/(used+free), NOT used/total. A non-existent path returns zeros, nil.
+func GetDiskStats(path string) (used, total, free uint64, err error) {
+	diskStats, err := disk.Usage(path)
+	if err != nil {
+		if errors.Is(err, oserror.ErrNotExist) {
+			return 0, 0, 0, nil
+		}
+		return 0, 0, 0, err
+	}
+	return diskStats.Used, diskStats.Total, diskStats.Free, nil
+}
+
 // GetIOWait Get IO Wait Percentage
 func GetIOWait() (float64, error) {
 	cpuTimes, err := cpu.Times(false)
