@@ -29,6 +29,11 @@ import (
 
 var _ Operation = (*BatchAppendOp)(nil)
 
+// batchAckReadTimeout bounds how long the drain waits for a single entry's
+// durability ack. Package var so tests can shrink it. TODO make configurable
+// (like the append-path waits); tracked with the timeout audit.
+var batchAckReadTimeout = 30 * time.Second
+
 // BatchAppendOp groups a run of consecutive AppendOps from the same segment and
 // sends their entries to each quorum replica in a single AddEntries request
 // (client-side group commit). It amortizes the per-entry send round-trip that
@@ -122,8 +127,13 @@ func (b *BatchAppendOp) sendBatchToNode(ctx context.Context, entries []*proto.Lo
 	}
 
 	startRequestTime := time.Now()
-	_, err := cli.AppendEntries(ctx, first.bucketName, first.rootPath, first.logId, entries, resultChs)
+	// The drain goroutine below owns the stream's lifetime: streamCtx is cancelled
+	// when the drain exits (normally or on give-up), so a stalled peer can't leave
+	// the client demux goroutine + gRPC stream + server handler hanging.
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	_, err := cli.AppendEntries(streamCtx, first.bucketName, first.rootPath, first.logId, entries, resultChs)
 	if err != nil {
+		streamCancel()
 		b.failNode(ctx, nodeIdx, serverAddr, err)
 		return
 	}
@@ -133,11 +143,24 @@ func (b *BatchAppendOp) sendBatchToNode(ctx context.Context, entries []*proto.Lo
 	// applies quorum inline, instead of spawning a receivedAckCallback goroutine
 	// per op. For a batch of N entries this is 1 goroutine per node instead of N.
 	go func() {
-		readCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // TODO configurable
-		defer cancel()
+		defer streamCancel()
 		for i, op := range b.ops {
+			// Per-entry deadline: a slow early entry must not shrink a later
+			// (still-arriving) entry's budget into a false timeout.
+			readCtx, cancel := context.WithTimeout(context.Background(), batchAckReadTimeout)
 			result, readErr := resultChs[i].ReadResult(readCtx)
+			cancel()
 			op.applyNodeAck(ctx, startRequestTime, result, readErr, nodeIdx, serverAddr)
+			if readErr != nil {
+				// The stream stalled (no ack within the deadline). Acks are ordered,
+				// so entries after i won't arrive either — fail them fast instead of
+				// blocking a full deadline each, and let the deferred streamCancel tear
+				// down the hung stream promptly.
+				for j := i + 1; j < len(b.ops); j++ {
+					b.ops[j].applyNodeAck(ctx, startRequestTime, nil, readErr, nodeIdx, serverAddr)
+				}
+				return
+			}
 		}
 	}()
 }
