@@ -96,6 +96,7 @@ type logStore struct {
 	maintenance  *NodeMaintenanceManager
 	stopped      atomic.Bool
 	rejectWrites atomic.Bool // separate from stopped: only blocks new writes during decommission, not reads
+	diskBlocked  atomic.Bool // set by diskWatermarkTask when the local WAL disk crosses the hard watermark; gates new appends only
 }
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient storageclient.ObjectStorage) LogStore {

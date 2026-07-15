@@ -27,7 +27,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/hardware"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 )
 
 // MaintenanceTask is one periodic, idempotent self-maintenance routine run by the
@@ -246,5 +248,92 @@ func (r *deletedLogReclaimTask) Run(ctx context.Context) error {
 			zap.Int64("earliestDueUnix", earliestDue),
 			zap.Duration("gracePeriod", r.grace))
 	}
+	return nil
+}
+
+// Disk watermark backpressure levels reported via WpLogStoreWriteBackpressureState.
+const (
+	diskLevelNormal  = 0
+	diskLevelWarn    = 1
+	diskLevelBlocked = 2
+)
+
+// diskWatermarkWarnCooldown rate-limits repeated warn logs while the node stays
+// at or above the soft watermark.
+const diskWatermarkWarnCooldown = time.Minute
+
+// diskWatermarkTask samples the local WAL disk once per interval, evaluates the
+// soft/hard watermarks (issue #215) and sets store.diskBlocked so the append path
+// can reject new writes with a retriable error before the disk actually fills.
+// The level is a pure function of the current sample (no hysteresis); lastLevel
+// and lastWarnAt exist only for log rate-limiting and are touched by a single
+// goroutine (the maintenance runner), so they are plain fields.
+type diskWatermarkTask struct {
+	store      *logStore
+	policy     config.DiskWatermarkPolicyConfig
+	path       string
+	usageFn    func(path string) (used, total, free uint64, err error) // injectable for tests
+	lastLevel  int
+	lastWarnAt time.Time
+}
+
+func newDiskWatermarkTask(store *logStore) *diskWatermarkTask {
+	return &diskWatermarkTask{
+		store:   store,
+		policy:  store.cfg.Woodpecker.Logstore.DiskWatermarkPolicy,
+		path:    store.cfg.Woodpecker.Storage.RootPath,
+		usageFn: hardware.GetDiskStats,
+	}
+}
+
+func (t *diskWatermarkTask) Name() string { return "disk-watermark" }
+
+func (t *diskWatermarkTask) Interval() time.Duration {
+	return t.policy.SampleInterval.Duration.Duration()
+}
+
+func (t *diskWatermarkTask) Run(ctx context.Context) error {
+	used, _, free, err := t.usageFn(t.path)
+	if err != nil || used+free == 0 {
+		// Transient stat failure (or empty stats): keep the previous state rather
+		// than flapping the gate; the next successful sample corrects it.
+		logger.Ctx(ctx).Debug("disk watermark sample unavailable, keeping previous state",
+			zap.String("path", t.path), zap.Error(err))
+		return nil
+	}
+	// df semantics: free is statfs Bavail, so used/(used+free) matches what the
+	// operator sees in df/kubectl and accounts for ext4 root-reserved blocks.
+	ratio := float64(used) / float64(used+free)
+	blocked := ratio >= t.policy.HardThresholdRatio || free <= uint64(t.policy.MinFreeBytes.Int64())
+	level := diskLevelNormal
+	if blocked {
+		level = diskLevelBlocked
+	} else if ratio >= t.policy.SoftThresholdRatio {
+		level = diskLevelWarn
+	}
+
+	t.store.diskBlocked.Store(blocked)
+	metrics.WpLogStoreDiskUsageRatio.WithLabelValues(metrics.NodeID, t.path).Set(ratio)
+	metrics.WpLogStoreDiskFreeBytes.WithLabelValues(metrics.NodeID, t.path).Set(float64(free))
+	metrics.WpLogStoreWriteBackpressureState.WithLabelValues(metrics.NodeID).Set(float64(level))
+
+	now := time.Now()
+	switch {
+	case level > diskLevelNormal && (level != t.lastLevel || now.Sub(t.lastWarnAt) >= diskWatermarkWarnCooldown):
+		logger.Ctx(ctx).Warn("local WAL disk usage high: expand the PVC or lower woodpecker.logstore.retentionPolicy.ttl",
+			zap.String("path", t.path),
+			zap.Float64("usedRatio", ratio),
+			zap.Uint64("freeBytes", free),
+			zap.Float64("softThreshold", t.policy.SoftThresholdRatio),
+			zap.Float64("hardThreshold", t.policy.HardThresholdRatio),
+			zap.Bool("writesBlocked", blocked))
+		t.lastWarnAt = now
+	case level == diskLevelNormal && t.lastLevel > diskLevelNormal:
+		logger.Ctx(ctx).Info("local WAL disk usage recovered below watermarks",
+			zap.String("path", t.path),
+			zap.Float64("usedRatio", ratio),
+			zap.Uint64("freeBytes", free))
+	}
+	t.lastLevel = level
 	return nil
 }
