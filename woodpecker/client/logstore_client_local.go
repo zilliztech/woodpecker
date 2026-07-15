@@ -75,6 +75,10 @@ func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, bucketName str
 	return l.store.CompactSegment(ctx, bucketName, rootPath, logId, segmentId)
 }
 
+func (l *logStoreClientLocal) NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error {
+	return l.store.NotifySegmentCompacted(ctx, bucketName, rootPath, logId, segmentId)
+}
+
 func (l *logStoreClientLocal) SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {
 	return l.store.CleanSegment(ctx, bucketName, rootPath, logId, segmentId, flag)
 }

@@ -1549,6 +1549,41 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 	return nil, werr.ErrSegmentHandleCompactionFailed.WithCauseErrMsg("all quorum nodes failed compaction")
 }
 
+// notifyQuorumSegmentCompacted fans out NotifySegmentCompacted to every node in the
+// quorum and waits for all of them to return. It is best-effort: a per-node
+// failure (client lookup or RPC) is only logged at Warn and never surfaces to
+// the caller, since the compacted-file-cleanup pull path self-heals any node
+// that misses this notification.
+func (s *segmentHandleImpl) notifyQuorumSegmentCompacted(ctx context.Context, quorumInfo *proto.QuorumInfo) {
+	var wg sync.WaitGroup
+	for _, node := range quorumInfo.Nodes {
+		node := node
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
+			if err != nil {
+				logger.Ctx(ctx).Warn("notify segment compacted: get client failed",
+					zap.String("logName", s.logName),
+					zap.Int64("logId", s.logId),
+					zap.Int64("segmentId", s.segmentId),
+					zap.String("node", node),
+					zap.Error(err))
+				return
+			}
+			if err := cli.NotifySegmentCompacted(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId); err != nil {
+				logger.Ctx(ctx).Warn("notify segment compacted failed (pull-based cleanup will self-heal)",
+					zap.String("logName", s.logName),
+					zap.Int64("logId", s.logId),
+					zap.Int64("segmentId", s.segmentId),
+					zap.String("node", node),
+					zap.Error(err))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
 	defer sp.End()
@@ -1777,6 +1812,13 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("compactedSize", compactSegMetaInfo.Size),
 		zap.Int64("completionTime", compactSegMetaInfo.SealedTime))
+
+	// Best-effort: tell every replica in the quorum that the segment is durably
+	// compacted so it can drop its local pre-compaction data. This is synchronous
+	// (wait for all nodes) so the fanout is deterministic for callers/tests, but
+	// it never fails Compact(): a per-node error is only logged. The compacted-file
+	// -cleanup pull path self-heals any node that misses this notification.
+	s.notifyQuorumSegmentCompacted(ctx, quorumInfo)
 
 	// update segment state and meta
 	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()

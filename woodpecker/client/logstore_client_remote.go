@@ -342,6 +342,15 @@ func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, bucketName st
 	return resp.GetMetadata(), nil
 }
 
+func (l *logStoreClientRemote) NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
+	resp, err := l.innerClient.NotifySegmentCompacted(ctx, &proto.NotifySegmentCompactedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
+	if err != nil {
+		return err
+	}
+	return werr.Error(resp.GetStatus())
+}
+
 func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) (err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.CleanSegment(ctx, &proto.CleanSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, Flag: int32(flag)})

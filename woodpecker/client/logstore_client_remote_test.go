@@ -547,6 +547,41 @@ func TestRemoteClient_SegmentCompact_StatusError(t *testing.T) {
 	assert.Nil(t, meta)
 }
 
+func TestRemoteClient_NotifySegmentCompacted_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("NotifySegmentCompacted", ctx, mock.AnythingOfType("*proto.NotifySegmentCompactedRequest")).
+		Return(&proto.NotifySegmentCompactedResponse{Status: werr.Success()}, nil)
+
+	err := client.NotifySegmentCompacted(ctx, "bucket", "root", 1, 0)
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_NotifySegmentCompacted_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("NotifySegmentCompacted", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("notify error"))
+
+	err := client.NotifySegmentCompacted(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_NotifySegmentCompacted_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("NotifySegmentCompacted", ctx, mock.Anything).
+		Return(&proto.NotifySegmentCompactedResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	err := client.NotifySegmentCompacted(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
 func TestRemoteClient_SegmentClean_Success(t *testing.T) {
 	client, mockClient := newRemoteClientWithMock(t)
 	ctx := context.Background()

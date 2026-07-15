@@ -40,6 +40,10 @@ type LogStoreClient interface {
 	FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// SegmentCompact compacts the specified log segment and returns the updated metadata and an error if any.
 	SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	// NotifySegmentCompacted informs the target node that the specified log segment has been
+	// durably compacted, authorizing it to drop its local pre-compaction data. Best-effort from
+	// the caller's perspective: see segment.Compact fanout.
+	NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error
 	// SegmentClean cleans up the specified log segment and returns an error if any.
 	SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error
 	// MarkLogDeleted marks a single log deleted on the target node.
