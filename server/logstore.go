@@ -117,6 +117,14 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 	logStore.maintenance.Register(newIdleProcessorCleanupTask(logStore))
 	logStore.maintenance.Register(newDeletedLogReclaimTask(logStore, cfg.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Duration.Duration()))
 
+	// Disk-watermark backpressure (issue #215): only meaningful when this node keeps
+	// WAL data on a local disk (service/local storage modes).
+	dwPolicy := cfg.Woodpecker.Logstore.DiskWatermarkPolicy
+	if dwPolicy.Enabled && cfg.Woodpecker.Storage.RootPath != "" &&
+		(cfg.Woodpecker.Storage.IsStorageService() || cfg.Woodpecker.Storage.IsStorageLocal()) {
+		logStore.maintenance.Register(newDiskWatermarkTask(logStore))
+	}
+
 	logger.Ctx(ctx).Info("LogStore created successfully",
 		zap.String("address", logStore.address))
 
@@ -208,6 +216,10 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 	if l.stopped.Load() || l.rejectWrites.Load() {
 		return -1, werr.ErrLogStoreShutdown
 	}
+	if l.diskBlocked.Load() {
+		metrics.WpLogStoreWriteRejectedTotal.WithLabelValues(metrics.NodeID, "disk_pressure").Inc()
+		return -1, werr.ErrLogStoreDiskPressure
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
 	defer sp.End()
 	logIdStr := strconv.FormatInt(logId, 10)
@@ -239,6 +251,10 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 func (l *logStore) AddEntryBatch(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
 	if l.stopped.Load() || l.rejectWrites.Load() {
 		return nil, werr.ErrLogStoreShutdown
+	}
+	if l.diskBlocked.Load() {
+		metrics.WpLogStoreWriteRejectedTotal.WithLabelValues(metrics.NodeID, "disk_pressure").Inc()
+		return nil, werr.ErrLogStoreDiskPressure
 	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntryBatch")
 	defer sp.End()
