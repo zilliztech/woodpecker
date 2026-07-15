@@ -98,6 +98,32 @@ var (
 		Help:      "Number of active segment processors in log store",
 	}, []string{"node_id", "log_ns", "log_id"})
 
+	// Disk watermark backpressure metrics (issue #215)
+	WpLogStoreDiskUsageRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_disk_usage_ratio",
+		Help:      "Local WAL disk usage ratio, used/(used+free) (df semantics)",
+	}, []string{"node_id", "path"})
+	WpLogStoreDiskFreeBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_disk_free_bytes",
+		Help:      "Local WAL disk free bytes available to the process (statfs Bavail)",
+	}, []string{"node_id", "path"})
+	WpLogStoreWriteBackpressureState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_write_backpressure_state",
+		Help:      "Disk watermark backpressure state: 0=normal, 1=warn, 2=blocked",
+	}, []string{"node_id"})
+	WpLogStoreWriteRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_write_rejected_total",
+		Help:      "Total writes rejected by node-level admission gates",
+	}, []string{"node_id", "reason"})
+
 	// Buffer wait latency
 	WpServerBufferWaitLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
@@ -274,6 +300,11 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpLogStoreOperationsTotal)
 		registerer.MustRegister(WpLogStoreOperationLatency)
 		registerer.MustRegister(WpLogStoreActiveSegmentProcessors)
+		// Disk watermark backpressure metrics (issue #215)
+		registerer.MustRegister(WpLogStoreDiskUsageRatio)
+		registerer.MustRegister(WpLogStoreDiskFreeBytes)
+		registerer.MustRegister(WpLogStoreWriteBackpressureState)
+		registerer.MustRegister(WpLogStoreWriteRejectedTotal)
 		// Buffer wait latency
 		registerer.MustRegister(WpServerBufferWaitLatency)
 		// Segment File Impl metrics

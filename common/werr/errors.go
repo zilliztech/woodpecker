@@ -96,6 +96,7 @@ var (
 	ErrLogStoreInvalidAddress = newWoodpeckerError("invalid logstore address", 2004, false)
 	ErrLogBeingDeleted        = newWoodpeckerError("log is being deleted", 2005, false)
 	ErrMarkDeleteFailed       = newWoodpeckerError("failed to durably mark log/instance deleted", 2006, true)
+	ErrLogStoreDiskPressure   = newWoodpeckerError("logstore local disk above hard watermark, write backpressure active", 2007, true)
 
 	// segment_processor errors (2100-2199)
 	ErrSegmentProcessorNotFound          = newWoodpeckerError("segment processor not found", 2100, false)
