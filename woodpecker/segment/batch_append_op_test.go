@@ -305,3 +305,117 @@ func TestBatchAppendOp_AppendEntriesError_AllOpsRoutedToFailure(t *testing.T) {
 		assert.Equal(t, sendErr, op.channelErrors[0], "op %d should record the send error", i)
 	}
 }
+
+// TestBatchAppendOp_StalledNode_FailsRemainingAndCancelsStream is a regression
+// test for issue #225 (#3): when the server acks some entries then stalls, the
+// drain must fail the remaining entries and cancel the context it passed to
+// AppendEntries, so the client demux goroutine + gRPC stream + server handler
+// unwind instead of leaking.
+func TestBatchAppendOp_StalledNode_FailsRemainingAndCancelsStream(t *testing.T) {
+	oldTimeout := batchAckReadTimeout
+	batchAckReadTimeout = 200 * time.Millisecond
+	defer func() { batchAckReadTimeout = oldTimeout }()
+
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
+
+	const batchN = 3
+	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo) // entryIds 10, 11, 12
+
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
+
+	var capturedCtx context.Context
+	mockClient.EXPECT().
+		AppendEntries(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(streamCtx context.Context, _ string, _ string, _ int64, entries []*proto.LogEntry, chs []channel.ResultChannel) ([]int64, error) {
+			capturedCtx = streamCtx
+			ids := make([]int64, len(entries))
+			for i, e := range entries {
+				ids[i] = e.EntryId
+			}
+			// Ack only the first entry; the node then stalls (never sends the rest).
+			_ = chs[0].SendResult(context.Background(), &channel.AppendResult{SyncedId: entries[0].EntryId})
+			return ids, nil
+		})
+
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(10)).Return().Once()
+	var failures sync.WaitGroup
+	failures.Add(2) // entries 11 and 12
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, 0, "node1").
+		Run(func(_ context.Context, entryId int64, _ error, _ int, _ string) {
+			if entryId == 11 || entryId == 12 {
+				failures.Done()
+			}
+		}).Return().Times(2)
+
+	NewBatchAppendOp(ops).Execute()
+	waitWG(t, &failures, 3*time.Second)
+
+	assert.Eventually(t, func() bool { return capturedCtx != nil && capturedCtx.Err() != nil },
+		2*time.Second, 10*time.Millisecond,
+		"stream context should be cancelled after the drain gives up on the stalled node")
+}
+
+// TestBatchAppendOp_PerEntryTimeout_NoFalseFailOnSlowEarlyEntry is a regression
+// test for issue #225 (#4): each entry must get its own read deadline. A slow
+// early entry must not shrink a later (still-arriving) entry's budget into a
+// false timeout, as the old single shared deadline did.
+func TestBatchAppendOp_PerEntryTimeout_NoFalseFailOnSlowEarlyEntry(t *testing.T) {
+	oldTimeout := batchAckReadTimeout
+	batchAckReadTimeout = 1 * time.Second
+	defer func() { batchAckReadTimeout = oldTimeout }()
+
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
+
+	const batchN = 2
+	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo) // entryIds 10, 11
+
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().
+		AppendEntries(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ int64, entries []*proto.LogEntry, chs []channel.ResultChannel) ([]int64, error) {
+			ids := make([]int64, len(entries))
+			for i, e := range entries {
+				ids[i] = e.EntryId
+			}
+			// Entry 0 acks slowly (consuming most of a single shared deadline); entry 1
+			// acks a bit later but still within its own per-entry window. Under the old
+			// shared deadline, entry 1 would be false-failed.
+			ch0, ch1 := chs[0], chs[1]
+			id0, id1 := entries[0].EntryId, entries[1].EntryId
+			go func() {
+				time.Sleep(600 * time.Millisecond)
+				_ = ch0.SendResult(context.Background(), &channel.AppendResult{SyncedId: id0})
+			}()
+			go func() {
+				time.Sleep(1200 * time.Millisecond)
+				_ = ch1.SendResult(context.Background(), &channel.AppendResult{SyncedId: id1})
+			}()
+			return ids, nil
+		})
+
+	var wg sync.WaitGroup
+	wg.Add(batchN)
+	for i := 0; i < batchN; i++ {
+		mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(10+i)).
+			Run(func(context.Context, int64) { wg.Done() }).Return().Once()
+	}
+	// Tolerate (but don't require) a failure call so the RED run doesn't panic on a
+	// strict mock; the real assertion is that both entries are acknowledged.
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return().Maybe()
+
+	NewBatchAppendOp(ops).Execute()
+	waitWG(t, &wg, 3*time.Second)
+
+	for i, op := range ops {
+		assert.True(t, op.completed.Load(), "op %d should be acknowledged, not false-failed", i)
+	}
+}
