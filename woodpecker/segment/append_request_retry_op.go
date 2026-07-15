@@ -41,5 +41,13 @@ func (a AppendRequestRetryOp) Identifier() string {
 }
 
 func (a AppendRequestRetryOp) Execute() {
+	// Hold the op's mutex across the retry send, mirroring AppendOp.Execute's
+	// locking for the initial send: sendWriteRequest may rewrite
+	// op.resultChannels[serverIndex] (channel rebuild on client-type mismatch),
+	// which FastFail/FastSuccess iterate under the same mutex. The lock cannot
+	// live inside sendWriteRequest itself — the initial path calls it while
+	// Execute already holds op.mu.
+	a.innerOp.mu.Lock()
+	defer a.innerOp.mu.Unlock()
 	a.innerOp.sendWriteRequestRetry(a.opCtx, a.serverIndex)
 }

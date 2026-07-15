@@ -181,6 +181,60 @@ func TestAppendOp_applyNodeAck_BelowQuorumThenReached(t *testing.T) {
 	assert.True(t, op.completed.Load(), "second ack reaches Aq=2")
 }
 
+// TestAppendOp_RetryChannelRebuild_RacesWithFastFail is a regression test for
+// issue #231: the retry path (AppendRequestRetryOp.Execute ->
+// sendWriteRequestRetry -> sendWriteRequest) rewrites
+// op.resultChannels[serverIndex] (channel rebuild on client-type mismatch),
+// while FastFail/FastSuccess iterate the same slice under op.mu. The
+// initial-send path is protected because AppendOp.Execute holds op.mu across
+// the fan-out; the retry entry point must hold the same lock. Run with -race:
+// without the lock the detector flags the unsynchronized write/read pair.
+// The concurrency is realistic: an op's per-replica retry (executor worker)
+// can overlap a FastFail triggered by another entry's final failure
+// (HandleAppendRequestFailure fast-fails all queued ops with a larger entryId).
+func TestAppendOp_RetryChannelRebuild_RacesWithFastFail(t *testing.T) {
+	for iter := 0; iter < 30; iter++ {
+		mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+		mockClient := mocks_logstore_client.NewLogStoreClient(t)
+		mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+		quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
+
+		op := NewAppendOp("bucket", "root", 1, 2, 10, []byte("v"),
+			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo)
+		// As installed by a prior batched send: a LocalResultChannel in the slot,
+		// which the retry against a remote client must rebuild (type mismatch).
+		op.resultChannels = make([]channel.ResultChannel, 1)
+		op.resultChannels[0] = channel.NewLocalResultChannel(op.Identifier())
+
+		mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
+		mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+		mockClient.EXPECT().
+			AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(int64(-1), werr.ErrInternalError).Maybe()
+		mockHandle.EXPECT().
+			HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return().Maybe()
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { // retry: rewrites op.resultChannels[0]
+			defer wg.Done()
+			<-start
+			NewAppendRequestRetryOp(context.Background(), 0, op).Execute()
+		}()
+		go func() { // fast-fail: iterates op.resultChannels under op.mu
+			defer wg.Done()
+			<-start
+			op.FastFail(context.Background(), werr.ErrSegmentFenced)
+		}()
+		close(start)
+		wg.Wait()
+		// Let the retry's spawned receivedAckCallback finish before mock teardown.
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestNewAppendOp(t *testing.T) {
 	logId := int64(1)
 	segmentId := int64(2)
