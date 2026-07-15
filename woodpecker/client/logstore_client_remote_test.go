@@ -92,6 +92,14 @@ func (m *mockProtoLogStoreClient) CompactSegment(ctx context.Context, in *proto.
 	return args.Get(0).(*proto.CompactSegmentResponse), args.Error(1)
 }
 
+func (m *mockProtoLogStoreClient) NotifySegmentCompacted(ctx context.Context, in *proto.NotifySegmentCompactedRequest, opts ...grpc.CallOption) (*proto.NotifySegmentCompactedResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.NotifySegmentCompactedResponse), args.Error(1)
+}
+
 func (m *mockProtoLogStoreClient) GetSegmentLastAddConfirmed(ctx context.Context, in *proto.GetSegmentLastAddConfirmedRequest, opts ...grpc.CallOption) (*proto.GetSegmentLastAddConfirmedResponse, error) {
 	args := m.Called(ctx, in)
 	if args.Get(0) == nil {

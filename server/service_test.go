@@ -435,17 +435,18 @@ func (m *mockServerStream) RecvMsg(interface{}) error    { return nil }
 
 // fakeLogStore is a minimal LogStore implementation for RPC handler tests.
 type fakeLogStore struct {
-	addEntryFn      func(ctx context.Context, bucketName, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
-	getBatchFn      func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, fromEntryId, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
-	fenceFn         func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
-	completeFn      func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) (int64, error)
-	compactFn       func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
-	getLACFn        func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
-	getBlockCountFn func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
-	updateLACFn     func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) error
-	cleanFn         func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, flag int) error
-	evictLogFn      func(ctx context.Context, bucketName, rootPath string, logId int64) error
-	evictInstanceFn func(ctx context.Context, bucketName, rootPath string) error
+	addEntryFn        func(ctx context.Context, bucketName, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	getBatchFn        func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, fromEntryId, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
+	fenceFn           func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
+	completeFn        func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) (int64, error)
+	compactFn         func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	getLACFn          func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
+	getBlockCountFn   func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
+	updateLACFn       func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) error
+	cleanFn           func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, flag int) error
+	evictLogFn        func(ctx context.Context, bucketName, rootPath string, logId int64) error
+	evictInstanceFn   func(ctx context.Context, bucketName, rootPath string) error
+	notifyCompactedFn func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) error
 }
 
 func (f *fakeLogStore) Start() error       { return nil }
@@ -498,6 +499,13 @@ func (f *fakeLogStore) UpdateLastAddConfirmed(ctx context.Context, bucketName, r
 
 func (f *fakeLogStore) CleanSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, flag int) error {
 	return f.cleanFn(ctx, bucketName, rootPath, logId, segmentId, flag)
+}
+
+func (f *fakeLogStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) error {
+	if f.notifyCompactedFn != nil {
+		return f.notifyCompactedFn(ctx, bucketName, rootPath, logId, segmentId)
+	}
+	return nil
 }
 
 func (f *fakeLogStore) GetActiveProcessorCount() int { return 0 }
@@ -762,6 +770,38 @@ func TestServer_CleanSegment_Error(t *testing.T) {
 	defer s.cancel()
 
 	resp, err := s.CleanSegment(context.Background(), &proto.CleanSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_NotifySegmentCompacted_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		notifyCompactedFn: func(ctx context.Context, bn, rp string, logId, segId int64) error {
+			return nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.NotifySegmentCompacted(context.Background(), &proto.NotifySegmentCompactedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_NotifySegmentCompacted_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		notifyCompactedFn: func(ctx context.Context, bn, rp string, logId, segId int64) error {
+			return assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.NotifySegmentCompacted(context.Background(), &proto.NotifySegmentCompactedRequest{
 		BucketName: "b", RootPath: "r", LogId: 1,
 	})
 	assert.NoError(t, err)

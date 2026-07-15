@@ -689,6 +689,39 @@ func TestLogStore_CleanSegment_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestLogStore_NotifySegmentCompacted_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	err := store.NotifySegmentCompacted(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestNotifySegmentCompacted_WritesMarkIdempotent(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+
+	ctx := context.Background()
+	require.NoError(t, store.NotifySegmentCompacted(ctx, "b", "rp", 1, 2))
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	assert.True(t, hasCompactedMark(seg))
+
+	require.NoError(t, store.NotifySegmentCompacted(ctx, "b", "rp", 1, 2)) // idempotent
+	assert.True(t, hasCompactedMark(seg))
+}
+
+func TestLogStore_NotifySegmentCompacted_NoLocalDataDir(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "minio" // pure object-storage mode: no local data dir
+
+	err := store.NotifySegmentCompacted(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+}
+
 func TestLogStore_UpdateLastAddConfirmed_Stopped(t *testing.T) {
 	store := createTestLogStore()
 	store.stopped.Store(true)

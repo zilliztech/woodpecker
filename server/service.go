@@ -597,6 +597,13 @@ func (s *Server) CompactSegment(ctx context.Context, request *proto.CompactSegme
 	return &proto.CompactSegmentResponse{Status: werr.Success(), Metadata: meta}, nil
 }
 
+func (s *Server) NotifySegmentCompacted(ctx context.Context, request *proto.NotifySegmentCompactedRequest) (*proto.NotifySegmentCompactedResponse, error) {
+	if err := s.logStore.NotifySegmentCompacted(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId); err != nil {
+		return &proto.NotifySegmentCompactedResponse{Status: werr.Status(err)}, nil
+	}
+	return &proto.NotifySegmentCompactedResponse{Status: werr.Success()}, nil
+}
+
 func (s *Server) GetSegmentLastAddConfirmed(ctx context.Context, request *proto.GetSegmentLastAddConfirmedRequest) (*proto.GetSegmentLastAddConfirmedResponse, error) {
 	lac, err := s.logStore.GetSegmentLastAddConfirmed(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId)
 	if err != nil {

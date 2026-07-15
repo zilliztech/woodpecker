@@ -63,6 +63,9 @@ type LogStore interface {
 	FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error)
 	CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	// NotifySegmentCompacted marks a segment's local data as durably compacted in object
+	// storage (writes a local compacted.mark), authorizing later reclaim of its data.log.
+	NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error
 	GetSegmentLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	GetSegmentBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error
@@ -577,6 +580,20 @@ func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPa
 		return nil, err
 	}
 	return metadata, nil
+}
+
+// NotifySegmentCompacted writes a local compacted.mark for the segment, authorizing the
+// compacted-file-cleanup task to later drop its local data.log. It is a no-op (returns nil)
+// when the node keeps no local data for this segment (pure object-storage mode).
+func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootPath string, logId, segmentId int64) error {
+	if l.stopped.Load() {
+		return werr.ErrLogStoreShutdown
+	}
+	dir := localSegmentDataDir(l.cfg, bucketName, rootPath, logId, segmentId)
+	if dir == "" {
+		return nil // no local data dir (pure object-storage mode): nothing to mark
+	}
+	return writeCompactedMark(ctx, dir)
 }
 
 func (l *logStore) CleanSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {

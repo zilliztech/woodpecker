@@ -20,6 +20,7 @@ import (
 	"context"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -126,6 +127,16 @@ func localLogDataDir(cfg *config.Configuration, bucket, rootPath string, logId i
 	default:
 		return ""
 	}
+}
+
+// localSegmentDataDir returns the node-local directory for a single segment, or "" when
+// the storage backend keeps no local data (pure object-storage / minio mode).
+func localSegmentDataDir(cfg *config.Configuration, bucket, rootPath string, logId, segId int64) string {
+	logDir := localLogDataDir(cfg, bucket, rootPath, logId)
+	if logDir == "" {
+		return ""
+	}
+	return filepath.Join(logDir, strconv.FormatInt(segId, 10))
 }
 
 // localInstanceDataDir returns the node-local data directory for a whole instance.
