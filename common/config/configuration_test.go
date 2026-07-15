@@ -1233,6 +1233,7 @@ func TestDiskWatermarkPolicyConfig_DefaultsAndValidation(t *testing.T) {
 	assert.Equal(t, 0.90, dw.HardThresholdRatio)
 	assert.Equal(t, int64(1024*1024*1024), dw.MinFreeBytes.Int64())
 	assert.Equal(t, 10*time.Second, dw.SampleInterval.Duration.Duration())
+	assert.True(t, dw.ThrottleEnabled)
 	assert.NoError(t, cfg.Validate())
 
 	// invalid: soft > hard

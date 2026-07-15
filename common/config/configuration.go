@@ -392,6 +392,7 @@ type DiskWatermarkPolicyConfig struct {
 	HardThresholdRatio float64         `yaml:"hardThresholdRatio"` // block watermark; default 0.90; >=1.0 means warn-only
 	MinFreeBytes       ByteSize        `yaml:"minFreeBytes"`       // absolute free floor that also blocks; default 1Gi
 	SampleInterval     DurationSeconds `yaml:"sampleInterval"`     // default 10s
+	ThrottleEnabled    bool            `yaml:"throttleEnabled"`    // probabilistic rejection between soft and hard; default true
 }
 
 type StorageConfig struct {
@@ -901,6 +902,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				HardThresholdRatio: 0.90,
 				MinFreeBytes:       ByteSize(1 * 1024 * 1024 * 1024), // 1Gi
 				SampleInterval:     DurationSeconds{Duration: Duration{duration: 10 * time.Second}},
+				ThrottleEnabled:    true,
 			},
 		},
 		Storage: StorageConfig{

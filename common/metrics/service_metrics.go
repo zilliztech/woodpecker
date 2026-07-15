@@ -123,6 +123,12 @@ var (
 		Name:      "logstore_write_rejected_total",
 		Help:      "Total writes rejected by node-level admission gates",
 	}, []string{"node_id", "reason"})
+	WpLogStoreWriteRejectProbability = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_write_reject_probability",
+		Help:      "Current probability that a new append is rejected by the disk watermark policy (0..1)",
+	}, []string{"node_id"})
 
 	// Buffer wait latency
 	WpServerBufferWaitLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -305,6 +311,7 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpLogStoreDiskFreeBytes)
 		registerer.MustRegister(WpLogStoreWriteBackpressureState)
 		registerer.MustRegister(WpLogStoreWriteRejectedTotal)
+		registerer.MustRegister(WpLogStoreWriteRejectProbability)
 		// Buffer wait latency
 		registerer.MustRegister(WpServerBufferWaitLatency)
 		// Segment File Impl metrics

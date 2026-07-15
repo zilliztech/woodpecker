@@ -1250,7 +1250,7 @@ func TestLogStore_AddEntry_DiskPressureRejected(t *testing.T) {
 	ctx := context.Background()
 	ls := NewLogStore(ctx, cfg, nil).(*logStore)
 	ls.stopped.Store(false) // bypass Start(); the gate under test sits after the stopped check
-	ls.diskBlocked.Store(true)
+	ls.diskRejectBps.Store(diskRejectBpsMax)
 
 	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("x")}
 	rc := channel.NewLocalResultChannel("test/disk-pressure/0")
@@ -1263,6 +1263,31 @@ func TestLogStore_AddEntry_DiskPressureRejected(t *testing.T) {
 		[]*proto.LogEntry{entry}, []channel.ResultChannel{rc})
 	assert.Nil(t, ids)
 	assert.True(t, werr.ErrLogStoreDiskPressure.Is(batchErr))
+}
+
+func TestLogStore_AdmitAppend_Probabilistic(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	ls := NewLogStore(context.Background(), cfg, nil).(*logStore)
+
+	ls.diskRejectBps.Store(0)
+	for i := 0; i < 100; i++ {
+		assert.True(t, ls.admitAppend())
+	}
+	ls.diskRejectBps.Store(diskRejectBpsMax)
+	for i := 0; i < 100; i++ {
+		assert.False(t, ls.admitAppend())
+	}
+	ls.diskRejectBps.Store(5000)
+	rejected := 0
+	const trials = 10000
+	for i := 0; i < trials; i++ {
+		if !ls.admitAppend() {
+			rejected++
+		}
+	}
+	// p=0.5, n=10000: ±10σ bounds — deterministic-in-practice
+	assert.Greater(t, rejected, 4000)
+	assert.Less(t, rejected, 6000)
 }
 
 func hasMaintenanceTaskNamed(ls *logStore, name string) bool {

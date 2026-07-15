@@ -20,6 +20,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,10 +94,25 @@ type logStore struct {
 	deletingLogs      map[string]struct{} // logKey set
 	deletingInstances map[string]struct{} // instanceKey set
 
-	maintenance  *NodeMaintenanceManager
-	stopped      atomic.Bool
-	rejectWrites atomic.Bool // separate from stopped: only blocks new writes during decommission, not reads
-	diskBlocked  atomic.Bool // set by diskWatermarkTask when the local WAL disk crosses the hard watermark; gates new appends only
+	maintenance   *NodeMaintenanceManager
+	stopped       atomic.Bool
+	rejectWrites  atomic.Bool  // separate from stopped: only blocks new writes during decommission, not reads
+	diskRejectBps atomic.Int32 // rejection probability in basis points (0..10000), set by diskWatermarkTask; gates new appends only
+}
+
+// admitAppend returns false when the disk-watermark policy rejects this append.
+// bps==0 admits everything, bps==diskRejectBpsMax rejects everything; in the
+// throttle band each admission is an independent Bernoulli trial, so retriable
+// rejections slow writers proportionally to disk pressure without a hard cliff.
+func (l *logStore) admitAppend() bool {
+	bps := l.diskRejectBps.Load()
+	if bps <= 0 {
+		return true
+	}
+	if bps >= diskRejectBpsMax {
+		return false
+	}
+	return rand.Int32N(diskRejectBpsMax) >= bps
 }
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient storageclient.ObjectStorage) LogStore {
@@ -216,7 +232,7 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 	if l.stopped.Load() || l.rejectWrites.Load() {
 		return -1, werr.ErrLogStoreShutdown
 	}
-	if l.diskBlocked.Load() {
+	if !l.admitAppend() {
 		metrics.WpLogStoreWriteRejectedTotal.WithLabelValues(metrics.NodeID, "disk_pressure").Inc()
 		return -1, werr.ErrLogStoreDiskPressure
 	}
@@ -252,7 +268,7 @@ func (l *logStore) AddEntryBatch(ctx context.Context, bucketName string, rootPat
 	if l.stopped.Load() || l.rejectWrites.Load() {
 		return nil, werr.ErrLogStoreShutdown
 	}
-	if l.diskBlocked.Load() {
+	if !l.admitAppend() {
 		metrics.WpLogStoreWriteRejectedTotal.WithLabelValues(metrics.NodeID, "disk_pressure").Inc()
 		return nil, werr.ErrLogStoreDiskPressure
 	}

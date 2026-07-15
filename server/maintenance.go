@@ -262,8 +262,26 @@ const (
 // at or above the soft watermark.
 const diskWatermarkWarnCooldown = time.Minute
 
+// diskRejectBpsMax is full rejection in basis points.
+const diskRejectBpsMax = int32(10000)
+
+// diskRejectBpsFor maps a disk sample to an append-rejection probability in
+// basis points: 0 below soft; a linear ramp across the soft→hard band when
+// throttling is enabled; full rejection at/above hard or at/below the
+// absolute free floor (regardless of ThrottleEnabled).
+func diskRejectBpsFor(ratio float64, free uint64, p config.DiskWatermarkPolicyConfig) int32 {
+	if free <= uint64(p.MinFreeBytes.Int64()) || ratio >= p.HardThresholdRatio {
+		return diskRejectBpsMax
+	}
+	if !p.ThrottleEnabled || ratio < p.SoftThresholdRatio || p.HardThresholdRatio <= p.SoftThresholdRatio {
+		return 0
+	}
+	frac := (ratio - p.SoftThresholdRatio) / (p.HardThresholdRatio - p.SoftThresholdRatio)
+	return int32(frac * float64(diskRejectBpsMax))
+}
+
 // diskWatermarkTask samples the local WAL disk once per interval, evaluates the
-// soft/hard watermarks (issue #215) and sets store.diskBlocked so the append path
+// soft/hard watermarks (issue #215) and sets store.diskRejectBps so the append path
 // can reject new writes with a retriable error before the disk actually fills.
 // The level is a pure function of the current sample (no hysteresis); lastLevel
 // and lastWarnAt exist only for log rate-limiting and are touched by a single
@@ -304,7 +322,8 @@ func (t *diskWatermarkTask) Run(ctx context.Context) error {
 	// df semantics: free is statfs Bavail, so used/(used+free) matches what the
 	// operator sees in df/kubectl and accounts for ext4 root-reserved blocks.
 	ratio := float64(used) / float64(used+free)
-	blocked := ratio >= t.policy.HardThresholdRatio || free <= uint64(t.policy.MinFreeBytes.Int64())
+	rejectBps := diskRejectBpsFor(ratio, free, t.policy)
+	blocked := rejectBps >= diskRejectBpsMax
 	level := diskLevelNormal
 	if blocked {
 		level = diskLevelBlocked
@@ -312,10 +331,11 @@ func (t *diskWatermarkTask) Run(ctx context.Context) error {
 		level = diskLevelWarn
 	}
 
-	t.store.diskBlocked.Store(blocked)
+	t.store.diskRejectBps.Store(rejectBps)
 	metrics.WpLogStoreDiskUsageRatio.WithLabelValues(metrics.NodeID, t.path).Set(ratio)
 	metrics.WpLogStoreDiskFreeBytes.WithLabelValues(metrics.NodeID, t.path).Set(float64(free))
 	metrics.WpLogStoreWriteBackpressureState.WithLabelValues(metrics.NodeID).Set(float64(level))
+	metrics.WpLogStoreWriteRejectProbability.WithLabelValues(metrics.NodeID).Set(float64(rejectBps) / float64(diskRejectBpsMax))
 
 	now := time.Now()
 	switch {
@@ -326,7 +346,8 @@ func (t *diskWatermarkTask) Run(ctx context.Context) error {
 			zap.Uint64("freeBytes", free),
 			zap.Float64("softThreshold", t.policy.SoftThresholdRatio),
 			zap.Float64("hardThreshold", t.policy.HardThresholdRatio),
-			zap.Bool("writesBlocked", blocked))
+			zap.Bool("writesBlocked", blocked),
+			zap.Int32("rejectBps", rejectBps))
 		t.lastWarnAt = now
 	case level == diskLevelNormal && t.lastLevel > diskLevelNormal:
 		logger.Ctx(ctx).Info("local WAL disk usage recovered below watermarks",
