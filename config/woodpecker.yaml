@@ -130,6 +130,12 @@ woodpecker:
       loadTTL: 30               # Seconds; a node's load older than this is treated as unknown
       memSoftThreshold: 0.85    # Memory ratio above which memory escalates the load factor
       ewmaAlpha: 0.5            # EWMA weight on the newest load sample (0,1]
+    diskWatermarkPolicy:
+      enabled: true             # Local WAL disk watermark monitoring + backpressure (service/local storage only)
+      softThresholdRatio: 0.80  # Used ratio (used/(used+free), df semantics) above which a rate-limited WARN recommends expanding the PVC or lowering retentionPolicy.ttl
+      hardThresholdRatio: 0.90  # Used ratio above which new appends are rejected with a retriable error; set >= 1.0 (with minFreeBytes: 0) for warn-only
+      minFreeBytes: 1GB         # Absolute free-space floor; free space at or below this also blocks appends
+      sampleInterval: 10        # Seconds between disk samples
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.

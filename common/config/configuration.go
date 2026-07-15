@@ -350,6 +350,7 @@ type LogstoreConfig struct {
 	ProcessorCleanupPolicy  ProcessorCleanupPolicyConfig `yaml:"processorCleanupPolicy"`
 	MaintenanceStrategy     MaintenanceStrategyConfig    `yaml:"maintenanceStrategy"`
 	NodeSelectionPolicy     NodeSelectionPolicyConfig    `yaml:"nodeSelectionPolicy"`
+	DiskWatermarkPolicy     DiskWatermarkPolicyConfig    `yaml:"diskWatermarkPolicy"`
 }
 
 // ProcessorCleanupPolicyConfig stores the background segment processor cleanup and shutdown configuration.
@@ -380,6 +381,17 @@ type NodeSelectionPolicyConfig struct {
 	LoadTTL            DurationSeconds `yaml:"loadTTL"`            // load older than this is treated as unknown; default 30s
 	MemSoftThreshold   float64         `yaml:"memSoftThreshold"`   // memory ratio above which memory escalates load; default 0.85
 	EWMAAlpha          float64         `yaml:"ewmaAlpha"`          // EWMA weight on newest sample; default 0.5
+}
+
+// DiskWatermarkPolicyConfig controls local-WAL-disk watermark warning and write
+// backpressure (issue #215). Active only for service/local storage (nodes that keep
+// WAL data on a local disk). Ratio semantics are used/(used+free), matching df.
+type DiskWatermarkPolicyConfig struct {
+	Enabled            bool            `yaml:"enabled"`            // master switch; default true
+	SoftThresholdRatio float64         `yaml:"softThresholdRatio"` // warn watermark; default 0.80
+	HardThresholdRatio float64         `yaml:"hardThresholdRatio"` // block watermark; default 0.90; >=1.0 means warn-only
+	MinFreeBytes       ByteSize        `yaml:"minFreeBytes"`       // absolute free floor that also blocks; default 1Gi
+	SampleInterval     DurationSeconds `yaml:"sampleInterval"`     // default 10s
 }
 
 type StorageConfig struct {
@@ -752,6 +764,17 @@ func (c *Configuration) validateLogstoreConfig() error {
 		}
 	}
 
+	dw := logstore.DiskWatermarkPolicy
+	if dw.Enabled {
+		if dw.SoftThresholdRatio <= 0 || dw.SoftThresholdRatio > dw.HardThresholdRatio {
+			return fmt.Errorf("diskWatermarkPolicy: require 0 < softThresholdRatio <= hardThresholdRatio, got soft=%v hard=%v",
+				dw.SoftThresholdRatio, dw.HardThresholdRatio)
+		}
+		if dw.MinFreeBytes < 0 {
+			return fmt.Errorf("diskWatermarkPolicy.minFreeBytes must be >= 0, got %d", dw.MinFreeBytes.Int64())
+		}
+	}
+
 	return nil
 }
 
@@ -871,6 +894,13 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				LoadTTL:            DurationSeconds{Duration: Duration{duration: 30 * time.Second}},
 				MemSoftThreshold:   0.85,
 				EWMAAlpha:          0.5,
+			},
+			DiskWatermarkPolicy: DiskWatermarkPolicyConfig{
+				Enabled:            true,
+				SoftThresholdRatio: 0.80,
+				HardThresholdRatio: 0.90,
+				MinFreeBytes:       ByteSize(1 * 1024 * 1024 * 1024), // 1Gi
+				SampleInterval:     DurationSeconds{Duration: Duration{duration: 10 * time.Second}},
 			},
 		},
 		Storage: StorageConfig{

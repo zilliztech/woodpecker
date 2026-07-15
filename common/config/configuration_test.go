@@ -19,6 +19,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -1220,4 +1221,30 @@ func TestQuorumConfig_DynamicReplicasAffectsEnsembleSize(t *testing.T) {
 
 	current = 4 // invalid -> clamps to 3
 	assert.Equal(t, 3, q.GetEnsembleSize())
+}
+
+func TestDiskWatermarkPolicyConfig_DefaultsAndValidation(t *testing.T) {
+	cfg, err := NewConfiguration()
+	assert.NoError(t, err)
+
+	dw := cfg.Woodpecker.Logstore.DiskWatermarkPolicy
+	assert.True(t, dw.Enabled)
+	assert.Equal(t, 0.80, dw.SoftThresholdRatio)
+	assert.Equal(t, 0.90, dw.HardThresholdRatio)
+	assert.Equal(t, int64(1024*1024*1024), dw.MinFreeBytes.Int64())
+	assert.Equal(t, 10*time.Second, dw.SampleInterval.Duration.Duration())
+	assert.NoError(t, cfg.Validate())
+
+	// invalid: soft > hard
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.SoftThresholdRatio = 0.95
+	assert.Error(t, cfg.Validate())
+
+	// invalid: negative minFreeBytes
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.SoftThresholdRatio = 0.80
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.MinFreeBytes = ByteSize(-1)
+	assert.Error(t, cfg.Validate())
+
+	// disabled: validation skipped
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
+	assert.NoError(t, cfg.Validate())
 }
