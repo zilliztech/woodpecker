@@ -78,6 +78,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			utils.DisableDiskWatermark(cfg)
 			cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
@@ -295,6 +296,7 @@ func TestReadWriteLoop(t *testing.T) {
 			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			utils.DisableDiskWatermark(cfg)
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -390,6 +392,11 @@ func testWrite(t *testing.T, client woodpecker.Client, logName string, count int
 
 	assert.Equal(t, 0, len(failedIds))
 	assert.Equal(t, count, len(successIds))
+	// Fail fast with a clear message instead of an index-out-of-range panic below if any
+	// write did not succeed (e.g. a rejected append), rather than indexing successIds[count-1].
+	if len(failedIds) != 0 || len(successIds) != count {
+		t.Fatalf("write incomplete: %d/%d succeeded, %d failed", len(successIds), count, len(failedIds))
+	}
 	for idx, msgId := range successIds {
 		if idx == 0 {
 			continue
@@ -475,6 +482,7 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			utils.DisableDiskWatermark(cfg)
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -583,6 +591,11 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 
 	assert.Equal(t, 0, len(failedIds))
 	assert.Equal(t, count, len(successIds))
+	// Fail fast with a clear message instead of an index-out-of-range panic below if any
+	// write did not succeed (e.g. a rejected append), rather than indexing successIds[count-1].
+	if len(failedIds) != 0 || len(successIds) != count {
+		t.Fatalf("write incomplete: %d/%d succeeded, %d failed", len(successIds), count, len(failedIds))
+	}
 	if count != len(successIds) {
 		t.Logf("unexpected success num")
 	}
@@ -658,6 +671,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			utils.DisableDiskWatermark(cfg)
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -848,6 +862,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			utils.DisableDiskWatermark(cfg)
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -982,6 +997,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			utils.DisableDiskWatermark(cfg)
 			cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
@@ -1249,6 +1265,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			// Create initial configuration
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			utils.DisableDiskWatermark(cfg)
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
@@ -1491,6 +1508,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			// Create initial configuration
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			utils.DisableDiskWatermark(cfg)
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period

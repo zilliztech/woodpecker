@@ -84,6 +84,14 @@ func (cluster *MiniCluster) allocateUniquePort() (int, error) {
 }
 
 // StartMiniCluster starts a test mini cluster of woodpecker servers
+// DisableDiskWatermark turns off the disk-watermark backpressure for tests. The production
+// default rejects new appends under disk pressure (probabilistic throttling between the soft
+// and hard watermarks), which flakes bulk-write integration tests on disk-constrained CI
+// runners. Tests should exercise the read/write paths without that throttle.
+func DisableDiskWatermark(cfg *config.Configuration) {
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
+}
+
 func StartMiniCluster(t *testing.T, nodeCount int, baseDir string) (*MiniCluster, *config.Configuration, []string, []string) {
 	// Load base configuration
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -120,6 +128,9 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 	cfg.Woodpecker.Storage.RootPath = baseDir
 	cfg.Minio.RootPath = baseDir
 	cfg.Log.Level = "debug"
+	// Tests write in bulk; the disk-watermark backpressure would flake them on
+	// disk-constrained CI runners. Disable it for all mini-cluster (service-mode) tests.
+	DisableDiskWatermark(cfg)
 
 	cluster := &MiniCluster{
 		Servers:        make(map[int]*server.Server),
