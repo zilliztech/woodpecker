@@ -258,3 +258,16 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestErrLogStoreDiskPressure_Retryable(t *testing.T) {
+	if !IsRetryableErr(ErrLogStoreDiskPressure) {
+		t.Error("ErrLogStoreDiskPressure must be retryable")
+	}
+	st := Status(ErrLogStoreDiskPressure)
+	if !st.Retriable {
+		t.Error("Status.Retriable must be true")
+	}
+	if st.Code != 2007 {
+		t.Errorf("expected code 2007, got %d", st.Code)
+	}
+}

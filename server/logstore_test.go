@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_segment"
@@ -1242,4 +1243,82 @@ func TestLogStore_EvictLog_MarkerWriteFailure(t *testing.T) {
 	_, marked := store.deletingLogs[GetLogKey(testBucketName, testRootPath, testLogId)]
 	store.spMu.RUnlock()
 	assert.False(t, marked, "log must not be marked in memory when the durable marker write failed")
+}
+
+func TestLogStore_AddEntry_DiskPressureRejected(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil).(*logStore)
+	ls.stopped.Store(false) // bypass Start(); the gate under test sits after the stopped check
+	ls.diskRejectBps.Store(diskRejectBpsMax)
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("x")}
+	rc := channel.NewLocalResultChannel("test/disk-pressure/0")
+	id, err := ls.AddEntry(ctx, "bucket", "root", 1, entry, rc)
+	assert.Equal(t, int64(-1), id)
+	assert.True(t, werr.ErrLogStoreDiskPressure.Is(err), "expected disk-pressure error, got %v", err)
+	assert.True(t, werr.IsRetryableErr(err), "disk-pressure rejection must be retriable")
+
+	ids, batchErr := ls.AddEntryBatch(ctx, "bucket", "root", 1, 1,
+		[]*proto.LogEntry{entry}, []channel.ResultChannel{rc})
+	assert.Nil(t, ids)
+	assert.True(t, werr.ErrLogStoreDiskPressure.Is(batchErr))
+}
+
+func TestLogStore_AdmitAppend_Probabilistic(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	ls := NewLogStore(context.Background(), cfg, nil).(*logStore)
+
+	ls.diskRejectBps.Store(0)
+	for i := 0; i < 100; i++ {
+		assert.True(t, ls.admitAppend())
+	}
+	ls.diskRejectBps.Store(diskRejectBpsMax)
+	for i := 0; i < 100; i++ {
+		assert.False(t, ls.admitAppend())
+	}
+	ls.diskRejectBps.Store(5000)
+	rejected := 0
+	const trials = 10000
+	for i := 0; i < trials; i++ {
+		if !ls.admitAppend() {
+			rejected++
+		}
+	}
+	// p=0.5, n=10000: ±10σ bounds — deterministic-in-practice
+	assert.Greater(t, rejected, 4000)
+	assert.Less(t, rejected, 6000)
+}
+
+func hasMaintenanceTaskNamed(ls *logStore, name string) bool {
+	for _, task := range ls.maintenance.tasks {
+		if task.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNewLogStore_DiskWatermarkTaskRegistration(t *testing.T) {
+	ctx := context.Background()
+
+	// service mode with a root path -> registered
+	cfg, _ := config.NewConfiguration()
+	cfg.Woodpecker.Storage.Type = "service"
+	cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	ls := NewLogStore(ctx, cfg, nil).(*logStore)
+	assert.True(t, hasMaintenanceTaskNamed(ls, "disk-watermark"))
+
+	// default (minio) mode: no local WAL accumulation -> not registered
+	cfg2, _ := config.NewConfiguration()
+	ls2 := NewLogStore(ctx, cfg2, nil).(*logStore)
+	assert.False(t, hasMaintenanceTaskNamed(ls2, "disk-watermark"))
+
+	// explicitly disabled -> not registered
+	cfg3, _ := config.NewConfiguration()
+	cfg3.Woodpecker.Storage.Type = "service"
+	cfg3.Woodpecker.Storage.RootPath = t.TempDir()
+	cfg3.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
+	ls3 := NewLogStore(ctx, cfg3, nil).(*logStore)
+	assert.False(t, hasMaintenanceTaskNamed(ls3, "disk-watermark"))
 }

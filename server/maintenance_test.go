@@ -18,6 +18,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -361,4 +362,114 @@ func TestDeletedLogReclaimTask_MinioModeNoLocalButPrunes(t *testing.T) {
 	_, present := store.deletingLogs[logKey]
 	store.spMu.RUnlock()
 	assert.False(t, present, "deletingLogs gate entry should have been pruned in minio mode")
+}
+
+func newDiskWatermarkTestStore(t *testing.T) (*logStore, *diskWatermarkTask) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	cfg.Woodpecker.Storage.Type = "service"
+	cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	ls := NewLogStore(context.Background(), cfg, nil).(*logStore)
+	return ls, newDiskWatermarkTask(ls)
+}
+
+const testGi = uint64(1024 * 1024 * 1024)
+
+func TestDiskWatermarkTask_Levels(t *testing.T) {
+	ls, task := newDiskWatermarkTestStore(t)
+	ctx := context.Background()
+
+	// normal: 50% used, plenty free
+	task.usageFn = func(string) (uint64, uint64, uint64, error) { return 15 * testGi, 30 * testGi, 15 * testGi, nil }
+	require.NoError(t, task.Run(ctx))
+	assert.Equal(t, int32(0), ls.diskRejectBps.Load())
+	assert.Equal(t, diskLevelNormal, task.lastLevel)
+
+	// warn: 85% used (exact midpoint of the 0.80-0.90 throttle band)
+	task.usageFn = func(string) (uint64, uint64, uint64, error) { return 85 * testGi, 100 * testGi, 15 * testGi, nil }
+	require.NoError(t, task.Run(ctx))
+	assert.InDelta(t, 5000, ls.diskRejectBps.Load(), 2)
+	assert.Equal(t, diskLevelWarn, task.lastLevel)
+
+	// blocked: 95% used
+	task.usageFn = func(string) (uint64, uint64, uint64, error) { return 95 * testGi, 100 * testGi, 5 * testGi, nil }
+	require.NoError(t, task.Run(ctx))
+	assert.Equal(t, diskRejectBpsMax, ls.diskRejectBps.Load())
+	assert.Equal(t, diskLevelBlocked, task.lastLevel)
+
+	// recovery back to normal clears the rejection probability on the next tick
+	task.usageFn = func(string) (uint64, uint64, uint64, error) { return 15 * testGi, 30 * testGi, 15 * testGi, nil }
+	require.NoError(t, task.Run(ctx))
+	assert.Equal(t, int32(0), ls.diskRejectBps.Load())
+	assert.Equal(t, diskLevelNormal, task.lastLevel)
+}
+
+func TestDiskWatermarkTask_MinFreeFloorBlocks(t *testing.T) {
+	ls, task := newDiskWatermarkTestStore(t)
+	// ratio is low (~16%) but free (512Mi) is under the 1Gi floor -> blocked
+	task.usageFn = func(string) (uint64, uint64, uint64, error) {
+		return 100 * 1024 * 1024, 1 * testGi, 512 * 1024 * 1024, nil
+	}
+	require.NoError(t, task.Run(context.Background()))
+	assert.Equal(t, diskRejectBpsMax, ls.diskRejectBps.Load())
+	assert.Equal(t, diskLevelBlocked, task.lastLevel)
+}
+
+func TestDiskWatermarkTask_StatErrorKeepsState(t *testing.T) {
+	ls, task := newDiskWatermarkTestStore(t)
+	ctx := context.Background()
+
+	// drive to blocked
+	task.usageFn = func(string) (uint64, uint64, uint64, error) { return 95 * testGi, 100 * testGi, 5 * testGi, nil }
+	require.NoError(t, task.Run(ctx))
+	require.Equal(t, diskRejectBpsMax, ls.diskRejectBps.Load())
+
+	// transient stat error must NOT unblock (keep last state)
+	task.usageFn = func(string) (uint64, uint64, uint64, error) { return 0, 0, 0, fmt.Errorf("statfs boom") }
+	require.NoError(t, task.Run(ctx))
+	assert.Equal(t, diskRejectBpsMax, ls.diskRejectBps.Load())
+}
+
+func TestDiskRejectBpsFor(t *testing.T) {
+	p := config.DiskWatermarkPolicyConfig{
+		Enabled: true, SoftThresholdRatio: 0.80, HardThresholdRatio: 0.90,
+		MinFreeBytes: config.ByteSize(1024), ThrottleEnabled: true,
+	}
+	assert.Equal(t, int32(0), diskRejectBpsFor(0.50, 1<<30, p))
+	assert.Equal(t, int32(0), diskRejectBpsFor(0.7999, 1<<30, p))
+	assert.InDelta(t, 0, diskRejectBpsFor(0.80, 1<<30, p), 2)    // ramp start
+	assert.InDelta(t, 5000, diskRejectBpsFor(0.85, 1<<30, p), 2) // midpoint
+	assert.InDelta(t, 9000, diskRejectBpsFor(0.89, 1<<30, p), 2) // near hard
+	assert.Equal(t, diskRejectBpsMax, diskRejectBpsFor(0.90, 1<<30, p))
+	assert.Equal(t, diskRejectBpsMax, diskRejectBpsFor(0.95, 1<<30, p))
+	assert.Equal(t, diskRejectBpsMax, diskRejectBpsFor(0.10, 1024, p)) // min-free floor wins
+
+	p.ThrottleEnabled = false // two-state mode: nothing in the band, hard still blocks
+	assert.Equal(t, int32(0), diskRejectBpsFor(0.85, 1<<30, p))
+	assert.Equal(t, diskRejectBpsMax, diskRejectBpsFor(0.90, 1<<30, p))
+
+	p.ThrottleEnabled = true
+	p.HardThresholdRatio = 0.80 // soft==hard: empty band, no division by zero
+	assert.Equal(t, diskRejectBpsMax, diskRejectBpsFor(0.80, 1<<30, p))
+	assert.Equal(t, int32(0), diskRejectBpsFor(0.79, 1<<30, p))
+}
+
+func TestDiskWatermarkTask_WarnCooldown(t *testing.T) {
+	ls, task := newDiskWatermarkTestStore(t)
+	_ = ls
+	ctx := context.Background()
+
+	task.usageFn = func(string) (uint64, uint64, uint64, error) { return 85 * testGi, 100 * testGi, 15 * testGi, nil }
+	require.NoError(t, task.Run(ctx))
+	firstWarnAt := task.lastWarnAt
+	assert.False(t, firstWarnAt.IsZero(), "first warn must stamp lastWarnAt")
+
+	// same level within cooldown: no re-log (lastWarnAt unchanged)
+	require.NoError(t, task.Run(ctx))
+	assert.Equal(t, firstWarnAt, task.lastWarnAt)
+
+	// level escalation logs immediately even within cooldown
+	task.usageFn = func(string) (uint64, uint64, uint64, error) { return 95 * testGi, 100 * testGi, 5 * testGi, nil }
+	require.NoError(t, task.Run(ctx))
+	assert.NotEqual(t, firstWarnAt, task.lastWarnAt, "level change must re-stamp lastWarnAt")
 }
