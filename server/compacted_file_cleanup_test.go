@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
@@ -58,6 +59,15 @@ func makeSegmentDir(t *testing.T, root, bucket, rootPath string, logId, segId in
 
 func footerKeyFor(rootPath string, logId, segId int64) string {
 	return fmt.Sprintf("%s/%d/%d/footer.blk", rootPath, logId, segId)
+}
+
+// ageDataLog backdates the segment's data.log mtime by `age` so it clears the reconcile
+// min-data-log-age gate (the default config sets a 30m window, so reconcile tests must age
+// their data.log to exercise the footer HEAD / mark-writing path).
+func ageDataLog(t *testing.T, segDir string, age time.Duration) {
+	t.Helper()
+	old := time.Now().Add(-age)
+	require.NoError(t, os.Chtimes(filepath.Join(segDir, "data.log"), old, old))
 }
 
 // TestCompactedFileCleanup_MarkedAndFooterPresent_DropsLocalData verifies row 1 of the
@@ -120,6 +130,7 @@ func TestCompactedFileCleanup_UnmarkedAndFooterPresent_ReconcileWritesMark(t *te
 	bucket, rp := "b", "rp"
 	logId, segId := int64(12), int64(4)
 	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	ageDataLog(t, segDir, time.Hour) // old enough to clear the reconcile min-age gate
 	require.False(t, hasCompactedMark(segDir))
 
 	mockStorage.EXPECT().
@@ -144,6 +155,7 @@ func TestCompactedFileCleanup_UnmarkedAndFooterAbsent_NothingChanges(t *testing.
 	bucket, rp := "b", "rp"
 	logId, segId := int64(13), int64(5)
 	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	ageDataLog(t, segDir, time.Hour) // old enough to clear the reconcile min-age gate
 
 	mockStorage.EXPECT().
 		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "13").
@@ -153,6 +165,26 @@ func TestCompactedFileCleanup_UnmarkedAndFooterAbsent_NothingChanges(t *testing.
 	require.NoError(t, task.runOnce(ctx, true)) // reconcile pass
 
 	assert.False(t, hasCompactedMark(segDir), "no mark should be written")
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.NoError(t, statErr, "data.log should be untouched")
+}
+
+// TestCompactedFileCleanup_ReconcileSkipsFreshDataLog verifies the reconcile min-age gate:
+// on a reconcile pass, an unmarked segment whose data.log is still fresh (within the
+// default 30m min-age window) is skipped WITHOUT a footer HEAD. No StatObject expectation
+// is set, so mockery's strict mode fails the test if a HEAD is issued; and no mark is written.
+func TestCompactedFileCleanup_ReconcileSkipsFreshDataLog(t *testing.T) {
+	store, root, _ := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(14), int64(6)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId) // fresh mtime (now)
+
+	task := newCompactedFileCleanupTask(store)
+	require.NoError(t, task.runOnce(ctx, true)) // reconcile pass, but data.log is too fresh to HEAD
+
+	assert.False(t, hasCompactedMark(segDir), "fresh data.log must not be marked (reconcile age gate)")
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.NoError(t, statErr, "data.log should be untouched")
 }

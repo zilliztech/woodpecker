@@ -87,6 +87,7 @@ func (t *compactedFileCleanupTask) runOnce(ctx context.Context, doReconcile bool
 	if root == "" {
 		return nil
 	}
+	reconcileMinAge := t.store.cfg.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Duration.Duration()
 
 	if doReconcile {
 		logger.Ctx(ctx).Info("compacted-file-cleanup: running reconcile pass (unmarked segments footer HEAD)")
@@ -137,6 +138,22 @@ func (t *compactedFileCleanupTask) runOnce(ctx context.Context, doReconcile bool
 			// Not marked, and this isn't a reconcile pass: skip the footer HEAD to
 			// bound object-storage request cost.
 			continue
+		}
+
+		// Age gate: only reconcile (HEAD) a data.log that has been idle long enough to be
+		// certainly compacted, so we don't waste HEADs on segments still in the
+		// write->roll->compact pipeline. A future mtime (clock skew) yields a negative age
+		// and is likewise treated as too-fresh. Disabled when reconcileMinAge <= 0.
+		if reconcileMinAge > 0 {
+			info, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+			if statErr != nil {
+				continue // gone or unreadable; nothing to reconcile
+			}
+			if age := time.Since(info.ModTime()); age < reconcileMinAge {
+				logger.Ctx(ctx).Debug("compacted-file-cleanup: reconcile skipping fresh data.log (within min-age window)",
+					zap.String("segDir", segDir), zap.Duration("age", age), zap.Duration("minAge", reconcileMinAge))
+				continue
+			}
 		}
 
 		footer, statErr := t.footerExistsInMinio(ctx, bucket, rootPath, logId, segId)

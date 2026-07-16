@@ -379,6 +379,14 @@ type MaintenanceStrategyConfig struct {
 	// much lower cadence than this to bound object-storage request cost; see
 	// reconcileEveryNPasses in server/compacted_file_cleanup.go.
 	CompactedFileCleanupInterval DurationSeconds `yaml:"compactedFileCleanupInterval"`
+	// ReconcileMinDataLogAge gates the pull-based reconcile: the footer HEAD for an
+	// unmarked segment only runs once its local data.log has been idle (unmodified) for at
+	// least this long. Default 30m — comfortably past the client's segment roll interval
+	// plus compaction/upload time — so the reconcile only acts on data.log files old enough
+	// to be certainly compacted, avoiding wasted object-storage HEADs on segments still in
+	// the write->roll->compact pipeline. It does NOT gate the marked/push delete path (push
+	// is the intended fast reclaim). A value <= 0 disables the age gate.
+	ReconcileMinDataLogAge DurationSeconds `yaml:"reconcileMinDataLogAge"`
 }
 
 // NodeSelectionPolicyConfig controls load-aware quorum node selection (issue #114).
@@ -899,6 +907,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				DeleteGracePeriod:            DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
 				DeleteReclaimInterval:        DurationSeconds{Duration: Duration{duration: 2 * time.Second}},
 				CompactedFileCleanupInterval: DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
+				ReconcileMinDataLogAge:       DurationSeconds{Duration: Duration{duration: 30 * time.Minute}},
 			},
 			NodeSelectionPolicy: NodeSelectionPolicyConfig{
 				LoadAwareEnabled:   true,
