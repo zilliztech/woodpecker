@@ -1453,8 +1453,12 @@ func TestStagedReader_LocalAbsent(t *testing.T) {
 		Return(&readerMockFileReader{data: blockData}, nil)
 
 	// Deliberately do NOT create the local data.log file — only the segment directory
-	// exists (as NewStagedFileReaderAdv itself creates it via os.MkdirAll).
+	// exists. A compacted tombstone mark is present (segment durably compacted, local
+	// data.log reclaimed), so the reader must serve from object storage.
 	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), []byte("{}"), 0o644))
 	filePath := getSegmentFilePath(localBaseDir, logId, segId)
 	_, statErr := os.Stat(filePath)
 	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
@@ -1485,10 +1489,10 @@ func TestStagedReader_LocalAbsent(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErrAfter), "local staged file must not be re-created by the minio fallback path")
 }
 
-// TestStagedReader_LocalAbsent_NoMinioFooter verifies that when the local staged file is
-// absent AND there is no compacted footer in minio either, NewStagedFileReaderAdv returns
-// ErrEntryNotFound (genuinely not found — nothing to read from either source).
-func TestStagedReader_LocalAbsent_NoMinioFooter(t *testing.T) {
+// TestStagedReader_LocalAbsent_MarkPresentButNoFooter verifies that when the local staged
+// file is absent but a compacted tombstone mark IS present, the reader consults object
+// storage; if the footer is unexpectedly absent there, it returns ErrEntryNotFound.
+func TestStagedReader_LocalAbsent_MarkPresentButNoFooter(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
@@ -1497,9 +1501,35 @@ func TestStagedReader_LocalAbsent_NoMinioFooter(t *testing.T) {
 	logId := int64(101)
 	segId := int64(101)
 
-	// Mock StatObject for footer — not found in minio either.
+	// Mark present -> the reader DOES consult object storage; footer absent there.
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), []byte("{}"), 0o644))
+	filePath := getSegmentFilePath(localBaseDir, logId, segId)
+	_, statErr := os.Stat(filePath)
+	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	assert.Nil(t, reader)
+	assert.ErrorIs(t, err, werr.ErrEntryNotFound)
+}
+
+// TestStagedReader_LocalAbsent_NoMark_NoMinioCall verifies the cost-saving tombstone gate:
+// when both the local staged file AND the compacted mark are absent, NewStagedFileReaderAdv
+// returns ErrEntryNotFound WITHOUT any object-storage call. The mock has no StatObject
+// expectation, so mockery's strict mode fails the test if a HEAD is issued.
+func TestStagedReader_LocalAbsent_NoMark_NoMinioCall(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	logId := int64(102)
+	segId := int64(102)
 
 	localBaseDir := filepath.Join(dir, "local")
 	filePath := getSegmentFilePath(localBaseDir, logId, segId)

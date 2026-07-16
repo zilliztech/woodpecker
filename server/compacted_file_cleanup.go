@@ -177,9 +177,12 @@ func (t *compactedFileCleanupTask) runOnce(ctx context.Context, doReconcile bool
 	return nil
 }
 
-// dropSegmentLocalData removes the segment's local data.log, evicts any cached segment
-// reader so subsequent reads rebuild against minio, removes the compacted mark, and
-// best-effort prunes the segment directory if it is now empty.
+// dropSegmentLocalData removes the segment's local data.log and evicts any cached segment
+// reader so subsequent reads rebuild against object storage. The compacted mark is KEPT as a
+// durable tombstone (and the segment directory is left in place): it lets a later reader tell
+// "compacted -> serve from object storage" from "no data here" without an object-storage
+// HEAD. The tombstone is removed only when the segment is fully truncated/deleted (the
+// truncate/delete GC path removes the mark and the directory).
 func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, segDir, bucket, rootPath string, logId, segId int64) {
 	dataLogPath := filepath.Join(segDir, "data.log")
 	if rmErr := os.Remove(dataLogPath); rmErr != nil && !os.IsNotExist(rmErr) {
@@ -193,17 +196,10 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 			zap.String("segDir", segDir), zap.Error(evictErr))
 	}
 
-	if rmErr := removeCompactedMark(ctx, segDir); rmErr != nil {
-		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to remove compacted mark after data.log removal",
-			zap.String("segDir", segDir), zap.Error(rmErr))
-	}
-
-	// Best-effort: prune the now-empty segment directory. Ignore "not empty" (and any
-	// other) error — an empty leftover dir is harmless and will be retried/reconciled
-	// on future passes or cleaned up by the truncate GC path.
-	_ = os.Remove(segDir)
-
-	logger.Ctx(ctx).Info("compacted-file-cleanup: removed local data.log for durably compacted segment",
+	// The compacted.mark is intentionally KEPT (tombstone) and the segment dir is left in
+	// place, so a reader that opens this segment after the data.log is gone can serve it
+	// from object storage without an object-storage HEAD.
+	logger.Ctx(ctx).Info("compacted-file-cleanup: removed local data.log for durably compacted segment (mark kept as tombstone)",
 		zap.String("segDir", segDir), zap.Int64("logId", logId), zap.Int64("segId", segId))
 }
 

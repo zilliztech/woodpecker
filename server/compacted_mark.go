@@ -27,12 +27,15 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 )
 
-// compactedMarkFileName marks a staged segment whose data is durably compacted in
-// object storage, authorizing the compacted-file-cleanup task to drop its local data.log.
-// Distinct from the truncate/delete `.deleted` marker system.
-const compactedMarkFileName = "compacted.mark"
+// compactedMarkFileName is the tombstone marking a staged segment whose data is durably
+// compacted in object storage. It authorizes dropping the local data.log and, kept after
+// that drop, lets a reader serve the segment from object storage without an object-storage
+// HEAD. Distinct from the truncate/delete `.deleted` marker system. The single source of
+// truth for the filename lives in the storage layer (stagedstorage.CompactedMarkFileName).
+const compactedMarkFileName = stagedstorage.CompactedMarkFileName
 
 func compactedMarkPath(segmentDir string) string {
 	return filepath.Join(segmentDir, compactedMarkFileName)

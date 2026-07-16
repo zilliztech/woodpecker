@@ -283,10 +283,13 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 		// Determine what to delete based on flag and file type
 		switch flag {
 		case 0:
-			// Delete all segment-related files
+			// Delete all segment-related files, including the compacted tombstone mark.
+			// This truncate/delete path is the only place that removes the mark; the
+			// compacted-file-cleanup GC keeps it as a tombstone after dropping data.log.
 			shouldDelete = strings.HasSuffix(fileName, ".log") ||
 				strings.HasSuffix(fileName, ".lock") ||
-				strings.HasSuffix(fileName, ".fence")
+				strings.HasSuffix(fileName, ".fence") ||
+				strings.HasSuffix(fileName, ".mark")
 		case 1, 2:
 			// For partial deletion, only delete .log files (main segment data)
 			shouldDelete = strings.HasSuffix(fileName, ".log")
@@ -329,6 +332,13 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 		zap.String("segmentDir", rs.segmentDir),
 		zap.Int("deletedCount", deletedCount),
 		zap.Int("errorCount", len(deleteErrors)))
+
+	// On a full delete (flag 0), best-effort prune the now-empty segment directory so a
+	// compacted-tombstone dir (mark removed just above) does not linger. Ignore a
+	// "not empty" or any other error.
+	if flag == 0 && len(deleteErrors) == 0 {
+		_ = os.Remove(rs.segmentDir)
+	}
 
 	if len(deleteErrors) > 0 {
 		return deletedCount, fmt.Errorf("failed to delete %d local files", len(deleteErrors))

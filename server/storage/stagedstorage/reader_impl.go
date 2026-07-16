@@ -110,10 +110,19 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Local staged file is gone (e.g. dropped after compaction). Fall back to the
-			// minio compacted footer; if present, serve reads from object storage with no
-			// local file handle and no local re-caching.
-			logger.Ctx(ctx).Debug("local staged file does not exist, trying minio compacted footer",
+			// Local staged data.log is gone. Distinguish "compacted -> served from object
+			// storage" from "genuinely no data on this node" using the durable compacted
+			// tombstone mark, so a genuinely-absent segment costs no object-storage HEAD.
+			// (A replica that never held this segment locally has no mark and returns
+			// not-found; the client retries another quorum replica, which is expected.)
+			if !HasCompactedMark(segmentDir) {
+				logger.Ctx(ctx).Debug("local staged file absent and no compacted mark, returning ErrEntryNotFound",
+					zap.String("filePath", filePath))
+				return nil, werr.ErrEntryNotFound
+			}
+			// Mark present: the segment is durably compacted. Serve reads from object
+			// storage with no local file handle and no local re-caching.
+			logger.Ctx(ctx).Debug("local staged file absent but compacted mark present, reading from minio compacted footer",
 				zap.String("filePath", filePath))
 			r := &StagedFileReaderAdv{
 				logId:           logId,

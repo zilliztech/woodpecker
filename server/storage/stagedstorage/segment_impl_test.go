@@ -95,6 +95,33 @@ func TestDeleteFileData_EmptyDir(t *testing.T) {
 	assert.Equal(t, 0, deleteCount)
 }
 
+func TestDeleteFileData_RemovesCompactedMarkAndPrunesDir(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	logId := int64(7)
+	segId := int64(3)
+	segmentDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segmentDir, 0o755))
+	// A compacted tombstone mark left behind after the compacted-file-cleanup GC dropped
+	// data.log. The full-delete (truncate) path must remove it and prune the dir.
+	markPath := filepath.Join(segmentDir, CompactedMarkFileName)
+	require.NoError(t, os.WriteFile(markPath, []byte("{}"), 0o644))
+
+	client := mocks_objectstorage.NewObjectStorage(t)
+	client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", mock.Anything, false, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	seg := NewStagedSegmentImpl(context.Background(), "test-bucket", "test-root", dir, logId, segId, client, cfg)
+
+	_, err = seg.DeleteFileData(context.Background(), 0)
+	assert.NoError(t, err)
+	assert.NoFileExists(t, markPath, "compacted tombstone mark must be removed on full delete")
+	_, dirErr := os.Stat(segmentDir)
+	assert.True(t, os.IsNotExist(dirErr), "segment dir should be pruned after full delete")
+}
+
 func TestDeleteFileData_NonExistentLocalDir(t *testing.T) {
 	dir := t.TempDir()
 	nonExistDir := filepath.Join(dir, "nonexist")

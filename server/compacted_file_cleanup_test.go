@@ -71,8 +71,9 @@ func ageDataLog(t *testing.T, segDir string, age time.Duration) {
 }
 
 // TestCompactedFileCleanup_MarkedAndFooterPresent_DropsLocalData verifies row 1 of the
-// decision matrix: marked + footer present -> data.log removed, mark removed, reader
-// evicted, and the now-empty segment dir pruned.
+// decision matrix: marked + footer present -> data.log removed and reader evicted, with the
+// compacted mark KEPT as a tombstone (dir left in place) so a later reader can serve the
+// segment from object storage without an object-storage HEAD.
 func TestCompactedFileCleanup_MarkedAndFooterPresent_DropsLocalData(t *testing.T) {
 	store, root, mockStorage := setupCompactedCleanupStore(t)
 	ctx := context.Background()
@@ -91,9 +92,9 @@ func TestCompactedFileCleanup_MarkedAndFooterPresent_DropsLocalData(t *testing.T
 
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.True(t, os.IsNotExist(statErr), "data.log should have been removed")
-	assert.False(t, hasCompactedMark(segDir), "compacted mark should have been removed")
+	assert.True(t, hasCompactedMark(segDir), "compacted mark should be KEPT as a tombstone")
 	_, dirStatErr := os.Stat(segDir)
-	assert.True(t, os.IsNotExist(dirStatErr), "now-empty segment dir should have been pruned")
+	assert.NoError(t, dirStatErr, "segment dir should be kept (it holds the tombstone mark)")
 }
 
 // TestCompactedFileCleanup_MarkedButFooterAbsent_NeverDeletesData verifies row 2 (the
