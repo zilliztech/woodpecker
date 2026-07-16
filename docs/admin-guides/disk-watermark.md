@@ -43,10 +43,13 @@ WAL disk demand ≈ peak ingest rate × `woodpecker.logstore.retentionPolicy.ttl
 steady state, either:
 
 1. **Expand the PVC** (preferred for sustained higher ingest), or
-2. **Lower `woodpecker.logstore.retentionPolicy.ttl`** so truncated segments are
+2. **Scale out logstore nodes** — new nodes bind fresh PVCs, quorum selection
+   places new segments on them, and the pressured node drains naturally as its
+   existing segments compact to object storage and get reclaimed, or
+3. **Lower `woodpecker.logstore.retentionPolicy.ttl`** so truncated segments are
    reclaimed sooner (data already compacted to object storage does not need long
-   local retention), or
-3. Reduce ingest (upstream rate limiting).
+   local retention) — note this shortens local retention, or
+4. Reduce ingest (upstream rate limiting).
 
 To disable write rejection entirely and keep only the warn stage, set
 `throttleEnabled: false`, `hardThresholdRatio: 1.0`, and `minFreeBytes: 0`;

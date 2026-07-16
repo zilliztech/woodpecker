@@ -340,7 +340,7 @@ func (t *diskWatermarkTask) Run(ctx context.Context) error {
 	now := time.Now()
 	switch {
 	case level > diskLevelNormal && (level != t.lastLevel || now.Sub(t.lastWarnAt) >= diskWatermarkWarnCooldown):
-		logger.Ctx(ctx).Warn("local WAL disk usage high: expand the PVC or lower woodpecker.logstore.retentionPolicy.ttl",
+		logger.Ctx(ctx).Warn("local WAL disk usage high: expand the PVC or scale out logstore nodes to bind new PVCs",
 			zap.String("path", t.path),
 			zap.Float64("usedRatio", ratio),
 			zap.Uint64("freeBytes", free),
