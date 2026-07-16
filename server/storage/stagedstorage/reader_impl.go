@@ -110,10 +110,47 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// File doesn't exist yet, return entry not found
-			logger.Ctx(ctx).Debug("file does not exist, returning ErrEntryNotFound",
+			// Local staged file is gone (e.g. dropped after compaction). Fall back to the
+			// minio compacted footer; if present, serve reads from object storage with no
+			// local file handle and no local re-caching.
+			logger.Ctx(ctx).Debug("local staged file does not exist, trying minio compacted footer",
 				zap.String("filePath", filePath))
-			return nil, werr.ErrEntryNotFound
+			r := &StagedFileReaderAdv{
+				logId:           logId,
+				segId:           segId,
+				logIdStr:        strconv.FormatInt(logId, 10),
+				logNs:           bucket + "/" + rootPath,
+				filePath:        filePath,
+				maxBatchSize:    maxBatchSize,
+				file:            nil,
+				bucket:          bucket,
+				rootPath:        rootPath,
+				maxFetchThreads: maxFetchThreads,
+				pool:            conc.NewPool[*BlockReadResult](maxFetchThreads),
+				storageCli:      storageCli,
+			}
+			r.flags.Store(0)
+			r.version.Store(codec.FormatVersion)
+			r.closed.Store(false)
+			r.lastAddConfirmed.Store(-1)
+
+			r.isIncompleteFile.Store(true)
+			if perr := r.tryParseMinioFooterUnsafe(ctx); perr != nil || r.isIncompleteFile.Load() {
+				// no local file, no minio footer => genuinely not found
+				logger.Ctx(ctx).Debug("no local staged file and no minio compacted footer, returning ErrEntryNotFound",
+					zap.String("filePath", filePath))
+				if r.pool != nil {
+					r.pool.Release()
+				}
+				return nil, werr.ErrEntryNotFound
+			}
+
+			metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Inc()
+			logger.Ctx(ctx).Info("local staged file absent, serving reads from minio compacted footer",
+				zap.String("filePath", filePath),
+				zap.Int64("logId", logId),
+				zap.Int64("segId", segId))
+			return r, nil
 		}
 		logger.Ctx(ctx).Warn("failed to open file for reading",
 			zap.String("filePath", filePath),
@@ -379,6 +416,13 @@ func (r *StagedFileReaderAdv) tryParseLocalFooterUnsafe(ctx context.Context) err
 
 	logger.Ctx(ctx).Debug("trying to parse footer from staged local file", zap.String("filePath", r.filePath))
 
+	if r.file == nil {
+		// Defensive guard: this fallback path is only meaningful when a local file was
+		// opened. A compacted (minio-backed) reader resolves its footer in
+		// tryParseMinioFooterUnsafe and never reaches here in normal operation.
+		return werr.ErrEntryNotFound.WithCauseErrMsg("no local file to parse footer from")
+	}
+
 	stat, err := r.file.Stat()
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to stat staged local file",
@@ -606,6 +650,13 @@ func (r *StagedFileReaderAdv) readAtUnsafe(ctx context.Context, offset int64, le
 		zap.Int("length", length),
 		zap.String("filePath", r.filePath))
 
+	if r.file == nil {
+		// Defensive guard: the compacted (minio-backed) reader path never has a local file
+		// and never reaches here in normal operation; this only protects against future
+		// call-path mistakes.
+		return nil, werr.ErrEntryNotFound
+	}
+
 	if offset < 0 || length < 0 {
 		return nil, fmt.Errorf("invalid read parameters: offset=%d, length=%d", offset, length)
 	}
@@ -680,6 +731,13 @@ func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) err
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanForAllBlockInfo")
 	defer sp.End()
 	startTime := time.Now()
+
+	if r.file == nil {
+		// Defensive guard: raw-scan is only meaningful for a local file. A compacted
+		// (minio-backed) reader always has a footer (isIncompleteFile=false) and never
+		// reaches here in normal operation.
+		return werr.ErrEntryNotFound.WithCauseErrMsg("no local file to scan")
+	}
 
 	// Get current file stat
 	stat, err := r.file.Stat()
@@ -1108,6 +1166,13 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "isFooterExists")
 	defer sp.End()
+
+	if r.file == nil {
+		// Defensive guard: only meaningful for a local file. A compacted (minio-backed)
+		// reader never reaches here in normal operation (isCompacted short-circuits in
+		// readDataBlocksUnsafe before this is called).
+		return false
+	}
 
 	// update size
 	stat, err := r.file.Stat()

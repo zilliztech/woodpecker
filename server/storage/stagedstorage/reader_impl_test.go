@@ -1377,6 +1377,140 @@ func TestStagedFileReaderAdv_ReadCompactedDataFromMinio(t *testing.T) {
 	assert.Equal(t, int64(4), result.Entries[4].EntryId)
 }
 
+// === NewStagedFileReaderAdv local-file-absent fallback to minio (R1) ===
+
+// TestStagedReader_LocalAbsent verifies that when the local staged data.log file has been
+// removed (e.g. after compaction cleanup), NewStagedFileReaderAdv falls back to reading the
+// compacted footer + blocks from minio instead of immediately returning ErrEntryNotFound.
+// It also asserts that no local file is created (no re-caching to local disk).
+func TestStagedReader_LocalAbsent(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	logId := int64(100)
+	segId := int64(100)
+
+	// Build valid footer data (compacted, 1 block, 5 entries)
+	blockIndex := &codec.IndexRecord{
+		BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4,
+	}
+	footer := &codec.FooterRecord{
+		TotalBlocks:  1,
+		TotalRecords: 5,
+		TotalSize:    200,
+		IndexLength:  uint32(codec.RecordHeaderSize + codec.IndexRecordSize),
+		Version:      codec.FormatVersion,
+		Flags:        codec.SetCompacted(0),
+		LAC:          4,
+	}
+
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(blockIndex))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+
+	footerKey := "test-root/100/100/footer.blk"
+
+	// Mock StatObject for footer
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+
+	// Mock GetObject for footer
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	// Build valid compacted block data for m_0.blk
+	var blockBuf bytes.Buffer
+	headerRecord := &codec.HeaderRecord{
+		Version:      codec.FormatVersion,
+		Flags:        codec.SetCompacted(0),
+		FirstEntryID: 0,
+	}
+	blockBuf.Write(codec.EncodeRecord(headerRecord))
+
+	dataRecords := make([]codec.Record, 0, 5)
+	for i := 0; i < 5; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	blockDataOnly := encodeRecordList(dataRecords)
+	blockHeaderRecord := &codec.BlockHeaderRecord{
+		BlockNumber:  0,
+		FirstEntryID: 0,
+		LastEntryID:  4,
+		BlockLength:  uint32(len(blockDataOnly)),
+		BlockCrc:     crc32.ChecksumIEEE(blockDataOnly),
+	}
+	blockBuf.Write(codec.EncodeRecord(blockHeaderRecord))
+	blockBuf.Write(blockDataOnly)
+	blockData := blockBuf.Bytes()
+
+	blockKey := "test-root/100/100/m_0.blk"
+
+	// Mock GetObject for block data
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", blockKey, int64(0), mock.Anything, mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: blockData}, nil)
+
+	// Deliberately do NOT create the local data.log file — only the segment directory
+	// exists (as NewStagedFileReaderAdv itself creates it via os.MkdirAll).
+	localBaseDir := filepath.Join(dir, "local")
+	filePath := getSegmentFilePath(localBaseDir, logId, segId)
+	_, statErr := os.Stat(filePath)
+	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+
+	// Reader should be a compacted, minio-backed reader with no local file handle.
+	assert.True(t, reader.isCompacted.Load())
+	assert.False(t, reader.isIncompleteFile.Load())
+	assert.Nil(t, reader.file)
+
+	opt := storage.ReaderOpt{
+		StartEntryID:    0,
+		MaxBatchEntries: 10,
+	}
+
+	result, err := reader.ReadNextBatchAdv(context.Background(), opt, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 5, len(result.Entries))
+	assert.Equal(t, int64(0), result.Entries[0].EntryId)
+	assert.Equal(t, int64(4), result.Entries[4].EntryId)
+
+	// Assert no local file was created (no re-caching to local disk).
+	_, statErrAfter := os.Stat(filePath)
+	assert.True(t, os.IsNotExist(statErrAfter), "local staged file must not be re-created by the minio fallback path")
+}
+
+// TestStagedReader_LocalAbsent_NoMinioFooter verifies that when the local staged file is
+// absent AND there is no compacted footer in minio either, NewStagedFileReaderAdv returns
+// ErrEntryNotFound (genuinely not found — nothing to read from either source).
+func TestStagedReader_LocalAbsent_NoMinioFooter(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	logId := int64(101)
+	segId := int64(101)
+
+	// Mock StatObject for footer — not found in minio either.
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
+
+	localBaseDir := filepath.Join(dir, "local")
+	filePath := getSegmentFilePath(localBaseDir, logId, segId)
+	_, statErr := os.Stat(filePath)
+	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	assert.Nil(t, reader)
+	assert.ErrorIs(t, err, werr.ErrEntryNotFound)
+}
+
 // === extractEntriesFromBlockData / extractEntriesFromBlockDataWithBytes ===
 
 func TestStagedFileReaderAdv_ExtractEntriesFromBlockData(t *testing.T) {
