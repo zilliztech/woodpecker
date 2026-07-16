@@ -29,9 +29,8 @@ import (
 
 	"go.uber.org/zap"
 
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
-
 	"github.com/zilliztech/woodpecker/common/logger"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 )
 
 // reconcileEveryNPasses throttles the pull-based reconcile branch (footer HEAD for

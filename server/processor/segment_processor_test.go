@@ -339,6 +339,7 @@ func TestSegmentProcessor_InvalidateReader_DoesNotHoldLockAcrossClose(t *testing
 		locked := make(chan struct{})
 		go func() {
 			sp.RLock()
+			_ = sp.currentSegmentReader // read the guarded field so the critical section isn't empty (SA2001)
 			sp.RUnlock()
 			close(locked)
 		}()
