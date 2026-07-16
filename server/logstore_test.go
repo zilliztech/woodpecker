@@ -1066,6 +1066,60 @@ func TestLogStore_HasLocalSegmentData_OnlyManagementFiles(t *testing.T) {
 	assert.False(t, ls.HasLocalSegmentData())
 }
 
+func TestLogStore_HasLocalSegmentData_MarkedSegmentIgnored(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Segment has a non-empty data.log AND a compacted.mark — its data.log is
+	// redundant (durably compacted, awaiting physical GC) and must not block
+	// decommission.
+	segDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("staged data"), 0o644))
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	assert.False(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_HasLocalSegmentData_UnmarkedSegmentBlocks(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Non-empty data.log with no compacted.mark still blocks decommission.
+	segDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("staged data"), 0o644))
+
+	assert.True(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_HasLocalSegmentData_MixedMarkedAndUnmarked(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Segment 0: marked — should be ignored.
+	markedDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(markedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(markedDir, "data.log"), []byte("staged data"), 0o644))
+	require.NoError(t, writeCompactedMark(ctx, markedDir))
+
+	// Segment 1: unmarked — still blocks decommission.
+	unmarkedDir := filepath.Join(dir, "1", "1")
+	require.NoError(t, os.MkdirAll(unmarkedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(unmarkedDir, "data.log"), []byte("staged data"), 0o644))
+
+	assert.True(t, ls.HasLocalSegmentData())
+}
+
 // === EvictLog / EvictInstance tests ===
 
 func TestLogStore_EvictLog_RejectsServing(t *testing.T) {

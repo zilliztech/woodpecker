@@ -735,6 +735,12 @@ func (l *logStore) HasLocalSegmentData() bool {
 		if d.Name() == "data.log" {
 			info, statErr := d.Info()
 			if statErr == nil && info.Size() > 0 {
+				if hasCompactedMark(filepath.Dir(path)) {
+					// Already durably compacted in object storage; this data.log is
+					// redundant and scheduled for physical GC. Don't let it block
+					// decommission — keep walking for other, un-marked segments.
+					return nil
+				}
 				found = true
 				return filepath.SkipAll // stop walking, we found data
 			}
