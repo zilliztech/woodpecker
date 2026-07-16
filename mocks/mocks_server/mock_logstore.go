@@ -942,6 +942,56 @@ func (_c *LogStore_EvictInstance_Call) RunAndReturn(run func(context.Context, st
 	return _c
 }
 
+// EvictSegmentReader provides a mock function with given fields: ctx, bucketName, rootPath, logId, segId
+func (_m *LogStore) EvictSegmentReader(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for EvictSegmentReader")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) error); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segId)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStore_EvictSegmentReader_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'EvictSegmentReader'
+type LogStore_EvictSegmentReader_Call struct {
+	*mock.Call
+}
+
+// EvictSegmentReader is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
+//   - logId int64
+//   - segId int64
+func (_e *LogStore_Expecter) EvictSegmentReader(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segId interface{}) *LogStore_EvictSegmentReader_Call {
+	return &LogStore_EvictSegmentReader_Call{Call: _e.mock.On("EvictSegmentReader", ctx, bucketName, rootPath, logId, segId)}
+}
+
+func (_c *LogStore_EvictSegmentReader_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64)) *LogStore_EvictSegmentReader_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStore_EvictSegmentReader_Call) Return(_a0 error) *LogStore_EvictSegmentReader_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStore_EvictSegmentReader_Call) RunAndReturn(run func(context.Context, string, string, int64, int64) error) *LogStore_EvictSegmentReader_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewLogStore creates a new instance of LogStore. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewLogStore(t interface {

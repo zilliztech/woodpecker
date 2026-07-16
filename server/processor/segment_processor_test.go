@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -297,6 +298,141 @@ func TestSegmentProcessor_ReadBatchEntriesAdv_OtherError(t *testing.T) {
 	batch, err := sp.ReadBatchEntriesAdv(context.Background(), 0, 100, nil)
 	assert.Error(t, err)
 	assert.Nil(t, batch)
+}
+
+// === InvalidateReader Tests ===
+
+func TestSegmentProcessor_InvalidateReader_ClosesAndClearsCachedReader(t *testing.T) {
+	sp := newTestProcessor(t)
+	mockReader := mocks_storage.NewReader(t)
+	mockReader.EXPECT().Close(mock.Anything).Return(nil).Once()
+	sp.currentSegmentReader = mockReader
+
+	sp.InvalidateReader(context.Background())
+
+	sp.RLock()
+	cached := sp.currentSegmentReader
+	sp.RUnlock()
+	assert.Nil(t, cached, "currentSegmentReader must be nil after InvalidateReader")
+}
+
+func TestSegmentProcessor_InvalidateReader_NilReaderIsNoop(t *testing.T) {
+	sp := newTestProcessor(t)
+	// No reader cached; must not panic and must remain nil.
+	sp.InvalidateReader(context.Background())
+
+	sp.RLock()
+	cached := sp.currentSegmentReader
+	sp.RUnlock()
+	assert.Nil(t, cached)
+}
+
+func TestSegmentProcessor_InvalidateReader_DoesNotHoldLockAcrossClose(t *testing.T) {
+	sp := newTestProcessor(t)
+	mockReader := mocks_storage.NewReader(t)
+	closeCalled := make(chan struct{})
+	mockReader.EXPECT().Close(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		// If InvalidateReader still held s.Lock() here, this attempt to take the
+		// read lock (from another goroutine, simulated inline) would deadlock.
+		// We assert this indirectly: a concurrent RLock attempt must succeed
+		// promptly while Close is executing.
+		locked := make(chan struct{})
+		go func() {
+			sp.RLock()
+			sp.RUnlock()
+			close(locked)
+		}()
+		select {
+		case <-locked:
+			// lock was available: s.Lock() was already released before Close ran.
+		case <-time.After(time.Second):
+			t.Error("timed out acquiring RLock while Close was executing; s.Lock() may still be held")
+		}
+		close(closeCalled)
+		return nil
+	}).Once()
+	sp.currentSegmentReader = mockReader
+
+	sp.InvalidateReader(context.Background())
+	<-closeCalled
+}
+
+// === ReadBatchEntriesAdv single-retry-on-closed-reader Tests ===
+
+// TestSegmentProcessor_ReadBatchEntriesAdv_RetriesOnceAfterReaderClosed proves the
+// staged->minio handoff recovery end-to-end: the cached reader reports
+// ErrFileReaderAlreadyClosed on its first read, ReadBatchEntriesAdv invalidates it,
+// rebuilds a REAL reader against the on-disk segment (via the real
+// getOrCreateSegmentReader path), and returns the real entries from the rebuilt
+// reader -- not just mock mechanics.
+func TestSegmentProcessor_ReadBatchEntriesAdv_RetriesOnceAfterReaderClosed(t *testing.T) {
+	sp := newLocalStorageProcessor(t)
+	ctx := context.Background()
+
+	// Write real entries to a real on-disk segment and finalize/close the writer so
+	// the rebuilt reader can open a completed file.
+	const numEntries = 5
+	writer, err := sp.getOrCreateSegmentWriter(ctx, false)
+	require.NoError(t, err)
+	for i := int64(0); i < numEntries; i++ {
+		_, err = writer.WriteDataAsync(ctx, i, []byte(fmt.Sprintf("entry-%d", i)), nil)
+		require.NoError(t, err)
+	}
+	_, err = writer.Finalize(ctx, numEntries-1)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close(ctx))
+	sp.Lock()
+	sp.currentSegmentWriter = nil
+	sp.Unlock()
+
+	// Prime the cache with a mock reader whose first ReadNextBatchAdv call reports
+	// the reader as already closed (simulating a stale cached reader after its
+	// local data.log was reclaimed).
+	mockReader := mocks_storage.NewReader(t)
+	mockReader.EXPECT().ReadNextBatchAdv(mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, werr.ErrFileReaderAlreadyClosed).Once()
+	mockReader.EXPECT().Close(mock.Anything).Return(nil).Once()
+	sp.currentSegmentReader = mockReader
+
+	batch, err := sp.ReadBatchEntriesAdv(ctx, 0, 100, nil)
+	require.NoError(t, err, "the retry must recover by rebuilding a real reader")
+	require.NotNil(t, batch)
+	require.Len(t, batch.Entries, numEntries)
+	for i := int64(0); i < numEntries; i++ {
+		assert.Equal(t, i, batch.Entries[i].EntryId)
+		assert.Equal(t, []byte(fmt.Sprintf("entry-%d", i)), batch.Entries[i].Values)
+	}
+
+	// The cached reader must now be the rebuilt real reader, not the mock.
+	sp.RLock()
+	rebuilt := sp.currentSegmentReader
+	sp.RUnlock()
+	assert.NotEqual(t, mockReader, rebuilt)
+	assert.NotNil(t, rebuilt)
+}
+
+func TestSegmentProcessor_ReadBatchEntriesAdv_OnlyRetriesOnce(t *testing.T) {
+	sp := newTestProcessor(t)
+	mockReader := mocks_storage.NewReader(t)
+	// Both the original call AND the retry after rebuild report the reader as
+	// closed; ReadBatchEntriesAdv must give up after exactly one retry rather
+	// than looping. Close's callback re-seeds the same mock as the "rebuilt"
+	// reader (getOrCreateSegmentReader only builds a new one if the slot is nil),
+	// so the retry deterministically exercises the same mock again.
+	mockReader.EXPECT().ReadNextBatchAdv(mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, werr.ErrFileReaderAlreadyClosed).Twice()
+	mockReader.EXPECT().Close(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		sp.Lock()
+		sp.currentSegmentReader = mockReader
+		sp.Unlock()
+		return nil
+	}).Once()
+	sp.currentSegmentReader = mockReader
+
+	batch, err := sp.ReadBatchEntriesAdv(context.Background(), 0, 100, nil)
+	assert.Error(t, err)
+	assert.Nil(t, batch)
+	assert.True(t, werr.ErrFileReaderAlreadyClosed.Is(err))
 }
 
 // === GetSegmentLastAddConfirmed Tests ===

@@ -447,6 +447,7 @@ type fakeLogStore struct {
 	evictLogFn        func(ctx context.Context, bucketName, rootPath string, logId int64) error
 	evictInstanceFn   func(ctx context.Context, bucketName, rootPath string) error
 	notifyCompactedFn func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) error
+	evictReaderFn     func(ctx context.Context, bucketName, rootPath string, logId int64, segId int64) error
 }
 
 func (f *fakeLogStore) Start() error       { return nil }
@@ -522,6 +523,13 @@ func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string
 func (f *fakeLogStore) EvictInstance(ctx context.Context, bucketName, rootPath string) error {
 	if f.evictInstanceFn != nil {
 		return f.evictInstanceFn(ctx, bucketName, rootPath)
+	}
+	return nil
+}
+
+func (f *fakeLogStore) EvictSegmentReader(ctx context.Context, bucketName, rootPath string, logId int64, segId int64) error {
+	if f.evictReaderFn != nil {
+		return f.evictReaderFn(ctx, bucketName, rootPath, logId, segId)
 	}
 	return nil
 }

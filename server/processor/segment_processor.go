@@ -64,6 +64,9 @@ type SegmentProcessor interface {
 	Clean(ctx context.Context, flag int) error
 	UpdateSegmentLastAddConfirmed(ctx context.Context, lac int64) error
 	Close(ctx context.Context) error
+	// InvalidateReader drops the cached segment reader (if any) so the next read
+	// rebuilds it from scratch (e.g. after its local data.log has been reclaimed).
+	InvalidateReader(ctx context.Context)
 
 	// GetWriterSnapshot returns a snapshot of the writer state, or nil if no writer is active.
 	GetWriterSnapshot() *storage.WriterSnapshot
@@ -273,12 +276,27 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 		lastState = lastReadState
 	}
 
-	// read batch entries
-	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+	readerOpt := storage.ReaderOpt{
 		StartEntryID:    fromEntryId,
 		EndEntryID:      0, // means no stop point, currently not use
 		MaxBatchEntries: maxEntries,
-	}, lastState)
+	}
+
+	// read batch entries
+	batch, err := reader.ReadNextBatchAdv(ctx, readerOpt, lastState)
+	if err != nil && werr.ErrFileReaderAlreadyClosed.Is(err) {
+		// The cached reader was invalidated concurrently (e.g. its local data.log was
+		// reclaimed after compaction). Drop it and rebuild once: the rebuild path falls
+		// back to minio when the local file is gone (R1). Retry exactly once.
+		logger.Ctx(ctx).Info("cached segment reader already closed, rebuilding and retrying once",
+			zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId))
+		s.InvalidateReader(ctx)
+		reader, err = s.getOrCreateSegmentReader(ctx)
+		if err != nil {
+			return nil, err
+		}
+		batch, err = reader.ReadNextBatchAdv(ctx, readerOpt, lastState)
+	}
 	if err != nil {
 		// ErrEntryNotFound is the steady-state of a caught-up tail reader; stay
 		// silent on it (issue #190) and only log genuine EOF/errors.
@@ -290,6 +308,22 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 		return nil, err
 	}
 	return batch, nil
+}
+
+// InvalidateReader drops the cached segment reader (if any) so the next
+// getOrCreateSegmentReader call rebuilds it from scratch. Used when the cached
+// reader's underlying local data.log has been reclaimed and it starts returning
+// ErrFileReaderAlreadyClosed, or by maintenance tasks that need to force a rebuild.
+func (s *segmentProcessor) InvalidateReader(ctx context.Context) {
+	s.Lock()
+	r := s.currentSegmentReader
+	s.currentSegmentReader = nil
+	s.Unlock()
+	if r != nil {
+		// Close takes r's own lock, so it waits for any in-flight read to finish.
+		// Close is idempotent, so this is safe even if the reader already closed itself.
+		_ = r.Close(ctx)
+	}
 }
 
 func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int64, error) {

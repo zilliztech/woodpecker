@@ -715,6 +715,39 @@ func (_c *SegmentProcessor_GetWriterSnapshotDetailed_Call) RunAndReturn(run func
 	return _c
 }
 
+// InvalidateReader provides a mock function with given fields: ctx
+func (_m *SegmentProcessor) InvalidateReader(ctx context.Context) {
+	_m.Called(ctx)
+}
+
+// SegmentProcessor_InvalidateReader_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'InvalidateReader'
+type SegmentProcessor_InvalidateReader_Call struct {
+	*mock.Call
+}
+
+// InvalidateReader is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *SegmentProcessor_Expecter) InvalidateReader(ctx interface{}) *SegmentProcessor_InvalidateReader_Call {
+	return &SegmentProcessor_InvalidateReader_Call{Call: _e.mock.On("InvalidateReader", ctx)}
+}
+
+func (_c *SegmentProcessor_InvalidateReader_Call) Run(run func(ctx context.Context)) *SegmentProcessor_InvalidateReader_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_InvalidateReader_Call) Return() *SegmentProcessor_InvalidateReader_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *SegmentProcessor_InvalidateReader_Call) RunAndReturn(run func(context.Context)) *SegmentProcessor_InvalidateReader_Call {
+	_c.Run(run)
+	return _c
+}
+
 // ReadBatchEntriesAdv provides a mock function with given fields: ctx, fromEntryId, maxEntries, lastReadState
 func (_m *SegmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	ret := _m.Called(ctx, fromEntryId, maxEntries, lastReadState)

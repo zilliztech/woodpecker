@@ -76,6 +76,12 @@ type LogStore interface {
 	HasLocalSegmentData() bool
 	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error
 	EvictInstance(ctx context.Context, bucketName string, rootPath string) error
+	// EvictSegmentReader invalidates the cached segment reader (if any) for an
+	// already-created segment processor, without creating one. No-op if no
+	// processor is cached for this key. Used by maintenance tasks after a
+	// segment's local data.log is reclaimed, so subsequent reads rebuild
+	// against minio instead of hitting a stale/closed local reader.
+	EvictSegmentReader(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error
 }
 
 var _ LogStore = (*logStore)(nil)
@@ -371,6 +377,27 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 		zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
 
 	return s, nil
+}
+
+// EvictSegmentReader invalidates the cached segment reader for an already-cached
+// segment processor, identified by the same key computation as
+// getOrCreateSegmentProcessor. It does NOT create a processor if one is not
+// already cached; absent key is a no-op.
+func (l *logStore) EvictSegmentReader(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error {
+	logKey := GetLogKey(bucketName, rootPath, logId)
+
+	l.spMu.RLock()
+	var segProcessor processor.SegmentProcessor
+	if processors, logExists := l.segmentProcessors[logKey]; logExists {
+		segProcessor = processors[segId]
+	}
+	l.spMu.RUnlock()
+
+	if segProcessor == nil {
+		return nil
+	}
+	segProcessor.InvalidateReader(ctx)
+	return nil
 }
 
 // Test Only

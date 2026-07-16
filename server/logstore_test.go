@@ -1355,3 +1355,56 @@ func TestNewLogStore_DiskWatermarkTaskRegistration(t *testing.T) {
 	ls3 := NewLogStore(ctx, cfg3, nil).(*logStore)
 	assert.False(t, hasMaintenanceTaskNamed(ls3, "disk-watermark"))
 }
+
+// === EvictSegmentReader Tests ===
+
+func TestLogStore_EvictSegmentReader_InvalidatesCachedProcessorReader(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	mockProc.EXPECT().InvalidateReader(mock.Anything).Return().Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{7: mockProc}
+
+	err := store.EvictSegmentReader(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+}
+
+func TestLogStore_EvictSegmentReader_AbsentKeyIsNoop(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	// No processor cached for this bucket/rootPath/logId/segId at all.
+	err := store.EvictSegmentReader(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+
+	// Must not have created a processor as a side effect.
+	store.spMu.RLock()
+	_, logExists := store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)]
+	store.spMu.RUnlock()
+	assert.False(t, logExists, "EvictSegmentReader must not create a processor for an absent key")
+}
+
+func TestLogStore_EvictSegmentReader_AbsentSegmentUnderExistingLogIsNoop(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	// A processor exists for a different segment under the same log; InvalidateReader
+	// must NOT be called on it, and no processor should be created for segId 7.
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{3: mockProc}
+
+	err := store.EvictSegmentReader(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+
+	store.spMu.RLock()
+	_, segExists := store.segmentProcessors[logKey][7]
+	store.spMu.RUnlock()
+	assert.False(t, segExists, "EvictSegmentReader must not create a processor for an absent segment")
+}
