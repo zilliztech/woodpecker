@@ -141,6 +141,7 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 	logStore.maintenance = NewNodeMaintenanceManager(ctx)
 	logStore.maintenance.Register(newIdleProcessorCleanupTask(logStore))
 	logStore.maintenance.Register(newDeletedLogReclaimTask(logStore, cfg.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Duration.Duration()))
+	logStore.maintenance.Register(newCompactedFileCleanupTask(logStore))
 
 	// Disk-watermark backpressure (issue #215): only meaningful when this node keeps
 	// WAL data on a local disk (service/local storage modes).

@@ -372,6 +372,13 @@ type MaintenanceStrategyConfig struct {
 	// DeleteReclaimInterval is how often the reclaim task scans delete markers.
 	// Default 2s, so deleted data disappears within ~grace+interval of the request.
 	DeleteReclaimInterval DurationSeconds `yaml:"deleteReclaimInterval"`
+	// CompactedFileCleanupInterval is how often the compacted-file-cleanup task scans
+	// staged segment directories for local data.log files that can be dropped now that
+	// their data is durably compacted in object storage. Default 5s. The task's pull-based
+	// reconcile pass (footer HEAD for segments not yet locally marked compacted) runs at a
+	// much lower cadence than this to bound object-storage request cost; see
+	// reconcileEveryNPasses in server/compacted_file_cleanup.go.
+	CompactedFileCleanupInterval DurationSeconds `yaml:"compactedFileCleanupInterval"`
 }
 
 // NodeSelectionPolicyConfig controls load-aware quorum node selection (issue #114).
@@ -754,6 +761,9 @@ func (c *Configuration) validateLogstoreConfig() error {
 	if logstore.MaintenanceStrategy.DeleteReclaimInterval.Milliseconds() <= 0 {
 		return fmt.Errorf("maintenance strategy delete reclaim interval must be positive, got %d", logstore.MaintenanceStrategy.DeleteReclaimInterval.Milliseconds())
 	}
+	if logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Milliseconds() <= 0 {
+		return fmt.Errorf("maintenance strategy compacted file cleanup interval must be positive, got %d", logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Milliseconds())
+	}
 
 	p := logstore.NodeSelectionPolicy
 	if p.LoadAwareEnabled {
@@ -886,8 +896,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}},  // 15s
 			},
 			MaintenanceStrategy: MaintenanceStrategyConfig{
-				DeleteGracePeriod:     DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
-				DeleteReclaimInterval: DurationSeconds{Duration: Duration{duration: 2 * time.Second}},
+				DeleteGracePeriod:            DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
+				DeleteReclaimInterval:        DurationSeconds{Duration: Duration{duration: 2 * time.Second}},
+				CompactedFileCleanupInterval: DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
 			},
 			NodeSelectionPolicy: NodeSelectionPolicyConfig{
 				LoadAwareEnabled:   true,
