@@ -1554,6 +1554,10 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 // failure (client lookup or RPC) is only logged at Warn and never surfaces to
 // the caller, since the compacted-file-cleanup pull path self-heals any node
 // that misses this notification.
+// notifySegmentCompactedTimeout bounds each per-node NotifySegmentCompacted RPC so a node that
+// connects but stalls cannot hang the (synchronous) fanout beyond this.
+const notifySegmentCompactedTimeout = 10 * time.Second
+
 func (s *segmentHandleImpl) notifyQuorumSegmentCompacted(ctx context.Context, quorumInfo *proto.QuorumInfo) {
 	var wg sync.WaitGroup
 	for _, node := range quorumInfo.Nodes {
@@ -1561,7 +1565,12 @@ func (s *segmentHandleImpl) notifyQuorumSegmentCompacted(ctx context.Context, qu
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
+			// Independent, time-bounded context: this best-effort notification must not be gated
+			// by (or hang on) the caller's context, and a node that connects but stalls must not
+			// block the fanout beyond the per-node timeout.
+			nodeCtx, cancel := context.WithTimeout(context.Background(), notifySegmentCompactedTimeout)
+			defer cancel()
+			cli, err := s.ClientPool.GetLogStoreClient(nodeCtx, node)
 			if err != nil {
 				logger.Ctx(ctx).Warn("notify segment compacted: get client failed",
 					zap.String("logName", s.logName),
@@ -1571,7 +1580,7 @@ func (s *segmentHandleImpl) notifyQuorumSegmentCompacted(ctx context.Context, qu
 					zap.Error(err))
 				return
 			}
-			if err := cli.NotifySegmentCompacted(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId); err != nil {
+			if err := cli.NotifySegmentCompacted(nodeCtx, s.bucketName, s.rootPath, s.logId, s.segmentId); err != nil {
 				logger.Ctx(ctx).Warn("notify segment compacted failed (pull-based cleanup will self-heal)",
 					zap.String("logName", s.logName),
 					zap.Int64("logId", s.logId),
@@ -1813,13 +1822,6 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		zap.Int64("compactedSize", compactSegMetaInfo.Size),
 		zap.Int64("completionTime", compactSegMetaInfo.SealedTime))
 
-	// Best-effort: tell every replica in the quorum that the segment is durably
-	// compacted so it can drop its local pre-compaction data. This is synchronous
-	// (wait for all nodes) so the fanout is deterministic for callers/tests, but
-	// it never fails Compact(): a per-node error is only logged. The compacted-file
-	// -cleanup pull path self-heals any node that misses this notification.
-	s.notifyQuorumSegmentCompacted(ctx, quorumInfo)
-
 	// update segment state and meta
 	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()
 	newSegmentMetadata.State = proto.SegmentState_Sealed
@@ -1866,6 +1868,14 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "success").Observe(float64(compactionDuration.Milliseconds()))
+
+	// Best-effort, and deliberately AFTER the durable Sealed metadata update so it can never
+	// gate durability: tell every replica the segment is compacted so it can drop its local
+	// pre-compaction data. Each RPC runs on its own time-bounded context (see
+	// notifyQuorumSegmentCompacted), so a node that connects but stalls cannot wedge the
+	// sequential compaction loop; the pull-based cleanup self-heals any node that misses it.
+	s.notifyQuorumSegmentCompacted(ctx, quorumInfo)
+
 	return updateMetaErr
 }
 
