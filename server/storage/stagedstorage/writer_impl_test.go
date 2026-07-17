@@ -2585,6 +2585,23 @@ func TestStagedFileWriter_Close_ErrorCleansUpResources(t *testing.T) {
 	assert.Error(t, writer.runCtx.Err(), "runCtx should be cancelled")
 }
 
+func TestNormalizeRootPathForKey(t *testing.T) {
+	// Must produce the same slash-normalized form the compacted-file-cleanup task derives from
+	// the path.Join-normalized local segment dir (parseSegmentDirUnderRoot), so object keys agree.
+	cases := map[string]string{
+		"foo":      "foo",
+		"foo/bar":  "foo/bar",
+		"foo/":     "foo",
+		"/foo":     "foo",
+		"foo//bar": "foo/bar",
+		"/a//b/":   "a/b",
+		"":         "",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, normalizeRootPathForKey(in), "normalizeRootPathForKey(%q)", in)
+	}
+}
+
 func TestStagedFileWriter_Close_Idempotent_NoDoubleClose(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
