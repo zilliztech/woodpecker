@@ -289,7 +289,7 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 			shouldDelete = strings.HasSuffix(fileName, ".log") ||
 				strings.HasSuffix(fileName, ".lock") ||
 				strings.HasSuffix(fileName, ".fence") ||
-				strings.HasSuffix(fileName, ".mark")
+				fileName == CompactedMarkFileName
 		case 1, 2:
 			// For partial deletion, only delete .log files (main segment data)
 			shouldDelete = strings.HasSuffix(fileName, ".log")

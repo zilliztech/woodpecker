@@ -1073,7 +1073,7 @@ func TestLogStore_HasLocalSegmentData_MarkedSegmentIgnored(t *testing.T) {
 	ctx := context.Background()
 	ls := NewLogStore(ctx, cfg, nil)
 
-	// Segment has a non-empty data.log AND a compacted.mark — its data.log is
+	// Segment has a non-empty data.log AND a data.compacted — its data.log is
 	// redundant (durably compacted, awaiting physical GC) and must not block
 	// decommission.
 	segDir := filepath.Join(dir, "1", "0")
@@ -1091,7 +1091,7 @@ func TestLogStore_HasLocalSegmentData_UnmarkedSegmentBlocks(t *testing.T) {
 	ctx := context.Background()
 	ls := NewLogStore(ctx, cfg, nil)
 
-	// Non-empty data.log with no compacted.mark still blocks decommission.
+	// Non-empty data.log with no data.compacted still blocks decommission.
 	segDir := filepath.Join(dir, "1", "0")
 	require.NoError(t, os.MkdirAll(segDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("staged data"), 0o644))

@@ -119,10 +119,10 @@ func TestCompactedLocalCleanup_ReadFromRealMinioAfterLocalDataLogRemoved(t *test
 	// Step 3: simulate the compacted-file-cleanup GC dropping the local copy. This
 	// reproduces the filesystem effect of dropSegmentLocalData without re-running its
 	// decision logic (that matrix is unit-tested in server/compacted_file_cleanup_test.go):
-	// the data.log is removed but the compacted.mark is KEPT as a tombstone — that mark is
+	// the data.log is removed but the data.compacted is KEPT as a tombstone — that mark is
 	// what lets the reader serve from object storage without an object-storage HEAD.
 	markPath := filepath.Join(segmentDir, stagedstorage.CompactedMarkFileName)
-	require.NoError(t, os.WriteFile(markPath, []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(markPath, nil, 0o644)) // empty marker: only existence matters
 	require.NoError(t, os.Remove(dataLogPath))
 	require.NoFileExists(t, dataLogPath)
 

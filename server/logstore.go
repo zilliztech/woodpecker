@@ -64,7 +64,7 @@ type LogStore interface {
 	CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error)
 	CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// NotifySegmentCompacted marks a segment's local data as durably compacted in object
-	// storage (writes a local compacted.mark), authorizing later reclaim of its data.log.
+	// storage (writes a local data.compacted), authorizing later reclaim of its data.log.
 	NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error
 	GetSegmentLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	GetSegmentBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
@@ -610,7 +610,7 @@ func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPa
 	return metadata, nil
 }
 
-// NotifySegmentCompacted writes a local compacted.mark for the segment, authorizing the
+// NotifySegmentCompacted writes a local data.compacted for the segment, authorizing the
 // compacted-file-cleanup task to later drop its local data.log. It is a no-op (returns nil)
 // when the node keeps no local data for this segment (pure object-storage mode).
 func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootPath string, logId, segmentId int64) error {

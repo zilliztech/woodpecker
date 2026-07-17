@@ -34,7 +34,7 @@ import (
 )
 
 // reconcileEveryNPasses throttles the pull-based reconcile branch (footer HEAD for
-// data.log directories that have NO local compacted.mark yet) to roughly once every
+// data.log directories that have NO local data.compacted yet) to roughly once every
 // ~60s given the default 5s CompactedFileCleanupInterval. The push path (mark already
 // written by NotifySegmentCompacted) is unaffected and still does its one confirming
 // HEAD every pass, right before deleting — that HEAD is a required correctness check,
@@ -43,13 +43,13 @@ const reconcileEveryNPasses = 12
 
 // compactedFileCleanupTask drops the local staged data.log for segments whose data is
 // durably compacted in object storage, once that is confirmed via the local
-// compacted.mark (T1) and, right before deletion, a footer HEAD against minio. It never
+// data.compacted (T1) and, right before deletion, a footer HEAD against minio. It never
 // deletes data.log without a confirmed footer present in object storage — that is the
 // invariant this task exists to protect.
 //
 // Scope: this task does exactly two things — (1) on a throttled reconcile pass, backfill a
 // mark for a compacted-but-unmarked segment, and (2) delete the data.log of a marked segment.
-// It reclaims nothing else: the compacted.mark and the segment directory are KEPT as a
+// It reclaims nothing else: the data.compacted and the segment directory are KEPT as a
 // tombstone (so a later reader can still serve the segment from object storage via the mark,
 // with no HEAD), and object storage is never touched. The mark, the directory, and the
 // object-storage data are removed only by the separate truncate/delete GC, when the log or
@@ -204,7 +204,7 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 			zap.String("segDir", segDir), zap.Error(evictErr))
 	}
 
-	// The compacted.mark is intentionally KEPT (tombstone) and the segment dir is left in
+	// The data.compacted is intentionally KEPT (tombstone) and the segment dir is left in
 	// place, so a reader that opens this segment after the data.log is gone can serve it
 	// from object storage without an object-storage HEAD.
 	logger.Ctx(ctx).Info("compacted-file-cleanup: removed local data.log for durably compacted segment (mark kept as tombstone)",

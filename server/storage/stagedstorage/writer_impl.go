@@ -2146,14 +2146,16 @@ func getSegmentFilePath(baseDir string, logId int64, segmentId int64) string {
 	return filepath.Join(baseDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
 }
 
-// CompactedMarkFileName is the sentinel file (a sibling of data.log) marking a staged
-// segment whose data is durably compacted in object storage. It is written when the segment
-// is confirmed compacted and kept as a TOMBSTONE after the local data.log is reclaimed, so a
-// reader can distinguish "compacted -> serve from object storage" from "genuinely no data
-// here" via a local stat instead of an object-storage HEAD. It is removed only when the
-// segment is fully truncated/deleted (see deleteLocalFiles flag=0). This is the single source
-// of truth for the mark filename; server/compacted_mark.go references it.
-const CompactedMarkFileName = "compacted.mark"
+// CompactedMarkFileName is the empty sentinel file (a sibling of data.log, named to mirror
+// it) marking a staged segment whose data is durably compacted in object storage. Only its
+// existence carries meaning — no content is written or read; its mtime records when the mark
+// was created. It is written when the segment is confirmed compacted and kept as a TOMBSTONE
+// after the local data.log is reclaimed, so a reader can distinguish "compacted -> serve from
+// object storage" from "genuinely no data here" via a local stat instead of an object-storage
+// HEAD. It is removed only when the segment is fully truncated/deleted (see deleteLocalFiles
+// flag=0). This is the single source of truth for the mark filename; server/compacted_mark.go
+// references it.
+const CompactedMarkFileName = "data.compacted"
 
 // HasCompactedMark reports whether segmentDir carries the compacted tombstone mark.
 func HasCompactedMark(segmentDir string) bool {

@@ -107,7 +107,7 @@ func TestDeleteFileData_RemovesCompactedMarkAndPrunesDir(t *testing.T) {
 	// A compacted tombstone mark left behind after the compacted-file-cleanup GC dropped
 	// data.log. The full-delete (truncate) path must remove it and prune the dir.
 	markPath := filepath.Join(segmentDir, CompactedMarkFileName)
-	require.NoError(t, os.WriteFile(markPath, []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(markPath, nil, 0o644)) // empty marker: only existence matters
 
 	client := mocks_objectstorage.NewObjectStorage(t)
 	client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", mock.Anything, false, mock.Anything, mock.Anything, mock.Anything).

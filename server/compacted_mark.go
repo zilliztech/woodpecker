@@ -19,10 +19,8 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -46,7 +44,12 @@ func hasCompactedMark(segmentDir string) bool {
 	return err == nil
 }
 
-// writeCompactedMark atomically creates the mark (create-if-absent, idempotent), fsync'd.
+// writeCompactedMark creates the mark (create-if-absent, idempotent) as an EMPTY file, then
+// fsyncs the parent segment dir so the marker is durable. Durability matters because
+// findDataLogSegmentDirs keys off data.log: once data.log is dropped, a lost mark could never
+// be re-created by the reconcile pass, leaving the segment unreadable. Only the marker's
+// existence is meaningful, so there is no content to write — the create + a single parent-dir
+// fsync replaces the old temp-write + rename + double-fsync.
 func writeCompactedMark(ctx context.Context, segmentDir string) error {
 	p := compactedMarkPath(segmentDir)
 	if _, err := os.Stat(p); err == nil {
@@ -57,27 +60,14 @@ func writeCompactedMark(ctx context.Context, segmentDir string) error {
 	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		return err
 	}
-	data, _ := json.Marshal(map[string]int64{"compactedAt": time.Now().Unix()})
-	tmp := p + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp)
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, p); err != nil {
-		return err
-	}
+	// Fsync the parent dir so the new directory entry survives a crash.
 	dir, err := os.Open(segmentDir)
 	if err != nil {
 		return err
