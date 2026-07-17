@@ -89,7 +89,7 @@ func TestCompactedFileCleanup_MarkedAndFooterPresent_DropsLocalData(t *testing.T
 		Return(int64(128), false, nil)
 
 	task := newCompactedFileCleanupTask(store)
-	require.NoError(t, task.runOnce(ctx, false))
+	require.NoError(t, task.runOnce(ctx, true)) // reconcile walk discovers the marked segment, then drains
 
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.True(t, os.IsNotExist(statErr), "data.log should have been removed")
@@ -98,9 +98,10 @@ func TestCompactedFileCleanup_MarkedAndFooterPresent_DropsLocalData(t *testing.T
 	assert.NoError(t, dirStatErr, "segment dir should be kept (it holds the tombstone mark)")
 }
 
-// TestCompactedFileCleanup_MarkedButFooterAbsent_NeverDeletesData verifies row 2 (the
-// core invariant): marked + footer absent -> data.log is NOT deleted, but the orphan
-// mark is cleared so future passes don't keep re-checking a stale mark.
+// TestCompactedFileCleanup_MarkedButFooterAbsent_NeverDeletesData verifies the core invariant
+// for the anomalous marked-but-no-footer state: data.log is NOT deleted, AND the mark is KEPT
+// (it is removed only by the truncate/delete GC). The task logs a warning and leaves both for
+// that GC rather than clearing the mark itself.
 func TestCompactedFileCleanup_MarkedButFooterAbsent_NeverDeletesData(t *testing.T) {
 	store, root, mockStorage := setupCompactedCleanupStore(t)
 	ctx := context.Background()
@@ -115,16 +116,17 @@ func TestCompactedFileCleanup_MarkedButFooterAbsent_NeverDeletesData(t *testing.
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
 
 	task := newCompactedFileCleanupTask(store)
-	require.NoError(t, task.runOnce(ctx, false))
+	require.NoError(t, task.runOnce(ctx, true)) // reconcile walk enqueues the marked segment, then drains
 
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.NoError(t, statErr, "data.log must NOT be deleted without a confirmed footer")
-	assert.False(t, hasCompactedMark(segDir), "orphan compacted mark should have been cleared")
+	assert.True(t, hasCompactedMark(segDir), "the mark is KEPT (removed only by the truncate/delete GC), not cleared here")
 }
 
-// TestCompactedFileCleanup_UnmarkedAndFooterPresent_ReconcileWritesMark verifies row 3:
-// unmarked + footer present, on a reconcile pass -> the mark is written (pull
-// reconcile) but data.log is left in place for the NEXT pass to delete.
+// TestCompactedFileCleanup_UnmarkedAndFooterPresent_ReconcileWritesMark verifies the reconcile
+// path: an unmarked but durably-compacted segment (footer present, data.log old enough) is
+// enqueued by the walk and, on drain, has the mark backfilled and its data.log dropped in the
+// same pass (tombstone kept).
 func TestCompactedFileCleanup_UnmarkedAndFooterPresent_ReconcileWritesMark(t *testing.T) {
 	store, root, mockStorage := setupCompactedCleanupStore(t)
 	ctx := context.Background()
@@ -142,9 +144,9 @@ func TestCompactedFileCleanup_UnmarkedAndFooterPresent_ReconcileWritesMark(t *te
 	task := newCompactedFileCleanupTask(store)
 	require.NoError(t, task.runOnce(ctx, true)) // reconcile pass
 
-	assert.True(t, hasCompactedMark(segDir), "reconcile pass should have written the compacted mark")
+	assert.True(t, hasCompactedMark(segDir), "reconcile should have written the compacted mark (tombstone kept)")
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
-	assert.NoError(t, statErr, "data.log should still be present; deletion happens next pass")
+	assert.True(t, os.IsNotExist(statErr), "reconcile marks AND drops the data.log in the same drain")
 }
 
 // TestCompactedFileCleanup_UnmarkedAndFooterAbsent_NothingChanges verifies row 4:
@@ -297,9 +299,9 @@ func TestCompactedFileCleanup_ReconcileAgeGateDisabled_HeadsFreshDataLog(t *test
 	task := newCompactedFileCleanupTask(store)
 	require.NoError(t, task.runOnce(ctx, true)) // reconcile pass; gate disabled -> HEAD despite fresh mtime
 
-	assert.True(t, hasCompactedMark(segDir), "gate disabled -> fresh data.log should still be reconciled and marked")
+	assert.True(t, hasCompactedMark(segDir), "gate disabled -> fresh data.log is reconciled and marked")
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
-	assert.NoError(t, statErr, "data.log should still be present; deletion happens next pass")
+	assert.True(t, os.IsNotExist(statErr), "gate disabled -> fresh data.log is marked AND dropped in the same drain")
 }
 
 // TestCompactedFileCleanup_ReconcileRespectsCustomAgeGate verifies the gate honors a
@@ -333,6 +335,63 @@ func TestCompactedFileCleanup_ReconcileRespectsCustomAgeGate(t *testing.T) {
 	ageDataLog(t, segDir, 15*time.Minute)
 	require.NoError(t, task.runOnce(ctx, true))
 	assert.True(t, hasCompactedMark(segDir), "data.log past the custom age window should be reconciled and marked")
+}
+
+// TestCompactedFileCleanup_PushEnqueue_DrainsWithoutWalk verifies the frequent event-driven
+// path: a segment enqueued by the push (NotifySegmentCompacted) is dropped on a NON-reconcile
+// tick (no tree walk), confirming the footer with a single HEAD.
+func TestCompactedFileCleanup_PushEnqueue_DrainsWithoutWalk(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(18), int64(10)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "18").
+		Return(int64(128), false, nil)
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId) // simulate the push notification
+
+	require.NoError(t, task.runOnce(ctx, false)) // NOT a reconcile pass: no walk, drains the queue
+
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.True(t, os.IsNotExist(statErr), "push-enqueued segment should be dropped on drain without a walk")
+	assert.True(t, hasCompactedMark(segDir), "mark kept as tombstone")
+}
+
+// TestCompactedFileCleanup_NonReconcileTick_DoesNotWalk verifies the two cadences: a marked
+// segment present on disk but NOT in the in-memory queue (e.g. after a restart) is left alone on
+// a non-reconcile tick (no walk), then recovered and dropped by the reconcile walk.
+func TestCompactedFileCleanup_NonReconcileTick_DoesNotWalk(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(19), int64(11)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	// Only the reconcile walk will HEAD; the non-reconcile tick must not (queue is empty).
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "19").
+		Return(int64(128), false, nil).
+		Once()
+
+	task := newCompactedFileCleanupTask(store)
+
+	// Non-reconcile tick: empty queue, no walk -> nothing happens.
+	require.NoError(t, task.runOnce(ctx, false))
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	require.NoError(t, statErr, "non-reconcile tick must not walk/drop an on-disk marked segment")
+
+	// Reconcile walk: re-discovers the mark (restart recovery), enqueues, drains, drops.
+	require.NoError(t, task.runOnce(ctx, true))
+	_, statErr = os.Stat(filepath.Join(segDir, "data.log"))
+	assert.True(t, os.IsNotExist(statErr), "reconcile walk recovers and drops the marked segment")
 }
 
 // TestCompactedFileCleanupTask_NameAndInterval verifies the MaintenanceTask surface.

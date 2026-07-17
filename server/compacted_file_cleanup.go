@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,42 +34,59 @@ import (
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 )
 
-// reconcileEveryNPasses throttles the pull-based reconcile branch (footer HEAD for
-// data.log directories that have NO local data.compacted yet) to roughly once every
-// ~60s given the default 5s CompactedFileCleanupInterval. The push path (mark already
-// written by NotifySegmentCompacted) is unaffected and still does its one confirming
-// HEAD every pass, right before deleting — that HEAD is a required correctness check,
-// not cost-control surface.
-const reconcileEveryNPasses = 12
+// reconcileEveryNPasses gates the low-frequency reconcile walk (the "pull" safety net). The
+// full-tree scan runs on pass 1 (startup) and then every Nth pass — roughly every 5m given the
+// default 5s CompactedFileCleanupInterval. Between walks the frequent drop path never touches
+// the tree: it drains the in-memory queue fed by the push (NotifySegmentCompacted) and by the
+// walk. Raising this lowers the full-scan frequency; the push path is unaffected.
+const reconcileEveryNPasses = 60
 
-// compactedFileCleanupTask drops the local staged data.log for segments whose data is
-// durably compacted in object storage, once that is confirmed via the local
-// data.compacted (T1) and, right before deletion, a footer HEAD against minio. It never
-// deletes data.log without a confirmed footer present in object storage — that is the
-// invariant this task exists to protect.
+// pendingSeg identifies a segment whose local data.log should be dropped once its compacted
+// footer is confirmed present in object storage. It carries just enough to run the footer HEAD
+// and the drop; the marked state is re-read from disk when the segment is processed.
+type pendingSeg struct {
+	segDir   string
+	bucket   string
+	rootPath string
+	logId    int64
+	segId    int64
+}
+
+// compactedFileCleanupTask reclaims the local staged data.log for segments whose data is
+// durably compacted in object storage, once that is confirmed by a footer HEAD against minio.
+// It never deletes data.log without a confirmed footer — that is the invariant this task exists
+// to protect.
 //
-// Scope: this task does exactly two things — (1) on a throttled reconcile pass, backfill a
-// mark for a compacted-but-unmarked segment, and (2) delete the data.log of a marked segment.
-// It reclaims nothing else: the data.compacted and the segment directory are KEPT as a
-// tombstone (so a later reader can still serve the segment from object storage via the mark,
-// with no HEAD), and object storage is never touched. The mark, the directory, and the
-// object-storage data are removed only by the separate truncate/delete GC, when the log or
-// segment is actually deleted.
+// Cadence: the drop path is event-driven. The push (NotifySegmentCompacted) enqueues a segment
+// the moment it is compacted, and every maintenance tick drains that queue (footer HEAD + drop)
+// WITHOUT walking the tree. A full-tree reconcile walk runs only on pass 1 (startup) and then
+// every reconcileEveryNPasses-th pass; it (a) re-enqueues marked segments still holding a
+// data.log — recovering the in-memory queue after a restart and any push that was missed — and
+// (b) enqueues unmarked segments whose data.log is old enough to reconcile. So a busy node no
+// longer re-scans the whole tree every few seconds.
 //
-// Decision matrix (marked = hasCompactedMark(segDir), footer = footer.blk present in minio):
+// Scope: this task only backfills marks and drops marked data.logs. It reclaims nothing else:
+// the data.compacted mark and the segment directory are KEPT as a tombstone (so a later reader
+// can serve the segment from object storage via the mark, with no HEAD), and object storage is
+// never touched. The mark, the directory, and the object-storage data are removed only by the
+// separate truncate/delete GC, when the log or segment is actually deleted.
 //
-//	marked && footer   -> delete data.log, evict cached reader; KEEP mark + dir as a tombstone
-//	marked && !footer  -> do NOT delete data.log (invariant); remove the orphan mark and
-//	                      leave data.log for truncate GC (or a future compaction pass)
-//	!marked && footer  -> write the mark (pull reconcile); a later pass performs the delete
-//	!marked && !footer -> not compacted yet; leave alone
+// Per-segment decision at drop time (marked = hasCompactedMark(segDir), footer = footer.blk in minio):
+//
+//	footer             -> write the mark if missing (reconcile), then delete data.log; KEEP mark + dir as a tombstone
+//	!footer && marked  -> anomaly (a mark is only ever written after the footer exists): WARN and leave
+//	                      BOTH data.log and mark for the truncate/delete GC (the mark is never cleared here)
+//	!footer && !marked -> not compacted yet; leave alone
 type compactedFileCleanupTask struct {
 	store *logStore
 	pass  atomic.Uint64
+
+	mu      sync.Mutex
+	pending map[string]pendingSeg // segDir -> segment awaiting a footer-confirmed data.log drop
 }
 
 func newCompactedFileCleanupTask(store *logStore) *compactedFileCleanupTask {
-	return &compactedFileCleanupTask{store: store}
+	return &compactedFileCleanupTask{store: store, pending: make(map[string]pendingSeg)}
 }
 
 func (t *compactedFileCleanupTask) Name() string { return "compacted-file-cleanup" }
@@ -77,35 +95,54 @@ func (t *compactedFileCleanupTask) Interval() time.Duration {
 	return t.store.cfg.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Duration.Duration()
 }
 
-func (t *compactedFileCleanupTask) Run(ctx context.Context) error {
-	n := t.pass.Add(1)
-	doReconcile := n%reconcileEveryNPasses == 1 // run on pass 1, then every Nth pass thereafter
-	return t.runOnce(ctx, doReconcile)
+// enqueue records a segment whose data.log should be dropped once its compacted footer is
+// confirmed. Called from the push path (NotifySegmentCompacted) and from the reconcile walk;
+// safe from any goroutine. Duplicates are harmless (keyed by segDir).
+func (t *compactedFileCleanupTask) enqueue(segDir, bucket, rootPath string, logId, segId int64) {
+	t.mu.Lock()
+	t.pending[segDir] = pendingSeg{segDir: segDir, bucket: bucket, rootPath: rootPath, logId: logId, segId: segId}
+	t.mu.Unlock()
 }
 
-// runOnce performs one scan pass. doReconcile controls whether the low-frequency
-// unmarked-branch footer HEAD (pull reconcile) runs this pass; it is a parameter (rather
-// than always reading the internal counter) so tests can exercise the reconcile branch
-// deterministically.
+func (t *compactedFileCleanupTask) Run(ctx context.Context) error {
+	n := t.pass.Add(1)
+	// Pass 1 (startup) and every reconcileEveryNPasses-th pass thereafter run the reconcile walk.
+	return t.runOnce(ctx, n%reconcileEveryNPasses == 1)
+}
+
+// runOnce performs one maintenance tick: an optional reconcile walk (the low-frequency pull
+// safety net) followed by draining the drop queue. doReconcile is a parameter (rather than
+// reading the internal counter) so tests can drive the walk deterministically.
 func (t *compactedFileCleanupTask) runOnce(ctx context.Context, doReconcile bool) error {
 	if !t.store.cfg.Woodpecker.Storage.IsStorageService() {
 		return nil
 	}
-	root := t.store.cfg.Woodpecker.Storage.RootPath
-	if root == "" {
+	if t.store.cfg.Woodpecker.Storage.RootPath == "" {
 		return nil
 	}
-	reconcileMinAge := t.store.cfg.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Duration.Duration()
-
 	if doReconcile {
-		logger.Ctx(ctx).Info("compacted-file-cleanup: running reconcile pass (unmarked segments footer HEAD)")
+		if err := t.reconcileWalk(ctx); err != nil {
+			return err
+		}
 	}
+	t.drainPending(ctx)
+	return nil
+}
+
+// reconcileWalk is the low-frequency pull safety net. It walks the local segment tree and
+// enqueues drop candidates: every marked segment that still has a data.log (restart recovery
+// plus any push the in-memory queue missed), and every unmarked segment whose data.log has been
+// idle past the age gate (a compacted-but-unmarked segment to reconcile). The footer HEAD, the
+// mark backfill, and the drop all happen later in drainPending, so there is a single drop path.
+func (t *compactedFileCleanupTask) reconcileWalk(ctx context.Context) error {
+	root := t.store.cfg.Woodpecker.Storage.RootPath
+	reconcileMinAge := t.store.cfg.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Duration.Duration()
+	logger.Ctx(ctx).Info("compacted-file-cleanup: running reconcile walk (restart recovery + unmarked footer HEAD)")
 
 	segDirs, err := findDataLogSegmentDirs(root)
 	if err != nil {
 		return err
 	}
-
 	for _, segDir := range segDirs {
 		bucket, rootPath, logId, segId, ok := parseSegmentDirUnderRoot(root, segDir)
 		if !ok {
@@ -113,45 +150,15 @@ func (t *compactedFileCleanupTask) runOnce(ctx context.Context, doReconcile bool
 				zap.String("segDir", segDir))
 			continue
 		}
-
-		marked := hasCompactedMark(segDir)
-
-		if marked {
-			// Marked segments get a confirming HEAD every pass — this is the one HEAD
-			// right before deletion, not subject to reconcile throttling.
-			footer, statErr := t.footerExistsInMinio(ctx, bucket, rootPath, logId, segId)
-			if statErr != nil {
-				logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; skipping this pass",
-					zap.String("segDir", segDir), zap.Error(statErr))
-				continue
-			}
-			if footer {
-				t.dropSegmentLocalData(ctx, segDir, bucket, rootPath, logId, segId)
-			} else {
-				// Orphan mark: no confirmed footer in object storage. NEVER delete
-				// data.log here (the invariant). Clear the stale mark and leave
-				// data.log for truncate GC (or a future compaction pass) to handle.
-				if rmErr := removeCompactedMark(ctx, segDir); rmErr != nil {
-					logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to remove orphan mark",
-						zap.String("segDir", segDir), zap.Error(rmErr))
-					continue
-				}
-				logger.Ctx(ctx).Info("compacted-file-cleanup: orphan compacted mark cleared (no confirmed footer); data.log left for truncate GC",
-					zap.String("segDir", segDir), zap.Int64("logId", logId), zap.Int64("segId", segId))
-			}
+		if hasCompactedMark(segDir) {
+			// Marked and still holding a data.log: (re)enqueue for the drop path.
+			t.enqueue(segDir, bucket, rootPath, logId, segId)
 			continue
 		}
-
-		if !doReconcile {
-			// Not marked, and this isn't a reconcile pass: skip the footer HEAD to
-			// bound object-storage request cost.
-			continue
-		}
-
-		// Age gate: only reconcile (HEAD) a data.log that has been idle long enough to be
-		// certainly compacted, so we don't waste HEADs on segments still in the
-		// write->roll->compact pipeline. A future mtime (clock skew) yields a negative age
-		// and is likewise treated as too-fresh. Disabled when reconcileMinAge <= 0.
+		// Unmarked: only reconcile a data.log that has been idle long enough to be certainly
+		// compacted, so we don't waste HEADs on segments still in the write->roll->compact
+		// pipeline. A future mtime (clock skew) yields a negative age and is likewise treated as
+		// too-fresh. Disabled when reconcileMinAge <= 0.
 		if reconcileMinAge > 0 {
 			info, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 			if statErr != nil {
@@ -163,26 +170,73 @@ func (t *compactedFileCleanupTask) runOnce(ctx context.Context, doReconcile bool
 				continue
 			}
 		}
+		t.enqueue(segDir, bucket, rootPath, logId, segId)
+	}
+	return nil
+}
 
-		footer, statErr := t.footerExistsInMinio(ctx, bucket, rootPath, logId, segId)
-		if statErr != nil {
-			logger.Ctx(ctx).Warn("compacted-file-cleanup: reconcile footer stat failed; skipping",
-				zap.String("segDir", segDir), zap.Error(statErr))
-			continue
+// drainPending processes every queued segment: it confirms the compacted footer in object
+// storage and then drops the local data.log. This is the frequent, walk-free path fed by the
+// push notification and the reconcile walk. The queue is snapshotted and cleared under the lock,
+// then processed outside it so per-segment I/O does not block enqueue.
+func (t *compactedFileCleanupTask) drainPending(ctx context.Context) {
+	t.mu.Lock()
+	if len(t.pending) == 0 {
+		t.mu.Unlock()
+		return
+	}
+	batch := make([]pendingSeg, 0, len(t.pending))
+	for _, s := range t.pending {
+		batch = append(batch, s)
+	}
+	t.pending = make(map[string]pendingSeg)
+	t.mu.Unlock()
+
+	for _, s := range batch {
+		t.processSegment(ctx, s)
+	}
+}
+
+// processSegment confirms the compacted footer and drops the local data.log. It NEVER deletes
+// data.log without a confirmed footer (the core invariant). For an unmarked-but-compacted
+// segment it backfills the mark before dropping. A marked segment whose footer is confirmed
+// ABSENT is an anomaly that should not occur — a mark is only ever written after the footer
+// exists — so it is logged loudly and left, mark and data.log both, for the truncate/delete GC;
+// the mark is never cleared here, upholding "the mark is removed only by the truncate/delete GC".
+func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pendingSeg) {
+	if _, err := os.Stat(filepath.Join(s.segDir, "data.log")); os.IsNotExist(err) {
+		return // data.log already gone (dropped earlier, or removed by the truncate GC): nothing to do
+	}
+	footer, statErr := t.footerExistsInMinio(ctx, s.bucket, s.rootPath, s.logId, s.segId)
+	if statErr != nil {
+		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; will retry next pass",
+			zap.String("segDir", s.segDir), zap.Error(statErr))
+		t.enqueue(s.segDir, s.bucket, s.rootPath, s.logId, s.segId) // transient: retry on the next tick
+		return
+	}
+	marked := hasCompactedMark(s.segDir)
+	if !footer {
+		if marked {
+			logger.Ctx(ctx).Warn("compacted-file-cleanup: marked segment has no compacted footer in object storage; leaving data.log AND mark for the truncate/delete GC (unexpected state)",
+				zap.String("segDir", s.segDir), zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
 		}
-		if !footer {
-			continue // not compacted yet
-		}
-		if markErr := writeCompactedMark(ctx, segDir); markErr != nil {
-			logger.Ctx(ctx).Warn("compacted-file-cleanup: reconcile failed to write compacted mark",
-				zap.String("segDir", segDir), zap.Error(markErr))
-			continue
+		// unmarked && !footer: not compacted yet; leave alone.
+		return
+	}
+	if !marked {
+		// Reconcile: a compacted-but-unmarked segment. Backfill the durable tombstone before the
+		// drop so a reader can always tell "compacted -> serve from object storage" apart from
+		// "no data here".
+		if markErr := writeCompactedMark(ctx, s.segDir); markErr != nil {
+			logger.Ctx(ctx).Warn("compacted-file-cleanup: reconcile failed to write compacted mark; will retry",
+				zap.String("segDir", s.segDir), zap.Error(markErr))
+			t.enqueue(s.segDir, s.bucket, s.rootPath, s.logId, s.segId)
+			return
 		}
 		logger.Ctx(ctx).Info("compacted-file-cleanup: reconcile wrote compacted mark for unmarked-but-compacted segment",
-			zap.String("segDir", segDir), zap.Int64("logId", logId), zap.Int64("segId", segId))
+			zap.String("segDir", s.segDir), zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
 	}
-
-	return nil
+	t.dropSegmentLocalData(ctx, s.segDir, s.bucket, s.rootPath, s.logId, s.segId)
 }
 
 // dropSegmentLocalData removes the segment's local data.log and evicts any cached segment

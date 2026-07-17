@@ -103,10 +103,11 @@ type logStore struct {
 	deletingLogs      map[string]struct{} // logKey set
 	deletingInstances map[string]struct{} // instanceKey set
 
-	maintenance   *NodeMaintenanceManager
-	stopped       atomic.Bool
-	rejectWrites  atomic.Bool  // separate from stopped: only blocks new writes during decommission, not reads
-	diskRejectBps atomic.Int32 // rejection probability in basis points (0..10000), set by diskWatermarkTask; gates new appends only
+	maintenance      *NodeMaintenanceManager
+	compactedCleanup *compactedFileCleanupTask // event queue fed by NotifySegmentCompacted; drop path for compacted data.log
+	stopped          atomic.Bool
+	rejectWrites     atomic.Bool  // separate from stopped: only blocks new writes during decommission, not reads
+	diskRejectBps    atomic.Int32 // rejection probability in basis points (0..10000), set by diskWatermarkTask; gates new appends only
 }
 
 // admitAppend returns false when the disk-watermark policy rejects this append.
@@ -141,7 +142,8 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 	logStore.maintenance = NewNodeMaintenanceManager(ctx)
 	logStore.maintenance.Register(newIdleProcessorCleanupTask(logStore))
 	logStore.maintenance.Register(newDeletedLogReclaimTask(logStore, cfg.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Duration.Duration()))
-	logStore.maintenance.Register(newCompactedFileCleanupTask(logStore))
+	logStore.compactedCleanup = newCompactedFileCleanupTask(logStore)
+	logStore.maintenance.Register(logStore.compactedCleanup)
 
 	// Disk-watermark backpressure (issue #215): only meaningful when this node keeps
 	// WAL data on a local disk (service/local storage modes).
@@ -621,7 +623,15 @@ func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootP
 	if dir == "" {
 		return nil // no local data dir (pure object-storage mode): nothing to mark
 	}
-	return writeCompactedMark(ctx, dir)
+	if err := writeCompactedMark(ctx, dir); err != nil {
+		return err
+	}
+	// Feed the event-driven drop queue so the local data.log is reclaimed on the next
+	// maintenance tick, without waiting for the low-frequency reconcile walk.
+	if l.compactedCleanup != nil {
+		l.compactedCleanup.enqueue(dir, bucketName, rootPath, logId, segmentId)
+	}
+	return nil
 }
 
 func (l *logStore) CleanSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {
