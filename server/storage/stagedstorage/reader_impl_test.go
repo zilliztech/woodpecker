@@ -37,6 +37,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
@@ -1487,6 +1488,83 @@ func TestStagedReader_LocalAbsent(t *testing.T) {
 	// Assert no local file was created (no re-caching to local disk).
 	_, statErrAfter := os.Stat(filePath)
 	assert.True(t, os.IsNotExist(statErrAfter), "local staged file must not be re-created by the minio fallback path")
+}
+
+// TestStagedReader_Compacted_IgnoresCrossProvenanceLastReadState verifies the fix for the
+// local->compacted resume bug: a compacted (minio-backed) reader given a LastReadState produced
+// by the LOCAL path (non-compacted flags + a local block id with no compacted counterpart) must
+// NOT reuse that block id (which resolves to nothing -> empty batch -> downstream panic). It
+// resolves the resume point by StartEntryID instead, and its emitted state carries compacted
+// provenance so subsequent reads take the same-backend fast path.
+func TestStagedReader_Compacted_IgnoresCrossProvenanceLastReadState(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	logId := int64(103)
+	segId := int64(103)
+
+	// Compacted footer + block fixture (1 block, 5 entries) served from object storage.
+	blockIndex := &codec.IndexRecord{BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4}
+	footer := &codec.FooterRecord{
+		TotalBlocks: 1, TotalRecords: 5, TotalSize: 200,
+		IndexLength: uint32(codec.RecordHeaderSize + codec.IndexRecordSize),
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: 4,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(blockIndex))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := "test-root/103/103/footer.blk"
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	var blockBuf bytes.Buffer
+	blockBuf.Write(codec.EncodeRecord(&codec.HeaderRecord{Version: codec.FormatVersion, Flags: codec.SetCompacted(0), FirstEntryID: 0}))
+	dataRecords := make([]codec.Record, 0, 5)
+	for i := 0; i < 5; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	blockDataOnly := encodeRecordList(dataRecords)
+	blockBuf.Write(codec.EncodeRecord(&codec.BlockHeaderRecord{
+		BlockNumber: 0, FirstEntryID: 0, LastEntryID: 4,
+		BlockLength: uint32(len(blockDataOnly)), BlockCrc: crc32.ChecksumIEEE(blockDataOnly),
+	}))
+	blockBuf.Write(blockDataOnly)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", "test-root/103/103/m_0.blk", int64(0), mock.Anything, mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: blockBuf.Bytes()}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), []byte("{}"), 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+	require.True(t, reader.isCompacted.Load())
+
+	// A LastReadState from the LOCAL path: non-compacted flags + a local block id (50) that has no
+	// compacted counterpart. Pre-fix, block id 50 -> startBlockIndex == -1 -> empty batch (then a
+	// panic in log_reader). Post-fix, the provenance mismatch forces a resolve by StartEntryID.
+	staleLocalState := &proto.LastReadState{
+		SegmentId:   segId,
+		Flags:       0,
+		Version:     uint32(codec.FormatVersion),
+		LastBlockId: 50,
+		BlockOffset: 0,
+	}
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}, staleLocalState)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 5, len(result.Entries), "resume must resolve by entry id, not the stale local block id")
+	assert.Equal(t, int64(0), result.Entries[0].EntryId)
+	assert.Equal(t, int64(4), result.Entries[4].EntryId)
+	require.NotNil(t, result.LastReadState)
+	assert.True(t, codec.IsCompacted(uint16(result.LastReadState.Flags)), "emitted state must carry compacted provenance")
 }
 
 // TestStagedReader_LocalAbsent_MarkPresentButNoFooter verifies that when the local staged

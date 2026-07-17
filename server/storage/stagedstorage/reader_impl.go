@@ -605,8 +605,13 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 	// start read batch from a certain point - need to protect blockIndexes read
 	startBlockID := int64(0)
 	startBlockOffset := int64(0)
-	if lastReadBatchInfo != nil {
-		// Scenario 1: Subsequent reads with advanced options
+	// A resume is only valid if lastReadBatchInfo was produced by THIS reader's backend:
+	// compaction renumbers blocks (0..M-1) with no relation to local block numbering, so a
+	// local-produced state replayed into a compacted reader (or vice versa, after the local
+	// data.log was reclaimed) must NOT reuse its block id. On a provenance mismatch, fall
+	// through to resolve the resume point by entry id from the footer.
+	if lastReadBatchInfo != nil && codec.IsCompacted(uint16(lastReadBatchInfo.Flags)) == r.isCompacted.Load() {
+		// Scenario 1: Subsequent reads with advanced options (same-backend resume)
 		// When we have lastReadBatchInfo, start from the block after the last read block
 
 		// TODO: Add a flag to indicate if the block has been fully read. Without this flag,
@@ -1409,12 +1414,14 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 	}
 
-	// Create last read state from last block info
+	// Create last read state from last block info. Force the compacted bit so the emitted state
+	// carries this compacted reader's provenance (and compacted block ids); subsequent reads then
+	// take the same-backend block-id fast path instead of re-resolving by entry id every batch.
 	var lastReadState *proto.LastReadState
 	if lastBlockInfo != nil {
 		lastReadState = &proto.LastReadState{
 			SegmentId:   r.segId,
-			Flags:       r.flags.Load(),
+			Flags:       uint32(codec.SetCompacted(uint16(r.flags.Load()))),
 			Version:     r.version.Load(),
 			LastBlockId: lastBlockInfo.BlockNumber,
 			BlockOffset: lastBlockInfo.StartOffset,
