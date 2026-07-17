@@ -1329,23 +1329,21 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 	}
 
 	if startBlockIndex == -1 {
-		logger.Ctx(ctx).Debug("no blocks found starting from blockID",
+		// A compacted segment is sealed: if no block sits at/after this id, there is no more
+		// data here. Return EOF (not an empty batch) so the consumer advances to the next
+		// segment instead of waiting forever on a segment that can never grow.
+		logger.Ctx(ctx).Debug("no blocks found starting from blockID; end of compacted segment",
 			zap.Int64("startBlockID", startBlockID))
-		return &proto.BatchReadResult{
-			Entries:       make([]*proto.LogEntry, 0),
-			LastReadState: nil,
-		}, nil
+		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 	}
 
 	// Determine which blocks to read based on limits
 	blocksToRead := r.determineBlocksToRead(startBlockIndex, maxEntries, maxBytes)
 	if len(blocksToRead) == 0 {
-		logger.Ctx(ctx).Debug("no blocks to read",
+		// Same as above: nothing left to read from a sealed segment -> EOF, not an empty batch.
+		logger.Ctx(ctx).Debug("no blocks to read; end of compacted segment",
 			zap.Int64("startBlockID", startBlockID))
-		return &proto.BatchReadResult{
-			Entries:       make([]*proto.LogEntry, 0),
-			LastReadState: nil,
-		}, nil
+		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 	}
 
 	logger.Ctx(ctx).Debug("starting concurrent block reading",

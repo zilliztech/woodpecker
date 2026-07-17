@@ -1637,6 +1637,118 @@ func TestStagedReader_Compacted_SameProvenanceResumeUsesBlockId(t *testing.T) {
 	assert.Equal(t, int64(4), result.Entries[2].EntryId)
 }
 
+// stagedCompactedReaderWithOneBlock builds a compacted (minio-backed, local-absent) reader
+// over a sealed segment with exactly one block (entries 0..4). Only the footer Stat+Get are
+// mocked; callers that expect to actually read the block must add its GetObject expectation.
+func stagedCompactedReaderWithOneBlock(t *testing.T, dir string, cfg *config.Configuration, mockStorage *mocks_objectstorage.ObjectStorage, logId, segId int64) *StagedFileReaderAdv {
+	t.Helper()
+	blockIndex := &codec.IndexRecord{BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4}
+	footer := &codec.FooterRecord{
+		TotalBlocks: 1, TotalRecords: 5, TotalSize: 200,
+		IndexLength: uint32(codec.RecordHeaderSize + codec.IndexRecordSize),
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: 4,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(blockIndex))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	require.True(t, reader.isCompacted.Load())
+	return reader
+}
+
+// TestStagedReader_Compacted_FirstReadPastEnd_ReturnsEOF verifies that a first read whose
+// StartEntryID is past the sealed segment's last entry returns ErrFileReaderEndOfFile (so the
+// consumer advances to the next segment), not ErrEntryNotFound (which would make it wait).
+func TestStagedReader_Compacted_FirstReadPastEnd_ReturnsEOF(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	reader := stagedCompactedReaderWithOneBlock(t, dir, cfg, mockStorage, 120, 120)
+	defer reader.Close(context.Background())
+
+	// Entries are 0..4; ask for 10 (strictly past LAC=4).
+	_, err = reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 10, MaxBatchEntries: 10}, nil)
+	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile, "first read past the last entry of a sealed compacted segment must return EOF")
+}
+
+// TestStagedReader_Compacted_ResumeBeyondBlocks_ReturnsEOF drives readCompactedDataFromMinio's
+// "no block found" path (startBlockIndex == -1): a same-provenance compacted resume whose
+// LastBlockId points past every block in the footer. On a sealed segment this means "no more
+// data", so it must return ErrFileReaderEndOfFile (advance), not an empty batch — which the
+// consumer (log_reader) treats as "wait" and would spin forever on a segment that never grows.
+func TestStagedReader_Compacted_ResumeBeyondBlocks_ReturnsEOF(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	reader := stagedCompactedReaderWithOneBlock(t, dir, cfg, mockStorage, 121, 121)
+	defer reader.Close(context.Background())
+
+	// Same-provenance (compacted) resume whose block id is beyond the footer's only block (0).
+	resumeState := &proto.LastReadState{
+		SegmentId:   121,
+		Flags:       uint32(codec.SetCompacted(0)),
+		Version:     uint32(codec.FormatVersion),
+		LastBlockId: 99,
+		BlockOffset: 0,
+	}
+	_, err = reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 5, MaxBatchEntries: 10}, resumeState)
+	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile, "resume beyond all blocks of a sealed compacted segment must return EOF, not an empty batch")
+}
+
+// TestStagedReader_Compacted_EmptySegment_ReturnsEOF verifies that a compacted segment with
+// zero blocks (genuinely no data) returns EOF on read, so the consumer advances rather than
+// waiting on data that will never arrive.
+func TestStagedReader_Compacted_EmptySegment_ReturnsEOF(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	logId, segId := int64(122), int64(122)
+	footer := &codec.FooterRecord{
+		TotalBlocks: 0, TotalRecords: 0, TotalSize: 0,
+		IndexLength: 0,
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: -1,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+
+	_, err = reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}, nil)
+	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile, "reading an empty (zero-block) compacted segment must return EOF")
+}
+
 // TestStagedReader_LocalAbsent_MarkPresentButNoFooter verifies that when the local staged
 // file is absent but a compacted tombstone mark IS present, the reader consults object
 // storage; if the footer is unexpectedly absent there, it returns ErrEntryNotFound.
@@ -2030,15 +2142,16 @@ func TestStagedFileReaderAdv_ReadCompactedDataFromMinio_NoBlocks(t *testing.T) {
 	reader := createTestReaderFromWriter(t, dir, 120, 120, 3, 2)
 	defer reader.Close(context.Background())
 
-	// Manually set compacted state with no block indexes
+	// Manually set compacted state with no block indexes: a sealed segment with nothing at or
+	// after the requested block id must report EOF (so the consumer advances), not an empty
+	// batch (which the consumer treats as "wait" and would spin on forever).
 	reader.isCompacted.Store(true)
 	reader.blockIndexes = nil
 
 	opt := storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}
 	result, err := reader.readCompactedDataFromMinio(context.Background(), opt, 999, 0)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Empty(t, result.Entries)
+	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile)
+	assert.Nil(t, result)
 }
 
 // === ReadNextBatchAdv with compacted footer and lastReadState ===
