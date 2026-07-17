@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 )
 
@@ -272,6 +273,66 @@ func TestParseSegmentDirUnderRoot(t *testing.T) {
 	// Non-numeric logId.
 	_, _, _, _, ok = parseSegmentDirUnderRoot(root, "/data/b/rp/notanumber/2")
 	assert.False(t, ok)
+}
+
+// TestCompactedFileCleanup_ReconcileAgeGateDisabled_HeadsFreshDataLog verifies the
+// documented "<=0 disables the age gate" escape hatch: with ReconcileMinDataLogAge set to
+// 0, even a brand-new (fresh mtime) unmarked data.log is HEADed on a reconcile pass and the
+// mark is written when the footer is present. This is the direct counterpart to
+// TestCompactedFileCleanup_ReconcileSkipsFreshDataLog, where the default 30m gate skips the
+// same fresh file.
+func TestCompactedFileCleanup_ReconcileAgeGateDisabled_HeadsFreshDataLog(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	store.cfg.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge = config.NewDurationSecondsFromInt(0)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(16), int64(8)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId) // fresh mtime (now)
+
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "16").
+		Return(int64(64), false, nil)
+
+	task := newCompactedFileCleanupTask(store)
+	require.NoError(t, task.runOnce(ctx, true)) // reconcile pass; gate disabled -> HEAD despite fresh mtime
+
+	assert.True(t, hasCompactedMark(segDir), "gate disabled -> fresh data.log should still be reconciled and marked")
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.NoError(t, statErr, "data.log should still be present; deletion happens next pass")
+}
+
+// TestCompactedFileCleanup_ReconcileRespectsCustomAgeGate verifies the gate honors a
+// non-default configured window (i.e. the value is actually read, not the hardcoded 30m
+// default): with ReconcileMinDataLogAge set to 10m, a data.log aged 5m (within the window)
+// is skipped WITHOUT a footer HEAD, while the same segment aged 15m (past the window) is
+// HEADed and marked. The single StatObject expectation is .Once(), so a spurious HEAD on
+// the within-window pass would exceed it and fail the test.
+func TestCompactedFileCleanup_ReconcileRespectsCustomAgeGate(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	store.cfg.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge = config.NewDurationSecondsFromInt(600) // 10m
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(17), int64(9)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "17").
+		Return(int64(64), false, nil).
+		Once()
+
+	task := newCompactedFileCleanupTask(store)
+
+	// Within the 10m window: too fresh -> no HEAD, no mark.
+	ageDataLog(t, segDir, 5*time.Minute)
+	require.NoError(t, task.runOnce(ctx, true))
+	assert.False(t, hasCompactedMark(segDir), "data.log within the custom age window must not be reconciled")
+
+	// Past the 10m window: HEAD issued, mark written.
+	ageDataLog(t, segDir, 15*time.Minute)
+	require.NoError(t, task.runOnce(ctx, true))
+	assert.True(t, hasCompactedMark(segDir), "data.log past the custom age window should be reconciled and marked")
 }
 
 // TestCompactedFileCleanupTask_NameAndInterval verifies the MaintenanceTask surface.

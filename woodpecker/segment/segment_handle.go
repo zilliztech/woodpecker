@@ -1549,15 +1549,15 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 	return nil, werr.ErrSegmentHandleCompactionFailed.WithCauseErrMsg("all quorum nodes failed compaction")
 }
 
+// notifySegmentCompactedTimeout bounds each per-node NotifySegmentCompacted RPC so a node that
+// connects but stalls cannot hang the (synchronous) fanout beyond this.
+const notifySegmentCompactedTimeout = 10 * time.Second
+
 // notifyQuorumSegmentCompacted fans out NotifySegmentCompacted to every node in the
 // quorum and waits for all of them to return. It is best-effort: a per-node
 // failure (client lookup or RPC) is only logged at Warn and never surfaces to
 // the caller, since the compacted-file-cleanup pull path self-heals any node
 // that misses this notification.
-// notifySegmentCompactedTimeout bounds each per-node NotifySegmentCompacted RPC so a node that
-// connects but stalls cannot hang the (synchronous) fanout beyond this.
-const notifySegmentCompactedTimeout = 10 * time.Second
-
 func (s *segmentHandleImpl) notifyQuorumSegmentCompacted(ctx context.Context, quorumInfo *proto.QuorumInfo) {
 	var wg sync.WaitGroup
 	for _, node := range quorumInfo.Nodes {

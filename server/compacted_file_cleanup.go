@@ -47,9 +47,17 @@ const reconcileEveryNPasses = 12
 // deletes data.log without a confirmed footer present in object storage — that is the
 // invariant this task exists to protect.
 //
+// Scope: this task does exactly two things — (1) on a throttled reconcile pass, backfill a
+// mark for a compacted-but-unmarked segment, and (2) delete the data.log of a marked segment.
+// It reclaims nothing else: the compacted.mark and the segment directory are KEPT as a
+// tombstone (so a later reader can still serve the segment from object storage via the mark,
+// with no HEAD), and object storage is never touched. The mark, the directory, and the
+// object-storage data are removed only by the separate truncate/delete GC, when the log or
+// segment is actually deleted.
+//
 // Decision matrix (marked = hasCompactedMark(segDir), footer = footer.blk present in minio):
 //
-//	marked && footer   -> delete data.log, evict cached reader, remove mark, prune empty dir
+//	marked && footer   -> delete data.log, evict cached reader; KEEP mark + dir as a tombstone
 //	marked && !footer  -> do NOT delete data.log (invariant); remove the orphan mark and
 //	                      leave data.log for truncate GC (or a future compaction pass)
 //	!marked && footer  -> write the mark (pull reconcile); a later pass performs the delete

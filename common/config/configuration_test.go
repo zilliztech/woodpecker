@@ -89,6 +89,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 5, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())            // near-real-time reclaim
 	assert.Equal(t, 2, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds())        // near-real-time reclaim
 	assert.Equal(t, 5, config.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Seconds()) // compacted local data.log reclaim scan
+	assert.Equal(t, 1800, config.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", config.Log.Level)
@@ -191,6 +192,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())            // near-real-time reclaim
 	assert.Equal(t, 2, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds())        // near-real-time reclaim
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Seconds()) // compacted local data.log reclaim scan
+	assert.Equal(t, 1800, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", defaultConfig.Log.Level)
@@ -481,6 +483,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 							DeleteGracePeriod:            NewDurationSecondsFromInt(259200),
 							DeleteReclaimInterval:        NewDurationSecondsFromInt(600),
 							CompactedFileCleanupInterval: NewDurationSecondsFromInt(5),
+							ReconcileMinDataLogAge:       NewDurationSecondsFromInt(1800),
 						},
 					},
 					Storage: StorageConfig{
@@ -1082,6 +1085,7 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					DeleteGracePeriod:            NewDurationSecondsFromInt(259200),
 					DeleteReclaimInterval:        NewDurationSecondsFromInt(600),
 					CompactedFileCleanupInterval: NewDurationSecondsFromInt(5),
+					ReconcileMinDataLogAge:       NewDurationSecondsFromInt(1800),
 				},
 			},
 			Storage: StorageConfig{
