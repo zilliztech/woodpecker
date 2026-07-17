@@ -1567,6 +1567,76 @@ func TestStagedReader_Compacted_IgnoresCrossProvenanceLastReadState(t *testing.T
 	assert.True(t, codec.IsCompacted(uint16(result.LastReadState.Flags)), "emitted state must carry compacted provenance")
 }
 
+// TestStagedReader_Compacted_SameProvenanceResumeUsesBlockId covers the "if" branch of the
+// resume gate: a compacted reader given a SAME-provenance (compacted) LastReadState resolves by
+// its block id, reads that block, and filters to entries >= StartEntryID — returning the correct
+// continuation (entries 2..4 here) rather than re-scanning from the footer.
+func TestStagedReader_Compacted_SameProvenanceResumeUsesBlockId(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	logId := int64(104)
+	segId := int64(104)
+
+	blockIndex := &codec.IndexRecord{BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4}
+	footer := &codec.FooterRecord{
+		TotalBlocks: 1, TotalRecords: 5, TotalSize: 200,
+		IndexLength: uint32(codec.RecordHeaderSize + codec.IndexRecordSize),
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: 4,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(blockIndex))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := "test-root/104/104/footer.blk"
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	var blockBuf bytes.Buffer
+	blockBuf.Write(codec.EncodeRecord(&codec.HeaderRecord{Version: codec.FormatVersion, Flags: codec.SetCompacted(0), FirstEntryID: 0}))
+	dataRecords := make([]codec.Record, 0, 5)
+	for i := 0; i < 5; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	blockDataOnly := encodeRecordList(dataRecords)
+	blockBuf.Write(codec.EncodeRecord(&codec.BlockHeaderRecord{
+		BlockNumber: 0, FirstEntryID: 0, LastEntryID: 4,
+		BlockLength: uint32(len(blockDataOnly)), BlockCrc: crc32.ChecksumIEEE(blockDataOnly),
+	}))
+	blockBuf.Write(blockDataOnly)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", "test-root/104/104/m_0.blk", int64(0), mock.Anything, mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: blockBuf.Bytes()}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), []byte("{}"), 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+	require.True(t, reader.isCompacted.Load())
+
+	// SAME-provenance (compacted) resume state with a valid compacted block id.
+	compactedResumeState := &proto.LastReadState{
+		SegmentId:   segId,
+		Flags:       uint32(codec.SetCompacted(0)),
+		Version:     uint32(codec.FormatVersion),
+		LastBlockId: 0,
+		BlockOffset: 0,
+	}
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 2, MaxBatchEntries: 10}, compactedResumeState)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 3, len(result.Entries), "block-id resume must return the block filtered to entries >= StartEntryID")
+	assert.Equal(t, int64(2), result.Entries[0].EntryId)
+	assert.Equal(t, int64(4), result.Entries[2].EntryId)
+}
+
 // TestStagedReader_LocalAbsent_MarkPresentButNoFooter verifies that when the local staged
 // file is absent but a compacted tombstone mark IS present, the reader consults object
 // storage; if the footer is unexpectedly absent there, it returns ErrEntryNotFound.
