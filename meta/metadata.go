@@ -103,6 +103,18 @@ type MetadataProvider interface {
 	// ListSegmentCleanupStatus lists all cleanup statuses for a log
 	ListSegmentCleanupStatus(ctx context.Context, logId int64) ([]*proto.SegmentCleanupStatus, error)
 
+	// CreateSegmentCompactedNotifyStatus creates a new compacted-mark distribution status record
+	// (root/marking/<logId>/<segId> — the Sealed-phase sibling of the cleanup status).
+	CreateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) error
+	// UpdateSegmentCompactedNotifyStatus updates an existing compacted-mark distribution status
+	UpdateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) error
+	// GetSegmentCompactedNotifyStatus retrieves the compacted-mark distribution status for a segment
+	GetSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCompactedNotifyStatus, error)
+	// DeleteSegmentCompactedNotifyStatus deletes the compacted-mark distribution status for a segment
+	DeleteSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) error
+	// ListSegmentCompactedNotifyStatus lists all compacted-mark distribution statuses for a log
+	ListSegmentCompactedNotifyStatus(ctx context.Context, logId int64) ([]*proto.SegmentCompactedNotifyStatus, error)
+
 	// StoreOrGetConditionWriteResult attempts to store the condition write detection result.
 	// If the key doesn't exist, it stores the value and returns it.
 	// If the key already exists, it retrieves and returns the existing value.

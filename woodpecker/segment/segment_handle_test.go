@@ -4202,7 +4202,9 @@ func TestCompact_Success(t *testing.T) {
 			segMeta.Metadata.Size == 1024
 	}), proto.SegmentState_Completed).Return(nil)
 	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
-	mockClient.EXPECT().NotifySegmentCompacted(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil)
+	// No NotifySegmentCompacted expectation: mark distribution is auditor-driven
+	// (SegmentCompactedNotifyManager), not inline in Compact; the strict mock fails
+	// this test if Compact ever notifies.
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -4277,7 +4279,9 @@ func TestCompact_SealedTimeFromCompactResponse(t *testing.T) {
 		return segMeta.Metadata.SealedTime == expectedSealedTime
 	}), proto.SegmentState_Completed).Return(nil)
 	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
-	mockClient.EXPECT().NotifySegmentCompacted(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil)
+	// No NotifySegmentCompacted expectation: mark distribution is auditor-driven
+	// (SegmentCompactedNotifyManager), not inline in Compact; the strict mock fails
+	// this test if Compact ever notifies.
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -4437,20 +4441,17 @@ func TestCompact_AlreadyCompacting(t *testing.T) {
 	wg.Wait()
 }
 
-// TestCompact_FansOutNotifyCompactedToAllQuorumNodes verifies that after a successful
-// compaction, Compact() fans out NotifySegmentCompacted to every node in the quorum
-// exactly once, and that a per-node notify failure is best-effort: it does not fail
-// Compact() nor block the metadata update to Sealed.
-func TestCompact_FansOutNotifyCompactedToAllQuorumNodes(t *testing.T) {
+// TestCompact_DoesNotNotifyInline verifies the async-marking contract on the Compact side:
+// a successful compaction updates the metadata to Sealed and returns WITHOUT sending any
+// NotifySegmentCompacted RPC and without dialing the other quorum nodes — mark distribution
+// belongs to the auditor-driven SegmentCompactedNotifyManager (covered by its own tests).
+// The strict mocks enforce the negative: any notify or extra dial fails this test.
+func TestCompact_DoesNotNotifyInline(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient0 := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
 
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node0").Return(mockClient0, nil)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
 
 	completedMeta := &meta.SegmentMeta{
 		Metadata: &proto.SegmentMetadata{
@@ -4491,15 +4492,9 @@ func TestCompact_FansOutNotifyCompactedToAllQuorumNodes(t *testing.T) {
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(sealedMeta, nil).Once()
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Completed).Return(nil)
 
-	// compactSegmentQuorum tries nodes in order and stops at the first success.
+	// compactSegmentQuorum tries nodes in order and stops at the first success. No other
+	// node is dialed and no NotifySegmentCompacted expectation exists anywhere.
 	mockClient0.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
-
-	// Every quorum node — including the one that didn't run SegmentCompact — must
-	// be notified exactly once. node1's notify fails; that must not affect the
-	// overall Compact() result.
-	mockClient0.EXPECT().NotifySegmentCompacted(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil).Once()
-	mockClient1.EXPECT().NotifySegmentCompacted(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(errors.New("notify failed")).Once()
-	mockClient2.EXPECT().NotifySegmentCompacted(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil).Once()
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -4518,10 +4513,6 @@ func TestCompact_FansOutNotifyCompactedToAllQuorumNodes(t *testing.T) {
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	err := segmentHandle.Compact(context.Background())
 	assert.NoError(t, err)
-
-	// mockClient1/mockClient2's asserted .Once() expectations (verified via
-	// mocks_logstore_client.NewLogStoreClient(t) test cleanup) confirm every
-	// quorum node was notified exactly once regardless of the node1 failure.
 }
 
 // TestSetWriterInvalidationNotifier tests the SetWriterInvalidationNotifier method

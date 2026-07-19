@@ -66,6 +66,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		logNs:              metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		notifyManager:      segment.NewSegmentCompactedNotifyManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
 		sessionLock:        sessionLock,
 	}
 	// Set trigger expired
@@ -102,6 +103,7 @@ type logWriterImpl struct {
 	logNs              string
 	writerClose        chan struct{}
 	cleanupManager     segment.SegmentCleanupManager
+	notifyManager      segment.SegmentCompactedNotifyManager
 
 	// Session related fields
 	sessionLock         *meta.SessionLock
@@ -344,6 +346,7 @@ func (l *logWriterImpl) runAuditor() {
 			segmentsProcessed := 0
 			segmentsCompacted := 0
 			segmentsFailed := 0
+			segmentsNotifyDriven := 0
 
 			for _, seg := range segmentMetaList {
 				stateBefore := seg.Metadata.State
@@ -371,6 +374,19 @@ func (l *logWriterImpl) runAuditor() {
 							zap.Int64("logId", l.logHandle.GetId()),
 							zap.Int64("segmentId", seg.Metadata.SegNo))
 					}
+				} else if stateBefore == proto.SegmentState_Sealed {
+					// Async compacted-mark distribution: drive the durable per-node notify
+					// record for this sealed segment (root/marking). Settled segments are an
+					// in-memory fast path and don't consume the per-cycle budget.
+					if segmentsNotifyDriven < maxCompactedNotifyPerCycle {
+						advanced, notifyErr := l.notifyManager.EnsureSegmentNotified(ctx, l.logHandle.GetName(), l.logHandle.GetId(), seg.Metadata.SegNo)
+						if notifyErr != nil {
+							logger.Ctx(ctx).Warn("auditor compacted-mark notify failed; will retry next cycle", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(notifyErr))
+						}
+						if advanced {
+							segmentsNotifyDriven++
+						}
+					}
 				} else if stateBefore == proto.SegmentState_Truncated {
 					truncatedSegmentExists = append(truncatedSegmentExists, seg.Metadata.SegNo)
 				}
@@ -382,6 +398,7 @@ func (l *logWriterImpl) runAuditor() {
 				zap.Int("segmentsProcessed", segmentsProcessed),
 				zap.Int("segmentsCompacted", segmentsCompacted),
 				zap.Int("segmentsFailed", segmentsFailed),
+				zap.Int("segmentsNotifyDriven", segmentsNotifyDriven),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))
 
 			// Check for truncated segments to clean up
@@ -576,6 +593,16 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 	minSegId := segmentIdsToClean[0]
 	if err := l.cleanupManager.CleanupOrphanedStatuses(ctx, logId, minSegId); err != nil {
 		logger.Ctx(ctx).Warn("Failed to clean orphaned cleanup statuses",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("minSegmentId", minSegId),
+			zap.Error(err))
+	}
+	// Same sweep for the sibling marking records (compacted-mark distribution): their
+	// segment metadata is gone, so the records — including PENDING_MANUAL ones — are
+	// orphans; the need for a mark dies with the segment.
+	if err := l.notifyManager.CleanupOrphanedStatuses(ctx, logId, minSegId); err != nil {
+		logger.Ctx(ctx).Warn("Failed to clean orphaned compacted notify statuses",
 			zap.String("logName", logName),
 			zap.Int64("logId", logId),
 			zap.Int64("minSegmentId", minSegId),
