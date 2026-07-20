@@ -339,69 +339,24 @@ func (l *logWriterImpl) runAuditor() {
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Int("totalSegments", len(segmentMetaList)))
 
-			// compact/recover if necessary
-			// NOTE: Segments are compacted sequentially by design to minimize per-log resource usage.
-			// The cluster may host many logs, so keeping each log's background work lightweight is preferred.
-			truncatedSegmentExists := make([]int64, 0)
-			segmentsProcessed := 0
-			segmentsCompacted := 0
-			segmentsFailed := 0
-			segmentsNotifyDriven := 0
-
-			for _, seg := range segmentMetaList {
-				stateBefore := seg.Metadata.State
-				if stateBefore == proto.SegmentState_Completed {
-					segmentsProcessed++
-					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(ctx, seg.Metadata.SegNo)
-					if getRecoverySegmentHandleErr != nil {
-						logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(getRecoverySegmentHandleErr))
-						segmentsFailed++
-						continue
-					}
-					maintainErr := recoverySegmentHandle.Compact(ctx)
-					if maintainErr != nil {
-						logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(maintainErr))
-						segmentsFailed++
-						continue
-					}
-
-					// Check if segment was recovered or compacted by checking its new state
-					// This is a best-effort attempt to track the operation type
-					if stateBefore == proto.SegmentState_Completed {
-						segmentsCompacted++
-						logger.Ctx(ctx).Info("Successfully compacted segment",
-							zap.String("logName", l.logHandle.GetName()),
-							zap.Int64("logId", l.logHandle.GetId()),
-							zap.Int64("segmentId", seg.Metadata.SegNo))
-					}
-				} else if stateBefore == proto.SegmentState_Sealed {
-					// Async compacted-mark distribution: drive the durable per-node notify
-					// record for this sealed segment (root/marking). Settled segments are an
-					// in-memory fast path and don't consume the per-cycle budget.
-					if segmentsNotifyDriven < maxCompactedNotifyPerCycle {
-						advanced, notifyErr := l.notifyManager.EnsureSegmentNotified(ctx, l.logHandle.GetName(), l.logHandle.GetId(), seg.Metadata.SegNo)
-						if notifyErr != nil {
-							logger.Ctx(ctx).Warn("auditor compacted-mark notify failed; will retry next cycle", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(notifyErr))
-						}
-						if advanced {
-							segmentsNotifyDriven++
-						}
-					}
-				} else if stateBefore == proto.SegmentState_Truncated {
-					truncatedSegmentExists = append(truncatedSegmentExists, seg.Metadata.SegNo)
-				}
-			}
+			// Per-segment maintenance, split by work type for readability (a segment is in
+			// exactly one state per snapshot, so these passes are independent): compact the
+			// Completed segments, distribute compacted marks for the Sealed ones, and collect
+			// the Truncated ones to clean up.
+			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
+			notifyDriven := distributeCompactedMarks(ctx, l.logHandle, l.notifyManager, segmentMetaList)
+			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
 
 			logger.Ctx(ctx).Info("Auditor segment processing completed",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
-				zap.Int("segmentsProcessed", segmentsProcessed),
-				zap.Int("segmentsCompacted", segmentsCompacted),
-				zap.Int("segmentsFailed", segmentsFailed),
-				zap.Int("segmentsNotifyDriven", segmentsNotifyDriven),
+				zap.Int("segmentsProcessed", cs.processed),
+				zap.Int("segmentsCompacted", cs.compacted),
+				zap.Int("segmentsFailed", cs.failed),
+				zap.Int("segmentsNotifyDriven", notifyDriven),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))
 
-			// Check for truncated segments to clean up
+			// Clean up truncated segments (object-storage data + local files + tombstones).
 			if len(truncatedSegmentExists) > 0 {
 				logger.Ctx(ctx).Info("auditor try to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64s("truncatedSegmentExists", truncatedSegmentExists))
 				l.cleanupTruncatedSegmentsIfNecessary(ctx)
