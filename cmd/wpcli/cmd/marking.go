@@ -1,0 +1,330 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+	clientv3 "go.etcd.io/etcd/client/v3"
+
+	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
+	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
+)
+
+// The marking command family operates on the compacted-mark distribution records
+// (root/marking/<logId>/<segId> in etcd — the Sealed-phase sibling of root/cleaning).
+// Unlike the rest of wp, these records live in cluster metadata, not on a node, so the
+// commands connect to etcd directly; the etcd endpoints and meta prefix are discovered
+// from any node's /admin/config (zero-config), overridable via --etcd / --meta-prefix.
+
+func newMarkingCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "marking",
+		Short: "Inspect and resolve compacted-mark distribution records (root/marking)",
+		Long: `Inspect and resolve compacted-mark distribution records.
+
+After a segment is compacted, the writer's auditor distributes a "compacted" mark to
+every quorum node so each can reclaim its local data.log. Per-node progress is durable
+in etcd under root/marking/<logId>/<segId>. A node that keeps failing past the retry
+budget parks its record as NOTIFY_PENDING_MANUAL — excluded from auto-retry and waiting
+for an operator: verify the node (usually dead or removed), then 'confirm' to delete the
+record. Unhandled records are also reaped automatically when the segment is truncated.
+A confirmed-away mark costs little: data-holding nodes self-heal via the server-side
+pull reconcile; nodes that never held the segment only lose a read optimization.`,
+	}
+	cmd.AddCommand(newMarkingListCommand(), newMarkingConfirmCommand())
+	return cmd
+}
+
+// markingEtcdFlags are shared discovery overrides for the marking subcommands.
+type markingEtcdFlags struct {
+	etcdEndpoints string // comma-separated override; skips /admin/config discovery
+	metaPrefix    string // full meta prefix override (e.g. "woodpecker" or "by-dev/woodpecker")
+}
+
+func (f *markingEtcdFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "etcd endpoints (comma-separated); default: discovered from a node's /admin/config")
+	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "metadata key prefix; default: discovered from a node's /admin/config (etcd.rootPath + woodpecker.meta.prefix)")
+}
+
+// adminConfigSnapshot is the minimal shape of GET /admin/config we need. The server
+// encodes the Go config struct without json tags, so field names match Go's.
+type adminConfigSnapshot struct {
+	Etcd struct {
+		Endpoints []string
+		RootPath  string
+	}
+	Woodpecker struct {
+		Meta struct {
+			Prefix string
+		}
+	}
+}
+
+// resolveMarkingEtcd resolves (endpoints, keyBuilder) from flags or, when absent, from the
+// first reachable node's /admin/config.
+func resolveMarkingEtcd(f *markingEtcdFlags) ([]string, *meta.KeyBuilder, error) {
+	var endpoints []string
+	prefix := f.metaPrefix
+
+	if f.etcdEndpoints != "" {
+		endpoints = strings.Split(f.etcdEndpoints, ",")
+	}
+
+	if len(endpoints) == 0 || prefix == "" {
+		res, err := resolveAndDiscover()
+		if err != nil {
+			return nil, nil, err
+		}
+		var snap *adminConfigSnapshot
+		var lastErr error
+		for _, m := range res.Members.Members {
+			body, fetchErr := fetchAdminJSON(res.Client.PeerAdminURL(m), "/admin/config")
+			if fetchErr != nil {
+				lastErr = fetchErr
+				continue
+			}
+			s := &adminConfigSnapshot{}
+			if jsonErr := json.Unmarshal(body, s); jsonErr != nil {
+				lastErr = jsonErr
+				continue
+			}
+			snap = s
+			break
+		}
+		if snap == nil {
+			return nil, nil, wperrors.NewNetworkError(fmt.Sprintf("could not fetch /admin/config from any node: %v", lastErr))
+		}
+		if len(endpoints) == 0 {
+			endpoints = snap.Etcd.Endpoints
+		}
+		if prefix == "" {
+			prefix = path.Join(snap.Etcd.RootPath, snap.Woodpecker.Meta.Prefix)
+		}
+	}
+
+	if len(endpoints) == 0 {
+		return nil, nil, wperrors.NewUsageError("no etcd endpoints (discovery returned none; pass --etcd)")
+	}
+	return endpoints, meta.NewKeyBuilder(prefix), nil
+}
+
+func markingEtcdClient(endpoints []string) (*clientv3.Client, error) {
+	timeout := Globals.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   endpoints,
+		DialTimeout: timeout,
+	})
+	if err != nil {
+		return nil, wperrors.NewNetworkError(fmt.Sprintf("connect etcd %v: %v", endpoints, err))
+	}
+	return cli, nil
+}
+
+func markingCtx() (context.Context, context.CancelFunc) {
+	timeout := Globals.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+// markingRow is one record rendered by `wp marking list`.
+type markingRow struct {
+	LogId        int64    `json:"log_id"`
+	SegmentId    int64    `json:"segment_id"`
+	State        string   `json:"state"`
+	UnackedNodes []string `json:"unacked_nodes"`
+	StartTime    string   `json:"start_time"`
+	LastUpdate   string   `json:"last_update"`
+	Error        string   `json:"error,omitempty"`
+}
+
+func newMarkingListCommand() *cobra.Command {
+	var flags markingEtcdFlags
+	var logID int64
+	var allStates bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List compacted-mark distribution records (default: only NOTIFY_PENDING_MANUAL)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			endpoints, kb, err := resolveMarkingEtcd(&flags)
+			if err != nil {
+				return err
+			}
+			cli, err := markingEtcdClient(endpoints)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+
+			// One prefix scan covers all logs; --log narrows to marking/<logId>/.
+			prefix := kb.SegmentCompactedNotifyStatusPrefix() + "/"
+			if cmd.Flags().Changed("log") {
+				prefix = kb.BuildLogCompactedNotifyStatusPrefix(logID)
+			}
+
+			ctx, cancel := markingCtx()
+			defer cancel()
+			resp, err := cli.Get(ctx, prefix, clientv3.WithPrefix())
+			if err != nil {
+				return wperrors.NewNetworkError(fmt.Sprintf("etcd get %s: %v", prefix, err))
+			}
+
+			rows := make([]markingRow, 0, len(resp.Kvs))
+			for _, kv := range resp.Kvs {
+				status := &proto.SegmentCompactedNotifyStatus{}
+				if err := proto.UnmarshalSegmentCompactedNotifyStatus(kv.Value, status); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warn: skipping unparseable record %s: %v\n", string(kv.Key), err)
+					continue
+				}
+				if !allStates && status.State != proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL {
+					continue
+				}
+				var unacked []string
+				for node, acked := range status.QuorumNotifyStatus {
+					if !acked {
+						unacked = append(unacked, node)
+					}
+				}
+				sort.Strings(unacked)
+				rows = append(rows, markingRow{
+					LogId:        status.LogId,
+					SegmentId:    status.SegmentId,
+					State:        strings.TrimPrefix(status.State.String(), "NOTIFY_"),
+					UnackedNodes: unacked,
+					StartTime:    formatMarkingTime(status.StartTime),
+					LastUpdate:   formatMarkingTime(status.LastUpdateTime),
+					Error:        status.ErrorMessage,
+				})
+			}
+			sort.Slice(rows, func(i, j int) bool {
+				if rows[i].LogId != rows[j].LogId {
+					return rows[i].LogId < rows[j].LogId
+				}
+				return rows[i].SegmentId < rows[j].SegmentId
+			})
+
+			w := cmd.OutOrStdout()
+			switch Globals.Output {
+			case "json":
+				return output.RenderJSON(w, rows)
+			case "yaml":
+				return output.RenderYAML(w, rows)
+			default:
+				if len(rows) == 0 {
+					if allStates {
+						fmt.Fprintln(w, "no marking records")
+					} else {
+						fmt.Fprintln(w, "no records pending manual handling (use --all-states to list every record)")
+					}
+					return nil
+				}
+				headers := []string{"LOG", "SEGMENT", "STATE", "UNACKED_NODES", "START", "LAST_UPDATE", "ERROR"}
+				table := make([][]string, len(rows))
+				for i, r := range rows {
+					table[i] = []string{
+						strconv.FormatInt(r.LogId, 10),
+						strconv.FormatInt(r.SegmentId, 10),
+						r.State,
+						strings.Join(r.UnackedNodes, ","),
+						r.StartTime,
+						r.LastUpdate,
+						r.Error,
+					}
+				}
+				return output.RenderRowTable(w, headers, table)
+			}
+		},
+	}
+	flags.register(cmd)
+	cmd.Flags().Int64Var(&logID, "log", 0, "restrict to one log id (default: all logs)")
+	cmd.Flags().BoolVar(&allStates, "all-states", false, "include IN_PROGRESS and COMPLETED records, not just PENDING_MANUAL")
+	return cmd
+}
+
+func newMarkingConfirmCommand() *cobra.Command {
+	var flags markingEtcdFlags
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "confirm <logId> <segmentId>",
+		Short: "Confirm and delete a PENDING_MANUAL marking record after operator triage",
+		Long: `Confirm and delete one compacted-mark distribution record.
+
+Meant for records parked as NOTIFY_PENDING_MANUAL: after verifying the unacked node
+(typically permanently dead or removed from the cluster), confirm to delete the record.
+Refuses records still IN_PROGRESS or COMPLETED unless --force is given (those are
+managed automatically and normally need no operator action).`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			logID, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return wperrors.NewUsageError(fmt.Sprintf("invalid logId %q", args[0]))
+			}
+			segID, err := strconv.ParseInt(args[1], 10, 64)
+			if err != nil {
+				return wperrors.NewUsageError(fmt.Sprintf("invalid segmentId %q", args[1]))
+			}
+
+			endpoints, kb, err := resolveMarkingEtcd(&flags)
+			if err != nil {
+				return err
+			}
+			cli, err := markingEtcdClient(endpoints)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+
+			key := kb.BuildSegmentCompactedNotifyStatusKey(logID, segID)
+			ctx, cancel := markingCtx()
+			defer cancel()
+
+			resp, err := cli.Get(ctx, key)
+			if err != nil {
+				return wperrors.NewNetworkError(fmt.Sprintf("etcd get %s: %v", key, err))
+			}
+			if len(resp.Kvs) == 0 {
+				return wperrors.NewTargetNotFoundError(fmt.Sprintf("marking record %d/%d", logID, segID))
+			}
+			status := &proto.SegmentCompactedNotifyStatus{}
+			if err := proto.UnmarshalSegmentCompactedNotifyStatus(resp.Kvs[0].Value, status); err != nil {
+				return fmt.Errorf("unparseable marking record %s: %w", key, err)
+			}
+			if status.State != proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL && !force {
+				return wperrors.NewStateConflictError(fmt.Sprintf(
+					"record %d/%d is %s, not PENDING_MANUAL — it is managed automatically; use --force to delete anyway",
+					logID, segID, status.State.String()))
+			}
+
+			if _, err := cli.Delete(ctx, key); err != nil {
+				return wperrors.NewNetworkError(fmt.Sprintf("etcd delete %s: %v", key, err))
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "confirmed: deleted marking record log %d segment %d (state was %s)\n",
+				logID, segID, status.State.String())
+			return nil
+		},
+	}
+	flags.register(cmd)
+	cmd.Flags().BoolVar(&force, "force", false, "delete even if the record is not PENDING_MANUAL")
+	return cmd
+}
+
+func formatMarkingTime(unixMilli uint64) string {
+	if unixMilli == 0 {
+		return "-"
+	}
+	return time.UnixMilli(int64(unixMilli)).UTC().Format("2006-01-02T15:04:05Z")
+}
