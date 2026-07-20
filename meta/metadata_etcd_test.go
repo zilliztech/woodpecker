@@ -140,6 +140,8 @@ func TestAll(t *testing.T) {
 	t.Run("test update compacted notify status not exists", testUpdateCompactedNotifyStatusNotExists)
 	t.Run("test corrupted compacted notify status data", testCorruptedCompactedNotifyStatusData)
 	t.Run("test delete log metadata wipes marking records", testDeleteLogMetadataWipesMarkingRecords)
+	t.Run("test list compacted notify status no cross log", testListSegmentCompactedNotifyStatusNoCrossLog)
+	t.Run("test list cleanup status no cross log", testListSegmentCleanupStatusNoCrossLog)
 	t.Run("test check segment not exists", testCheckSegmentNotExists)
 	t.Run("test cancelled context etcd errors", testCancelledContextEtcdErrors)
 	t.Run("test corrupted protobuf data", testCorruptedProtobufData)
@@ -2942,4 +2944,55 @@ func testDeleteLogMetadataWipesMarkingRecords(t *testing.T) {
 	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
 	assert.NoError(t, err)
 	assert.Nil(t, stored, "marking record must be wiped by the whole-log delete transaction")
+}
+
+// testListSegmentCompactedNotifyStatusNoCrossLog is the regression for the trailing-slash
+// prefix fix: List(logId=1) must NOT also match marking/12/*, marking/10/* etc. (records are
+// keyed by SegmentId alone downstream, so a cross-log match would seed the wrong log's
+// same-numbered segment as settled and silently skip its distribution).
+func testListSegmentCompactedNotifyStatusNoCrossLog(t *testing.T) {
+	provider, _, _ := setupSegmentCleanupTest(t)
+
+	put := func(logId, segId int64) {
+		require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), &proto.SegmentCompactedNotifyStatus{
+			LogId: logId, SegmentId: segId,
+			State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+			StartTime:          uint64(time.Now().UnixMilli()),
+			QuorumNotifyStatus: map[string]bool{"n1": false},
+		}))
+	}
+	// Log 1 has segment 3; sibling logs 10, 12, 100 (whose ids share the "1" prefix) also have it.
+	put(1, 3)
+	put(10, 3)
+	put(12, 7)
+	put(100, 9)
+
+	got, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "List(1) must return only log 1's records, not marking/10, marking/12, marking/100")
+	assert.Equal(t, int64(1), got[0].LogId)
+	assert.Equal(t, int64(3), got[0].SegmentId)
+}
+
+// testListSegmentCleanupStatusNoCrossLog is the same regression for the sibling cleanup-status
+// scan (which had the identical prefix bug).
+func testListSegmentCleanupStatusNoCrossLog(t *testing.T) {
+	provider, _, _ := setupSegmentCleanupTest(t)
+
+	put := func(logId, segId int64) {
+		require.NoError(t, provider.CreateSegmentCleanupStatus(context.Background(), &proto.SegmentCleanupStatus{
+			LogId: logId, SegmentId: segId,
+			State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+			StartTime:           uint64(time.Now().UnixMilli()),
+			QuorumCleanupStatus: map[string]bool{"n1": false},
+		}))
+	}
+	put(1, 3)
+	put(10, 3)
+	put(12, 7)
+
+	got, err := provider.ListSegmentCleanupStatus(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "List(1) must return only log 1's cleanup records")
+	assert.Equal(t, int64(1), got[0].LogId)
 }

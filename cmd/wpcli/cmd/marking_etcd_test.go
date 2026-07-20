@@ -170,26 +170,43 @@ func TestMarkingCommands_EmbeddedEtcd(t *testing.T) {
 		assert.Contains(t, err.Error(), "not PENDING_MANUAL")
 	})
 
-	t.Run("confirm deletes PENDING_MANUAL record", func(t *testing.T) {
+	t.Run("confirm transitions PENDING_MANUAL to OPERATOR_CONFIRMED (durable, not deleted)", func(t *testing.T) {
 		cmd, out, _ := markingTestCmd()
 		require.NoError(t, runMarkingConfirm(cmd, cli, kb, 7, 1, false))
-		assert.Contains(t, out.String(), "confirmed: deleted marking record log 7 segment 1")
+		assert.Contains(t, out.String(), "set to OPERATOR_CONFIRMED")
+
+		// Record is retained (durable) with the new terminal state — NOT physically deleted.
 		resp, err := cli.Get(context.Background(), kb.BuildSegmentCompactedNotifyStatusKey(7, 1))
 		require.NoError(t, err)
-		assert.Empty(t, resp.Kvs, "record must be gone")
+		require.Len(t, resp.Kvs, 1, "record must be retained, not deleted")
+		st := &proto.SegmentCompactedNotifyStatus{}
+		require.NoError(t, proto.UnmarshalSegmentCompactedNotifyStatus(resp.Kvs[0].Value, st))
+		assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED, st.State)
+	})
+
+	t.Run("confirm on an already-confirmed record is idempotent", func(t *testing.T) {
+		cmd, out, _ := markingTestCmd()
+		require.NoError(t, runMarkingConfirm(cmd, cli, kb, 7, 1, false)) // 7/1 is now OPERATOR_CONFIRMED
+		assert.Contains(t, out.String(), "already confirmed")
+	})
+
+	t.Run("confirm hides the record from the default list", func(t *testing.T) {
+		cmd, out, _ := markingTestCmd()
+		require.NoError(t, runMarkingList(cmd, cli, kb, 7, true, false)) // default view = PENDING_MANUAL only
+		assert.NotContains(t, out.String(), "OPERATOR_CONFIRMED", "confirmed records are hidden from the default view")
 	})
 
 	t.Run("confirm missing record is a target-not-found error", func(t *testing.T) {
 		cmd, _, _ := markingTestCmd()
-		err := runMarkingConfirm(cmd, cli, kb, 7, 1, false)
+		err := runMarkingConfirm(cmd, cli, kb, 7, 999, false)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "marking record 7/1")
+		assert.Contains(t, err.Error(), "marking record 7/999")
 	})
 
-	t.Run("confirm force deletes a COMPLETED record", func(t *testing.T) {
+	t.Run("confirm force transitions a COMPLETED record", func(t *testing.T) {
 		cmd, out, _ := markingTestCmd()
 		require.NoError(t, runMarkingConfirm(cmd, cli, kb, 7, 2, true))
-		assert.Contains(t, out.String(), "state was NOTIFY_COMPLETED")
+		assert.Contains(t, out.String(), "was NOTIFY_COMPLETED")
 	})
 
 	t.Run("confirm refuses unparseable record", func(t *testing.T) {

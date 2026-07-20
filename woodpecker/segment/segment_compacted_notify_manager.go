@@ -90,6 +90,22 @@ type nodeNotifyResult struct {
 	errorMsg    string
 }
 
+// isSettledNotifyState reports whether a marking record is terminal for the manager: no more
+// auto-retry, and (once seeded) skipped by EnsureSegmentNotified. COMPLETED = all nodes acked;
+// PENDING_MANUAL = retry budget spent, awaiting an operator; OPERATOR_CONFIRMED = an operator
+// ran `wp marking confirm`, so it stays settled durably across restarts instead of being
+// rebuilt. Physical deletion of any of these is left to truncate-reap / orphan-sweep.
+func isSettledNotifyState(state proto.SegmentCompactedNotifyState) bool {
+	switch state {
+	case proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+		proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL,
+		proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *segmentCompactedNotifyManagerImpl) EnsureSegmentNotified(ctx context.Context, logName string, logId int64, segmentId int64) (bool, error) {
 	// One-time seed: warm the settled cache from the durable records so a restarted writer
 	// skips already-settled segments without per-segment etcd reads.
@@ -147,13 +163,15 @@ func (s *segmentCompactedNotifyManagerImpl) EnsureSegmentNotified(ctx context.Co
 		logger.Ctx(ctx).Info("created segment compacted notify status; starting mark distribution",
 			zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId),
 			zap.Strings("nodes", quorum.Nodes))
-	case status.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
-		status.State == proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL:
+	case isSettledNotifyState(status.State):
 		s.markSettled(segmentId)
 		return false, nil
 	default:
-		// IN_PROGRESS: resume. Make sure every current quorum node is present in the map
-		// (defensive against a quorum config change between passes).
+		// IN_PROGRESS: resume. Reconcile the per-node map against the CURRENT quorum — add any
+		// newly-added node (unacked) AND prune any node no longer in the quorum. Without the
+		// prune, a node that was unacked at record creation and later removed from the quorum
+		// would keep len(unacked) != 0 forever, parking the record as PENDING_MANUAL for a node
+		// that no longer belongs to the segment.
 		quorum, quorumErr := s.getQuorumForSegment(ctx, logName, segmentId)
 		if quorumErr != nil {
 			return true, quorumErr
@@ -161,9 +179,16 @@ func (s *segmentCompactedNotifyManagerImpl) EnsureSegmentNotified(ctx context.Co
 		if status.QuorumNotifyStatus == nil {
 			status.QuorumNotifyStatus = make(map[string]bool, len(quorum.Nodes))
 		}
+		inQuorum := make(map[string]struct{}, len(quorum.Nodes))
 		for _, nodeAddress := range quorum.Nodes {
+			inQuorum[nodeAddress] = struct{}{}
 			if _, exists := status.QuorumNotifyStatus[nodeAddress]; !exists {
 				status.QuorumNotifyStatus[nodeAddress] = false
+			}
+		}
+		for nodeAddress := range status.QuorumNotifyStatus {
+			if _, ok := inQuorum[nodeAddress]; !ok {
+				delete(status.QuorumNotifyStatus, nodeAddress)
 			}
 		}
 	}
@@ -208,8 +233,7 @@ func (s *segmentCompactedNotifyManagerImpl) seedIfNecessary(ctx context.Context,
 	}
 	settledCount := 0
 	for _, st := range statuses {
-		if st.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED ||
-			st.State == proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL {
+		if isSettledNotifyState(st.State) {
 			s.settled[st.SegmentId] = struct{}{}
 			settledCount++
 		}
@@ -357,9 +381,11 @@ func (s *segmentCompactedNotifyManagerImpl) CleanupOrphanedStatuses(ctx context.
 		// the marking record is an orphan, including PENDING_MANUAL ones — the need
 		// for a mark dies with the segment.
 		orphanCount++
-		if deleteErr := s.metadata.DeleteSegmentCompactedNotifyStatus(ctx, logId, status.SegmentId); deleteErr != nil {
+		// Delete by the record's OWN LogId, not the caller's, as defense-in-depth: even if a
+		// scan ever returned a cross-log record, we never delete the wrong log's segment.
+		if deleteErr := s.metadata.DeleteSegmentCompactedNotifyStatus(ctx, status.LogId, status.SegmentId); deleteErr != nil {
 			logger.Ctx(ctx).Warn("Failed to delete orphaned compacted notify status",
-				zap.Int64("logId", logId), zap.Int64("segmentId", status.SegmentId), zap.Error(deleteErr))
+				zap.Int64("logId", status.LogId), zap.Int64("segmentId", status.SegmentId), zap.Error(deleteErr))
 		} else {
 			cleanedCount++
 			s.mu.Lock()

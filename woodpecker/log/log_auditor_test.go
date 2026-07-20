@@ -21,6 +21,7 @@ import (
 	"errors"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -162,4 +163,54 @@ func TestCompactCompletedSegments_CountsAndSkips(t *testing.T) {
 	require.Equal(t, 1, st.processed)
 	assert.Equal(t, 0, st.compacted)
 	assert.Equal(t, 1, st.failed)
+}
+
+// TestRunNotifyDistributor_NonServiceReturnsImmediately verifies the distributor goroutine is a
+// no-op outside service storage: it returns at once rather than spinning a ticker.
+func TestRunNotifyDistributor_NonServiceReturnsImmediately(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+	nm := &countingNotifyManager{}
+
+	done := make(chan struct{})
+	go func() {
+		runNotifyDistributor(lh, nm, false /*serviceMode*/, 1, make(chan struct{}))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runNotifyDistributor should return immediately in non-service mode")
+	}
+	assert.Empty(t, nm.called)
+}
+
+// TestRunNotifyDistributor_DrivesThenStops verifies the service-mode loop drives distribution on
+// its ticker and exits when the close channel fires.
+func TestRunNotifyDistributor_DrivesThenStops(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+	lh.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
+		1: segMeta(1, proto.SegmentState_Sealed),
+	}, nil)
+	nm := &countingNotifyManager{advanced: true}
+
+	closeCh := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		runNotifyDistributor(lh, nm, true /*serviceMode*/, 1, closeCh)
+		close(done)
+	}()
+
+	time.Sleep(1300 * time.Millisecond) // let at least one 1s tick fire
+	close(closeCh)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runNotifyDistributor should stop after closeCh fires")
+	}
+	assert.NotEmpty(t, nm.called, "the distributor drove at least one cycle")
+	assert.Contains(t, nm.called, int64(1))
 }

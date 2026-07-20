@@ -1156,12 +1156,17 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Add(float64(readBytes))
 	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
-	// Create batch with proper error handling for nil lastBlockInfo
+	// Create batch with proper error handling for nil lastBlockInfo.
+	// Emit with the compacted bit CLEARED: this is the local (non-compacted) reader and
+	// LastBlockId is a local block number. r.flags may carry a compacted bit absorbed from a
+	// prior hop's LastReadState (L589 stores it wholesale), and a local block id tagged as
+	// compacted provenance would be mis-resolved as a compacted block index downstream. This
+	// mirrors the compacted emitter's SetCompacted self-correction, in the opposite direction.
 	var lastReadState *proto.LastReadState
 	if lastBlockInfo != nil {
 		lastReadState = &proto.LastReadState{
 			SegmentId:   r.segId,
-			Flags:       r.flags.Load(),
+			Flags:       uint32(codec.ClearCompacted(uint16(r.flags.Load()))),
 			Version:     r.version.Load(),
 			LastBlockId: lastBlockInfo.BlockNumber,
 			BlockOffset: lastBlockInfo.StartOffset,

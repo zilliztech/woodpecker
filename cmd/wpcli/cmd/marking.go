@@ -318,17 +318,32 @@ func runMarkingConfirm(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 	if err := proto.UnmarshalSegmentCompactedNotifyStatus(resp.Kvs[0].Value, status); err != nil {
 		return fmt.Errorf("unparseable marking record %s: %w", key, err)
 	}
+	if status.State == proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED {
+		fmt.Fprintf(cmd.OutOrStdout(), "already confirmed: marking record log %d segment %d\n", logID, segID)
+		return nil
+	}
 	if status.State != proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL && !force {
 		return wperrors.NewStateConflictError(fmt.Sprintf(
-			"record %d/%d is %s, not PENDING_MANUAL — it is managed automatically; use --force to delete anyway",
+			"record %d/%d is %s, not PENDING_MANUAL — it is managed automatically; use --force to confirm anyway",
 			logID, segID, status.State.String()))
 	}
 
-	if _, err := cli.Delete(ctx, key); err != nil {
-		return wperrors.NewNetworkError(fmt.Sprintf("etcd delete %s: %v", key, err))
+	// Confirm by transitioning to a durable terminal state, NOT by physical delete: the segment
+	// is still Sealed, so a physical delete would let the writer's auditor rebuild the record on
+	// restart and re-enter PENDING_MANUAL after another retry cycle. OPERATOR_CONFIRMED is
+	// re-seeded as settled across restarts; physical deletion is left to truncate-reap.
+	prevState := status.State
+	status.State = proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED
+	status.LastUpdateTime = uint64(time.Now().UnixMilli())
+	newVal, err := proto.MarshalSegmentCompactedNotifyStatus(status)
+	if err != nil {
+		return fmt.Errorf("marshal marking record %s: %w", key, err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "confirmed: deleted marking record log %d segment %d (state was %s)\n",
-		logID, segID, status.State.String())
+	if _, err := cli.Put(ctx, key, string(newVal)); err != nil {
+		return wperrors.NewNetworkError(fmt.Sprintf("etcd put %s: %v", key, err))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "confirmed: marking record log %d segment %d set to OPERATOR_CONFIRMED (was %s); it will be reaped when the segment is truncated\n",
+		logID, segID, prevState.String())
 	return nil
 }
 

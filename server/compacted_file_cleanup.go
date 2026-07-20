@@ -31,6 +31,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 )
@@ -122,8 +123,12 @@ func (t *compactedFileCleanupTask) runOnce(ctx context.Context, doReconcile bool
 		return nil
 	}
 	if doReconcile {
+		// A walk error means only the root itself is unreadable (findDataLogSegmentDirs
+		// swallows per-entry errors), e.g. a brief mount outage. The push-fed drop queue needs
+		// no tree access, so log and drain anyway rather than skipping it.
 		if err := t.reconcileWalk(ctx); err != nil {
-			return err
+			logger.Ctx(ctx).Warn("compacted-file-cleanup: reconcile walk failed; draining the push queue anyway",
+				zap.Error(err))
 		}
 	}
 	t.drainPending(ctx)
@@ -248,11 +253,23 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 // truncate/delete GC path removes the mark and the directory).
 func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, segDir, bucket, rootPath string, logId, segId int64) {
 	dataLogPath := filepath.Join(segDir, "data.log")
+	// Size the file before removal so we can keep the local-storage gauges accurate. This
+	// push+pull path bypasses deleteLocalFiles' accounting, so without this the "current local
+	// bytes/files" gauges would never decrement for reclaimed data.logs and capacity dashboards
+	// would persistently overestimate WAL usage.
+	var dataLogSize int64
+	if info, statErr := os.Stat(dataLogPath); statErr == nil {
+		dataLogSize = info.Size()
+	}
 	if rmErr := os.Remove(dataLogPath); rmErr != nil && !os.IsNotExist(rmErr) {
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to remove data.log; will retry next pass",
 			zap.String("path", dataLogPath), zap.Error(rmErr))
 		return
 	}
+	logNs := bucket + "/" + rootPath
+	logIdStr := strconv.FormatInt(logId, 10)
+	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr).Sub(float64(dataLogSize))
+	metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr).Dec()
 
 	if evictErr := t.store.EvictSegmentReader(ctx, bucket, rootPath, logId, segId); evictErr != nil {
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to evict cached segment reader",

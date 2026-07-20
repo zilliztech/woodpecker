@@ -337,6 +337,13 @@ func SetCompacted(flags uint16) uint16 {
 	return flags | 1
 }
 
+// ClearCompacted clears the compacted provenance bit. Used by the local (non-compacted)
+// reader when emitting a LastReadState, so a compacted bit absorbed from a prior hop's state
+// never leaks out with a local block number.
+func ClearCompacted(flags uint16) uint16 {
+	return flags &^ 1
+}
+
 // GetMaxFooterReadSize returns the maximum size needed to read any supported footer version
 func GetMaxFooterReadSize() int {
 	return RecordHeaderSize + FooterRecordSizeV6 // Always try to read enough for the largest footer once

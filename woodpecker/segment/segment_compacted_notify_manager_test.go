@@ -459,3 +459,87 @@ func TestNotifyManager_CleanupOrphaned_DeleteError(t *testing.T) {
 	defer mgr.mu.Unlock()
 	assert.Contains(t, mgr.settled, int64(1), "settled entry kept when the delete failed (retried next sweep)")
 }
+
+// TestNotifyManager_OperatorConfirmed_IsSettled verifies #4: an OPERATOR_CONFIRMED record is
+// terminal/settled — EnsureSegmentNotified returns (false, nil) without creating or notifying,
+// even across a writer restart (fresh manager re-seeds it as settled).
+func TestNotifyManager_OperatorConfirmed_IsSettled(t *testing.T) {
+	mgr, mockMeta, _ := newNotifyTestManager(t)
+	logId, segId := int64(1), int64(20)
+
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State: proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED,
+	}, nil).Once()
+
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.False(t, advanced)
+
+	// Settled fast path on the next call: no Get expected.
+	advanced, err = mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.False(t, advanced)
+}
+
+// TestNotifyManager_Seed_OperatorConfirmedIsSettled verifies a restart re-seeds an
+// OPERATOR_CONFIRMED record as settled (so a confirmed segment is never rebuilt).
+func TestNotifyManager_Seed_OperatorConfirmedIsSettled(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mgr := NewSegmentCompactedNotifyManager("bucket", "root", mockMeta, mockPool).(*segmentCompactedNotifyManagerImpl)
+	logId := int64(1)
+
+	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, logId).Return([]*proto.SegmentCompactedNotifyStatus{
+		{LogId: logId, SegmentId: 5, State: proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED},
+	}, nil).Once()
+
+	// Seeded as settled -> no Get for segment 5.
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, 5)
+	require.NoError(t, err)
+	assert.False(t, advanced)
+}
+
+// TestNotifyManager_Resume_PrunesRemovedNode verifies #5: a node no longer in the quorum is
+// pruned from the persisted map on resume, so it can never block NOTIFY_COMPLETED. Here node1
+// (unacked, removed from quorum) is dropped and only node2 remains -> COMPLETED.
+func TestNotifyManager_Resume_PrunesRemovedNode(t *testing.T) {
+	mgr, mockMeta, _ := newNotifyTestManager(t)
+	logId, segId := int64(1), int64(21)
+
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false, "node2": true}, // node1 removed, unacked
+	}, nil).Once()
+	// Current quorum no longer contains node1.
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node2"})
+	// node2 already acked, node1 pruned -> nothing to notify -> COMPLETED, node1 dropped.
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
+		_, node1Present := s.QuorumNotifyStatus["node1"]
+		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED && !node1Present
+	})).Return(nil).Once()
+
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.True(t, advanced)
+}
+
+// TestNotifyManager_CleanupOrphaned_DeletesByStatusLogId verifies #6: deletion uses the
+// record's own LogId (defense-in-depth), not the caller's.
+func TestNotifyManager_CleanupOrphaned_DeletesByStatusLogId(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mgr := NewSegmentCompactedNotifyManager("bucket", "root", mockMeta, mockPool).(*segmentCompactedNotifyManagerImpl)
+	callerLogId := int64(1)
+
+	// A record whose own LogId differs from the caller's (would only happen under a scan bug,
+	// but the delete must still target the record's own LogId).
+	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, callerLogId).Return([]*proto.SegmentCompactedNotifyStatus{
+		{LogId: 99, SegmentId: 2, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED},
+	}, nil).Once()
+	mockMeta.EXPECT().DeleteSegmentCompactedNotifyStatus(mock.Anything, int64(99), int64(2)).Return(nil).Once()
+
+	require.NoError(t, mgr.CleanupOrphanedStatuses(context.Background(), callerLogId, 5))
+}

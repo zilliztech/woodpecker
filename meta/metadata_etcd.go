@@ -1575,7 +1575,9 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 	defer sp.End()
 	startTime := time.Now()
 	// Create a prefix key for the log to retrieve all segments
-	prefix := e.keyBuilder.BuildAllSegmentsCleanupStatusKey(logId)
+	// Trailing-slash prefix so listing cleaning/12 cannot also match cleaning/123, cleaning/120, ...
+	// (records are handled by SegmentId alone downstream, so a cross-log match would corrupt state).
+	prefix := e.keyBuilder.BuildLogCleanupStatusPrefix(logId)
 
 	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
@@ -1762,7 +1764,10 @@ func (e *metadataProviderEtcd) ListSegmentCompactedNotifyStatus(ctx context.Cont
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListSegmentCompactedNotifyStatus")
 	defer sp.End()
 	startTime := time.Now()
-	prefix := e.keyBuilder.BuildAllSegmentsCompactedNotifyStatusKey(logId)
+	// Trailing-slash prefix so listing marking/12 cannot also match marking/123, marking/120, ...
+	// Without it a settled record from another log (segments start at 0 in every log) would seed
+	// this log's same-numbered segment as settled and silently skip its mark distribution.
+	prefix := e.keyBuilder.BuildLogCompactedNotifyStatusPrefix(logId)
 
 	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()

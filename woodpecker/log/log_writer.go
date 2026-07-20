@@ -87,6 +87,8 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	// Monitor keepAlive channel
 	go w.monitorSession()
 	go w.runAuditor()
+	// Compacted-mark distribution runs on its own goroutine so a slow node can't stall the auditor.
+	go runNotifyDistributor(w.logHandle, w.notifyManager, cfg.Woodpecker.Storage.IsStorageService(), w.auditorMaxInterval, w.writerClose)
 	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(sessionLock.GetSession().Lease())))
 	return w
 }
@@ -344,7 +346,6 @@ func (l *logWriterImpl) runAuditor() {
 			// Completed segments, distribute compacted marks for the Sealed ones, and collect
 			// the Truncated ones to clean up.
 			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
-			notifyDriven := distributeCompactedMarks(ctx, l.logHandle, l.notifyManager, segmentMetaList, l.cfg.Woodpecker.Storage.IsStorageService())
 			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
 
 			logger.Ctx(ctx).Info("Auditor segment processing completed",
@@ -353,7 +354,6 @@ func (l *logWriterImpl) runAuditor() {
 				zap.Int("segmentsProcessed", cs.processed),
 				zap.Int("segmentsCompacted", cs.compacted),
 				zap.Int("segmentsFailed", cs.failed),
-				zap.Int("segmentsNotifyDriven", notifyDriven),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))
 
 			// Clean up truncated segments (object-storage data + local files + tombstones).

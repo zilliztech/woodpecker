@@ -115,9 +115,14 @@ enum SegmentCompactedNotifyState {
   NOTIFY_IN_PROGRESS = 0;
   NOTIFY_COMPLETED = 1;
   // A node kept failing past the retry budget; excluded from auto-retry and
-  // surfaced to operators (wp notify-pending) until confirmed or the segment
+  // surfaced to operators (wp marking list) until confirmed or the segment
   // is truncated (which reaps the record).
   NOTIFY_PENDING_MANUAL = 2;
+  // An operator ran `wp marking confirm` on a PENDING_MANUAL record. Terminal
+  // and settled (auto-retry stops, hidden from the default marking list), and
+  // durable — unlike a physical delete, a writer restart re-seeds it as settled
+  // instead of rebuilding the record. Physical deletion is left to truncate-reap.
+  NOTIFY_OPERATOR_CONFIRMED = 3;
 }
 
 // SegmentCompactedNotifyStatus tracks the distribution of the compacted mark

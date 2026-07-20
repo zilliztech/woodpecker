@@ -3369,3 +3369,25 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 	assert.Error(t, err)
 	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
 }
+
+// TestStagedReader_LocalEmitterClearsCompactedBit is the regression for the provenance-flag
+// pollution chain: a LOCAL (non-compacted) reader whose r.flags carries a compacted bit
+// absorbed from a prior hop's LastReadState must emit a state with that bit CLEARED — otherwise
+// its LOCAL block number would be mis-resolved as a compacted block index by a downstream
+// compacted reader (silent mis-positioned/missed reads).
+func TestStagedReader_LocalEmitterClearsCompactedBit(t *testing.T) {
+	dir := t.TempDir()
+	reader := createTestReaderFromWriter(t, dir, 130, 130, 5, 4)
+	defer reader.Close(context.Background())
+	require.False(t, reader.isCompacted.Load(), "precondition: this is a local reader")
+
+	// Pollute r.flags with the compacted bit, as if absorbed from a prior compacted hop's state.
+	reader.flags.Store(uint32(codec.SetCompacted(uint16(reader.flags.Load()))))
+
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.LastReadState)
+	assert.False(t, codec.IsCompacted(uint16(result.LastReadState.Flags)),
+		"a local reader must emit a state with the compacted bit cleared, even when r.flags is polluted")
+}

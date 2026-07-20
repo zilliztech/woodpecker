@@ -26,10 +26,12 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 )
 
@@ -501,4 +503,36 @@ func TestCompactedFileCleanup_PushPath_NormalizesRootPathForFooterHead(t *testin
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.True(t, os.IsNotExist(statErr), "footer HEAD must hit the normalized key so the push-path drop happens")
 	assert.True(t, hasCompactedMark(segDir), "mark kept as tombstone")
+}
+
+// TestCompactedFileCleanup_DropDecrementsStoredGauges verifies #7: dropping data.log keeps the
+// local-storage gauges accurate (this push+pull path bypasses deleteLocalFiles' accounting).
+func TestCompactedFileCleanup_DropDecrementsStoredGauges(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(23), int64(15)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId) // data.log = "staged data" (11 bytes)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+	fi, err := os.Stat(filepath.Join(segDir, "data.log"))
+	require.NoError(t, err)
+	size := float64(fi.Size())
+
+	logNs := bucket + "/" + rp
+	logIdStr := "23"
+	// Seed the gauges as if this file were accounted for.
+	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr).Set(size)
+	metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr).Set(1)
+
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), logNs, logIdStr).
+		Return(int64(128), false, nil)
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId)
+	require.NoError(t, task.runOnce(ctx, false))
+
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr)), "bytes gauge decremented by the dropped file size")
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr)), "count gauge decremented")
 }

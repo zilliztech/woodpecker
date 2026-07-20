@@ -18,6 +18,8 @@ package log
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -108,6 +110,47 @@ func distributeCompactedMarks(ctx context.Context, logHandle LogHandle, notifyMa
 		}
 	}
 	return driven
+}
+
+// runNotifyDistributor is the compacted-mark distribution loop, run on its OWN goroutine —
+// separate from the auditor — so a slow or black-holed quorum node (each notify RPC blocks up
+// to notifySegmentCompactedTimeout, and a cycle can drive up to maxCompactedNotifyPerCycle
+// segments) can never stall this log's compaction or truncate-GC, which share the auditor's
+// single goroutine. It exits immediately outside service storage (nothing to distribute) and
+// otherwise ticks every intervalSeconds until closeCh fires.
+func runNotifyDistributor(logHandle LogHandle, notifyManager segment.SegmentCompactedNotifyManager, serviceMode bool, intervalSeconds int, closeCh <-chan struct{}) {
+	if !serviceMode {
+		return
+	}
+	ticker := time.NewTicker(time.Duration(intervalSeconds * int(time.Second)))
+	defer ticker.Stop()
+	logger.Ctx(context.Background()).Info("compacted-mark distributor started",
+		zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()),
+		zap.Int("intervalSeconds", intervalSeconds))
+
+	for {
+		select {
+		case <-ticker.C:
+			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("notify_distributor_%d", logHandle.GetId()))
+			segs, err := logHandle.GetSegments(ctx)
+			if err != nil {
+				logger.Ctx(ctx).Warn("compacted-mark distributor: get segments failed",
+					zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Error(err))
+				sp.End()
+				continue
+			}
+			driven := distributeCompactedMarks(ctx, logHandle, notifyManager, segs, true)
+			if driven > 0 {
+				logger.Ctx(ctx).Debug("compacted-mark distributor cycle completed",
+					zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int("driven", driven))
+			}
+			sp.End()
+		case <-closeCh:
+			logger.Ctx(context.Background()).Info("compacted-mark distributor stopped",
+				zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
+			return
+		}
+	}
 }
 
 // collectTruncatedSegments returns the ids of Truncated segments eligible for cleanup.
