@@ -185,6 +185,15 @@ func (s *segmentCleanupManagerImpl) handleExistingCleanupStatus(
 				zap.Int64("logId", logId),
 				zap.Int64("segmentId", segmentId))
 		}
+		// Also reap the sibling compacted-mark distribution record (root/marking/<log>/<seg>).
+		// The auditor's marking orphan sweep only removes records BELOW the batch's minSegId, so
+		// the log's last-truncated segment would otherwise never be swept — its COMPLETED /
+		// PENDING_MANUAL record would linger in etcd (and in `wp marking list`) until the whole
+		// log is deleted. The need for a mark dies with the segment, so delete it here too;
+		// best-effort, since the sweep still covers the non-last-segment cases.
+		if deleteNotifyErr := s.metadata.DeleteSegmentCompactedNotifyStatus(ctx, logId, segmentId); deleteNotifyErr != nil {
+			logger.Ctx(ctx).Warn("failed to clean compacted notify status for truncated segment", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(deleteNotifyErr))
+		}
 		return nil
 	}
 

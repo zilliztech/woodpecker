@@ -470,3 +470,35 @@ func TestCompactedFileCleanup_WalkSkipsUnparseableDir(t *testing.T) {
 	assert.NoError(t, statErr, "unparseable segment dir must be left untouched")
 	assert.False(t, hasCompactedMark(badDir))
 }
+
+// TestCompactedFileCleanup_PushPath_NormalizesRootPathForFooterHead is a regression for the
+// push-path key-normalization bug: a rootPath with stray slashes ("rp//x/") must produce the
+// SAME footer key the writer/reader use (normalized "rp/x/..."), so the footer HEAD hits and
+// the drop happens on the push tick — not silently deferred to the ~5m reconcile walk.
+func TestCompactedFileCleanup_PushPath_NormalizesRootPathForFooterHead(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket := "b"
+	rawRootPath := "rp//x/" // misconfigured: leading/dup/trailing slashes
+	logId, segId := int64(22), int64(14)
+
+	// The segment dir + mark are created under the RAW rootPath (that's what the push carries).
+	segDir := makeSegmentDir(t, root, bucket, rawRootPath, logId, segId)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	// The footer HEAD must probe the NORMALIZED key ("rp/x/22/14/footer.blk") + normalized ns.
+	normalized := "rp/x"
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(normalized, logId, segId), bucket+"/"+rawRootPath, "22").
+		Return(int64(128), false, nil).Once()
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rawRootPath, logId, segId) // push carries the raw rootPath
+
+	require.NoError(t, task.runOnce(ctx, false)) // non-reconcile tick: drains the push queue
+
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.True(t, os.IsNotExist(statErr), "footer HEAD must hit the normalized key so the push-path drop happens")
+	assert.True(t, hasCompactedMark(segDir), "mark kept as tombstone")
+}

@@ -2598,7 +2598,7 @@ func TestNormalizeRootPathForKey(t *testing.T) {
 		"":         "",
 	}
 	for in, want := range cases {
-		assert.Equal(t, want, normalizeRootPathForKey(in), "normalizeRootPathForKey(%q)", in)
+		assert.Equal(t, want, NormalizeRootPathForKey(in), "NormalizeRootPathForKey(%q)", in)
 	}
 }
 

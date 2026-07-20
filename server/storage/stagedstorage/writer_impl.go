@@ -1815,12 +1815,12 @@ func (w *StagedFileWriter) readRemoteFooter(ctx context.Context) (*codec.FooterR
 
 // getFooterBlockKey generates the object key for the footer block
 func (w *StagedFileWriter) getFooterBlockKey() string {
-	return fmt.Sprintf("%s/%d/%d/footer.blk", normalizeRootPathForKey(w.rootPath), w.logId, w.segmentId)
+	return fmt.Sprintf("%s/%d/%d/footer.blk", NormalizeRootPathForKey(w.rootPath), w.logId, w.segmentId)
 }
 
 // getCompactedBlockKey generates the object key for a compacted block
 func (w *StagedFileWriter) getCompactedBlockKey(blockID int64) string {
-	return fmt.Sprintf("%s/%d/%d/m_%d.blk", normalizeRootPathForKey(w.rootPath), w.logId, w.segmentId, blockID)
+	return fmt.Sprintf("%s/%d/%d/m_%d.blk", NormalizeRootPathForKey(w.rootPath), w.logId, w.segmentId, blockID)
 }
 
 // recoverFromExistingFile attempts to recover state from an existing incomplete file
@@ -2163,11 +2163,13 @@ func HasCompactedMark(segmentDir string) bool {
 	return err == nil
 }
 
-// normalizeRootPathForKey strips leading/trailing/doubled slashes from rootPath so an
+// NormalizeRootPathForKey strips leading/trailing/doubled slashes from rootPath so an
 // object-storage key built from it matches the value the compacted-file-cleanup task derives
 // from the (path.Join-normalized) local segment directory. It is a no-op for a clean rootPath,
-// so it only changes keys for a misconfigured rootPath with stray slashes.
-func normalizeRootPathForKey(rootPath string) string {
+// so it only changes keys for a misconfigured rootPath with stray slashes. Exported so the
+// footer-HEAD in the cleanup task uses the exact same key derivation as the writer/reader
+// (single source of truth), rather than raw fmt.Sprintf on the RPC rootPath.
+func NormalizeRootPathForKey(rootPath string) string {
 	segs := make([]string, 0, strings.Count(rootPath, "/")+1)
 	for _, p := range strings.Split(rootPath, "/") {
 		if p != "" {

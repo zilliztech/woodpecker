@@ -32,6 +32,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/logger"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 )
 
 // reconcileEveryNPasses gates the low-frequency reconcile walk (the "pull" safety net). The
@@ -269,7 +270,12 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 // is present in object storage, using the exact same key format as the segment reader
 // (getFooterBlockKey in server/storage/stagedstorage/reader_impl.go).
 func (t *compactedFileCleanupTask) footerExistsInMinio(ctx context.Context, bucket, rootPath string, logId, segId int64) (bool, error) {
-	footerKey := fmt.Sprintf("%s/%d/%d/footer.blk", rootPath, logId, segId)
+	// Build the footer key via the SAME normalization the writer/reader use (single source of
+	// truth), not a raw fmt.Sprintf: the push path carries the RPC rootPath verbatim, so a
+	// misconfigured rootPath with stray slashes (e.g. "/wp//root/") would otherwise probe a key
+	// the writer never stored and wrongly conclude the footer is absent. The pull path already
+	// derives a normalized rootPath from disk, for which this is a no-op.
+	footerKey := fmt.Sprintf("%s/%d/%d/footer.blk", stagedstorage.NormalizeRootPathForKey(rootPath), logId, segId)
 	logNs := bucket + "/" + rootPath
 	logIdStr := strconv.FormatInt(logId, 10)
 	_, _, err := t.store.storageClient.StatObject(ctx, bucket, footerKey, logNs, logIdStr)

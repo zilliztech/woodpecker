@@ -506,12 +506,12 @@ func (r *StagedFileReaderAdv) tryParseLocalFooterUnsafe(ctx context.Context) err
 
 // getFooterBlockKey generates the object key for the footer block
 func (r *StagedFileReaderAdv) getFooterBlockKey() string {
-	return fmt.Sprintf("%s/%d/%d/footer.blk", normalizeRootPathForKey(r.rootPath), r.logId, r.segId)
+	return fmt.Sprintf("%s/%d/%d/footer.blk", NormalizeRootPathForKey(r.rootPath), r.logId, r.segId)
 }
 
 // getCompactedBlockKey generates the object key for a compacted block
 func (r *StagedFileReaderAdv) getCompactedBlockKey(blockID int64) string {
-	return fmt.Sprintf("%s/%d/%d/m_%d.blk", normalizeRootPathForKey(r.rootPath), r.logId, r.segId, blockID)
+	return fmt.Sprintf("%s/%d/%d/m_%d.blk", NormalizeRootPathForKey(r.rootPath), r.logId, r.segId, blockID)
 }
 
 // parseIndexRecords parses all index records from the file
