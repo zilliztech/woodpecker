@@ -81,7 +81,16 @@ func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map
 // segments, bounded to maxCompactedNotifyPerCycle segments doing real work per cycle. It returns
 // how many segments were driven this cycle. A per-segment failure is logged and retried next
 // cycle; it never aborts the pass.
-func distributeCompactedMarks(ctx context.Context, logHandle LogHandle, notifyManager segment.SegmentCompactedNotifyManager, segs map[int64]*meta.SegmentMeta) int {
+//
+// Gated on serviceMode: compacted-mark cleanup reclaims a node's local staged data.log, which
+// only exists in service (staged) storage. In other modes this is a no-op — driving it would
+// create useless root/marking records and fan out no-op RPCs (and, for local storage, enqueue
+// into a drop queue the cleanup task never drains). This is the client-side counterpart of the
+// IsStorageService gate on the server's compacted-file-cleanup task and NotifySegmentCompacted.
+func distributeCompactedMarks(ctx context.Context, logHandle LogHandle, notifyManager segment.SegmentCompactedNotifyManager, segs map[int64]*meta.SegmentMeta, serviceMode bool) int {
+	if !serviceMode {
+		return 0
+	}
 	driven := 0
 	for _, seg := range segs {
 		if seg.Metadata.State != proto.SegmentState_Sealed {

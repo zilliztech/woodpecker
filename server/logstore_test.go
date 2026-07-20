@@ -722,6 +722,22 @@ func TestLogStore_NotifySegmentCompacted_NoLocalDataDir(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestLogStore_NotifySegmentCompacted_LocalModeIsNoOp verifies the storage-mode gate: local
+// storage has a node-local data dir but no object-storage footer to reclaim against, and its
+// cleanup task never runs (it gates on service mode), so the handler must NOT write a mark
+// (which would otherwise linger, and — in local mode — enqueue into a never-drained queue).
+func TestLogStore_NotifySegmentCompacted_LocalModeIsNoOp(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "local" // local storage: localSegmentDataDir is non-empty
+
+	require.NoError(t, store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2))
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	require.NotEmpty(t, seg, "precondition: local mode has a non-empty segment dir")
+	assert.False(t, hasCompactedMark(seg), "local mode must not write a compacted mark")
+}
+
 func TestLogStore_UpdateLastAddConfirmed_Stopped(t *testing.T) {
 	store := createTestLogStore()
 	store.stopped.Store(true)

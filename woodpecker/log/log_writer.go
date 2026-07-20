@@ -344,7 +344,7 @@ func (l *logWriterImpl) runAuditor() {
 			// Completed segments, distribute compacted marks for the Sealed ones, and collect
 			// the Truncated ones to clean up.
 			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
-			notifyDriven := distributeCompactedMarks(ctx, l.logHandle, l.notifyManager, segmentMetaList)
+			notifyDriven := distributeCompactedMarks(ctx, l.logHandle, l.notifyManager, segmentMetaList, l.cfg.Woodpecker.Storage.IsStorageService())
 			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
 
 			logger.Ctx(ctx).Info("Auditor segment processing completed",

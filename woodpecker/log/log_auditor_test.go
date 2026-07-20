@@ -81,11 +81,30 @@ func TestDistributeCompactedMarks_OnlySealedAndDrivenCount(t *testing.T) {
 		4: segMeta(4, proto.SegmentState_Sealed),
 	}
 	nm := &countingNotifyManager{advanced: true}
-	driven := distributeCompactedMarks(context.Background(), lh, nm, segs)
+	driven := distributeCompactedMarks(context.Background(), lh, nm, segs, true)
 
 	assert.Equal(t, 2, driven, "both Sealed segments did real work")
 	sort.Slice(nm.called, func(i, j int) bool { return nm.called[i] < nm.called[j] })
 	assert.Equal(t, []int64{2, 4}, nm.called, "only Sealed segments are notified")
+}
+
+// TestDistributeCompactedMarks_NonServiceModeIsNoOp verifies the client-side storage-mode gate:
+// outside service (staged) storage, mark distribution is skipped entirely — no notify RPC and
+// no root/marking record is ever created.
+func TestDistributeCompactedMarks_NonServiceModeIsNoOp(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+
+	segs := map[int64]*meta.SegmentMeta{
+		1: segMeta(1, proto.SegmentState_Sealed),
+		2: segMeta(2, proto.SegmentState_Sealed),
+	}
+	nm := &countingNotifyManager{advanced: true}
+	driven := distributeCompactedMarks(context.Background(), lh, nm, segs, false)
+
+	assert.Equal(t, 0, driven, "non-service mode drives nothing")
+	assert.Empty(t, nm.called, "non-service mode must not notify any segment")
 }
 
 // TestDistributeCompactedMarks_SettledNotCounted verifies settled (advanced==false) segments
@@ -100,7 +119,7 @@ func TestDistributeCompactedMarks_SettledNotCounted(t *testing.T) {
 		2: segMeta(2, proto.SegmentState_Sealed),
 	}
 	nm := &countingNotifyManager{advanced: false} // all settled fast-path
-	driven := distributeCompactedMarks(context.Background(), lh, nm, segs)
+	driven := distributeCompactedMarks(context.Background(), lh, nm, segs, true)
 
 	assert.Equal(t, 0, driven, "settled segments don't consume the budget")
 	assert.Len(t, nm.called, 2, "but they are still asked (the manager fast-paths internally)")
@@ -118,7 +137,7 @@ func TestDistributeCompactedMarks_ErrorDoesNotAbort(t *testing.T) {
 		2: segMeta(2, proto.SegmentState_Sealed),
 	}
 	nm := &countingNotifyManager{advanced: false, err: errors.New("etcd down")}
-	driven := distributeCompactedMarks(context.Background(), lh, nm, segs)
+	driven := distributeCompactedMarks(context.Background(), lh, nm, segs, true)
 
 	assert.Equal(t, 0, driven)
 	assert.Len(t, nm.called, 2, "both segments attempted despite the error")

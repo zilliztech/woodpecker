@@ -619,9 +619,16 @@ func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootP
 	if l.stopped.Load() {
 		return werr.ErrLogStoreShutdown
 	}
+	// Compacted-mark cleanup only applies to service (staged) storage — that is the only mode
+	// with a node-local data.log to reclaim. Gate here (matching the compacted-file-cleanup task
+	// and the client-side distributeCompactedMarks) so a non-service node never writes a mark or
+	// enqueues into a drop queue its cleanup task never drains.
+	if !l.cfg.Woodpecker.Storage.IsStorageService() {
+		return nil
+	}
 	dir := localSegmentDataDir(l.cfg, bucketName, rootPath, logId, segmentId)
 	if dir == "" {
-		return nil // no local data dir (pure object-storage mode): nothing to mark
+		return nil // no local data dir (e.g. empty RootPath): nothing to mark
 	}
 	if err := writeCompactedMark(ctx, dir); err != nil {
 		return err
