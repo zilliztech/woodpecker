@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/proto"
@@ -293,4 +294,168 @@ func TestNotifyManager_CleanupOrphanedStatuses(t *testing.T) {
 	assert.NotContains(t, mgr.settled, int64(1))
 	assert.NotContains(t, mgr.settled, int64(2))
 	assert.Contains(t, mgr.settled, int64(5))
+}
+
+// === error-branch coverage ===
+
+func TestNotifyManager_SeedListError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mgr := NewSegmentCompactedNotifyManager("bucket", "root", mockMeta, mockPool).(*segmentCompactedNotifyManagerImpl)
+
+	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, int64(1)).Return(nil, errors.New("etcd down")).Once()
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 2)
+	require.Error(t, err)
+	assert.False(t, advanced)
+
+	// Seed is retried on the next call (not latched by the failure).
+	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCompactedNotifyStatus{}, nil).Once()
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: 1, SegmentId: 2, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+	}, nil).Once()
+	advanced, err = mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 2)
+	require.NoError(t, err)
+	assert.False(t, advanced)
+}
+
+func TestNotifyManager_GetStatusError(t *testing.T) {
+	mgr, mockMeta, _ := newNotifyTestManager(t)
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(nil, errors.New("etcd timeout")).Once()
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 2)
+	require.Error(t, err)
+	assert.True(t, advanced)
+}
+
+func TestNotifyManager_CreateRecordError(t *testing.T) {
+	mgr, mockMeta, _ := newNotifyTestManager(t)
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(3)).Return(nil, nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", 3, []string{"node1"})
+	mockMeta.EXPECT().CreateSegmentCompactedNotifyStatus(mock.Anything, mock.Anything).Return(errors.New("txn failed")).Once()
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 3)
+	require.Error(t, err)
+	assert.True(t, advanced)
+}
+
+func TestNotifyManager_GetSegmentMetadataError(t *testing.T) {
+	mgr, mockMeta, _ := newNotifyTestManager(t)
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(4)).Return(nil, nil).Once()
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(4)).Return(nil, errors.New("meta gone")).Once()
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 4)
+	require.Error(t, err)
+	assert.True(t, advanced)
+}
+
+// TestNotifyManager_NilQuorumFallsBackToEmbedNode covers the embed/standalone fallback: a
+// segment meta without quorum info distributes to the single 127.0.0.1 node.
+func TestNotifyManager_NilQuorumFallsBackToEmbedNode(t *testing.T) {
+	mgr, mockMeta, mockPool := newNotifyTestManager(t)
+	logId, segId := int64(1), int64(5)
+
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(nil, nil).Once()
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", segId).Return(&meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{}, // no quorum info
+	}, nil).Once()
+	mockMeta.EXPECT().CreateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
+		_, ok := s.QuorumNotifyStatus["127.0.0.1"]
+		return len(s.QuorumNotifyStatus) == 1 && ok
+	})).Return(nil).Once()
+	expectNotifyToNode(t, mockPool, "127.0.0.1", logId, segId, nil)
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
+		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED
+	})).Return(nil).Once()
+
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.True(t, advanced)
+}
+
+// TestNotifyManager_ClientLookupFailure covers the GetLogStoreClient error path: the node
+// stays unacked and the record stays IN_PROGRESS for the next cycle.
+func TestNotifyManager_ClientLookupFailure(t *testing.T) {
+	mgr, mockMeta, mockPool := newNotifyTestManager(t)
+	logId, segId := int64(1), int64(6)
+
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}, nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("no route")).Once()
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
+		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS && !s.QuorumNotifyStatus["node1"]
+	})).Return(nil).Once()
+
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.True(t, advanced)
+}
+
+func TestNotifyManager_FinalizeUpdateError(t *testing.T) {
+	mgr, mockMeta, mockPool := newNotifyTestManager(t)
+	logId, segId := int64(1), int64(7)
+
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}, nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
+	expectNotifyToNode(t, mockPool, "node1", logId, segId, nil)
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.Anything).Return(errors.New("etcd txn failed")).Once()
+
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
+	require.Error(t, err)
+	assert.True(t, advanced)
+}
+
+// TestNotifyManager_ResumedFullyAckedRecord_CompletesWithoutRPC covers the nodesToNotify==0
+// path: a resumed record whose nodes are all acked completes directly, with no RPC.
+func TestNotifyManager_ResumedFullyAckedRecord_CompletesWithoutRPC(t *testing.T) {
+	mgr, mockMeta, _ := newNotifyTestManager(t)
+	logId, segId := int64(1), int64(8)
+
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": true},
+	}, nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
+		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED
+	})).Return(nil).Once()
+
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.True(t, advanced)
+}
+
+func TestNotifyManager_CleanupOrphaned_ListError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mgr := NewSegmentCompactedNotifyManager("bucket", "root", mockMeta, mockPool).(*segmentCompactedNotifyManagerImpl)
+	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, int64(1)).Return(nil, errors.New("etcd down")).Once()
+	require.Error(t, mgr.CleanupOrphanedStatuses(context.Background(), 1, 5))
+}
+
+// TestNotifyManager_CleanupOrphaned_DeleteError verifies a per-record delete failure is
+// logged and skipped (kept for the next sweep) without failing the whole sweep.
+func TestNotifyManager_CleanupOrphaned_DeleteError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mgr := NewSegmentCompactedNotifyManager("bucket", "root", mockMeta, mockPool).(*segmentCompactedNotifyManagerImpl)
+	mgr.settled[1] = struct{}{}
+
+	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCompactedNotifyStatus{
+		{LogId: 1, SegmentId: 1, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED},
+	}, nil).Once()
+	mockMeta.EXPECT().DeleteSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(1)).Return(errors.New("etcd down")).Once()
+
+	require.NoError(t, mgr.CleanupOrphanedStatuses(context.Background(), 1, 5))
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	assert.Contains(t, mgr.settled, int64(1), "settled entry kept when the delete failed (retried next sweep)")
 }

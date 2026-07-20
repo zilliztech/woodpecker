@@ -401,3 +401,72 @@ func TestCompactedFileCleanupTask_NameAndInterval(t *testing.T) {
 	assert.Equal(t, "compacted-file-cleanup", task.Name())
 	assert.Equal(t, store.cfg.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Duration.Duration(), task.Interval())
 }
+
+// TestCompactedFileCleanup_TransientStatError_Requeues verifies the drain retry path: a
+// transport error on the footer HEAD leaves data.log in place and re-enqueues the segment,
+// and the next tick (with the footer reachable again) completes the drop.
+func TestCompactedFileCleanup_TransientStatError_Requeues(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(20), int64(12)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	// First tick: transport error (NOT NoSuchKey) -> no delete, requeued.
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "20").
+		Return(int64(0), false, fmt.Errorf("i/o timeout")).Once()
+	// Second tick: footer confirmed -> drop.
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "20").
+		Return(int64(128), false, nil).Once()
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId)
+
+	require.NoError(t, task.runOnce(ctx, false))
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	require.NoError(t, statErr, "data.log must survive a transient footer stat error")
+
+	require.NoError(t, task.runOnce(ctx, false)) // drains the requeued entry
+	_, statErr = os.Stat(filepath.Join(segDir, "data.log"))
+	assert.True(t, os.IsNotExist(statErr), "requeued segment should be dropped once the footer is reachable")
+}
+
+// TestCompactedFileCleanup_QueuedSegmentAlreadyGone verifies the early return: a queued
+// segment whose data.log is already gone (dropped earlier or truncate-GC'ed) is skipped
+// without any footer HEAD (no StatObject expectation set).
+func TestCompactedFileCleanup_QueuedSegmentAlreadyGone(t *testing.T) {
+	store, root, _ := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(21), int64(13)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	require.NoError(t, os.Remove(filepath.Join(segDir, "data.log")))
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId)
+	require.NoError(t, task.runOnce(ctx, false))
+}
+
+// TestCompactedFileCleanup_WalkSkipsUnparseableDir verifies the reconcile walk skips a
+// data.log whose path does not parse as <bucket>/<rootPath>/<logId>/<segId> (no HEAD, no
+// mark, no delete).
+func TestCompactedFileCleanup_WalkSkipsUnparseableDir(t *testing.T) {
+	store, root, _ := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	badDir := filepath.Join(root, "b", "rp", "notanumber", "2")
+	require.NoError(t, os.MkdirAll(badDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(badDir, "data.log"), []byte("x"), 0o644))
+
+	task := newCompactedFileCleanupTask(store)
+	require.NoError(t, task.runOnce(ctx, true))
+
+	_, statErr := os.Stat(filepath.Join(badDir, "data.log"))
+	assert.NoError(t, statErr, "unparseable segment dir must be left untouched")
+	assert.False(t, hasCompactedMark(badDir))
+}

@@ -132,6 +132,14 @@ func TestAll(t *testing.T) {
 	t.Run("test store segment meta already exists", testStoreSegmentMetaAlreadyExists)
 	t.Run("test create cleanup status already exists", testCreateCleanupStatusAlreadyExists)
 	t.Run("test update cleanup status not exists", testUpdateCleanupStatusNotExists)
+	t.Run("test create segment compacted notify status", testCreateSegmentCompactedNotifyStatus)
+	t.Run("test update segment compacted notify status", testUpdateSegmentCompactedNotifyStatus)
+	t.Run("test list segment compacted notify status", testListSegmentCompactedNotifyStatus)
+	t.Run("test delete segment compacted notify status", testDeleteSegmentCompactedNotifyStatus)
+	t.Run("test create compacted notify status already exists", testCreateCompactedNotifyStatusAlreadyExists)
+	t.Run("test update compacted notify status not exists", testUpdateCompactedNotifyStatusNotExists)
+	t.Run("test corrupted compacted notify status data", testCorruptedCompactedNotifyStatusData)
+	t.Run("test delete log metadata wipes marking records", testDeleteLogMetadataWipesMarkingRecords)
 	t.Run("test check segment not exists", testCheckSegmentNotExists)
 	t.Run("test cancelled context etcd errors", testCancelledContextEtcdErrors)
 	t.Run("test corrupted protobuf data", testCorruptedProtobufData)
@@ -2742,4 +2750,196 @@ func testStoreSegmentMetadata_RejectsAfterLogDeleted(t *testing.T) {
 	segResp, err := etcdCli.Get(context.Background(), kb.BuildSegmentInstanceKey("ghost", ""), clientv3.WithPrefix())
 	require.NoError(t, err)
 	assert.Equal(t, 0, len(segResp.Kvs), "no segment key must exist under deleted log 'ghost'")
+}
+
+// === SegmentCompactedNotifyStatus (root/marking) provider tests ===
+// Mirror of the SegmentCleanupStatus tests for the Sealed-phase sibling record.
+
+func testCreateSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(1)
+	nowMs := uint64(time.Now().UnixMilli())
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:          logId,
+		SegmentId:      segmentId,
+		State:          proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:      nowMs,
+		LastUpdateTime: nowMs,
+		QuorumNotifyStatus: map[string]bool{
+			"node1": false,
+			"node2": true,
+		},
+	}
+	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+
+	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.NotNil(t, stored)
+	assert.Equal(t, logId, stored.LogId)
+	assert.Equal(t, segmentId, stored.SegmentId)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS, stored.State)
+	assert.Equal(t, nowMs, stored.StartTime)
+	assert.Equal(t, nowMs, stored.LastUpdateTime)
+	assert.Equal(t, 2, len(stored.QuorumNotifyStatus))
+	assert.False(t, stored.QuorumNotifyStatus["node1"])
+	assert.True(t, stored.QuorumNotifyStatus["node2"])
+}
+
+func testUpdateSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(2)
+	nowMs := uint64(time.Now().UnixMilli())
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          nowMs,
+		LastUpdateTime:     nowMs,
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+
+	// Advance to PENDING_MANUAL with an error message (the operator-triage transition).
+	status.State = proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL
+	status.ErrorMessage = "nodes unacked after 30m0s of retries: node1"
+	status.LastUpdateTime = uint64(time.Now().UnixMilli())
+	require.NoError(t, provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status))
+
+	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.NotNil(t, stored)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL, stored.State)
+	assert.Contains(t, stored.ErrorMessage, "node1")
+}
+
+func testListSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	for _, segId := range []int64{1, 2, 3} {
+		status := &proto.SegmentCompactedNotifyStatus{
+			LogId:              logId,
+			SegmentId:          segId,
+			State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+			StartTime:          uint64(time.Now().UnixMilli()),
+			LastUpdateTime:     uint64(time.Now().UnixMilli()),
+			QuorumNotifyStatus: map[string]bool{"node1": false},
+		}
+		require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+	}
+
+	statuses, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(statuses))
+	segIds := make([]int64, 0, len(statuses))
+	for _, s := range statuses {
+		segIds = append(segIds, s.SegmentId)
+	}
+	sort.Slice(segIds, func(i, j int) bool { return segIds[i] < segIds[j] })
+	assert.Equal(t, []int64{1, 2, 3}, segIds)
+
+	// Empty list for a log with no records.
+	empty, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId+999)
+	assert.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func testDeleteSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(4)
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": true},
+	}
+	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+
+	require.NoError(t, provider.DeleteSegmentCompactedNotifyStatus(context.Background(), logId, segmentId))
+
+	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.Nil(t, stored)
+
+	// Deleting a missing record is idempotent.
+	assert.NoError(t, provider.DeleteSegmentCompactedNotifyStatus(context.Background(), logId, segmentId))
+}
+
+func testCreateCompactedNotifyStatusAlreadyExists(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          5,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+	err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
+func testUpdateCompactedNotifyStatusNotExists(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          77,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+		QuorumNotifyStatus: map[string]bool{"node1": true},
+	}
+	err := provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "does not exist")
+}
+
+func testCorruptedCompactedNotifyStatusData(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Invalid protobuf: field 1, length-delimited, claims length=10 but no data follows.
+	invalidProto := string([]byte{0x0a, 0x0a})
+	logId := int64(31415)
+	key := legacyKeyBuilder().BuildSegmentCompactedNotifyStatusKey(logId, 1)
+	_, err = etcdCli.Put(context.Background(), key, invalidProto)
+	require.NoError(t, err)
+
+	_, err = provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
+	assert.Error(t, err)
+	_, err = provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
+	assert.Error(t, err)
+
+	_, err = etcdCli.Delete(context.Background(), key)
+	require.NoError(t, err)
+}
+
+func testDeleteLogMetadataWipesMarkingRecords(t *testing.T) {
+	provider, logName, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          1,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+
+	// Whole-log delete must wipe the marking/<logId>/ prefix along with the rest.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), logName, true))
+
+	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
+	assert.NoError(t, err)
+	assert.Nil(t, stored, "marking record must be wiped by the whole-log delete transaction")
 }
