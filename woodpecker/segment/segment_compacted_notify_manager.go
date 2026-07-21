@@ -53,6 +53,14 @@ type SegmentCompactedNotifyManager interface {
 	// the caller's per-cycle budget only counts segments that actually did work.
 	EnsureSegmentNotified(ctx context.Context, logName string, logId int64, segmentId int64) (advanced bool, err error)
 
+	// MarkSegmentReaped records, in memory, that a segment has entered truncate reclamation on
+	// this writer: a Truncated segment never needs mark distribution (its data — local files,
+	// object storage, and the marking record — is being deleted), so Ensure must skip it even
+	// when the distributor is still working on a stale snapshot that shows it Sealed. Both the
+	// distributor and the truncate GC run in this same process, so this in-memory sync closes
+	// the late-notify-resurrects-a-cleaned-directory race down to a single in-flight RPC.
+	MarkSegmentReaped(segmentId int64)
+
 	// CleanupOrphanedStatuses deletes marking records whose segmentId is below minSegmentId —
 	// their segment metadata is already gone (segments are cleaned in ascending order), so the
 	// records are orphans. Mirrors SegmentCleanupManager.CleanupOrphanedStatuses.
@@ -69,6 +77,7 @@ type segmentCompactedNotifyManagerImpl struct {
 	inProgress map[int64]bool     // segId -> an EnsureSegmentNotified call is running
 	settled    map[int64]struct{} // segId -> record is COMPLETED/PENDING_MANUAL; skip without etcd reads
 	seeded     bool               // one-time List seed of `settled` performed
+	seedWarned bool               // seed failure already logged (reset on success) to avoid per-segment spam
 }
 
 // NewSegmentCompactedNotifyManager creates a new compacted-mark distribution manager.
@@ -108,10 +117,12 @@ func isSettledNotifyState(state proto.SegmentCompactedNotifyState) bool {
 
 func (s *segmentCompactedNotifyManagerImpl) EnsureSegmentNotified(ctx context.Context, logName string, logId int64, segmentId int64) (bool, error) {
 	// One-time seed: warm the settled cache from the durable records so a restarted writer
-	// skips already-settled segments without per-segment etcd reads.
-	if err := s.seedIfNecessary(ctx, logId); err != nil {
-		return false, err
-	}
+	// skips already-settled segments without per-segment etcd reads. A seed failure DEGRADES
+	// rather than blocks: distribution proceeds with an empty cache (settled segments cost one
+	// Get each until a later seed succeeds) — a failing List (e.g. transient etcd trouble) must
+	// not disable mark distribution for the whole log, nor bypass the caller's per-cycle budget
+	// by erroring out before any real work.
+	s.seedIfNecessary(ctx, logId)
 
 	s.mu.Lock()
 	if _, ok := s.settled[segmentId]; ok {
@@ -210,26 +221,36 @@ func (s *segmentCompactedNotifyManagerImpl) EnsureSegmentNotified(ctx context.Co
 }
 
 // seedIfNecessary lists the log's marking records once per manager lifetime and caches the
-// settled (COMPLETED/PENDING_MANUAL) ones, so restarts resume exactly without re-reading etcd
-// per segment on every pass.
-func (s *segmentCompactedNotifyManagerImpl) seedIfNecessary(ctx context.Context, logId int64) error {
+// settled (COMPLETED/PENDING_MANUAL/OPERATOR_CONFIRMED) ones, so restarts resume exactly
+// without re-reading etcd per segment on every pass. Best-effort: a List failure is logged
+// ONCE (per failure streak) and retried on later calls; callers proceed either way, so a
+// broken seed can only cost extra per-segment Gets, never disable distribution.
+func (s *segmentCompactedNotifyManagerImpl) seedIfNecessary(ctx context.Context, logId int64) {
 	s.mu.Lock()
 	if s.seeded {
 		s.mu.Unlock()
-		return nil
+		return
 	}
 	s.mu.Unlock()
 
 	statuses, err := s.metadata.ListSegmentCompactedNotifyStatus(ctx, logId)
 	if err != nil {
-		logger.Ctx(ctx).Warn("seed: list segment compacted notify statuses failed", zap.Int64("logId", logId), zap.Error(err))
-		return err
+		s.mu.Lock()
+		warned := s.seedWarned
+		s.seedWarned = true
+		s.mu.Unlock()
+		if !warned {
+			logger.Ctx(ctx).Warn("seed: list segment compacted notify statuses failed; proceeding unseeded (will retry)",
+				zap.Int64("logId", logId), zap.Error(err))
+		}
+		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.seedWarned = false
 	if s.seeded {
-		return nil
+		return
 	}
 	settledCount := 0
 	for _, st := range statuses {
@@ -241,7 +262,11 @@ func (s *segmentCompactedNotifyManagerImpl) seedIfNecessary(ctx context.Context,
 	s.seeded = true
 	logger.Ctx(ctx).Info("seeded compacted notify settled cache",
 		zap.Int64("logId", logId), zap.Int("records", len(statuses)), zap.Int("settled", settledCount))
-	return nil
+}
+
+// MarkSegmentReaped implements the in-process reap sync (see the interface doc).
+func (s *segmentCompactedNotifyManagerImpl) MarkSegmentReaped(segmentId int64) {
+	s.markSettled(segmentId)
 }
 
 func (s *segmentCompactedNotifyManagerImpl) markSettled(segmentId int64) {

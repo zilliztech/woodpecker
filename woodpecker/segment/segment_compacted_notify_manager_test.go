@@ -298,24 +298,43 @@ func TestNotifyManager_CleanupOrphanedStatuses(t *testing.T) {
 
 // === error-branch coverage ===
 
+// TestNotifyManager_SeedListError verifies a seed (List) failure DEGRADES instead of blocking:
+// distribution proceeds via per-segment Gets with an empty cache — a single failing List (e.g.
+// transient etcd trouble, or one corrupt record before the List was hardened) must never
+// disable mark distribution for the whole log nor bypass the caller's per-cycle budget.
 func TestNotifyManager_SeedListError(t *testing.T) {
 	mockMeta := mocks_meta.NewMetadataProvider(t)
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mgr := NewSegmentCompactedNotifyManager("bucket", "root", mockMeta, mockPool).(*segmentCompactedNotifyManagerImpl)
 
+	// Seed fails, but the settled record is still discovered via the Get path.
 	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, int64(1)).Return(nil, errors.New("etcd down")).Once()
-	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 2)
-	require.Error(t, err)
-	assert.False(t, advanced)
-
-	// Seed is retried on the next call (not latched by the failure).
-	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCompactedNotifyStatus{}, nil).Once()
 	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCompactedNotifyStatus{
 		LogId: 1, SegmentId: 2, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
 	}, nil).Once()
-	advanced, err = mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 2)
-	require.NoError(t, err)
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 2)
+	require.NoError(t, err, "a seed failure must degrade, not block")
 	assert.False(t, advanced)
+
+	// Seed is retried on a later call (not latched by the failure) and succeeds.
+	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCompactedNotifyStatus{
+		{LogId: 1, SegmentId: 3, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED},
+	}, nil).Once()
+	advanced, err = mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 3)
+	require.NoError(t, err)
+	assert.False(t, advanced, "seeded settled record is a fast path (no Get expected)")
+}
+
+// TestNotifyManager_MarkSegmentReaped verifies the in-process reap sync: a segment marked
+// reaped (its truncate reclamation started on this writer) is skipped entirely — no etcd
+// read, no record creation, no RPC — even if a stale snapshot still shows it Sealed.
+func TestNotifyManager_MarkSegmentReaped(t *testing.T) {
+	mgr, _, _ := newNotifyTestManager(t)
+	mgr.MarkSegmentReaped(42)
+
+	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 42)
+	require.NoError(t, err)
+	assert.False(t, advanced, "a reaped segment must never be driven again")
 }
 
 func TestNotifyManager_GetStatusError(t *testing.T) {

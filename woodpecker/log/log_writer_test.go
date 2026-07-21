@@ -67,6 +67,8 @@ func (s *stubNotifyManager) CleanupOrphanedStatuses(ctx context.Context, logId i
 	return nil
 }
 
+func (s *stubNotifyManager) MarkSegmentReaped(_ int64) {}
+
 // createTestInternalWriter creates an internalLogWriterImpl for testing without goroutines.
 func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segment.SegmentCleanupManager) *internalLogWriterImpl {
 	cfg := newTestConfig()

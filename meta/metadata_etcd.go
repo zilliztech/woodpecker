@@ -1600,10 +1600,12 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 		status := &proto.SegmentCleanupStatus{}
 		err = proto.UnmarshalSegmentCleanupStatus(kv.Value, status)
 		if err != nil {
-			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "list_segment_cleanup_status", "error").Inc()
-			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "list_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-			logger.Ctx(ctx).Warn("unmarshal segment cleanup status failed", zap.Error(err))
-			return nil, fmt.Errorf("failed to unmarshal segment cleanup status: %w", err)
+			// Skip the corrupt record instead of failing the whole list (same hardening as the
+			// sibling marking list): one bad value must not poison the truncate cleanup and the
+			// orphan sweep for the entire log.
+			logger.Ctx(ctx).Warn("skipping unparseable segment cleanup status",
+				zap.String("key", string(kv.Key)), zap.Error(err))
+			continue
 		}
 		statuses = append(statuses, status)
 	}
@@ -1790,10 +1792,13 @@ func (e *metadataProviderEtcd) ListSegmentCompactedNotifyStatus(ctx context.Cont
 		status := &proto.SegmentCompactedNotifyStatus{}
 		err = proto.UnmarshalSegmentCompactedNotifyStatus(kv.Value, status)
 		if err != nil {
-			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "list_segment_compacted_notify_status", "error").Inc()
-			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "list_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-			logger.Ctx(ctx).Warn("unmarshal segment compacted notify status failed", zap.Error(err))
-			return nil, fmt.Errorf("failed to unmarshal segment compacted notify status: %w", err)
+			// Skip the corrupt record instead of failing the whole list: one bad value must not
+			// poison every consumer (the notify seed, the orphan sweep, wp marking) for the
+			// entire log — the CLI already tolerates unparseable records the same way. The bad
+			// key itself is bounded (reaped with the log) and loudly logged here.
+			logger.Ctx(ctx).Warn("skipping unparseable segment compacted notify status",
+				zap.String("key", string(kv.Key)), zap.Error(err))
+			continue
 		}
 		statuses = append(statuses, status)
 	}

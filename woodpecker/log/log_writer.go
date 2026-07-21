@@ -355,6 +355,9 @@ func (l *logWriterImpl) runAuditor() {
 
 			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
 			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
+			// In-process reap sync: a Truncated segment must never be notified again, even if the
+			// distributor is mid-round on a stale snapshot that still shows it Sealed.
+			markTruncatedSegmentsReaped(l.notifyManager, truncatedSegmentExists)
 
 			// Periodic orphan sweep (pass 1 = startup recovery, then every Nth cycle): reclaims
 			// cleanup-domain records whose segment metadata is already gone, covering the

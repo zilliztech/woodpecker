@@ -174,6 +174,17 @@ func collectTruncatedSegments(segs map[int64]*meta.SegmentMeta) []int64 {
 	return truncated
 }
 
+// markTruncatedSegmentsReaped feeds the auditor's FRESH view of Truncated segments into the
+// notify manager's in-memory reap set. The distributor works on published snapshots and can be
+// mid-round when a segment gets truncated; without this sync a late NotifySegmentCompacted
+// could resurrect the segment's already-reclaimed local directory on the nodes. Same process,
+// same memory: the freshest "never notify this again" signal costs nothing to share.
+func markTruncatedSegmentsReaped(notifyManager segment.SegmentCompactedNotifyManager, truncatedIds []int64) {
+	for _, segId := range truncatedIds {
+		notifyManager.MarkSegmentReaped(segId)
+	}
+}
+
 // orphanSweepEveryNAuditCycles throttles the auditor-driven orphan sweep of cleanup-domain
 // records (cleaning/ + marking/) to roughly every 5m at the default auditor interval. The
 // batch-time sweeps inside cleanupTruncatedSegmentsIfNecessary remain the immediate path;

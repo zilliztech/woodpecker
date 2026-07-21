@@ -2264,9 +2264,11 @@ func testCorruptedProtobufData(t *testing.T) {
 	_, err = provider.GetSegmentCleanupStatus(context.Background(), 1, 1)
 	assert.Error(t, err)
 
-	// ListSegmentCleanupStatus unmarshal error
-	_, err = provider.ListSegmentCleanupStatus(context.Background(), 1)
-	assert.Error(t, err)
+	// ListSegmentCleanupStatus SKIPS the corrupt record (hardened: one bad value must not
+	// poison the truncate cleanup / orphan sweep for the whole log).
+	cleanupStatuses, err := provider.ListSegmentCleanupStatus(context.Background(), 1)
+	assert.NoError(t, err)
+	assert.Empty(t, cleanupStatuses, "the corrupt record is skipped, not returned")
 }
 
 // testCreateLogEdgeCases covers CreateLog error branches for missing/invalid idgen
@@ -2917,11 +2919,27 @@ func testCorruptedCompactedNotifyStatusData(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
-	assert.Error(t, err)
-	_, err = provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
-	assert.Error(t, err)
+	assert.Error(t, err, "a targeted Get of the corrupt record still surfaces the error")
+
+	// List SKIPS the corrupt record instead of failing wholesale: one bad value must not
+	// poison the notify seed / orphan sweep for the entire log. A good sibling record is
+	// still returned.
+	goodKey := legacyKeyBuilder().BuildSegmentCompactedNotifyStatusKey(logId, 2)
+	goodVal, err := proto.MarshalSegmentCompactedNotifyStatus(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: 2, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+	})
+	require.NoError(t, err)
+	_, err = etcdCli.Put(context.Background(), goodKey, string(goodVal))
+	require.NoError(t, err)
+
+	statuses, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
+	assert.NoError(t, err, "List must tolerate a corrupt record")
+	require.Len(t, statuses, 1, "the good record survives; the corrupt one is skipped")
+	assert.Equal(t, int64(2), statuses[0].SegmentId)
 
 	_, err = etcdCli.Delete(context.Background(), key)
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), goodKey)
 	require.NoError(t, err)
 }
 

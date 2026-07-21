@@ -41,6 +41,7 @@ func segMeta(segNo int64, state proto.SegmentState) *meta.SegmentMeta {
 type countingNotifyManager struct {
 	called      []int64
 	sweepBounds []int64
+	reaped      []int64
 	advanced    bool
 	err         error
 }
@@ -53,6 +54,10 @@ func (c *countingNotifyManager) EnsureSegmentNotified(_ context.Context, _ strin
 func (c *countingNotifyManager) CleanupOrphanedStatuses(_ context.Context, _ int64, minSegmentId int64) error {
 	c.sweepBounds = append(c.sweepBounds, minSegmentId)
 	return nil
+}
+
+func (c *countingNotifyManager) MarkSegmentReaped(segmentId int64) {
+	c.reaped = append(c.reaped, segmentId)
 }
 
 // recordingCleanupManager records the orphan-sweep bounds it was invoked with.
