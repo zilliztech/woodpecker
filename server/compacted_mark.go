@@ -82,11 +82,3 @@ func writeCompactedMark(ctx context.Context, segmentDir string) error {
 	logger.Ctx(ctx).Info("compacted mark created", zap.String("path", p))
 	return nil
 }
-
-func removeCompactedMark(ctx context.Context, segmentDir string) error {
-	err := os.Remove(compactedMarkPath(segmentDir))
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}

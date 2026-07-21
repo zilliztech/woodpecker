@@ -73,7 +73,7 @@ type StagedFileWriter struct {
 	file            *os.File
 	logIdStr        string // for metrics only
 	logNs           string // for metrics only
-	storedNs        string // normalized log_ns for the local-storage gauges (see storedGaugeNs)
+	storedNs        string // log_ns label for the local-storage gauges (see storedGaugeNs)
 
 	// Configuration
 	maxFlushSize     int64 // Max buffer size before triggering sync
@@ -1851,12 +1851,12 @@ func (w *StagedFileWriter) readRemoteFooter(ctx context.Context) (*codec.FooterR
 
 // getFooterBlockKey generates the object key for the footer block
 func (w *StagedFileWriter) getFooterBlockKey() string {
-	return fmt.Sprintf("%s/%d/%d/footer.blk", NormalizeRootPathForKey(w.rootPath), w.logId, w.segmentId)
+	return fmt.Sprintf("%s/%d/%d/footer.blk", w.rootPath, w.logId, w.segmentId)
 }
 
 // getCompactedBlockKey generates the object key for a compacted block
 func (w *StagedFileWriter) getCompactedBlockKey(blockID int64) string {
-	return fmt.Sprintf("%s/%d/%d/m_%d.blk", NormalizeRootPathForKey(w.rootPath), w.logId, w.segmentId, blockID)
+	return fmt.Sprintf("%s/%d/%d/m_%d.blk", w.rootPath, w.logId, w.segmentId, blockID)
 }
 
 // recoverFromExistingFile attempts to recover state from an existing incomplete file
@@ -2199,20 +2199,13 @@ func HasCompactedMark(segmentDir string) bool {
 	return err == nil
 }
 
-// NormalizeRootPathForKey mirrors objectstorage.NormalizeRootPathForKey (the canonical
-// implementation) for this package's key-building sites; see that function for rationale.
-func NormalizeRootPathForKey(rootPath string) string {
-	return objectstorage.NormalizeRootPathForKey(rootPath)
-}
-
-// storedGaugeNs builds the log_ns label for the WpFileStoredBytes/WpFileStoredCount gauges
-// with a NORMALIZED rootPath. These gauges are incremented by the staged writer (rootPath as
-// received over RPC) and decremented by both deleteLocalFiles and the compacted-file-cleanup
-// drop path (whose pull branch re-derives a path.Join-cleaned rootPath from disk); without a
-// canonical label the two sides would drive different series for a non-clean rootPath — the
-// writer's series never decrementing while a never-incremented one goes negative.
+// storedGaugeNs builds the log_ns label for the WpFileStoredBytes/WpFileStoredCount gauges.
+// The gauges are incremented by the staged writer (rootPath as received over RPC) and
+// decremented by deleteLocalFiles and the compacted-file-cleanup drop path (whose pull branch
+// re-derives rootPath from the on-disk layout); all sides must build the label the same way.
+// rootPath is validated clean at startup (config.Validate), so the raw value is canonical.
 func storedGaugeNs(bucket, rootPath string) string {
-	return bucket + "/" + NormalizeRootPathForKey(rootPath)
+	return bucket + "/" + rootPath
 }
 
 // validateLACAlignment validates that the segment contains complete data for the LAC range

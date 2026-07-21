@@ -28,11 +28,14 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
+	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_segment"
+	"github.com/zilliztech/woodpecker/server/processor"
 )
 
 // setupCompactedCleanupStore builds a service-mode logStore over a temp RootPath, wired
@@ -473,35 +476,70 @@ func TestCompactedFileCleanup_WalkSkipsUnparseableDir(t *testing.T) {
 	assert.False(t, hasCompactedMark(badDir))
 }
 
-// TestCompactedFileCleanup_PushPath_NormalizesRootPathForFooterHead is a regression for the
-// push-path key-normalization bug: a rootPath with stray slashes ("rp//x/") must produce the
-// SAME footer key the writer/reader use (normalized "rp/x/..."), so the footer HEAD hits and
-// the drop happens on the push tick — not silently deferred to the ~5m reconcile walk.
-func TestCompactedFileCleanup_PushPath_NormalizesRootPathForFooterHead(t *testing.T) {
+// TestCompactedFileCleanup_PushPath_FooterHeadUsesRootPathVerbatim pins the push-path footer
+// HEAD to the exact verbatim key the staged writer stores the footer under
+// ("<rootPath>/<logId>/<segId>/footer.blk"). rootPath is validated clean at startup and used
+// raw on every key-building site; if the HEAD key format ever diverges from the writer's, the
+// strict mock fails and flags the drop as silently deferred to the reconcile walk.
+func TestCompactedFileCleanup_PushPath_FooterHeadUsesRootPathVerbatim(t *testing.T) {
 	store, root, mockStorage := setupCompactedCleanupStore(t)
 	ctx := context.Background()
 
 	bucket := "b"
-	rawRootPath := "rp//x/" // misconfigured: leading/dup/trailing slashes
+	rootPath := "rp/x" // multi-segment, already canonical (config.Validate enforces this)
 	logId, segId := int64(22), int64(14)
 
-	// The segment dir + mark are created under the RAW rootPath (that's what the push carries).
-	segDir := makeSegmentDir(t, root, bucket, rawRootPath, logId, segId)
+	segDir := makeSegmentDir(t, root, bucket, rootPath, logId, segId)
 	require.NoError(t, writeCompactedMark(ctx, segDir))
 
-	// The footer HEAD must probe the NORMALIZED key ("rp/x/22/14/footer.blk") + normalized ns.
-	normalized := "rp/x"
+	// The footer HEAD must probe the writer's exact key and ns, built verbatim from rootPath.
 	mockStorage.EXPECT().
-		StatObject(ctx, bucket, footerKeyFor(normalized, logId, segId), bucket+"/"+rawRootPath, "22").
+		StatObject(ctx, bucket, footerKeyFor(rootPath, logId, segId), bucket+"/"+rootPath, "22").
 		Return(int64(128), false, nil).Once()
 
 	task := newCompactedFileCleanupTask(store)
-	task.enqueue(segDir, bucket, rawRootPath, logId, segId) // push carries the raw rootPath
+	task.enqueue(segDir, bucket, rootPath, logId, segId)
 
 	require.NoError(t, task.runOnce(ctx, false)) // non-reconcile tick: drains the push queue
 
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
-	assert.True(t, os.IsNotExist(statErr), "footer HEAD must hit the normalized key so the push-path drop happens")
+	assert.True(t, os.IsNotExist(statErr), "footer HEAD must hit the writer's key so the push-path drop happens")
+	assert.True(t, hasCompactedMark(segDir), "mark kept as tombstone")
+}
+
+// TestCompactedFileCleanup_DropEvictsCachedWriterAndReader verifies the drop releases the
+// compaction node's cached StagedFileWriter fd (and the cached reader): unlinking data.log
+// while the writer still holds it open keeps the inode's blocks allocated until the idle
+// cleanup (MaxIdleTime) closes it — "ls" shows the file gone while "df" stays flat.
+func TestCompactedFileCleanup_DropEvictsCachedWriterAndReader(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(31), int64(9)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "31").
+		Return(int64(128), false, nil).Once()
+
+	// Seed a cached processor for exactly this (bucket, rootPath, logId, segId): the drop
+	// must evict BOTH the writer (fd release, before the unlink) and the reader.
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	mockProc.EXPECT().InvalidateWriter(mock.Anything).Return().Once()
+	mockProc.EXPECT().InvalidateReader(mock.Anything).Return().Once()
+	logKey := GetLogKey(bucket, rp, logId)
+	store.spMu.Lock()
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{segId: mockProc}
+	store.spMu.Unlock()
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId)
+	require.NoError(t, task.runOnce(ctx, false))
+
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.True(t, os.IsNotExist(statErr))
 	assert.True(t, hasCompactedMark(segDir), "mark kept as tombstone")
 }
 

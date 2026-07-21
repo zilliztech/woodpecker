@@ -251,14 +251,14 @@ func TestDirectReadBatch_ClosesDirectReaderOnEOFAndReopens(t *testing.T) {
 	assert.Nil(t, impl.directReader)
 }
 
-// TestGetOrCreateDirectReader_NormalizesRootPath verifies the direct reader targets the SAME
-// normalized object keys the staged writer stores under: with a non-clean rootPath every key
-// the reader requests must use the normalized form (no stray slashes), otherwise sealed-segment
-// direct reads would miss objects written under the normalized key.
-func TestGetOrCreateDirectReader_NormalizesRootPath(t *testing.T) {
+// TestGetOrCreateDirectReader_UsesRootPathVerbatim verifies the direct reader targets the SAME
+// object keys the writers store under: rootPath is validated clean at startup and every
+// key-building site uses it verbatim, so the reader's keys must carry the exact configured
+// prefix — any transformation on either side would silently split the key space.
+func TestGetOrCreateDirectReader_UsesRootPathVerbatim(t *testing.T) {
 	cfg := newTestCfgWithDirectRead(true)
 	cfg.Minio.BucketName = "test-bucket"
-	cfg.Minio.RootPath = "/test-root//x/" // non-clean on purpose
+	cfg.Minio.RootPath = "test-root/x"
 
 	var mu sync.Mutex
 	var requestedKeys []string
@@ -293,7 +293,6 @@ func TestGetOrCreateDirectReader_NormalizesRootPath(t *testing.T) {
 	require.NotEmpty(t, requestedKeys, "the direct reader must have consulted object storage")
 	for _, key := range requestedKeys {
 		assert.True(t, strings.HasPrefix(key, "test-root/x/"),
-			"key %q must use the normalized rootPath prefix", key)
-		assert.NotContains(t, key, "//", "key %q must not contain stray slashes", key)
+			"key %q must use the configured rootPath verbatim as its prefix", key)
 	}
 }

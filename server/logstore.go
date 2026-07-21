@@ -82,6 +82,10 @@ type LogStore interface {
 	// segment's local data.log is reclaimed, so subsequent reads rebuild
 	// against minio instead of hitting a stale/closed local reader.
 	EvictSegmentReader(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error
+	// EvictSegmentWriter closes the cached segment writer (if any) for an already-cached
+	// segment processor, releasing its open fd on the local data.log. Like
+	// EvictSegmentReader it never creates a processor; absent key is a no-op.
+	EvictSegmentWriter(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error
 }
 
 var _ LogStore = (*logStore)(nil)
@@ -403,6 +407,27 @@ func (l *logStore) EvictSegmentReader(ctx context.Context, bucketName string, ro
 	return nil
 }
 
+// EvictSegmentWriter closes and drops the cached segment writer for an already-cached
+// segment processor, releasing its open fd on the local data.log so the unlinked inode's
+// blocks are reclaimed immediately. It does NOT create a processor if one is not already
+// cached; absent key is a no-op.
+func (l *logStore) EvictSegmentWriter(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error {
+	logKey := GetLogKey(bucketName, rootPath, logId)
+
+	l.spMu.RLock()
+	var segProcessor processor.SegmentProcessor
+	if processors, logExists := l.segmentProcessors[logKey]; logExists {
+		segProcessor = processors[segId]
+	}
+	l.spMu.RUnlock()
+
+	if segProcessor == nil {
+		return nil
+	}
+	segProcessor.InvalidateWriter(ctx)
+	return nil
+}
+
 // Test Only
 func (l *logStore) getExistsSegmentProcessor(bucketName string, rootPath string, logId int64, segmentId int64) processor.SegmentProcessor {
 	l.spMu.RLock()
@@ -629,6 +654,26 @@ func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootP
 	dir := localSegmentDataDir(l.cfg, bucketName, rootPath, logId, segmentId)
 	if dir == "" {
 		return nil // no local data dir (e.g. empty RootPath): nothing to mark
+	}
+	// Verify the compaction is actually durable BEFORE writing the tombstone. The mark is
+	// load-bearing — HasLocalSegmentData treats a marked data.log as drained and the cleanup
+	// task reclaims against it — so the "mark ⇒ footer exists" invariant is enforced here,
+	// not on the caller's word: a stale retry, a mis-routed notify, or an external caller of
+	// the public RPC must not fabricate a drained state. This also closes the truncate race
+	// end-to-end: a notify arriving after the truncate GC removed the segment's objects finds
+	// no footer and cannot resurrect the reaped directory.
+	if l.storageClient == nil {
+		return werr.ErrInternalError.WithCauseErrMsg("no object storage client; cannot verify compacted footer")
+	}
+	footerOk, footerErr := footerExistsInMinio(ctx, l.storageClient, bucketName, rootPath, logId, segmentId)
+	if footerErr != nil {
+		return footerErr
+	}
+	if !footerOk {
+		logger.Ctx(ctx).Warn("NotifySegmentCompacted: compacted footer not found; refusing to write mark",
+			zap.String("bucket", bucketName), zap.String("rootPath", rootPath),
+			zap.Int64("logId", logId), zap.Int64("segId", segmentId))
+		return werr.ErrSegmentNotFound.WithCauseErrMsg("compacted footer not found in object storage; segment is not durably compacted")
 	}
 	if err := writeCompactedMark(ctx, dir); err != nil {
 		return err

@@ -123,6 +123,31 @@ func newTestProcessor(t *testing.T) *segmentProcessor {
 	return sp.(*segmentProcessor)
 }
 
+// === InvalidateWriter Tests ===
+
+func TestSegmentProcessor_InvalidateWriter_ClosesAndDrops(t *testing.T) {
+	sp := newTestProcessor(t)
+	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().Close(mock.Anything).Return(nil).Once()
+	sp.currentSegmentWriter = mockWriter
+
+	sp.InvalidateWriter(context.Background())
+	assert.Nil(t, sp.currentSegmentWriter)
+	// nothing cached anymore: a second call must be a no-op (the strict mock would fail
+	// on a second Close)
+	sp.InvalidateWriter(context.Background())
+}
+
+func TestSegmentProcessor_InvalidateWriter_CloseErrorStillDrops(t *testing.T) {
+	sp := newTestProcessor(t)
+	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().Close(mock.Anything).Return(fmt.Errorf("close failed")).Once()
+	sp.currentSegmentWriter = mockWriter
+
+	sp.InvalidateWriter(context.Background())
+	assert.Nil(t, sp.currentSegmentWriter, "writer must be dropped even when Close errors")
+}
+
 // === Fence Tests ===
 
 func TestSegmentProcessor_Fence_Success(t *testing.T) {

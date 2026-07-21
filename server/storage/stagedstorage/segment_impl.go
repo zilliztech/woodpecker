@@ -59,7 +59,7 @@ type StagedSegmentImpl struct {
 	client         objectstorage.ObjectStorage
 	logIdStr       string // for metrics label only
 	logNs          string // for metrics log_ns label
-	storedNs       string // normalized log_ns for the local-storage gauges (see storedGaugeNs)
+	storedNs       string // log_ns label for the local-storage gauges (see storedGaugeNs)
 }
 
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
@@ -161,12 +161,10 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 		zap.String("bucket", rs.bucket),
 		zap.Int("flag", flag))
 
-	// List all objects in the segment directory
-	// Build the walk prefix via the SAME rootPath normalization the writer/reader/cleanup use:
-	// objects are stored under the normalized key, so a raw prefix from a non-clean rootPath
-	// (e.g. "/wp//root/") would match nothing and this delete would "succeed" having removed
-	// zero objects — permanently leaking the compacted blocks and footer in the bucket.
-	listPrefix := fmt.Sprintf("%s/%s", NormalizeRootPathForKey(rs.rootPath), rs.segmentFileKey)
+	// List all objects in the segment directory. The prefix is built verbatim from rootPath —
+	// exactly how the writer built the object keys — so the walk covers everything the writer
+	// stored. rootPath is validated clean at startup (config.Validate); no normalization here.
+	listPrefix := fmt.Sprintf("%s/%s", rs.rootPath, rs.segmentFileKey)
 	type objectToDelete struct {
 		path string
 		size int64

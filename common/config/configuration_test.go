@@ -827,6 +827,29 @@ func TestValidateStorageConfig_Errors(t *testing.T) {
 	})
 }
 
+func TestValidateMinioRootPath(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	// rootPath is consumed verbatim by every key/dir/label-building site, so Validate must
+	// only admit values that are already canonical.
+	valid := []string{"", "woodpecker", "wp/data", "a/b/c", "wp-1_x.y"}
+	for _, rp := range valid {
+		cfg := newValidCfg()
+		cfg.Minio.RootPath = rp
+		assert.NoError(t, cfg.Validate(), "rootPath %q should be accepted", rp)
+	}
+
+	invalid := []string{"/wp", "wp/", "/wp/", "wp//data", "a/./b", "a/../b", ".", "..", "../wp", "/"}
+	for _, rp := range invalid {
+		cfg := newValidCfg()
+		cfg.Minio.RootPath = rp
+		assert.ErrorContains(t, cfg.Validate(), "invalid minio rootPath", "rootPath %q should be rejected", rp)
+	}
+}
+
 func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 	makeServiceCfg := func(q QuorumConfig) *Configuration {
 		cfg, _ := NewConfiguration()

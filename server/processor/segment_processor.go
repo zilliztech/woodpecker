@@ -67,6 +67,9 @@ type SegmentProcessor interface {
 	// InvalidateReader drops the cached segment reader (if any) so the next read
 	// rebuilds it from scratch (e.g. after its local data.log has been reclaimed).
 	InvalidateReader(ctx context.Context)
+	// InvalidateWriter closes and drops the cached segment writer (if any), releasing its
+	// open fd on the local data.log so an unlinked file's blocks are actually reclaimed.
+	InvalidateWriter(ctx context.Context)
 
 	// GetWriterSnapshot returns a snapshot of the writer state, or nil if no writer is active.
 	GetWriterSnapshot() *storage.WriterSnapshot
@@ -323,6 +326,26 @@ func (s *segmentProcessor) InvalidateReader(ctx context.Context) {
 		// Close takes r's own lock, so it waits for any in-flight read to finish.
 		// Close is idempotent, so this is safe even if the reader already closed itself.
 		_ = r.Close(ctx)
+	}
+}
+
+// InvalidateWriter closes and drops the cached segment writer (if any) so its open fd on the
+// local data.log is released. The compacted-file cleanup calls this before unlinking the
+// data.log: the node that ran the compaction still holds the file open O_APPEND in its cached
+// writer, and an unlinked inode's blocks are not reclaimed while any fd is open — without
+// this, the "prompt" reclaim would silently wait for the idle cleanup (MaxIdleTime) to close
+// the writer. The segment is sealed and durably compacted by then, so the writer is inert;
+// Close is idempotent and has nothing left to sync.
+func (s *segmentProcessor) InvalidateWriter(ctx context.Context) {
+	s.Lock()
+	w := s.currentSegmentWriter
+	s.currentSegmentWriter = nil
+	s.Unlock()
+	if w != nil {
+		if err := w.Close(ctx); err != nil {
+			logger.Ctx(ctx).Warn("failed to close evicted segment writer",
+				zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
+		}
 	}
 }
 

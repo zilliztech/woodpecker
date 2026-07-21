@@ -19,6 +19,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -501,9 +502,33 @@ func (c *Configuration) Validate() error {
 		return fmt.Errorf("woodpecker config validation failed: %w", err)
 	}
 
-	// Validate other configurations if needed
-	// TODO: Add validation for dependent configurations, such as trace config, etcd config, minio config, etc.
+	// Validate Minio configuration
+	if err := c.validateMinioConfig(); err != nil {
+		return fmt.Errorf("minio config validation failed: %w", err)
+	}
 
+	// Validate other configurations if needed
+	// TODO: Add validation for dependent configurations, such as trace config, etcd config, etc.
+
+	return nil
+}
+
+// validateMinioConfig checks the object-storage configuration. rootPath is used VERBATIM to
+// build object keys (<rootPath>/<logId>/<segId>/...), local staged directories, and metric
+// labels — there is deliberately no normalization anywhere on that chain. Rejecting a
+// non-canonical value here, once at startup, is what lets every consuming site trust the raw
+// value and stay trivially consistent with every other site.
+func (c *Configuration) validateMinioConfig() error {
+	rp := c.Minio.RootPath
+	if rp == "" {
+		return nil // empty = bucket root
+	}
+	if rp == "." || rp == ".." || strings.HasPrefix(rp, "/") || strings.HasSuffix(rp, "/") ||
+		strings.HasPrefix(rp, "../") || rp != path.Clean(rp) {
+		return fmt.Errorf("invalid minio rootPath %q: must be a clean relative path such as "+
+			"\"woodpecker\" or \"wp/data\" (no leading/trailing/doubled slashes, no \".\" or \"..\" "+
+			"segments), or empty for the bucket root", rp)
+	}
 	return nil
 }
 

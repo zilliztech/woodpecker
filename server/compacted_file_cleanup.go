@@ -33,7 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
-	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 )
 
 // reconcileEveryNPasses gates the low-frequency reconcile walk (the "pull" safety net). The
@@ -213,7 +213,7 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 	if _, err := os.Stat(filepath.Join(s.segDir, "data.log")); os.IsNotExist(err) {
 		return // data.log already gone (dropped earlier, or removed by the truncate GC): nothing to do
 	}
-	footer, statErr := t.footerExistsInMinio(ctx, s.bucket, s.rootPath, s.logId, s.segId)
+	footer, statErr := footerExistsInMinio(ctx, t.store.storageClient, s.bucket, s.rootPath, s.logId, s.segId)
 	if statErr != nil {
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; will retry next pass",
 			zap.String("segDir", s.segDir), zap.Error(statErr))
@@ -261,15 +261,23 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 	if info, statErr := os.Stat(dataLogPath); statErr == nil {
 		dataLogSize = info.Size()
 	}
+	// Release the cached writer's fd BEFORE unlinking: the node that ran the compaction still
+	// holds data.log open O_APPEND in its cached StagedFileWriter, and an unlinked inode's
+	// blocks are not freed while any fd is open — the drop would look done (ls) while df stays
+	// flat until the idle cleanup (MaxIdleTime) closes the writer.
+	if evictErr := t.store.EvictSegmentWriter(ctx, bucket, rootPath, logId, segId); evictErr != nil {
+		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to evict cached segment writer",
+			zap.String("segDir", segDir), zap.Error(evictErr))
+	}
 	if rmErr := os.Remove(dataLogPath); rmErr != nil && !os.IsNotExist(rmErr) {
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to remove data.log; will retry next pass",
 			zap.String("path", dataLogPath), zap.Error(rmErr))
 		return
 	}
-	// Use the NORMALIZED log_ns for these gauges so this decrement hits the exact series the
-	// staged writer incremented, regardless of whether rootPath arrived raw over RPC (push) or
-	// was re-derived path.Join-cleaned from disk (pull reconcile).
-	storedNs := bucket + "/" + stagedstorage.NormalizeRootPathForKey(rootPath)
+	// Same log_ns the staged writer used when incrementing these gauges: rootPath is validated
+	// clean at startup, so the raw RPC value (push) and the disk-derived value (pull reconcile)
+	// are identical and this decrement hits the writer's exact series.
+	storedNs := bucket + "/" + rootPath
 	logIdStr := strconv.FormatInt(logId, 10)
 	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, storedNs, logIdStr).Sub(float64(dataLogSize))
 	metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, storedNs, logIdStr).Dec()
@@ -288,17 +296,16 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 
 // footerExistsInMinio checks whether the compacted footer object for (logId, segId)
 // is present in object storage, using the exact same key format as the segment reader
-// (getFooterBlockKey in server/storage/stagedstorage/reader_impl.go).
-func (t *compactedFileCleanupTask) footerExistsInMinio(ctx context.Context, bucket, rootPath string, logId, segId int64) (bool, error) {
-	// Build the footer key via the SAME normalization the writer/reader use (single source of
-	// truth), not a raw fmt.Sprintf: the push path carries the RPC rootPath verbatim, so a
-	// misconfigured rootPath with stray slashes (e.g. "/wp//root/") would otherwise probe a key
-	// the writer never stored and wrongly conclude the footer is absent. The pull path already
-	// derives a normalized rootPath from disk, for which this is a no-op.
-	footerKey := fmt.Sprintf("%s/%d/%d/footer.blk", stagedstorage.NormalizeRootPathForKey(rootPath), logId, segId)
+// (getFooterBlockKey in server/storage/stagedstorage/reader_impl.go). Shared by the cleanup
+// task (verify-before-drop / reconcile backfill) and the NotifySegmentCompacted handler
+// (verify-before-mark), so every consumer of the "footer exists" fact probes the same key.
+func footerExistsInMinio(ctx context.Context, client storageclient.ObjectStorage, bucket, rootPath string, logId, segId int64) (bool, error) {
+	// Same verbatim key format as the staged writer/reader (getFooterBlockKey): rootPath is
+	// validated clean at startup, so raw concatenation is the canonical key.
+	footerKey := fmt.Sprintf("%s/%d/%d/footer.blk", rootPath, logId, segId)
 	logNs := bucket + "/" + rootPath
 	logIdStr := strconv.FormatInt(logId, 10)
-	_, _, err := t.store.storageClient.StatObject(ctx, bucket, footerKey, logNs, logIdStr)
+	_, _, err := client.StatObject(ctx, bucket, footerKey, logNs, logIdStr)
 	if err != nil {
 		if minioHandler.IsObjectNotExists(err) {
 			return false, nil

@@ -669,13 +669,12 @@ func TestDeleteFileData_ReadDirError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestDeleteFileData_NormalizesRootPathForWalkPrefix is the regression for the delete-GC
-// normalization gap: objects are WRITTEN under NormalizeRootPathForKey(rootPath), so the delete
-// walk must list under the exact same normalized prefix. With a non-clean rootPath (here
-// "/test-root/"), the raw prefix "/test-root//7/4" would match nothing and the delete would
-// "succeed" while leaking every compacted object. The exact-string expectation proves the walk
-// uses "test-root/7/4".
-func TestDeleteFileData_NormalizesRootPathForWalkPrefix(t *testing.T) {
+// TestDeleteFileData_WalkPrefixMatchesWriterKeys pins the delete-GC walk prefix to the exact
+// verbatim <rootPath>/<logId>/<segId> layout the writer stores objects under (getFooterBlockKey /
+// getCompactedBlockKey build "<rootPath>/<logId>/<segId>/..."). rootPath is validated clean at
+// startup and used raw on both sides; if either side ever diverges from this layout the strict
+// mock expectation fails and flags the delete as leaking every compacted object.
+func TestDeleteFileData_WalkPrefixMatchesWriterKeys(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
@@ -686,12 +685,11 @@ func TestDeleteFileData_NormalizesRootPathForWalkPrefix(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(segmentDir, "data.log"), []byte("staged"), 0o644))
 
 	client := mocks_objectstorage.NewObjectStorage(t)
-	// Exact normalized prefix — the raw "/test-root//7/4" would not match this expectation and
-	// the strict mock would fail the test (as the pre-fix code does).
+	// Must equal the prefix of the writer's object keys for (rootPath="test-root", 7, 4).
 	client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-root/7/4", false, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	seg := NewStagedSegmentImpl(context.Background(), "test-bucket", "/test-root/", dir, logId, segId, client, cfg)
+	seg := NewStagedSegmentImpl(context.Background(), "test-bucket", "test-root", dir, logId, segId, client, cfg)
 	_, err = seg.DeleteFileData(context.Background(), 0)
 	assert.NoError(t, err)
 }

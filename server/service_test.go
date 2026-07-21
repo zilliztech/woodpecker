@@ -534,6 +534,10 @@ func (f *fakeLogStore) EvictSegmentReader(ctx context.Context, bucketName, rootP
 	return nil
 }
 
+func (f *fakeLogStore) EvictSegmentWriter(ctx context.Context, bucketName, rootPath string, logId int64, segId int64) error {
+	return nil
+}
+
 func createTestServerWithFakeLogStore(fake *fakeLogStore) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg, _ := config.NewConfiguration()

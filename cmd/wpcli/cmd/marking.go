@@ -36,8 +36,9 @@ After a segment is compacted, the writer's auditor distributes a "compacted" mar
 every quorum node so each can reclaim its local data.log. Per-node progress is durable
 in etcd under root/marking/<logId>/<segId>. A node that keeps failing past the retry
 budget parks its record as NOTIFY_PENDING_MANUAL — excluded from auto-retry and waiting
-for an operator: verify the node (usually dead or removed), then 'confirm' to delete the
-record. Unhandled records are also reaped automatically when the segment is truncated.
+for an operator: verify the node (usually dead or removed), then 'confirm' to mark the
+record NOTIFY_OPERATOR_CONFIRMED (settled; physical removal happens when the segment is
+truncated). Unhandled records are also reaped automatically at truncation.
 A confirmed-away mark costs little: data-holding nodes self-heal via the server-side
 pull reconcile; nodes that never held the segment only lose a read optimization.`,
 	}
@@ -354,11 +355,14 @@ func newMarkingConfirmCommand() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "confirm <logId> <segmentId>",
-		Short: "Confirm and delete a PENDING_MANUAL marking record after operator triage",
-		Long: `Confirm and delete one compacted-mark distribution record.
+		Short: "Confirm a PENDING_MANUAL marking record after operator triage",
+		Long: `Confirm one compacted-mark distribution record.
 
 Meant for records parked as NOTIFY_PENDING_MANUAL: after verifying the unacked node
-(typically permanently dead or removed from the cluster), confirm to delete the record.
+(typically permanently dead or removed from the cluster), confirm transitions the record
+to NOTIFY_OPERATOR_CONFIRMED, which settles it (the auditor stops retrying and stops
+counting it against the log). The etcd record itself is intentionally NOT deleted here;
+it is reaped when the segment is truncated, like every other marking record.
 Refuses records still IN_PROGRESS or COMPLETED unless --force is given (those are
 managed automatically and normally need no operator action).`,
 		Args: cobra.ExactArgs(2),

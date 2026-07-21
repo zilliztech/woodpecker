@@ -51,7 +51,8 @@ segment meta list (loaded every cycle anyway)
    └─ Truncated  → SegmentCleanupManager.CleanupSegment()  (+ reap marking records)
 
 ──────────── server (each logstore node; unchanged by client cadence) ────────────
-NotifySegmentCompacted handler : write data.compacted + enqueue on the drop queue
+NotifySegmentCompacted handler : footer HEAD (verify durably compacted; refuse otherwise)
+                                 → write data.compacted + enqueue on the drop queue
 maintenance tick (5s)          : drain queue → footer HEAD → rm data.log (keep tombstone)
 reconcile walk (~5m, backstop) : re-enqueue marked dirs still holding data.log
                                  (restart recovery); age-gated footer HEAD for
@@ -142,15 +143,18 @@ waiting forever.
 | node down during distribution | retried each cycle; after 30m → PENDING_MANUAL; if it holds data, server pull self-heals it when back |
 | no writer open for the log (no push at all) | server pull reconcile converges independently (~5m walk + 30m age gate) |
 | node crash after mark write, before drop | mark is fsynced; node's startup walk re-enqueues → drop proceeds |
-| segment truncated while distribution in flight | truncated-branch sweep reaps the marking record; truncate GC removes data everywhere |
+| segment truncated while distribution in flight | auditor marks it reaped in-process (distributor skips it even on a stale snapshot); truncated-branch sweep reaps the marking record; truncate GC removes data everywhere; a straggler notify that still lands is refused by the handler footer HEAD (objects already deleted → no footer), so a reaped dir cannot be resurrected |
 
 ## rootPath expectations
 
-`minio.rootPath` is operator-set configuration (not request input) and is expected to be a
-clean path ("files", "woodpecker"). All object-storage key builders — the staged
-writer/reader/delete-GC, the cleanup footer HEAD, and the client's direct reader — canonicalize
-it through the same `NormalizeRootPathForKey` (a no-op for clean values), so every component
-derives identical keys from the same configuration value.
+`minio.rootPath` is operator-set configuration (not request input) and MUST be a clean
+relative path ("files", "wp/data") or empty (bucket root). This is enforced once, at startup:
+`config.Validate()` rejects a non-canonical value (leading/trailing/doubled slashes, `.`/`..`
+segments) and the process refuses to start. Every consumer — the staged writer/reader/delete-GC,
+the cleanup footer HEAD, the pure object-storage writer/reader, the client's direct reader, and
+the local-storage metric labels — then uses the value **verbatim**, with no normalization
+anywhere on the chain; fail-fast validation at the single entry point is what keeps all of
+those sites trivially consistent with each other.
 
 ## Config knobs
 

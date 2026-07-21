@@ -19,11 +19,13 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -31,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_segment"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
@@ -703,6 +706,13 @@ func TestNotifySegmentCompacted_WritesMarkIdempotent(t *testing.T) {
 	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
 	store.cfg.Woodpecker.Storage.Type = "service"
 
+	// The handler verifies the compacted footer before writing the mark ("mark ⇒ footer
+	// exists" is enforced server-side, not on the caller's word). Each notify HEADs once.
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
+		Return(int64(128), false, nil).Twice()
+	store.storageClient = mockStorage
+
 	ctx := context.Background()
 	require.NoError(t, store.NotifySegmentCompacted(ctx, "b", "rp", 1, 2))
 	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
@@ -710,6 +720,65 @@ func TestNotifySegmentCompacted_WritesMarkIdempotent(t *testing.T) {
 
 	require.NoError(t, store.NotifySegmentCompacted(ctx, "b", "rp", 1, 2)) // idempotent
 	assert.True(t, hasCompactedMark(seg))
+}
+
+// TestNotifySegmentCompacted_FooterAbsentRefusesMark pins the handler-side invariant: a
+// notify for a segment whose compacted footer is NOT in object storage (stale or mis-routed
+// retry, external caller of the public RPC, or a notify arriving after the truncate GC
+// already removed the segment's objects) must be rejected — no mark written, no directory
+// fabricated — so a bare RPC can never make decommission report data as drained, and a late
+// notify can never resurrect a truncate-reaped segment dir.
+func TestNotifySegmentCompacted_FooterAbsentRefusesMark(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Once()
+	store.storageClient = mockStorage
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2)
+	assert.ErrorIs(t, err, werr.ErrSegmentNotFound)
+
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	assert.False(t, hasCompactedMark(seg), "no mark may be written without a confirmed footer")
+	_, statErr := os.Stat(seg)
+	assert.True(t, os.IsNotExist(statErr), "no segment dir may be fabricated without a confirmed footer")
+}
+
+// TestNotifySegmentCompacted_FooterHeadTransientErrorPropagates: a transport-level StatObject
+// failure (not NoSuchKey) must surface as an error so the client retries, rather than being
+// treated as either "exists" or "absent".
+func TestNotifySegmentCompacted_FooterHeadTransientErrorPropagates(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
+		Return(int64(0), false, fmt.Errorf("connection refused")).Once()
+	store.storageClient = mockStorage
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2)
+	assert.Error(t, err)
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	assert.False(t, hasCompactedMark(seg))
+}
+
+// TestNotifySegmentCompacted_NilStorageClientErrors: without an object-storage client the
+// footer cannot be verified, so the handler must refuse rather than trust the caller.
+func TestNotifySegmentCompacted_NilStorageClientErrors(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.storageClient = nil
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2)
+	assert.ErrorIs(t, err, werr.ErrInternalError)
 }
 
 func TestLogStore_NotifySegmentCompacted_NoLocalDataDir(t *testing.T) {
@@ -1477,4 +1546,35 @@ func TestLogStore_EvictSegmentReader_AbsentSegmentUnderExistingLogIsNoop(t *test
 	_, segExists := store.segmentProcessors[logKey][7]
 	store.spMu.RUnlock()
 	assert.False(t, segExists, "EvictSegmentReader must not create a processor for an absent segment")
+}
+
+// === EvictSegmentWriter Tests ===
+
+func TestLogStore_EvictSegmentWriter_InvalidatesCachedProcessorWriter(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	mockProc.EXPECT().InvalidateWriter(mock.Anything).Return().Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{7: mockProc}
+
+	err := store.EvictSegmentWriter(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+}
+
+func TestLogStore_EvictSegmentWriter_AbsentKeyIsNoop(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	err := store.EvictSegmentWriter(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+
+	store.spMu.RLock()
+	_, logExists := store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)]
+	store.spMu.RUnlock()
+	assert.False(t, logExists, "EvictSegmentWriter must not create a processor for an absent key")
 }
