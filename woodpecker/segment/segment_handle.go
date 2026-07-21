@@ -549,8 +549,11 @@ func (s *segmentHandleImpl) getOrCreateDirectReader(ctx context.Context) (*objec
 
 	maxBatchSize := s.cfg.Woodpecker.Client.DirectRead.MaxBatchSize.Int64()
 	maxFetchThreads := s.cfg.Woodpecker.Client.DirectRead.MaxFetchThreads
+	// Normalize the rootPath exactly like the staged writer does when it builds the compacted
+	// object keys: direct reads target those objects, so both sides must derive the same key
+	// (a no-op for a clean rootPath).
 	reader, err := objectstorage.NewMinioFileReaderAdv(
-		ctx, s.bucketName, s.rootPath, s.logId, s.segmentId,
+		ctx, s.bucketName, storageclient.NormalizeRootPathForKey(s.rootPath), s.logId, s.segmentId,
 		s.objectStorageClient, maxBatchSize, maxFetchThreads,
 	)
 	if err != nil {

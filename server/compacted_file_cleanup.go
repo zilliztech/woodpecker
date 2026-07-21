@@ -266,10 +266,13 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 			zap.String("path", dataLogPath), zap.Error(rmErr))
 		return
 	}
-	logNs := bucket + "/" + rootPath
+	// Use the NORMALIZED log_ns for these gauges so this decrement hits the exact series the
+	// staged writer incremented, regardless of whether rootPath arrived raw over RPC (push) or
+	// was re-derived path.Join-cleaned from disk (pull reconcile).
+	storedNs := bucket + "/" + stagedstorage.NormalizeRootPathForKey(rootPath)
 	logIdStr := strconv.FormatInt(logId, 10)
-	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr).Sub(float64(dataLogSize))
-	metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr).Dec()
+	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, storedNs, logIdStr).Sub(float64(dataLogSize))
+	metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, storedNs, logIdStr).Dec()
 
 	if evictErr := t.store.EvictSegmentReader(ctx, bucket, rootPath, logId, segId); evictErr != nil {
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to evict cached segment reader",

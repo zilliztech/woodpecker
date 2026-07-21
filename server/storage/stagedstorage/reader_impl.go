@@ -1395,6 +1395,7 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 	readBytes := int64(0)
 	concurrentReadTime := time.Now()
 
+	var readErr error
 	for i, future := range futures {
 		result, err := future.Await()
 		if err != nil {
@@ -1402,7 +1403,9 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 				zap.Int("blockIndex", i),
 				zap.Error(err))
 			// The data to be read must be sequential. If one block cannot be read here, it will be aborted.
-			// Let subsequent retries continue at this breakpoint
+			// Let subsequent retries continue at this breakpoint. Record the error: if NOTHING was
+			// collected it must surface as a read error, not EOF (see below).
+			readErr = err
 			break
 		}
 
@@ -1427,6 +1430,13 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 	}
 
 	if entriesCollected == 0 {
+		if readErr != nil {
+			// A failed block fetch (transient object-storage error, throttle, timeout) with
+			// nothing collected must surface as a READ ERROR: returning EOF here would make the
+			// consumer treat it as end-of-segment and silently skip the rest of the sealed
+			// segment. This mirrors the local path's hasDataReadError guard on its EOF return.
+			return nil, readErr
+		}
 		// No desired data found in current segment and the entire segment has been scanned.
 		// Return EOF to let client proceed to next segment.
 		logger.Ctx(ctx).Debug("no more entries to read",

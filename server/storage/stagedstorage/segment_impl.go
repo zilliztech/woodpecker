@@ -59,6 +59,7 @@ type StagedSegmentImpl struct {
 	client         objectstorage.ObjectStorage
 	logIdStr       string // for metrics label only
 	logNs          string // for metrics log_ns label
+	storedNs       string // normalized log_ns for the local-storage gauges (see storedGaugeNs)
 }
 
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
@@ -85,6 +86,7 @@ func NewStagedSegmentImpl(ctx context.Context, bucket string, rootPath string, l
 		client:          storageCli,
 		logIdStr:        strconv.FormatInt(logId, 10),
 		logNs:           bucket + "/" + rootPath,
+		storedNs:        storedGaugeNs(bucket, rootPath),
 	}
 	return segmentImpl
 }
@@ -325,8 +327,8 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 					zap.String("filePath", filePath))
 				deletedCount++
 				if isDataFile {
-					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(fileSize))
-					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
+					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.storedNs, rs.logIdStr).Sub(float64(fileSize))
+					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.storedNs, rs.logIdStr).Dec()
 				}
 			}
 		}

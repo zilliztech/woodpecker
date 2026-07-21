@@ -27,7 +27,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -74,6 +73,7 @@ type StagedFileWriter struct {
 	file            *os.File
 	logIdStr        string // for metrics only
 	logNs           string // for metrics only
+	storedNs        string // normalized log_ns for the local-storage gauges (see storedGaugeNs)
 
 	// Configuration
 	maxFlushSize     int64 // Max buffer size before triggering sync
@@ -181,6 +181,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		segmentId:           segmentId,
 		logIdStr:            strconv.FormatInt(logId, 10),
 		logNs:               bucket + "/" + rootPath,
+		storedNs:            storedGaugeNs(bucket, rootPath),
 		bucket:              bucket,
 		rootPath:            rootPath,
 		storageCli:          storageCli,
@@ -260,7 +261,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		logger.Ctx(ctx).Debug("opening file for writing (truncate mode)")
 		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err == nil {
-			metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, writer.logNs, writer.logIdStr).Inc()
+			metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, writer.storedNs, writer.logIdStr).Inc()
 		}
 	}
 
@@ -585,7 +586,7 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		if status == "success" {
 			metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Add(float64(actualDataSize))
 			metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
-			metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Add(float64(actualDataSize))
+			metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.storedNs, w.logIdStr).Add(float64(actualDataSize))
 		}
 	}()
 
@@ -1314,11 +1315,32 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 		return -1, fmt.Errorf("segment must be finalized before compaction")
 	}
 
-	// Check if we have any blocks to compact
+	// An EMPTY sealed segment still gets a footer.blk (TotalBlocks=0): "Sealed => footer exists
+	// in object storage" must hold unconditionally, because compacted-mark distribution and the
+	// decommission drain gate both rely on the mark, and the mark's own invariant is
+	// footer-confirmed-before-drop. Without this, an empty segment becomes Sealed-without-footer:
+	// marks get distributed for it, the cleanup task's anomaly branch warns forever and never
+	// reclaims its data.log, and HasLocalSegmentData reports drained while the file is still on
+	// disk. A reader of a zero-block compacted segment returns EOF, so reads are unaffected.
 	if len(w.blockIndexes) == 0 {
-		logger.Ctx(ctx).Info("no blocks to compact",
-			zap.String("segmentFilePath", w.segmentFilePath))
-		return -1, nil
+		if w.storageCli == nil {
+			// Without an object storage client the footer invariant cannot be established;
+			// surface it instead of silently "succeeding" into Sealed-without-footer.
+			return -1, fmt.Errorf("cannot compact empty segment without an object storage client")
+		}
+		emptyLac := int64(-1)
+		if w.recoveredFooter != nil {
+			emptyLac = w.recoveredFooter.LAC
+		}
+		logger.Ctx(ctx).Info("no blocks to compact; uploading an empty compacted footer",
+			zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("lac", emptyLac))
+		footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, emptyLac)
+		if footerErr != nil {
+			logger.Ctx(ctx).Warn("failed to upload empty compacted footer",
+				zap.String("segmentFilePath", w.segmentFilePath), zap.Error(footerErr))
+			return -1, fmt.Errorf("failed to upload empty compacted footer: %w", footerErr)
+		}
+		return footerSize, nil
 	}
 
 	// Read and validate footer LAC against segment data for completeness
@@ -1352,9 +1374,14 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 	}
 
 	if len(newBlockIndexes) == 0 {
-		logger.Ctx(ctx).Info("no blocks uploaded during compaction",
+		// Same invariant as the empty-segment branch above: Sealed must always have a footer.
+		logger.Ctx(ctx).Info("no blocks uploaded during compaction; uploading an empty compacted footer",
 			zap.String("segmentFilePath", w.segmentFilePath))
-		return -1, nil
+		footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, lac)
+		if footerErr != nil {
+			return -1, fmt.Errorf("failed to upload empty compacted footer: %w", footerErr)
+		}
+		return footerSize, nil
 	}
 
 	// Create footer with compacted flag and LAC, then upload
@@ -1722,16 +1749,25 @@ func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndex
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "uploadCompactedFooter")
 	defer sp.End()
 
-	// Create footer with compacted flag and LAC
+	// Create footer with compacted flag and LAC. An empty segment (no blocks) records zero
+	// entries; the entry-span arithmetic below would wrongly yield 1 for it.
+	totalRecords := uint32(0)
+	if len(blockIndexes) > 0 {
+		totalRecords = uint32(w.lastEntryID.Load() - w.firstEntryID.Load() + 1)
+	}
+	baseFlags := uint16(0)
+	if w.recoveredFooter != nil {
+		baseFlags = w.recoveredFooter.Flags
+	}
 	footer := &codec.FooterRecord{
 		TotalBlocks:  int32(len(blockIndexes)),
-		TotalRecords: uint32(w.lastEntryID.Load() - w.firstEntryID.Load() + 1),
+		TotalRecords: totalRecords,
 		TotalSize:    uint64(fileSizeAfterCompact),
 		IndexOffset:  0,
 		IndexLength:  uint32(len(blockIndexes) * (codec.RecordHeaderSize + codec.IndexRecordSize)),
 		Version:      codec.FormatVersion,
-		Flags:        codec.SetCompacted(w.recoveredFooter.Flags), // Preserve existing flags, set compacted bit
-		LAC:          lac,                                         // Set Last Add Confirmed ID from validation
+		Flags:        codec.SetCompacted(baseFlags), // Preserve existing flags, set compacted bit
+		LAC:          lac,                           // Set Last Add Confirmed ID from validation
 	}
 
 	// Serialize footer and indexes
@@ -2163,20 +2199,20 @@ func HasCompactedMark(segmentDir string) bool {
 	return err == nil
 }
 
-// NormalizeRootPathForKey strips leading/trailing/doubled slashes from rootPath so an
-// object-storage key built from it matches the value the compacted-file-cleanup task derives
-// from the (path.Join-normalized) local segment directory. It is a no-op for a clean rootPath,
-// so it only changes keys for a misconfigured rootPath with stray slashes. Exported so the
-// footer-HEAD in the cleanup task uses the exact same key derivation as the writer/reader
-// (single source of truth), rather than raw fmt.Sprintf on the RPC rootPath.
+// NormalizeRootPathForKey mirrors objectstorage.NormalizeRootPathForKey (the canonical
+// implementation) for this package's key-building sites; see that function for rationale.
 func NormalizeRootPathForKey(rootPath string) string {
-	segs := make([]string, 0, strings.Count(rootPath, "/")+1)
-	for _, p := range strings.Split(rootPath, "/") {
-		if p != "" {
-			segs = append(segs, p)
-		}
-	}
-	return strings.Join(segs, "/")
+	return objectstorage.NormalizeRootPathForKey(rootPath)
+}
+
+// storedGaugeNs builds the log_ns label for the WpFileStoredBytes/WpFileStoredCount gauges
+// with a NORMALIZED rootPath. These gauges are incremented by the staged writer (rootPath as
+// received over RPC) and decremented by both deleteLocalFiles and the compacted-file-cleanup
+// drop path (whose pull branch re-derives a path.Join-cleaned rootPath from disk); without a
+// canonical label the two sides would drive different series for a non-clean rootPath — the
+// writer's series never decrementing while a never-incremented one goes negative.
+func storedGaugeNs(bucket, rootPath string) string {
+	return bucket + "/" + NormalizeRootPathForKey(rootPath)
 }
 
 // validateLACAlignment validates that the segment contains complete data for the LAC range

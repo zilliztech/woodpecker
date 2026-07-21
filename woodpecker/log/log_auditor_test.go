@@ -19,6 +19,7 @@ package log
 import (
 	"context"
 	"errors"
+	"math"
 	"sort"
 	"testing"
 	"time"
@@ -38,9 +39,10 @@ func segMeta(segNo int64, state proto.SegmentState) *meta.SegmentMeta {
 // countingNotifyManager records which segments EnsureSegmentNotified was called for and
 // reports each as "advanced" (real work) so the per-cycle budget accounting can be exercised.
 type countingNotifyManager struct {
-	called   []int64
-	advanced bool
-	err      error
+	called      []int64
+	sweepBounds []int64
+	advanced    bool
+	err         error
 }
 
 func (c *countingNotifyManager) EnsureSegmentNotified(_ context.Context, _ string, _ int64, segmentId int64) (bool, error) {
@@ -48,7 +50,22 @@ func (c *countingNotifyManager) EnsureSegmentNotified(_ context.Context, _ strin
 	return c.advanced, c.err
 }
 
-func (c *countingNotifyManager) CleanupOrphanedStatuses(_ context.Context, _ int64, _ int64) error {
+func (c *countingNotifyManager) CleanupOrphanedStatuses(_ context.Context, _ int64, minSegmentId int64) error {
+	c.sweepBounds = append(c.sweepBounds, minSegmentId)
+	return nil
+}
+
+// recordingCleanupManager records the orphan-sweep bounds it was invoked with.
+type recordingCleanupManager struct {
+	sweepBounds []int64
+}
+
+func (r *recordingCleanupManager) CleanupSegment(_ context.Context, _ string, _ int64, _ int64) error {
+	return nil
+}
+
+func (r *recordingCleanupManager) CleanupOrphanedStatuses(_ context.Context, _ int64, minSegmentId int64) error {
+	r.sweepBounds = append(r.sweepBounds, minSegmentId)
 	return nil
 }
 
@@ -166,7 +183,7 @@ func TestCompactCompletedSegments_CountsAndSkips(t *testing.T) {
 }
 
 // TestRunNotifyDistributor_NonServiceReturnsImmediately verifies the distributor goroutine is a
-// no-op outside service storage: it returns at once rather than spinning a ticker.
+// no-op outside service storage: it returns at once rather than waiting on the snapshot channel.
 func TestRunNotifyDistributor_NonServiceReturnsImmediately(t *testing.T) {
 	lh := &testLogHandleMock{}
 	lh.On("GetName").Return("test-log").Maybe()
@@ -175,7 +192,7 @@ func TestRunNotifyDistributor_NonServiceReturnsImmediately(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		runNotifyDistributor(lh, nm, false /*serviceMode*/, 1, make(chan struct{}))
+		runNotifyDistributor(lh, nm, false /*serviceMode*/, make(chan map[int64]*meta.SegmentMeta, 1), make(chan struct{}))
 		close(done)
 	}()
 	select {
@@ -186,31 +203,91 @@ func TestRunNotifyDistributor_NonServiceReturnsImmediately(t *testing.T) {
 	assert.Empty(t, nm.called)
 }
 
-// TestRunNotifyDistributor_DrivesThenStops verifies the service-mode loop drives distribution on
-// its ticker and exits when the close channel fires.
-func TestRunNotifyDistributor_DrivesThenStops(t *testing.T) {
+// TestRunNotifyDistributor_ConsumesSnapshotsThenStops verifies the service-mode loop consumes
+// auditor-published snapshots (no etcd scan of its own: the mock log handle has NO GetSegments
+// expectation, so a re-list would fail the test) and exits when the close channel fires.
+func TestRunNotifyDistributor_ConsumesSnapshotsThenStops(t *testing.T) {
 	lh := &testLogHandleMock{}
 	lh.On("GetName").Return("test-log").Maybe()
 	lh.On("GetId").Return(int64(1)).Maybe()
-	lh.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
-		1: segMeta(1, proto.SegmentState_Sealed),
-	}, nil)
 	nm := &countingNotifyManager{advanced: true}
 
+	segsCh := make(chan map[int64]*meta.SegmentMeta, 1)
 	closeCh := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		runNotifyDistributor(lh, nm, true /*serviceMode*/, 1, closeCh)
+		runNotifyDistributor(lh, nm, true /*serviceMode*/, segsCh, closeCh)
 		close(done)
 	}()
 
-	time.Sleep(1300 * time.Millisecond) // let at least one 1s tick fire
+	publishSegmentsSnapshot(segsCh, map[int64]*meta.SegmentMeta{
+		1: segMeta(1, proto.SegmentState_Sealed),
+	})
+	require.Eventually(t, func() bool {
+		lh.Mock.Test(t)
+		return len(nm.called) > 0
+	}, 3*time.Second, 10*time.Millisecond, "the distributor consumed the published snapshot")
+
 	close(closeCh)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("runNotifyDistributor should stop after closeCh fires")
 	}
-	assert.NotEmpty(t, nm.called, "the distributor drove at least one cycle")
 	assert.Contains(t, nm.called, int64(1))
+}
+
+// TestPublishSegmentsSnapshot_ReplacesStale verifies the non-blocking publish: an unconsumed
+// snapshot in the buffer is replaced by the fresher one instead of blocking the auditor.
+func TestPublishSegmentsSnapshot_ReplacesStale(t *testing.T) {
+	segsCh := make(chan map[int64]*meta.SegmentMeta, 1)
+	publishSegmentsSnapshot(segsCh, map[int64]*meta.SegmentMeta{1: segMeta(1, proto.SegmentState_Sealed)})
+	publishSegmentsSnapshot(segsCh, map[int64]*meta.SegmentMeta{2: segMeta(2, proto.SegmentState_Sealed)})
+
+	got := <-segsCh
+	_, hasFresh := got[2]
+	assert.True(t, hasFresh, "the buffered stale snapshot must be replaced by the fresh one")
+	select {
+	case <-segsCh:
+		t.Fatal("channel must hold at most one snapshot")
+	default:
+	}
+}
+
+// TestOrphanSweepBound verifies the sweep bound derivation: segments are cleaned in ascending
+// order, so any cleanup-domain record below the smallest EXISTING segment id is an orphan;
+// with no segments left, everything is (MaxInt64).
+func TestOrphanSweepBound(t *testing.T) {
+	assert.Equal(t, int64(5), orphanSweepBound(map[int64]*meta.SegmentMeta{
+		5: segMeta(5, proto.SegmentState_Sealed),
+		7: segMeta(7, proto.SegmentState_Truncated),
+		9: segMeta(9, proto.SegmentState_Active),
+	}))
+	assert.Equal(t, int64(math.MaxInt64), orphanSweepBound(map[int64]*meta.SegmentMeta{}))
+}
+
+// TestSweepOrphanedCleanupRecords verifies the periodic sweep drives BOTH cleanup-domain
+// record types (cleaning + marking) with the live-list bound — the reclaim path for a
+// best-effort record delete that failed after the segment metadata was already gone (the
+// idle-log case the batch-time sweeps never reach).
+func TestSweepOrphanedCleanupRecords(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+	cm := &recordingCleanupManager{}
+	nm := &countingNotifyManager{}
+
+	// Live segments {5,9}: both sweeps run with bound 5.
+	sweepOrphanedCleanupRecords(context.Background(), lh, cm, nm, map[int64]*meta.SegmentMeta{
+		5: segMeta(5, proto.SegmentState_Sealed),
+		9: segMeta(9, proto.SegmentState_Truncated),
+	})
+	assert.Equal(t, []int64{5}, cm.sweepBounds)
+	assert.Equal(t, []int64{5}, nm.sweepBounds)
+
+	// Empty log: both sweeps run with MaxInt64 — every leftover record (e.g. a PENDING_MANUAL
+	// marking record whose delete failed while reaping the log's last segment) is reclaimed.
+	sweepOrphanedCleanupRecords(context.Background(), lh, cm, nm, map[int64]*meta.SegmentMeta{})
+	assert.Equal(t, []int64{5, math.MaxInt64}, cm.sweepBounds)
+	assert.Equal(t, []int64{5, math.MaxInt64}, nm.sweepBounds)
 }

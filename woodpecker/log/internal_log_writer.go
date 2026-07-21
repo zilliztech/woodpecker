@@ -30,6 +30,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
@@ -53,6 +54,7 @@ type internalLogWriterImpl struct {
 	writerClose        chan struct{}
 	cleanupManager     segment.SegmentCleanupManager
 	notifyManager      segment.SegmentCompactedNotifyManager
+	notifySegsCh       chan map[int64]*meta.SegmentMeta // auditor -> notify distributor snapshot handoff
 
 	// validation related fields
 	isWriterValid       atomic.Bool
@@ -76,6 +78,7 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
 		notifyManager:      segment.NewSegmentCompactedNotifyManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		notifySegsCh:       make(chan map[int64]*meta.SegmentMeta, 1),
 	}
 	// Set sessionValid to true
 	w.isWriterValid.Store(true)
@@ -90,7 +93,7 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 	// Monitor keepAlive channel
 	go w.runAuditor()
 	// Compacted-mark distribution runs on its own goroutine so a slow node can't stall the auditor.
-	go runNotifyDistributor(w.logHandle, w.notifyManager, cfg.Woodpecker.Storage.IsStorageService(), w.auditorMaxInterval, w.writerClose)
+	go runNotifyDistributor(w.logHandle, w.notifyManager, cfg.Woodpecker.Storage.IsStorageService(), w.notifySegsCh, w.writerClose)
 	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
 	return w
 }
@@ -237,9 +240,11 @@ func (l *internalLogWriterImpl) runAuditor() {
 		zap.Int64("logId", l.logHandle.GetId()),
 		zap.Int("intervalSeconds", l.auditorMaxInterval))
 
+	auditCycle := uint64(0)
 	for {
 		select {
 		case <-ticker.C:
+			auditCycle++
 			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 
@@ -272,8 +277,21 @@ func (l *internalLogWriterImpl) runAuditor() {
 			// collect the Truncated ones to clean up. Compacted-mark distribution for Sealed
 			// segments runs on its own goroutine (runNotifyDistributor) so a slow/black-holed
 			// quorum node can never block compaction or truncate cleanup on this critical path.
+			// Share the freshly loaded snapshot with the notify distributor so it does not
+			// issue a second identical etcd range scan per cycle.
+			publishSegmentsSnapshot(l.notifySegsCh, segmentMetaList)
+
 			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
 			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
+
+			// Periodic orphan sweep (pass 1 = startup recovery, then every Nth cycle): reclaims
+			// cleanup-domain records whose segment metadata is already gone, covering the
+			// idle-log case the batch-time sweeps (gated on a pending truncate batch) never
+			// reach — e.g. a transiently failed best-effort record delete on the log's last
+			// truncated segment.
+			if auditCycle%orphanSweepEveryNAuditCycles == 1 {
+				sweepOrphanedCleanupRecords(ctx, l.logHandle, l.cleanupManager, l.notifyManager, segmentMetaList)
+			}
 
 			logger.Ctx(ctx).Info("Auditor segment processing completed",
 				zap.String("logName", l.logHandle.GetName()),

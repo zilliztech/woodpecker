@@ -19,7 +19,7 @@ package log
 import (
 	"context"
 	"fmt"
-	"time"
+	"math"
 
 	"go.uber.org/zap"
 
@@ -116,29 +116,24 @@ func distributeCompactedMarks(ctx context.Context, logHandle LogHandle, notifyMa
 // separate from the auditor — so a slow or black-holed quorum node (each notify RPC blocks up
 // to notifySegmentCompactedTimeout, and a cycle can drive up to maxCompactedNotifyPerCycle
 // segments) can never stall this log's compaction or truncate-GC, which share the auditor's
-// single goroutine. It exits immediately outside service storage (nothing to distribute) and
-// otherwise ticks every intervalSeconds until closeCh fires.
-func runNotifyDistributor(logHandle LogHandle, notifyManager segment.SegmentCompactedNotifyManager, serviceMode bool, intervalSeconds int, closeCh <-chan struct{}) {
+// single goroutine. It exits immediately outside service storage (nothing to distribute).
+//
+// It consumes the segment-metadata snapshots the auditor already loads each cycle (published
+// on segsCh with a non-blocking send) instead of issuing its own etcd range scan — a second
+// identical GetSegments per cycle would double the per-log metadata load for nothing. When
+// the distributor is still busy with the previous snapshot, newer ones are dropped by the
+// publisher — natural backpressure; the next published snapshot is always fresher anyway.
+func runNotifyDistributor(logHandle LogHandle, notifyManager segment.SegmentCompactedNotifyManager, serviceMode bool, segsCh <-chan map[int64]*meta.SegmentMeta, closeCh <-chan struct{}) {
 	if !serviceMode {
 		return
 	}
-	ticker := time.NewTicker(time.Duration(intervalSeconds * int(time.Second)))
-	defer ticker.Stop()
 	logger.Ctx(context.Background()).Info("compacted-mark distributor started",
-		zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()),
-		zap.Int("intervalSeconds", intervalSeconds))
+		zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
 
 	for {
 		select {
-		case <-ticker.C:
+		case segs := <-segsCh:
 			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("notify_distributor_%d", logHandle.GetId()))
-			segs, err := logHandle.GetSegments(ctx)
-			if err != nil {
-				logger.Ctx(ctx).Warn("compacted-mark distributor: get segments failed",
-					zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Error(err))
-				sp.End()
-				continue
-			}
 			driven := distributeCompactedMarks(ctx, logHandle, notifyManager, segs, true)
 			if driven > 0 {
 				logger.Ctx(ctx).Debug("compacted-mark distributor cycle completed",
@@ -153,6 +148,21 @@ func runNotifyDistributor(logHandle LogHandle, notifyManager segment.SegmentComp
 	}
 }
 
+// publishSegmentsSnapshot hands the auditor's freshly loaded segment snapshot to the notify
+// distributor without ever blocking the auditor: if the distributor is still working, the
+// stale snapshot in the buffer is replaced by this fresher one.
+func publishSegmentsSnapshot(segsCh chan map[int64]*meta.SegmentMeta, segs map[int64]*meta.SegmentMeta) {
+	// Drain a stale unconsumed snapshot (capacity-1 channel), then publish the fresh one.
+	select {
+	case <-segsCh:
+	default:
+	}
+	select {
+	case segsCh <- segs:
+	default:
+	}
+}
+
 // collectTruncatedSegments returns the ids of Truncated segments eligible for cleanup.
 func collectTruncatedSegments(segs map[int64]*meta.SegmentMeta) []int64 {
 	truncated := make([]int64, 0)
@@ -162,4 +172,51 @@ func collectTruncatedSegments(segs map[int64]*meta.SegmentMeta) []int64 {
 		}
 	}
 	return truncated
+}
+
+// orphanSweepEveryNAuditCycles throttles the auditor-driven orphan sweep of cleanup-domain
+// records (cleaning/ + marking/) to roughly every 5m at the default auditor interval. The
+// batch-time sweeps inside cleanupTruncatedSegmentsIfNecessary remain the immediate path;
+// this periodic one is the backstop that still runs when NO truncate batch is pending.
+const orphanSweepEveryNAuditCycles = 60
+
+// orphanSweepBound returns the exclusive upper bound for the cleanup-record orphan sweeps:
+// segments are cleaned in ascending order and their metadata is deleted afterwards, so any
+// cleaning/ or marking/ record whose SegmentId is below the smallest EXISTING segment id
+// belongs to an already-deleted segment — an orphan. With no segments left, every record is
+// an orphan (MaxInt64).
+func orphanSweepBound(segs map[int64]*meta.SegmentMeta) int64 {
+	if len(segs) == 0 {
+		return math.MaxInt64
+	}
+	bound := int64(math.MaxInt64)
+	for segId := range segs {
+		if segId < bound {
+			bound = segId
+		}
+	}
+	return bound
+}
+
+// sweepOrphanedCleanupRecords reclaims cleaning/ and marking/ records for segments whose
+// metadata is already gone. It exists because the best-effort record deletes on the
+// truncate-reap path (segment_cleanup_manager.go, CLEANUP_COMPLETED branch) can fail
+// transiently AFTER the segment metadata was deleted — and the batch-time sweeps never run
+// again for an idle log (they are gated on a pending truncate batch), so without this
+// periodic pass a leftover record (a PENDING_MANUAL one pollutes `wp marking list`) would
+// linger until a larger segment id happened to enter a future batch or the whole log died.
+func sweepOrphanedCleanupRecords(ctx context.Context, logHandle LogHandle, cleanupManager segment.SegmentCleanupManager, notifyManager segment.SegmentCompactedNotifyManager, segs map[int64]*meta.SegmentMeta) {
+	if cleanupManager == nil || notifyManager == nil {
+		return // not fully wired (tests); production always sets both
+	}
+	logId := logHandle.GetId()
+	bound := orphanSweepBound(segs)
+	if err := cleanupManager.CleanupOrphanedStatuses(ctx, logId, bound); err != nil {
+		logger.Ctx(ctx).Warn("periodic orphan sweep of cleanup statuses failed",
+			zap.String("logName", logHandle.GetName()), zap.Int64("logId", logId), zap.Error(err))
+	}
+	if err := notifyManager.CleanupOrphanedStatuses(ctx, logId, bound); err != nil {
+		logger.Ctx(ctx).Warn("periodic orphan sweep of compacted notify statuses failed",
+			zap.String("logName", logHandle.GetName()), zap.Int64("logId", logId), zap.Error(err))
+	}
 }

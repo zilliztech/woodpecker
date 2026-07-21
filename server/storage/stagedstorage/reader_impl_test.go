@@ -3291,9 +3291,12 @@ func TestReadCompactedData_ReadBlockError(t *testing.T) {
 
 	opt := storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}
 	_, err = reader.ReadNextBatchAdv(context.Background(), opt, nil)
-	// Should get EOF since the block read failed and no entries were collected
+	// A failed block fetch with nothing collected must surface as a READ ERROR, never EOF:
+	// EOF would make the consumer advance to the next segment and silently skip the rest of
+	// this sealed segment on a transient object-storage error.
 	assert.Error(t, err)
-	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+	assert.False(t, werr.ErrFileReaderEndOfFile.Is(err),
+		"a transient block-read failure must not be converted into end-of-segment")
 }
 
 // === readCompactedDataFromMinio - no entries match (all below startEntryID) ===

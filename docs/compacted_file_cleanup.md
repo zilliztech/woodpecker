@@ -144,6 +144,14 @@ waiting forever.
 | node crash after mark write, before drop | mark is fsynced; node's startup walk re-enqueues → drop proceeds |
 | segment truncated while distribution in flight | truncated-branch sweep reaps the marking record; truncate GC removes data everywhere |
 
+## rootPath expectations
+
+`minio.rootPath` is operator-set configuration (not request input) and is expected to be a
+clean path ("files", "woodpecker"). All object-storage key builders — the staged
+writer/reader/delete-GC, the cleanup footer HEAD, and the client's direct reader — canonicalize
+it through the same `NormalizeRootPathForKey` (a no-op for clean values), so every component
+derives identical keys from the same configuration value.
+
 ## Config knobs
 
 | key | default | meaning |

@@ -70,6 +70,9 @@ func (s *stubNotifyManager) CleanupOrphanedStatuses(ctx context.Context, logId i
 // createTestInternalWriter creates an internalLogWriterImpl for testing without goroutines.
 func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segment.SegmentCleanupManager) *internalLogWriterImpl {
 	cfg := newTestConfig()
+	if cleanupMgr == nil {
+		cleanupMgr = &recordingCleanupManager{}
+	}
 	w := &internalLogWriterImpl{
 		logIdStr:           "1",
 		logHandle:          logHandle,
@@ -628,6 +631,9 @@ func TestWriteResult_Structure(t *testing.T) {
 // createTestSessionWriter creates a logWriterImpl for testing without goroutines.
 func createTestSessionWriter(t *testing.T, logHandle LogHandle, cleanupMgr segment.SegmentCleanupManager, sessionLock *meta.SessionLock) *logWriterImpl {
 	cfg := newTestConfig()
+	if cleanupMgr == nil {
+		cleanupMgr = &recordingCleanupManager{}
+	}
 	w := &logWriterImpl{
 		logIdStr:           "1",
 		logHandle:          logHandle,
