@@ -668,3 +668,30 @@ func TestDeleteFileData_ReadDirError(t *testing.T) {
 	_, err = seg.DeleteFileData(context.Background(), 0)
 	assert.Error(t, err)
 }
+
+// TestDeleteFileData_NormalizesRootPathForWalkPrefix is the regression for the delete-GC
+// normalization gap: objects are WRITTEN under NormalizeRootPathForKey(rootPath), so the delete
+// walk must list under the exact same normalized prefix. With a non-clean rootPath (here
+// "/test-root/"), the raw prefix "/test-root//7/4" would match nothing and the delete would
+// "succeed" while leaking every compacted object. The exact-string expectation proves the walk
+// uses "test-root/7/4".
+func TestDeleteFileData_NormalizesRootPathForWalkPrefix(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	logId, segId := int64(7), int64(4)
+	segmentDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segmentDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segmentDir, "data.log"), []byte("staged"), 0o644))
+
+	client := mocks_objectstorage.NewObjectStorage(t)
+	// Exact normalized prefix — the raw "/test-root//7/4" would not match this expectation and
+	// the strict mock would fail the test (as the pre-fix code does).
+	client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-root/7/4", false, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	seg := NewStagedSegmentImpl(context.Background(), "test-bucket", "/test-root/", dir, logId, segId, client, cfg)
+	_, err = seg.DeleteFileData(context.Background(), 0)
+	assert.NoError(t, err)
+}

@@ -160,7 +160,11 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 		zap.Int("flag", flag))
 
 	// List all objects in the segment directory
-	listPrefix := fmt.Sprintf("%s/%s", rs.rootPath, rs.segmentFileKey)
+	// Build the walk prefix via the SAME rootPath normalization the writer/reader/cleanup use:
+	// objects are stored under the normalized key, so a raw prefix from a non-clean rootPath
+	// (e.g. "/wp//root/") would match nothing and this delete would "succeed" having removed
+	// zero objects — permanently leaking the compacted blocks and footer in the bucket.
+	listPrefix := fmt.Sprintf("%s/%s", NormalizeRootPathForKey(rs.rootPath), rs.segmentFileKey)
 	type objectToDelete struct {
 		path string
 		size int64

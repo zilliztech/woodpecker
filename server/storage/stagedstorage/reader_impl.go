@@ -1342,6 +1342,24 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 	}
 
+	// A compacted block is always read whole, so a same-provenance resume points at the block
+	// containing the LAST delivered entry — usually a fully consumed block. Skip every block
+	// whose LastEntryID < StartEntryID BEFORE sizing the batch: otherwise the entry budget in
+	// determineBlocksToRead can be exhausted by the consumed block alone (any single block
+	// holding >= maxEntries entries), extraction then filters it to zero entries, and the
+	// resulting spurious EOF makes the consumer silently skip the rest of the sealed segment.
+	if opt.StartEntryID >= 0 {
+		for startBlockIndex < len(r.blockIndexes) && r.blockIndexes[startBlockIndex].LastEntryID < opt.StartEntryID {
+			startBlockIndex++
+		}
+		if startBlockIndex >= len(r.blockIndexes) {
+			// Every remaining block is fully consumed: genuine end of the sealed segment.
+			logger.Ctx(ctx).Debug("all blocks at/after resume point already consumed; end of compacted segment",
+				zap.Int64("startBlockID", startBlockID), zap.Int64("startEntryID", opt.StartEntryID))
+			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+		}
+	}
+
 	// Determine which blocks to read based on limits
 	blocksToRead := r.determineBlocksToRead(startBlockIndex, maxEntries, maxBytes)
 	if len(blocksToRead) == 0 {

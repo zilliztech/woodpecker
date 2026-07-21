@@ -3307,30 +3307,10 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 	logId := int64(113)
 	segId := int64(113)
 
-	// Build valid block data with entries 0-4
-	var blockBuf bytes.Buffer
-	hdrRec := &codec.HeaderRecord{Version: codec.FormatVersion, Flags: codec.SetCompacted(0), FirstEntryID: 0}
-	blockBuf.Write(codec.EncodeRecord(hdrRec))
-
-	dataRecords := make([]codec.Record, 0, 5)
-	for i := 0; i < 5; i++ {
-		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("data")})
-	}
-	blockDataOnly := encodeRecordList(dataRecords)
-	blockHdr := &codec.BlockHeaderRecord{
-		BlockNumber:  0,
-		FirstEntryID: 0,
-		LastEntryID:  4,
-		BlockLength:  uint32(len(blockDataOnly)),
-		BlockCrc:     crc32.ChecksumIEEE(blockDataOnly),
-	}
-	blockBuf.Write(codec.EncodeRecord(blockHdr))
-	blockBuf.Write(blockDataOnly)
-	blockData := blockBuf.Bytes()
-
-	blockKey := fmt.Sprintf("test-root/%d/%d/m_0.blk", logId, segId)
-	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", blockKey, int64(0), mock.Anything, mock.Anything, mock.Anything).
-		Return(&readerMockFileReader{data: blockData}, nil)
+	// NOTE: no GetObject expectation exists — with the consumed-block skip, a StartEntryID past
+	// every block's LastEntryID returns EOF WITHOUT fetching any block object (the strict mock
+	// fails this test if a fetch happens; pre-skip the code wastefully fetched block 0, filtered
+	// it to zero entries, and only then returned EOF).
 
 	// Mock StatObject to return "not found" so constructor doesn't try to parse a compacted footer
 	mockStorage.EXPECT().StatObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -3362,8 +3342,8 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 		Flags: codec.SetCompacted(0),
 	}
 
-	// Call readCompactedDataFromMinio directly with startEntryID=100 (beyond all block entries 0-4)
-	// This exercises the "no entries collected" EOF path at L1328-1334
+	// Call readCompactedDataFromMinio directly with startEntryID=100 (beyond all block entries
+	// 0-4): the consumed-block skip advances past every block and returns EOF with no fetch.
 	opt := storage.ReaderOpt{StartEntryID: 100, MaxBatchEntries: 10}
 	_, err = reader.readCompactedDataFromMinio(context.Background(), opt, 0, 0)
 	assert.Error(t, err)
@@ -3390,4 +3370,85 @@ func TestStagedReader_LocalEmitterClearsCompactedBit(t *testing.T) {
 	require.NotNil(t, result.LastReadState)
 	assert.False(t, codec.IsCompacted(uint16(result.LastReadState.Flags)),
 		"a local reader must emit a state with the compacted bit cleared, even when r.flags is polluted")
+}
+
+// TestStagedReader_Compacted_ResumePastFullyConsumedLargeBlock is the regression for the
+// multi-block resume data-loss bug: a same-provenance compacted resume restarts at the block
+// holding the LAST delivered entry (block 0, fully consumed). When that block alone reaches the
+// entry budget (MaxBatchEntries), determineBlocksToRead used to admit ONLY it, extraction
+// filtered it to zero entries, and the spurious EOF made the consumer skip every later block of
+// the sealed segment. Post-fix the consumed block is skipped before sizing the batch, so the
+// read returns block 1's entries. The strict mock proves it: only m_1.blk may be fetched.
+func TestStagedReader_Compacted_ResumePastFullyConsumedLargeBlock(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	logId, segId := int64(140), int64(140)
+
+	// Footer with TWO blocks: block 0 = entries 0..4, block 1 = entries 5..9.
+	idx0 := &codec.IndexRecord{BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4}
+	idx1 := &codec.IndexRecord{BlockNumber: 1, StartOffset: 200, BlockSize: 200, FirstEntryID: 5, LastEntryID: 9}
+	footer := &codec.FooterRecord{
+		TotalBlocks: 2, TotalRecords: 10, TotalSize: 400,
+		IndexLength: uint32(2 * (codec.RecordHeaderSize + codec.IndexRecordSize)),
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: 9,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(idx0))
+	footerBuf.Write(codec.EncodeRecord(idx1))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	// Only block 1's object may be fetched: no expectation exists for m_0.blk, so re-reading the
+	// consumed block fails the test via the strict mock.
+	var block1Buf bytes.Buffer
+	block1Buf.Write(codec.EncodeRecord(&codec.HeaderRecord{Version: codec.FormatVersion, Flags: codec.SetCompacted(0), FirstEntryID: 5}))
+	dataRecords := make([]codec.Record, 0, 5)
+	for i := 0; i < 5; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	block1DataOnly := encodeRecordList(dataRecords)
+	block1Buf.Write(codec.EncodeRecord(&codec.BlockHeaderRecord{
+		BlockNumber: 1, FirstEntryID: 5, LastEntryID: 9,
+		BlockLength: uint32(len(block1DataOnly)), BlockCrc: crc32.ChecksumIEEE(block1DataOnly),
+	}))
+	block1Buf.Write(block1DataOnly)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", fmt.Sprintf("test-root/%d/%d/m_1.blk", logId, segId), int64(0), mock.Anything, mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: block1Buf.Bytes()}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+	require.True(t, reader.isCompacted.Load())
+
+	// Same-provenance resume: block 0 fully consumed (entries 0..4 delivered), next wanted
+	// entry is 5. MaxBatchEntries == 5 makes block 0 alone fill the whole entry budget — the
+	// exact trigger for the pre-fix spurious EOF.
+	resumeState := &proto.LastReadState{
+		SegmentId:   segId,
+		Flags:       uint32(codec.SetCompacted(0)),
+		Version:     uint32(codec.FormatVersion),
+		LastBlockId: 0,
+		BlockOffset: 0,
+	}
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 5, MaxBatchEntries: 5}, resumeState)
+	require.NoError(t, err, "resume past a fully consumed budget-sized block must NOT return EOF")
+	require.NotNil(t, result)
+	require.Equal(t, 5, len(result.Entries), "all of block 1's entries must be returned")
+	assert.Equal(t, int64(5), result.Entries[0].EntryId)
+	assert.Equal(t, int64(9), result.Entries[4].EntryId)
+	require.NotNil(t, result.LastReadState)
+	assert.Equal(t, int32(1), result.LastReadState.LastBlockId)
+	assert.True(t, codec.IsCompacted(uint16(result.LastReadState.Flags)))
 }

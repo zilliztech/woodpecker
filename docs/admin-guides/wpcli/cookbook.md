@@ -174,9 +174,14 @@ wp marking confirm 42 7
 ```
 
 Notes:
-- These commands read etcd directly; endpoints and the meta prefix are discovered from any
-  node's `/admin/config` automatically. Override with `--etcd` / `--meta-prefix` if the
-  admin plane is unreachable.
+- These commands read etcd directly; endpoints, the meta prefix, AND the cluster's etcd
+  TLS/auth settings are discovered from any node's `/admin/config` automatically. Override
+  with `--etcd` / `--meta-prefix` if the admin plane is unreachable, and
+  `--etcd-cert/-key/-cacert` / `--etcd-username/-password` for a secured etcd (the
+  discovered cert paths are server-side paths — valid when running in-pod).
+- `confirm` marks the record `OPERATOR_CONFIRMED` — durable across writer restarts and
+  hidden from the default list — rather than deleting it; the record is physically reaped
+  when the segment is truncated.
 - Confirming is low-stakes: a data-holding node self-heals its mark via the server-side
   pull reconcile once it comes back; a node that never held the segment's bytes only loses
   a read optimization.

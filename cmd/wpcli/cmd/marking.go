@@ -15,6 +15,7 @@ import (
 
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
+	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -46,13 +47,27 @@ pull reconcile; nodes that never held the segment only lose a read optimization.
 
 // markingEtcdFlags are shared discovery overrides for the marking subcommands.
 type markingEtcdFlags struct {
-	etcdEndpoints string // comma-separated override; skips /admin/config discovery
+	etcdEndpoints string // comma-separated override; with --meta-prefix, skips /admin/config discovery
 	metaPrefix    string // full meta prefix override (e.g. "woodpecker" or "by-dev/woodpecker")
+	// TLS/auth overrides. Defaults are discovered from a node's /admin/config (its cert PATHS
+	// are server-side paths — valid when wp runs in-pod; override from a remote machine).
+	etcdCert          string
+	etcdKey           string
+	etcdCACert        string
+	etcdTLSMinVersion string
+	etcdUsername      string
+	etcdPassword      string
 }
 
 func (f *markingEtcdFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "etcd endpoints (comma-separated); default: discovered from a node's /admin/config")
 	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "metadata key prefix; default: discovered from a node's /admin/config (etcd.rootPath + woodpecker.meta.prefix)")
+	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "etcd TLS client cert file; default: discovered (server-side path, valid in-pod)")
+	cmd.Flags().StringVar(&f.etcdKey, "etcd-key", "", "etcd TLS client key file; default: discovered")
+	cmd.Flags().StringVar(&f.etcdCACert, "etcd-cacert", "", "etcd TLS CA cert file; default: discovered")
+	cmd.Flags().StringVar(&f.etcdTLSMinVersion, "etcd-tls-min-version", "", "etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered")
+	cmd.Flags().StringVar(&f.etcdUsername, "etcd-username", "", "etcd auth username; default: discovered")
+	cmd.Flags().StringVar(&f.etcdPassword, "etcd-password", "", "etcd auth password; default: discovered")
 }
 
 // adminConfigSnapshot is the minimal shape of GET /admin/config we need. The server
@@ -61,6 +76,18 @@ type adminConfigSnapshot struct {
 	Etcd struct {
 		Endpoints []string
 		RootPath  string
+		Ssl       struct {
+			Enabled       bool
+			TlsCert       string
+			TlsKey        string
+			TlsCACert     string
+			TlsMinVersion string
+		}
+		Auth struct {
+			Enabled  bool
+			UserName string
+			Password string
+		}
 	}
 	Woodpecker struct {
 		Meta struct {
@@ -69,20 +96,32 @@ type adminConfigSnapshot struct {
 	}
 }
 
-// resolveMarkingEtcd resolves (endpoints, keyBuilder) from flags or, when absent, from the
-// first reachable node's /admin/config.
-func resolveMarkingEtcd(f *markingEtcdFlags) ([]string, *meta.KeyBuilder, error) {
-	var endpoints []string
+// markingEtcdConn is the fully resolved etcd connection spec for the marking commands:
+// endpoints + key prefix + the TLS/auth material the cluster's own nodes use.
+type markingEtcdConn struct {
+	endpoints                             []string
+	kb                                    *meta.KeyBuilder
+	useSSL                                bool
+	tlsCert, tlsKey, tlsCACert, tlsMinVer string
+	username, password                    string
+}
+
+// resolveMarkingEtcd resolves the connection spec from flags or, when endpoints/prefix are not
+// both given, from the first reachable node's /admin/config — including the etcd TLS and auth
+// settings the cluster itself uses, so `wp marking` works against a secured etcd. Flags always
+// override discovered values.
+func resolveMarkingEtcd(f *markingEtcdFlags) (*markingEtcdConn, error) {
+	conn := &markingEtcdConn{}
 	prefix := f.metaPrefix
 
 	if f.etcdEndpoints != "" {
-		endpoints = strings.Split(f.etcdEndpoints, ",")
+		conn.endpoints = strings.Split(f.etcdEndpoints, ",")
 	}
 
-	if len(endpoints) == 0 || prefix == "" {
+	if len(conn.endpoints) == 0 || prefix == "" {
 		res, err := resolveAndDiscover()
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		var snap *adminConfigSnapshot
 		var lastErr error
@@ -101,33 +140,83 @@ func resolveMarkingEtcd(f *markingEtcdFlags) ([]string, *meta.KeyBuilder, error)
 			break
 		}
 		if snap == nil {
-			return nil, nil, wperrors.NewNetworkError(fmt.Sprintf("could not fetch /admin/config from any node: %v", lastErr))
+			return nil, wperrors.NewNetworkError(fmt.Sprintf("could not fetch /admin/config from any node: %v", lastErr))
 		}
-		if len(endpoints) == 0 {
-			endpoints = snap.Etcd.Endpoints
+		if len(conn.endpoints) == 0 {
+			conn.endpoints = snap.Etcd.Endpoints
 		}
 		if prefix == "" {
 			prefix = path.Join(snap.Etcd.RootPath, snap.Woodpecker.Meta.Prefix)
 		}
+		// Adopt the cluster's own TLS/auth settings (the admin config endpoint is unredacted by
+		// design; the admin plane is an internal network per the wpcli security model).
+		if snap.Etcd.Ssl.Enabled {
+			conn.useSSL = true
+			conn.tlsCert = snap.Etcd.Ssl.TlsCert
+			conn.tlsKey = snap.Etcd.Ssl.TlsKey
+			conn.tlsCACert = snap.Etcd.Ssl.TlsCACert
+			conn.tlsMinVer = snap.Etcd.Ssl.TlsMinVersion
+		}
+		if snap.Etcd.Auth.Enabled {
+			conn.username = snap.Etcd.Auth.UserName
+			conn.password = snap.Etcd.Auth.Password
+		}
 	}
 
-	if len(endpoints) == 0 {
-		return nil, nil, wperrors.NewUsageError("no etcd endpoints (discovery returned none; pass --etcd)")
+	// Flag overrides (also enable SSL/auth when only the flags are given, e.g. with discovery
+	// skipped via --etcd + --meta-prefix).
+	if f.etcdCert != "" || f.etcdKey != "" || f.etcdCACert != "" {
+		conn.useSSL = true
 	}
-	return endpoints, meta.NewKeyBuilder(prefix), nil
+	if f.etcdCert != "" {
+		conn.tlsCert = f.etcdCert
+	}
+	if f.etcdKey != "" {
+		conn.tlsKey = f.etcdKey
+	}
+	if f.etcdCACert != "" {
+		conn.tlsCACert = f.etcdCACert
+	}
+	if f.etcdTLSMinVersion != "" {
+		conn.tlsMinVer = f.etcdTLSMinVersion
+	}
+	if f.etcdUsername != "" {
+		conn.username = f.etcdUsername
+	}
+	if f.etcdPassword != "" {
+		conn.password = f.etcdPassword
+	}
+
+	if len(conn.endpoints) == 0 {
+		return nil, wperrors.NewUsageError("no etcd endpoints (discovery returned none; pass --etcd)")
+	}
+	conn.kb = meta.NewKeyBuilder(prefix)
+	return conn, nil
 }
 
-func markingEtcdClient(endpoints []string) (*clientv3.Client, error) {
+// markingEtcdClient dials etcd with the resolved TLS/auth material, reusing the same
+// common/etcd constructors the server uses.
+func markingEtcdClient(conn *markingEtcdConn) (*clientv3.Client, error) {
 	timeout := Globals.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   endpoints,
-		DialTimeout: timeout,
-	})
+	var cli *clientv3.Client
+	var err error
+	switch {
+	case conn.useSSL:
+		cli, err = etcd.GetRemoteEtcdSSLClientWithCfg(conn.endpoints, conn.tlsCert, conn.tlsKey, conn.tlsCACert, conn.tlsMinVer,
+			clientv3.Config{Username: conn.username, Password: conn.password})
+	case conn.username != "":
+		cli, err = etcd.GetRemoteEtcdClientWithAuth(conn.endpoints, conn.username, conn.password)
+	default:
+		cli, err = clientv3.New(clientv3.Config{
+			Endpoints:   conn.endpoints,
+			DialTimeout: timeout,
+		})
+	}
 	if err != nil {
-		return nil, wperrors.NewNetworkError(fmt.Sprintf("connect etcd %v: %v", endpoints, err))
+		return nil, wperrors.NewNetworkError(fmt.Sprintf("connect etcd %v: %v", conn.endpoints, err))
 	}
 	return cli, nil
 }
@@ -160,16 +249,16 @@ func newMarkingListCommand() *cobra.Command {
 		Short: "List compacted-mark distribution records (default: only NOTIFY_PENDING_MANUAL)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			endpoints, kb, err := resolveMarkingEtcd(&flags)
+			conn, err := resolveMarkingEtcd(&flags)
 			if err != nil {
 				return err
 			}
-			cli, err := markingEtcdClient(endpoints)
+			cli, err := markingEtcdClient(conn)
 			if err != nil {
 				return err
 			}
 			defer cli.Close()
-			return runMarkingList(cmd, cli, kb, logID, cmd.Flags().Changed("log"), allStates)
+			return runMarkingList(cmd, cli, conn.kb, logID, cmd.Flags().Changed("log"), allStates)
 		},
 	}
 	flags.register(cmd)
@@ -283,16 +372,16 @@ managed automatically and normally need no operator action).`,
 				return wperrors.NewUsageError(fmt.Sprintf("invalid segmentId %q", args[1]))
 			}
 
-			endpoints, kb, err := resolveMarkingEtcd(&flags)
+			conn, err := resolveMarkingEtcd(&flags)
 			if err != nil {
 				return err
 			}
-			cli, err := markingEtcdClient(endpoints)
+			cli, err := markingEtcdClient(conn)
 			if err != nil {
 				return err
 			}
 			defer cli.Close()
-			return runMarkingConfirm(cmd, cli, kb, logID, segID, force)
+			return runMarkingConfirm(cmd, cli, conn.kb, logID, segID, force)
 		},
 	}
 	flags.register(cmd)
@@ -339,12 +428,35 @@ func runMarkingConfirm(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 	if err != nil {
 		return fmt.Errorf("marshal marking record %s: %w", key, err)
 	}
-	if _, err := cli.Put(ctx, key, string(newVal)); err != nil {
-		return wperrors.NewNetworkError(fmt.Sprintf("etcd put %s: %v", key, err))
+	// Compare-and-put against the revision we read: if a concurrent deleter (orphan sweep /
+	// truncate reap) or the manager touched the key in between, the delete/update wins and we
+	// must NOT resurrect a reaped record with an unconditional Put.
+	ok, err := casPutMarkingRecord(ctx, cli, key, string(newVal), resp.Kvs[0].ModRevision)
+	if err != nil {
+		return wperrors.NewNetworkError(fmt.Sprintf("etcd txn %s: %v", key, err))
+	}
+	if !ok {
+		return wperrors.NewStateConflictError(fmt.Sprintf(
+			"marking record %d/%d changed or was reaped concurrently; re-run `wp marking list` and retry if it still shows",
+			logID, segID))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "confirmed: marking record log %d segment %d set to OPERATOR_CONFIRMED (was %s); it will be reaped when the segment is truncated\n",
 		logID, segID, prevState.String())
 	return nil
+}
+
+// casPutMarkingRecord writes val to key only if the key still exists at exactly modRev — a
+// compare-and-put honoring the manager's update-if-present invariant. Returns false when the
+// key was deleted or rewritten concurrently (the other writer wins).
+func casPutMarkingRecord(ctx context.Context, cli *clientv3.Client, key, val string, modRev int64) (bool, error) {
+	txnResp, err := cli.Txn(ctx).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", modRev)).
+		Then(clientv3.OpPut(key, val)).
+		Commit()
+	if err != nil {
+		return false, err
+	}
+	return txnResp.Succeeded, nil
 }
 
 func formatMarkingTime(unixMilli uint64) string {

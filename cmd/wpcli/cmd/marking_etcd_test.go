@@ -219,3 +219,47 @@ func TestMarkingCommands_EmbeddedEtcd(t *testing.T) {
 		assert.Contains(t, err.Error(), "unparseable")
 	})
 }
+
+// TestCasPutMarkingRecord verifies confirm's compare-and-put: a stale revision (the key was
+// rewritten or deleted between the read and the write) must lose — in particular a concurrent
+// reap must NOT be undone by resurrecting the key.
+func TestCasPutMarkingRecord(t *testing.T) {
+	cli := startTestEtcd(t)
+	ctx := context.Background()
+	key := "wptest/marking/50/1"
+
+	putResp, err := cli.Put(ctx, key, "v1")
+	require.NoError(t, err)
+	rev1 := putResp.Header.Revision
+
+	t.Run("succeeds at the read revision", func(t *testing.T) {
+		ok, err := casPutMarkingRecord(ctx, cli, key, "v2", rev1)
+		require.NoError(t, err)
+		assert.True(t, ok)
+	})
+
+	t.Run("stale revision loses after a concurrent rewrite", func(t *testing.T) {
+		ok, err := casPutMarkingRecord(ctx, cli, key, "v3", rev1) // rev1 is stale (v2 write bumped it)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("concurrent delete wins and the key is not resurrected", func(t *testing.T) {
+		getResp, err := cli.Get(ctx, key)
+		require.NoError(t, err)
+		require.Len(t, getResp.Kvs, 1)
+		readRev := getResp.Kvs[0].ModRevision
+
+		// A reaper deletes the key between the read and the confirm write.
+		_, err = cli.Delete(ctx, key)
+		require.NoError(t, err)
+
+		ok, err := casPutMarkingRecord(ctx, cli, key, "resurrected", readRev)
+		require.NoError(t, err)
+		assert.False(t, ok, "the delete must win")
+
+		after, err := cli.Get(ctx, key)
+		require.NoError(t, err)
+		assert.Empty(t, after.Kvs, "the reaped key must NOT be resurrected")
+	})
+}
