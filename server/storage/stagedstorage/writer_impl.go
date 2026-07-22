@@ -2219,7 +2219,9 @@ func HasCompactedMark(segmentDir string) bool {
 // The gauges are incremented by the staged writer (rootPath as received over RPC) and
 // decremented by deleteLocalFiles and the compacted-file-cleanup drop path (whose pull branch
 // re-derives rootPath from the on-disk layout); all sides must build the label the same way.
-// rootPath is validated clean at startup (config.Validate), so the raw value is canonical.
+// Canonical form is client-enforced (config.Validate at client startup rejects non-canonical
+// values in service mode) and the NotifySegmentCompacted boundary re-checks it server-side
+// before the cleanup machinery consumes it.
 func storedGaugeNs(bucket, rootPath string) string {
 	return bucket + "/" + rootPath
 }

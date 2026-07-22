@@ -52,6 +52,14 @@ type pendingSeg struct {
 	rootPath string
 	logId    int64
 	segId    int64
+	// Retry state for transient footer-HEAD failures: attempts counts consecutive failed
+	// HEADs; nextAttemptAt gates the next try (exponential backoff capped at the reconcile
+	// cadence), so an object-storage outage costs a bounded, decaying HEAD rate per segment
+	// instead of one probe per queued segment per 5s tick. Zero values mean "due now"; a
+	// fresh enqueue (push notify or reconcile walk) resets both — new evidence earns an
+	// immediate try.
+	attempts      int
+	nextAttemptAt time.Time
 }
 
 // compactedFileCleanupTask reclaims the local staged data.log for segments whose data is
@@ -103,6 +111,32 @@ func (t *compactedFileCleanupTask) Interval() time.Duration {
 func (t *compactedFileCleanupTask) enqueue(segDir, bucket, rootPath string, logId, segId int64) {
 	t.mu.Lock()
 	t.pending[segDir] = pendingSeg{segDir: segDir, bucket: bucket, rootPath: rootPath, logId: logId, segId: segId}
+	t.mu.Unlock()
+}
+
+// requeueAfterFailure re-inserts a segment whose footer HEAD failed transiently, doubling
+// the delay per consecutive failure up to the reconcile cadence. A fresh enqueue for the
+// same segment that raced in while this one was being processed wins (it reset the backoff),
+// so the stale retry state is dropped rather than clobbering it.
+func (t *compactedFileCleanupTask) requeueAfterFailure(s pendingSeg) {
+	base := t.Interval()
+	if base <= 0 {
+		base = 5 * time.Second
+	}
+	maxBackoff := base * reconcileEveryNPasses
+	backoff := base
+	for i := 0; i < s.attempts && backoff < maxBackoff; i++ {
+		backoff *= 2
+	}
+	if backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+	s.attempts++
+	s.nextAttemptAt = time.Now().Add(backoff)
+	t.mu.Lock()
+	if _, exists := t.pending[s.segDir]; !exists {
+		t.pending[s.segDir] = s
+	}
 	t.mu.Unlock()
 }
 
@@ -186,16 +220,20 @@ func (t *compactedFileCleanupTask) reconcileWalk(ctx context.Context) error {
 // push notification and the reconcile walk. The queue is snapshotted and cleared under the lock,
 // then processed outside it so per-segment I/O does not block enqueue.
 func (t *compactedFileCleanupTask) drainPending(ctx context.Context) {
+	now := time.Now()
 	t.mu.Lock()
 	if len(t.pending) == 0 {
 		t.mu.Unlock()
 		return
 	}
 	batch := make([]pendingSeg, 0, len(t.pending))
-	for _, s := range t.pending {
+	for key, s := range t.pending {
+		if s.nextAttemptAt.After(now) {
+			continue // still backing off after a failed footer HEAD; leave queued
+		}
 		batch = append(batch, s)
+		delete(t.pending, key)
 	}
-	t.pending = make(map[string]pendingSeg)
 	t.mu.Unlock()
 
 	for _, s := range batch {
@@ -215,9 +253,9 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 	}
 	footer, statErr := footerExistsInMinio(ctx, t.store.storageClient, s.bucket, s.rootPath, s.logId, s.segId)
 	if statErr != nil {
-		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; will retry next pass",
-			zap.String("segDir", s.segDir), zap.Error(statErr))
-		t.enqueue(s.segDir, s.bucket, s.rootPath, s.logId, s.segId) // transient: retry on the next tick
+		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; will retry with backoff",
+			zap.String("segDir", s.segDir), zap.Int("attempts", s.attempts+1), zap.Error(statErr))
+		t.requeueAfterFailure(s) // transient: retried with exponential backoff, capped at the reconcile cadence
 		return
 	}
 	marked := hasCompactedMark(s.segDir)
@@ -258,8 +296,10 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 	// bytes/files" gauges would never decrement for reclaimed data.logs and capacity dashboards
 	// would persistently overestimate WAL usage.
 	var dataLogSize int64
+	sizeKnown := false
 	if info, statErr := os.Stat(dataLogPath); statErr == nil {
 		dataLogSize = info.Size()
+		sizeKnown = true
 	}
 	// Release the cached writer's fd BEFORE unlinking: the node that ran the compaction still
 	// holds data.log open O_APPEND in its cached StagedFileWriter, and an unlinked inode's
@@ -269,18 +309,30 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to evict cached segment writer",
 			zap.String("segDir", segDir), zap.Error(evictErr))
 	}
-	if rmErr := os.Remove(dataLogPath); rmErr != nil && !os.IsNotExist(rmErr) {
+	rmErr := os.Remove(dataLogPath)
+	if rmErr != nil && !os.IsNotExist(rmErr) {
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to remove data.log; will retry next pass",
 			zap.String("path", dataLogPath), zap.Error(rmErr))
 		return
 	}
-	// Same log_ns the staged writer used when incrementing these gauges: rootPath is validated
-	// clean at startup, so the raw RPC value (push) and the disk-derived value (pull reconcile)
-	// are identical and this decrement hits the writer's exact series.
-	storedNs := bucket + "/" + rootPath
-	logIdStr := strconv.FormatInt(logId, 10)
-	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, storedNs, logIdStr).Sub(float64(dataLogSize))
-	metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, storedNs, logIdStr).Dec()
+	// Decrement the local-storage gauges ONLY for a removal this task actually performed
+	// (mirroring deleteLocalFiles, which decrements only when its os.Remove succeeds). If the
+	// file was already gone — e.g. the truncate/delete GC removed it between our existence
+	// check and this unlink — the remover did its own accounting, and decrementing here too
+	// would drive the series permanently negative. Skip the byte Sub when the pre-unlink Stat
+	// failed (size unknown): a small residual over-report beats subtracting a fabricated 0/N.
+	if rmErr == nil {
+		// Same log_ns the staged writer used when incrementing these gauges: rootPath is
+		// validated at the NotifySegmentCompacted boundary (push) and derived
+		// path.Join-canonicalized from disk (pull reconcile), so both agree and this
+		// decrement hits the writer's exact series.
+		storedNs := bucket + "/" + rootPath
+		logIdStr := strconv.FormatInt(logId, 10)
+		if sizeKnown {
+			metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, storedNs, logIdStr).Sub(float64(dataLogSize))
+		}
+		metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, storedNs, logIdStr).Dec()
+	}
 
 	if evictErr := t.store.EvictSegmentReader(ctx, bucket, rootPath, logId, segId); evictErr != nil {
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to evict cached segment reader",

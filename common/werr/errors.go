@@ -89,14 +89,15 @@ var (
 	// ---------------------------------------------
 
 	// logstore errors (2000-2099)
-	ErrLogStoreNotStarted     = newWoodpeckerError("logstore not started", 2000, false)
-	ErrLogStoreAlreadyStarted = newWoodpeckerError("logstore already started", 2001, false)
-	ErrLogStoreShutdown       = newWoodpeckerError("logstore is shutting down", 2002, false)
-	ErrLogStoreRegisterFailed = newWoodpeckerError("failed to register logstore", 2003, true)
-	ErrLogStoreInvalidAddress = newWoodpeckerError("invalid logstore address", 2004, false)
-	ErrLogBeingDeleted        = newWoodpeckerError("log is being deleted", 2005, false)
-	ErrMarkDeleteFailed       = newWoodpeckerError("failed to durably mark log/instance deleted", 2006, true)
-	ErrLogStoreDiskPressure   = newWoodpeckerError("logstore local disk above hard watermark, write backpressure active", 2007, true)
+	ErrLogStoreNotStarted      = newWoodpeckerError("logstore not started", 2000, false)
+	ErrLogStoreAlreadyStarted  = newWoodpeckerError("logstore already started", 2001, false)
+	ErrLogStoreShutdown        = newWoodpeckerError("logstore is shutting down", 2002, false)
+	ErrLogStoreRegisterFailed  = newWoodpeckerError("failed to register logstore", 2003, true)
+	ErrLogStoreInvalidAddress  = newWoodpeckerError("invalid logstore address", 2004, false)
+	ErrLogBeingDeleted         = newWoodpeckerError("log is being deleted", 2005, false)
+	ErrMarkDeleteFailed        = newWoodpeckerError("failed to durably mark log/instance deleted", 2006, true)
+	ErrLogStoreDiskPressure    = newWoodpeckerError("logstore local disk above hard watermark, write backpressure active", 2007, true)
+	ErrLogStoreInvalidRootPath = newWoodpeckerError("invalid rootPath", 2008, false)
 
 	// segment_processor errors (2100-2199)
 	ErrSegmentProcessorNotFound          = newWoodpeckerError("segment processor not found", 2100, false)

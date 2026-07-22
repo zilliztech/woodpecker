@@ -768,6 +768,23 @@ func TestNotifySegmentCompacted_FooterHeadTransientErrorPropagates(t *testing.T)
 	assert.False(t, hasCompactedMark(seg))
 }
 
+// TestNotifySegmentCompacted_NonCanonicalRootPathRejected pins the RPC-boundary validation:
+// rootPath is caller-managed in service mode, so the local config validation cannot vouch
+// for it. A non-canonical value must be rejected before anything consumes it — no footer
+// HEAD (the strict mock has no StatObject expectation), no mark, no fabricated directory —
+// otherwise the push path (raw value) and the pull reconcile (disk-derived, canonicalized)
+// would silently split keys and metric series.
+func TestNotifySegmentCompacted_NonCanonicalRootPathRejected(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.storageClient = mocks_objectstorage.NewObjectStorage(t)
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "/rp//x/", 1, 2)
+	assert.ErrorIs(t, err, werr.ErrLogStoreInvalidRootPath)
+}
+
 // TestNotifySegmentCompacted_NilStorageClientErrors: without an object-storage client the
 // footer cannot be verified, so the handler must refuse rather than trust the caller.
 func TestNotifySegmentCompacted_NilStorageClientErrors(t *testing.T) {

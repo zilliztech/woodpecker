@@ -46,7 +46,8 @@ import (
 func TestNewEmbedClient_InvalidMinioRootPathRejected(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	cfg.Minio.RootPath = "wp/" // mutated post-load: trailing slash
+	cfg.Woodpecker.Storage.Type = "service" // the mode that REQUIRES a canonical rootPath
+	cfg.Minio.RootPath = "wp/"              // mutated post-load: trailing slash
 
 	_, err = NewEmbedClient(context.Background(), cfg, nil, nil, false)
 	require.Error(t, err)

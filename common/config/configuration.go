@@ -518,16 +518,12 @@ func (c *Configuration) Validate() error {
 	return nil
 }
 
-// ValidateMinioConfig checks the object-storage configuration. rootPath is used VERBATIM to
-// build object keys (<rootPath>/<logId>/<segId>/...), local staged directories, and metric
-// labels — there is deliberately no normalization anywhere on that chain, so rejecting a
-// non-canonical value at startup is what lets every consuming site trust the raw value and
-// stay trivially consistent with every other site. It is exported separately so consumption
-// points (the server and client constructors) can re-check the object-storage section of a
-// possibly hand-rolled or post-load-mutated config without imposing the full Validate() on
-// partial configurations.
-func (c *Configuration) ValidateMinioConfig() error {
-	rp := c.Minio.RootPath
+// ValidateRootPathValue checks that a rootPath value is in the canonical form woodpecker
+// consumes VERBATIM — for object keys (<rootPath>/<logId>/<segId>/...), local staged
+// directories, and metric labels there is deliberately no normalization anywhere on the
+// chain. Shared by the local-config validation below and by RPC boundaries that receive a
+// caller-managed rootPath (service mode's NotifySegmentCompacted).
+func ValidateRootPathValue(rp string) error {
 	if rp == "" {
 		return nil // empty = bucket root
 	}
@@ -537,6 +533,35 @@ func (c *Configuration) ValidateMinioConfig() error {
 			"\"woodpecker\" or \"wp/data\" (no leading/trailing/doubled slashes, no \".\" or \"..\" "+
 			"segments), or empty for the bucket root", rp)
 	}
+	return nil
+}
+
+// ValidateMinioConfig checks the object-storage configuration. Enforcement is scoped by
+// storage mode:
+//
+//   - service (staged) mode HARD-FAILS on a non-canonical rootPath: the pull-reconcile path
+//     re-derives rootPath from the on-disk layout (path.Join-canonicalized), so push and pull
+//     only agree when the configured value is already canonical.
+//   - minio/local modes only WARN: every key/dir/label-building site uses the raw value
+//     verbatim, so even a non-canonical value is self-consistent end-to-end — exactly as it
+//     was before validation existed. Hard-failing here would break existing deployments on
+//     upgrade for no correctness gain (and normalizing instead would silently re-key their
+//     object space, orphaning previously written objects — strictly worse).
+//
+// It is exported separately so consumption points (the server and client constructors) can
+// re-check the object-storage section of a possibly hand-rolled or post-load-mutated config
+// without imposing the full Validate() on partial configurations.
+func (c *Configuration) ValidateMinioConfig() error {
+	err := ValidateRootPathValue(c.Minio.RootPath)
+	if err == nil {
+		return nil
+	}
+	if c.Woodpecker.Storage.IsStorageService() {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "[WARN] woodpecker: %v — tolerated in %q storage mode (keys are built "+
+		"verbatim and stay self-consistent), but service mode rejects this value\n",
+		err, c.Woodpecker.Storage.Type)
 	return nil
 }
 

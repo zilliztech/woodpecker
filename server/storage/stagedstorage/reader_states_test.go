@@ -303,6 +303,58 @@ func TestStagedReaderStates_MarkWithDataLogStillServesLocally(t *testing.T) {
 		"local serving in the drop-pending state emits local provenance")
 }
 
+// TestStagedReaderStates_ReclaimedSegment_TransientMinioErrorSurfaces pins the
+// absent-vs-error split on the R1 fallback: for a reclaimed segment (tombstone mark, no
+// data.log) object storage is the ONLY source, so a transient StatObject failure
+// (throttle/5xx/timeout) must surface as a retriable error — NOT be collapsed into
+// ErrEntryNotFound, which callers deliberately treat as the silent caught-up steady state
+// (the collapse would turn an S3 blip into an unlogged read stall).
+func TestStagedReaderStates_ReclaimedSegment_TransientMinioErrorSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	logId, segId := int64(205), int64(205)
+
+	segDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId), mock.Anything, mock.Anything).
+		Return(int64(0), false, fmt.Errorf("i/o timeout")).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).Return(false).Maybe()
+
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+	require.Error(t, err)
+	assert.False(t, werr.ErrEntryNotFound.Is(err),
+		"a transient object-storage failure must stay a retriable error, got %v", err)
+	assert.Contains(t, err.Error(), "i/o timeout")
+}
+
+// TestStagedReaderStates_ReclaimedSegment_FooterGenuinelyAbsentIsNotFound is the companion:
+// a CONFIRMED absent footer (NoSuchKey) on the same tombstone-only layout still maps to
+// ErrEntryNotFound (the S6 anomaly semantics are unchanged by the absent-vs-error split).
+func TestStagedReaderStates_ReclaimedSegment_FooterGenuinelyAbsentIsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	logId, segId := int64(206), int64(206)
+
+	segDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId), mock.Anything, mock.Anything).
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Once()
+
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+	require.Error(t, err)
+	assert.True(t, werr.ErrEntryNotFound.Is(err), "confirmed absence still maps to ErrEntryNotFound, got %v", err)
+}
+
 // TestStagedReaderStates_CompactedStateIntoLocalReader_ResolvesByEntryId covers T4', the
 // mirror of the local->compacted provenance test: a COMPACTED-provenance resume state (with a
 // block id meaningless in local numbering) replayed into a LOCAL reader must not reuse the

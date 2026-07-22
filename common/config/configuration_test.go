@@ -833,20 +833,45 @@ func TestValidateMinioRootPath(t *testing.T) {
 		return cfg
 	}
 
-	// rootPath is consumed verbatim by every key/dir/label-building site, so Validate must
-	// only admit values that are already canonical.
+	// rootPath is consumed verbatim by every key/dir/label-building site, so canonical values
+	// must be accepted in every storage mode. (ValidateMinioConfig is asserted directly: full
+	// Validate() drags in unrelated per-mode requirements like service-mode quorum seeds.)
 	valid := []string{"", "woodpecker", "wp/data", "a/b/c", "wp-1_x.y"}
 	for _, rp := range valid {
+		for _, mode := range []string{"service", "minio", "local", "default"} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Storage.Type = mode
+			cfg.Minio.RootPath = rp
+			assert.NoError(t, cfg.ValidateMinioConfig(), "rootPath %q should be accepted in %s mode", rp, mode)
+		}
+		// And through the full config gate in the default mode.
 		cfg := newValidCfg()
 		cfg.Minio.RootPath = rp
-		assert.NoError(t, cfg.Validate(), "rootPath %q should be accepted", rp)
+		assert.NoError(t, cfg.Validate(), "rootPath %q should pass full validation", rp)
 	}
 
 	invalid := []string{"/wp", "wp/", "/wp/", "wp//data", "a/./b", "a/../b", ".", "..", "../wp", "/"}
 	for _, rp := range invalid {
+		// SERVICE mode hard-fails: the pull-reconcile path re-derives rootPath from the
+		// on-disk layout, so push and pull only agree for a canonical value.
 		cfg := newValidCfg()
+		cfg.Woodpecker.Storage.Type = "service"
 		cfg.Minio.RootPath = rp
-		assert.ErrorContains(t, cfg.Validate(), "invalid minio rootPath", "rootPath %q should be rejected", rp)
+		assert.ErrorContains(t, cfg.ValidateMinioConfig(), "invalid minio rootPath", "rootPath %q should be rejected in service mode", rp)
+
+		// minio/local modes only WARN: the raw value is used verbatim everywhere and stays
+		// self-consistent, exactly as before validation existed — hard-failing would break
+		// existing deployments on upgrade for no correctness gain; and through the full gate
+		// too (default mode), pinning the no-upgrade-break behavior end-to-end.
+		for _, mode := range []string{"minio", "local", "default"} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Storage.Type = mode
+			cfg.Minio.RootPath = rp
+			assert.NoError(t, cfg.ValidateMinioConfig(), "rootPath %q should be tolerated (warn-only) in %s mode", rp, mode)
+		}
+		full := newValidCfg()
+		full.Minio.RootPath = rp
+		assert.NoError(t, full.Validate(), "rootPath %q must not fail full validation in the default mode", rp)
 	}
 }
 

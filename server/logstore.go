@@ -651,6 +651,14 @@ func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootP
 	if !l.cfg.Woodpecker.Storage.IsStorageService() {
 		return nil
 	}
+	// The rootPath arrives per-RPC (service mode: bucket/rootPath are caller-managed) — the
+	// local config validation cannot vouch for it. The cleanup machinery consumes it verbatim
+	// for the footer key, the local dir, and the gauge label, while the pull reconcile
+	// re-derives a path.Join-canonicalized value from disk; accepting a non-canonical value
+	// here would silently split those. Reject it loudly instead.
+	if rpErr := config.ValidateRootPathValue(rootPath); rpErr != nil {
+		return werr.ErrLogStoreInvalidRootPath.WithCauseErr(rpErr)
+	}
 	dir := localSegmentDataDir(l.cfg, bucketName, rootPath, logId, segmentId)
 	if dir == "" {
 		return nil // no local data dir (e.g. empty RootPath): nothing to mark

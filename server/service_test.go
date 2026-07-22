@@ -545,7 +545,8 @@ func (f *fakeLogStore) EvictSegmentWriter(ctx context.Context, bucketName, rootP
 func TestNewServer_InvalidMinioRootPathRejected(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	cfg.Minio.RootPath = "/wp//root/" // mutated post-load: absolute + doubled + trailing slash
+	cfg.Woodpecker.Storage.Type = "service" // the mode that REQUIRES a canonical rootPath
+	cfg.Minio.RootPath = "/wp//root/"       // mutated post-load: absolute + doubled + trailing slash
 
 	_, err = NewServer(context.Background(), cfg, 0, 0, nil)
 	require.Error(t, err)

@@ -145,6 +145,19 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 
 			r.isIncompleteFile.Store(true)
 			if perr := r.tryParseMinioFooterUnsafe(ctx); perr != nil || r.isIncompleteFile.Load() {
+				if perr != nil && !minioHandler.IsObjectNotExists(perr) {
+					// Transient object-storage failure (throttle/5xx/timeout/parse) — NOT
+					// evidence of absence. With the local data.log reclaimed this is the only
+					// source, and mapping it to ErrEntryNotFound would silently stall reads
+					// (that error is the suppressed steady-state signal). Surface it as a
+					// retriable error, mirroring footerExistsInMinio's absent-vs-error split.
+					logger.Ctx(ctx).Warn("failed to load minio compacted footer for reclaimed staged segment; surfacing retriable error",
+						zap.String("filePath", filePath), zap.Error(perr))
+					if r.pool != nil {
+						r.pool.Release()
+					}
+					return nil, perr
+				}
 				// no local file, no minio footer => genuinely not found
 				logger.Ctx(ctx).Debug("no local staged file and no minio compacted footer, returning ErrEntryNotFound",
 					zap.String("filePath", filePath))
@@ -259,7 +272,12 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 	return r.tryParseLocalFooterUnsafe(ctx)
 }
 
-// tryParseMinioFooterUnsafe attempts to parse footer from minio object storage
+// tryParseMinioFooterUnsafe attempts to parse footer from minio object storage.
+// The "footer genuinely absent" outcome returns the ORIGINAL StatObject error untouched, so
+// callers distinguish it with the same minioHandler.IsObjectNotExists predicate the rest of
+// the codebase uses (footerExistsInMinio et al.) — absence is the only outcome that may be
+// translated into ErrEntryNotFound; every other failure (nil client, StatObject/GetObject/
+// ReadFull/parse) must stay visible and retriable.
 func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseMinioFooterUnsafe")
 	defer sp.End()
@@ -281,7 +299,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 		if minioHandler.IsObjectNotExists(err) {
 			logger.Ctx(ctx).Debug("no compacted footer found in minio",
 				zap.String("footerKey", footerKey))
-			return fmt.Errorf("no footer in minio")
+			return err // untouched: callers re-check with minioHandler.IsObjectNotExists
 		}
 		logger.Ctx(ctx).Warn("failed to stat footer object in minio",
 			zap.String("footerKey", footerKey),
