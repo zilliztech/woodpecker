@@ -323,7 +323,9 @@ func (s *segmentProcessor) InvalidateReader(ctx context.Context) {
 	s.currentSegmentReader = nil
 	s.Unlock()
 	if r != nil {
-		// Close takes r's own lock, so it waits for any in-flight read to finish.
+		// Close takes r's own lock, so it waits for any read already inside its locked
+		// section; a read that loses the race instead observes closed under the lock and
+		// returns ErrFileReaderAlreadyClosed, which the read path handles by rebuilding.
 		// Close is idempotent, so this is safe even if the reader already closed itself.
 		_ = r.Close(ctx)
 	}

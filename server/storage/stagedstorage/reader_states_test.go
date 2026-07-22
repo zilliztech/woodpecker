@@ -46,6 +46,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -301,6 +302,98 @@ func TestStagedReaderStates_MarkWithDataLogStillServesLocally(t *testing.T) {
 	require.NotNil(t, result.LastReadState)
 	assert.False(t, codec.IsCompacted(uint16(result.LastReadState.Flags)),
 		"local serving in the drop-pending state emits local provenance")
+}
+
+// TestStagedReaderStates_ParseAfterClose_ReturnsAlreadyClosed pins the under-lock closed
+// check on the parse path: tryParseFooterAndIndexesIfExists runs BEFORE ReadNextBatchAdv's
+// read lock and takes the writer lock itself, so a read racing an eviction-triggered Close
+// can reach it after the file was nilled. It must report the rebuildable
+// ErrFileReaderAlreadyClosed — pre-fix it fell through to the nil-file guard and masqueraded
+// as ErrEntryNotFound, which nothing rebuilds.
+func TestStagedReaderStates_ParseAfterClose_ReturnsAlreadyClosed(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	logId, segId := int64(207), int64(207)
+
+	writer := newTailingWriter(t, dir, logId, segId, 3) // local incomplete: parse path stays live
+	defer writer.Close(ctx)
+
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
+	require.NoError(t, err)
+	require.True(t, reader.isIncompleteFile.Load(), "precondition: incomplete, so the parse path does real work")
+
+	require.NoError(t, reader.Close(ctx))
+
+	err = reader.tryParseFooterAndIndexesIfExists(ctx)
+	require.Error(t, err)
+	assert.True(t, werr.ErrFileReaderAlreadyClosed.Is(err),
+		"parse on a closed reader must be the rebuildable AlreadyClosed, got %v", err)
+	assert.False(t, werr.ErrEntryNotFound.Is(err), "must not masquerade as ErrEntryNotFound")
+}
+
+// TestStagedReaderStates_ConcurrentCloseAndRead_OnlyAlreadyClosedSurfaces races the
+// eviction-triggered Close (drop path: EvictSegmentReader -> InvalidateReader -> Close)
+// against in-flight reads on a COMPACTED (pool-backed) reader — the flavor whose lost race
+// used to submit to a released pool and surface ants' ErrPoolClosed verbatim to the
+// application. With the under-lock closed re-check, every read outcome must be either a
+// successful batch or ErrFileReaderAlreadyClosed; anything else (pool-closed, EntryNotFound,
+// EOF) fails the test. Run under -race in the gates, this also exercises memory safety.
+func TestStagedReaderStates_ConcurrentCloseAndRead_OnlyAlreadyClosedSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	logId, segId := int64(208), int64(208)
+
+	// Reclaimed layout: tombstone mark only — the reader opens on the R1 path, compacted.
+	segDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	footerData, blockData := compactedSingleBlockFixture(t)
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	blockKey := fmt.Sprintf("test-root/%d/%d/m_0.blk", logId, segId)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil).Maybe()
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, _ string, _, _ int64, _, _ string) (minioHandler.FileReader, error) {
+			return &readerMockFileReader{data: footerData}, nil
+		}).Maybe()
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", blockKey, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, _ string, _, _ int64, _, _ string) (minioHandler.FileReader, error) {
+			return &readerMockFileReader{data: blockData}, nil
+		}).Maybe()
+
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	for i := 0; i < 60; i++ {
+		reader, openErr := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+		require.NoError(t, openErr)
+		require.True(t, reader.isCompacted.Load(), "precondition: compacted (pool-backed) reader")
+
+		done := make(chan error, 1)
+		go func() {
+			for j := 0; j < 5; j++ {
+				_, readErr := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}, nil)
+				if readErr != nil {
+					done <- readErr
+					return
+				}
+			}
+			done <- nil
+		}()
+
+		runtime.Gosched()
+		require.NoError(t, reader.Close(ctx))
+
+		if raceErr := <-done; raceErr != nil {
+			require.True(t, werr.ErrFileReaderAlreadyClosed.Is(raceErr),
+				"a read racing Close may only observe AlreadyClosed (rebuildable), got: %v", raceErr)
+		}
+	}
 }
 
 // TestStagedReaderStates_ReclaimedSegment_TransientMinioErrorSurfaces pins the

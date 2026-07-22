@@ -249,6 +249,14 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Closed check UNDER the lock: this runs before ReadNextBatchAdv takes its read lock, so
+	// it races with an eviction-triggered Close the same way — parsing on a closed reader
+	// would hit the nil file and masquerade as ErrEntryNotFound instead of the rebuildable
+	// AlreadyClosed.
+	if r.closed.Load() {
+		return werr.ErrFileReaderAlreadyClosed
+	}
+
 	// double check if already exists
 	if !r.isIncompleteFile.Load() {
 		// already parse an exists footer
@@ -620,6 +628,17 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	// Re-check closed UNDER the lock: the lock-free pre-check above races with an
+	// eviction-triggered Close (drop path: EvictSegmentReader -> InvalidateReader -> Close),
+	// which holds the write lock while nilling the file and releasing the pool. A read that
+	// passed the pre-check and lost the race would otherwise proceed against those — turning
+	// into ErrEntryNotFound (nil-file guards) or a raw pool-closed error, neither of which
+	// triggers the processor's rebuild. Once we hold the RLock with closed still false, Close
+	// must wait for us, so file/pool stay valid for the whole critical section.
+	if r.closed.Load() {
+		return nil, werr.ErrFileReaderAlreadyClosed
+	}
+
 	// start read batch from a certain point - need to protect blockIndexes read
 	startBlockID := int64(0)
 	startBlockOffset := int64(0)
@@ -721,6 +740,12 @@ func (r *StagedFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error)
 
 	// First try to read without write lock
 	r.mu.RLock()
+	// Re-check closed under the lock (same race as ReadNextBatchAdv: the pre-check above is
+	// lock-free and an eviction-triggered Close may have completed in between).
+	if r.closed.Load() {
+		r.mu.RUnlock()
+		return -1, werr.ErrFileReaderAlreadyClosed
+	}
 	if r.footer != nil && len(r.blockIndexes) > 0 {
 		lastBlock := r.blockIndexes[len(r.blockIndexes)-1]
 		lastEntryID := lastBlock.LastEntryID
@@ -733,6 +758,12 @@ func (r *StagedFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error)
 	if r.isIncompleteFile.Load() {
 		r.mu.Lock() // Need write lock for scanning
 		defer r.mu.Unlock()
+
+		// Re-check closed after re-acquiring the lock: Close may have slipped in between the
+		// RUnlock above and this Lock, and scanning would then hit the nil file.
+		if r.closed.Load() {
+			return -1, werr.ErrFileReaderAlreadyClosed
+		}
 
 		// Double-check after acquiring write lock
 		if r.footer != nil && len(r.blockIndexes) > 0 {
