@@ -1328,13 +1328,28 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 			// surface it instead of silently "succeeding" into Sealed-without-footer.
 			return -1, fmt.Errorf("cannot compact empty segment without an object storage client")
 		}
-		emptyLac := int64(-1)
-		if w.recoveredFooter != nil {
-			emptyLac = w.recoveredFooter.LAC
+		// The empty-footer path may ONLY run for a genuinely empty segment: the local footer's
+		// LAC (the coordinator-acknowledged last entry, written by Finalize) must say "no
+		// entries" (< 0). A replica that missed the segment's appends and was then
+		// quorum-completed carries LAC >= 0 with zero local blocks — publishing a
+		// TotalBlocks=0 compacted footer from it would COMMIT an empty segment globally,
+		// authorize every data-holding replica to drop its data.log, and silently lose all
+		// entries up to that LAC. Refuse instead, so compactSegmentQuorum moves on to a
+		// replica that actually holds the data. (recoveredFooter == nil while finalized
+		// should be impossible — Finalize sets it before the flag — treat it as the same
+		// refusal rather than guessing.)
+		if w.recoveredFooter == nil || w.recoveredFooter.LAC >= 0 {
+			lac := int64(-1)
+			if w.recoveredFooter != nil {
+				lac = w.recoveredFooter.LAC
+			}
+			logger.Ctx(ctx).Warn("refusing to compact: zero local blocks but footer LAC says the segment has entries (this replica is missing the data)",
+				zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("footerLac", lac))
+			return -1, fmt.Errorf("refusing empty compaction: local footer LAC %d expects entries but this replica holds zero blocks", lac)
 		}
 		logger.Ctx(ctx).Info("no blocks to compact; uploading an empty compacted footer",
-			zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("lac", emptyLac))
-		footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, emptyLac)
+			zap.String("segmentFilePath", w.segmentFilePath))
+		footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, -1)
 		if footerErr != nil {
 			logger.Ctx(ctx).Warn("failed to upload empty compacted footer",
 				zap.String("segmentFilePath", w.segmentFilePath), zap.Error(footerErr))
@@ -1374,14 +1389,15 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 	}
 
 	if len(newBlockIndexes) == 0 {
-		// Same invariant as the empty-segment branch above: Sealed must always have a footer.
-		logger.Ctx(ctx).Info("no blocks uploaded during compaction; uploading an empty compacted footer",
-			zap.String("segmentFilePath", w.segmentFilePath))
-		footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, lac)
-		if footerErr != nil {
-			return -1, fmt.Errorf("failed to upload empty compacted footer: %w", footerErr)
-		}
-		return footerSize, nil
+		// Unreachable today: the merge plan covers every local block, so it is empty only when
+		// blockIndexes is empty — handled (and guarded) above. If this ever fires, something
+		// upstream broke; the one thing this branch must NOT do is publish a zero-block footer
+		// with a non-negative LAC — footer.blk is the commit point that authorizes every
+		// replica to delete its local data.log. Fail loudly instead.
+		logger.Ctx(ctx).Warn("no blocks uploaded during compaction of a non-empty segment; refusing to publish an empty footer",
+			zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("lac", lac),
+			zap.Int("localBlocks", len(w.blockIndexes)))
+		return -1, fmt.Errorf("compaction produced zero merged blocks for a segment with %d local blocks (lac %d)", len(w.blockIndexes), lac)
 	}
 
 	// Create footer with compacted flag and LAC, then upload

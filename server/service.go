@@ -110,6 +110,13 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 
 // NewServerWithConfig creates a new server instance with custom configuration
 func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, gossipSeeds []string) (*Server, error) {
+	// Re-validate the object-storage section at the consumption point: the config may have
+	// been mutated programmatically after load, and key-building all over the server trusts a
+	// canonical minio rootPath verbatim. (Scoped to the minio section so hand-rolled partial
+	// configs used by embedders/tests are not subjected to the full Validate.)
+	if err := configuration.ValidateMinioConfig(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	var storageCli storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {

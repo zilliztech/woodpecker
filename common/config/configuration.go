@@ -471,6 +471,11 @@ func NewConfiguration(files ...string) (*Configuration, error) {
 		Minio:      minioConfig,
 	}
 	if len(files) == 0 {
+		// The all-defaults / programmatic path is validated too: for embedding callers this
+		// is the only validation gate before the config is consumed.
+		if err := config.Validate(); err != nil {
+			return nil, err
+		}
 		return config, nil
 	}
 
@@ -503,7 +508,7 @@ func (c *Configuration) Validate() error {
 	}
 
 	// Validate Minio configuration
-	if err := c.validateMinioConfig(); err != nil {
+	if err := c.ValidateMinioConfig(); err != nil {
 		return fmt.Errorf("minio config validation failed: %w", err)
 	}
 
@@ -513,12 +518,15 @@ func (c *Configuration) Validate() error {
 	return nil
 }
 
-// validateMinioConfig checks the object-storage configuration. rootPath is used VERBATIM to
+// ValidateMinioConfig checks the object-storage configuration. rootPath is used VERBATIM to
 // build object keys (<rootPath>/<logId>/<segId>/...), local staged directories, and metric
-// labels — there is deliberately no normalization anywhere on that chain. Rejecting a
-// non-canonical value here, once at startup, is what lets every consuming site trust the raw
-// value and stay trivially consistent with every other site.
-func (c *Configuration) validateMinioConfig() error {
+// labels — there is deliberately no normalization anywhere on that chain, so rejecting a
+// non-canonical value at startup is what lets every consuming site trust the raw value and
+// stay trivially consistent with every other site. It is exported separately so consumption
+// points (the server and client constructors) can re-check the object-storage section of a
+// possibly hand-rolled or post-load-mutated config without imposing the full Validate() on
+// partial configurations.
+func (c *Configuration) ValidateMinioConfig() error {
 	rp := c.Minio.RootPath
 	if rp == "" {
 		return nil // empty = bucket root

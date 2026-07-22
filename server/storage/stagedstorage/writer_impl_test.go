@@ -2180,6 +2180,37 @@ func TestCompact_EmptyBlocks(t *testing.T) {
 	assert.True(t, codec.IsCompacted(footer.Flags))
 }
 
+// TestCompact_ZeroBlocksNonEmptyLAC_Refuses is the regression for the quorum data-loss
+// vector: a replica that missed the segment's appends but was quorum-completed carries a
+// local footer with the coordinator's LAC (>= 0) and ZERO local blocks. Compacting on such a
+// replica must FAIL — publishing a TotalBlocks=0 compacted footer would commit "empty"
+// globally and authorize every data-holding replica to drop its data.log. The strict mock
+// has no PutObject expectation, so any upload attempt fails the test.
+func TestCompact_ZeroBlocksNonEmptyLAC_Refuses(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	// Idempotency probe: no remote footer yet.
+	mockStorage.EXPECT().StatObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Maybe()
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).Return(true).Maybe()
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	// Quorum-complete the data-less replica: Finalize with the coordinator's LAC even though
+	// this writer holds zero blocks (Finalize does not cross-check local coverage).
+	_, err = writer.Finalize(context.Background(), 999)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	result, err := writer.Compact(context.Background())
+	assert.Error(t, err, "a data-less replica of a non-empty segment must refuse to compact")
+	assert.Contains(t, err.Error(), "refusing empty compaction")
+	assert.Equal(t, int64(-1), result)
+}
+
 // === Compact - Invalid LAC ===
 
 func TestCompact_InvalidLAC(t *testing.T) {

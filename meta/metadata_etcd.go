@@ -1616,7 +1616,7 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 }
 
 // CreateSegmentCompactedNotifyStatus creates a new compacted-mark distribution status record
-func (e *metadataProviderEtcd) CreateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) error {
+func (e *metadataProviderEtcd) CreateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) (int64, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CreateSegmentCompactedNotifyStatus")
 	defer sp.End()
 	startTime := time.Now()
@@ -1626,7 +1626,7 @@ func (e *metadataProviderEtcd) CreateSegmentCompactedNotifyStatus(ctx context.Co
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("marshal segment compacted notify status failed", zap.Error(err))
-		return fmt.Errorf("failed to marshal segment compacted notify status: %w", err)
+		return 0, fmt.Errorf("failed to marshal segment compacted notify status: %w", err)
 	}
 
 	ctx1, cancel := e.getContextWithTimeout(ctx)
@@ -1641,23 +1641,24 @@ func (e *metadataProviderEtcd) CreateSegmentCompactedNotifyStatus(ctx context.Co
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("create segment compacted notify status transaction failed", zap.Error(err))
-		return fmt.Errorf("failed to create segment compacted notify status: %w", err)
+		return 0, fmt.Errorf("failed to create segment compacted notify status: %w", err)
 	}
 
 	if !resp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("segment compacted notify status already exists", zap.String("key", key))
-		return fmt.Errorf("segment compacted notify status already exists: %s", key)
+		return 0, fmt.Errorf("segment compacted notify status already exists: %s", key)
 	}
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return nil
+	// A single-put txn: the created key's ModRevision equals the txn's header revision.
+	return resp.Header.Revision, nil
 }
 
 // UpdateSegmentCompactedNotifyStatus updates an existing compacted-mark distribution status
-func (e *metadataProviderEtcd) UpdateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) error {
+func (e *metadataProviderEtcd) UpdateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus, expectedRevision int64) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateSegmentCompactedNotifyStatus")
 	defer sp.End()
 	startTime := time.Now()
@@ -1672,9 +1673,14 @@ func (e *metadataProviderEtcd) UpdateSegmentCompactedNotifyStatus(ctx context.Co
 
 	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
-	// Update-if-present transaction
+	// Compare-and-swap on the record's ModRevision: the update lands only if the record is
+	// exactly the version the caller read (expectedRevision). This closes the manager's
+	// read → distribute (seconds) → write-back race against a concurrent operator action
+	// ("wp marking confirm"): the stale write-back fails with ErrMetadataRevisionConflict
+	// instead of silently clobbering NOTIFY_OPERATOR_CONFIRMED. A deleted (reaped) record
+	// fails the same compare (ModRevision 0), which is equally correct — do not resurrect it.
 	txn := e.client.Txn(ctx1)
-	cmp := clientv3.Compare(clientv3.CreateRevision(key), ">", 0)
+	cmp := clientv3.Compare(clientv3.ModRevision(key), "=", expectedRevision)
 	put := clientv3.OpPut(key, string(bytes))
 
 	resp, err := txn.If(cmp).Then(put).Commit()
@@ -1688,8 +1694,9 @@ func (e *metadataProviderEtcd) UpdateSegmentCompactedNotifyStatus(ctx context.Co
 	if !resp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		logger.Ctx(ctx).Warn("segment compacted notify status does not exist", zap.String("key", key))
-		return fmt.Errorf("segment compacted notify status does not exist: %s", key)
+		logger.Ctx(ctx).Warn("segment compacted notify status modified concurrently (or deleted); not overwriting",
+			zap.String("key", key), zap.Int64("expectedRevision", expectedRevision))
+		return werr.ErrMetadataRevisionConflict.WithCauseErrMsg(fmt.Sprintf("segment compacted notify status %s changed since revision %d", key, expectedRevision))
 	}
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "success").Inc()
@@ -1698,7 +1705,7 @@ func (e *metadataProviderEtcd) UpdateSegmentCompactedNotifyStatus(ctx context.Co
 }
 
 // GetSegmentCompactedNotifyStatus retrieves the compacted-mark distribution status for a segment
-func (e *metadataProviderEtcd) GetSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCompactedNotifyStatus, error) {
+func (e *metadataProviderEtcd) GetSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCompactedNotifyStatus, int64, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetSegmentCompactedNotifyStatus")
 	defer sp.End()
 	startTime := time.Now()
@@ -1711,13 +1718,13 @@ func (e *metadataProviderEtcd) GetSegmentCompactedNotifyStatus(ctx context.Conte
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("get segment compacted notify status failed", zap.Error(err))
-		return nil, fmt.Errorf("failed to get segment compacted notify status: %w", err)
+		return nil, 0, fmt.Errorf("failed to get segment compacted notify status: %w", err)
 	}
 
 	if len(resp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "success").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	status := &proto.SegmentCompactedNotifyStatus{}
@@ -1726,12 +1733,12 @@ func (e *metadataProviderEtcd) GetSegmentCompactedNotifyStatus(ctx context.Conte
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("unmarshal segment compacted notify status failed", zap.Error(err))
-		return nil, fmt.Errorf("failed to unmarshal segment compacted notify status: %w", err)
+		return nil, 0, fmt.Errorf("failed to unmarshal segment compacted notify status: %w", err)
 	}
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return status, nil
+	return status, resp.Kvs[0].ModRevision, nil
 }
 
 // DeleteSegmentCompactedNotifyStatus deletes the compacted-mark distribution status for a segment

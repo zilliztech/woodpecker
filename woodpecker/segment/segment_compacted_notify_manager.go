@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
@@ -141,8 +142,11 @@ func (s *segmentCompactedNotifyManagerImpl) EnsureSegmentNotified(ctx context.Co
 		s.mu.Unlock()
 	}()
 
-	// Load (or lazily create) the durable per-node progress record.
-	status, err := s.metadata.GetSegmentCompactedNotifyStatus(ctx, logId, segmentId)
+	// Load (or lazily create) the durable per-node progress record. The record's ModRevision
+	// travels with it: the pass's single write-back is a CAS against exactly this version, so
+	// a concurrent operator action (wp marking confirm) during the multi-second distribution
+	// window cannot be clobbered by our stale copy.
+	status, rev, err := s.metadata.GetSegmentCompactedNotifyStatus(ctx, logId, segmentId)
 	if err != nil {
 		logger.Ctx(ctx).Warn("get segment compacted notify status failed",
 			zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(err))
@@ -166,11 +170,13 @@ func (s *segmentCompactedNotifyManagerImpl) EnsureSegmentNotified(ctx context.Co
 		for _, nodeAddress := range quorum.Nodes {
 			status.QuorumNotifyStatus[nodeAddress] = false
 		}
-		if createErr := s.metadata.CreateSegmentCompactedNotifyStatus(ctx, status); createErr != nil {
+		createdRev, createErr := s.metadata.CreateSegmentCompactedNotifyStatus(ctx, status)
+		if createErr != nil {
 			logger.Ctx(ctx).Warn("create segment compacted notify status failed",
 				zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(createErr))
 			return true, createErr
 		}
+		rev = createdRev
 		logger.Ctx(ctx).Info("created segment compacted notify status; starting mark distribution",
 			zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId),
 			zap.Strings("nodes", quorum.Nodes))
@@ -213,11 +219,11 @@ func (s *segmentCompactedNotifyManagerImpl) EnsureSegmentNotified(ctx context.Co
 	}
 	if len(nodesToNotify) == 0 {
 		// Nothing left (e.g. a resumed record already fully acked): just complete it.
-		return true, s.finalizeStatus(ctx, logName, status, nil)
+		return true, s.finalizeStatus(ctx, logName, status, rev, nil)
 	}
 
 	results := s.sendNotifyToNodes(ctx, logName, logId, segmentId, nodesToNotify)
-	return true, s.finalizeStatus(ctx, logName, status, results)
+	return true, s.finalizeStatus(ctx, logName, status, rev, results)
 }
 
 // seedIfNecessary lists the log's marking records once per manager lifetime and caches the
@@ -339,7 +345,7 @@ func (s *segmentCompactedNotifyManagerImpl) sendNotifyRequestToNode(ctx context.
 // finalizeStatus applies the pass's per-node results to the record and writes it back once:
 // COMPLETED when every node acked, PENDING_MANUAL when the retry budget (from StartTime) is
 // spent with nodes still unacked, IN_PROGRESS otherwise (retried next auditor cycle).
-func (s *segmentCompactedNotifyManagerImpl) finalizeStatus(ctx context.Context, logName string, status *proto.SegmentCompactedNotifyStatus, results []nodeNotifyResult) error {
+func (s *segmentCompactedNotifyManagerImpl) finalizeStatus(ctx context.Context, logName string, status *proto.SegmentCompactedNotifyStatus, readRevision int64, results []nodeNotifyResult) error {
 	for _, r := range results {
 		if r.success {
 			status.QuorumNotifyStatus[r.nodeAddress] = true
@@ -369,7 +375,17 @@ func (s *segmentCompactedNotifyManagerImpl) finalizeStatus(ctx context.Context, 
 	}
 	status.LastUpdateTime = uint64(time.Now().UnixMilli())
 
-	if err := s.metadata.UpdateSegmentCompactedNotifyStatus(ctx, status); err != nil {
+	if err := s.metadata.UpdateSegmentCompactedNotifyStatus(ctx, status, readRevision); err != nil {
+		if werr.ErrMetadataRevisionConflict.Is(err) {
+			// Someone else modified (or reaped) the record while this pass was distributing —
+			// most likely "wp marking confirm" settling it, or the truncate reap deleting it.
+			// Their write wins; drop ours and do NOT settle in memory: the next cycle re-reads
+			// the fresh record (an OPERATOR_CONFIRMED/COMPLETED state settles there, a reaped
+			// record is skipped via the reap sync).
+			logger.Ctx(ctx).Info("segment compacted notify status changed concurrently; discarding this pass's write-back",
+				zap.String("logName", logName), zap.Int64("logId", status.LogId), zap.Int64("segmentId", status.SegmentId))
+			return nil
+		}
 		logger.Ctx(ctx).Warn("update segment compacted notify status failed",
 			zap.String("logName", logName), zap.Int64("logId", status.LogId), zap.Int64("segmentId", status.SegmentId), zap.Error(err))
 		return err

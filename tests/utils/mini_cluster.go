@@ -22,6 +22,7 @@ import (
 	"net"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,7 +127,11 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 	// Set up staged storage type for quorum testing
 	cfg.Woodpecker.Storage.Type = "service"
 	cfg.Woodpecker.Storage.RootPath = baseDir
-	cfg.Minio.RootPath = baseDir
+	// A RELATIVE object-storage prefix (unique per run via baseDir), as production requires:
+	// config.Validate rejects absolute/non-clean values, and the pull-reconcile path re-derives
+	// rootPath from the on-disk layout — an absolute value here would split push vs pull keys
+	// and silently disable the reconcile backstop in every service-mode test.
+	cfg.Minio.RootPath = strings.TrimPrefix(baseDir, "/")
 	cfg.Log.Level = "debug"
 	// Tests write in bulk; the disk-watermark backpressure would flake them on
 	// disk-constrained CI runners. Disable it for all mini-cluster (service-mode) tests.

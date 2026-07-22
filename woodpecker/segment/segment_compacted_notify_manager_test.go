@@ -61,19 +61,19 @@ func TestNotifyManager_NewRecord_AllAck_Completes(t *testing.T) {
 	ctx := context.Background()
 	logId, segId := int64(7), int64(3)
 
-	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(nil, nil).Once()
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(nil, int64(0), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1", "node2"})
 	mockMeta.EXPECT().CreateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.LogId == logId && s.SegmentId == segId &&
 			s.State == proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS &&
 			len(s.QuorumNotifyStatus) == 2 && !s.QuorumNotifyStatus["node1"] && !s.QuorumNotifyStatus["node2"]
-	})).Return(nil).Once()
+	})).Return(int64(7), nil).Once()
 	expectNotifyToNode(t, mockPool, "node1", logId, segId, nil)
 	expectNotifyToNode(t, mockPool, "node2", logId, segId, nil)
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED &&
 			s.QuorumNotifyStatus["node1"] && s.QuorumNotifyStatus["node2"]
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
 	require.NoError(t, err)
@@ -97,13 +97,13 @@ func TestNotifyManager_Resume_OnlyUnackedNodesRetried(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": true, "node2": false},
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1", "node2"})
 	// Only node2 may be dialed: no expectation exists for node1, so a call to it fails the test.
 	expectNotifyToNode(t, mockPool, "node2", logId, segId, nil)
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
 	require.NoError(t, err)
@@ -123,12 +123,12 @@ func TestNotifyManager_FailureWithinBudget_StaysInProgress(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(time.Now().UnixMilli()), // fresh: well within the budget
 		QuorumNotifyStatus: map[string]bool{"node1": false},
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
 	expectNotifyToNode(t, mockPool, "node1", logId, segId, errors.New("connection refused"))
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS && !s.QuorumNotifyStatus["node1"]
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
 	require.NoError(t, err)
@@ -155,13 +155,13 @@ func TestNotifyManager_BudgetSpent_ParksPendingManual(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(started.UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": true, "node2": false},
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1", "node2"})
 	expectNotifyToNode(t, mockPool, "node2", logId, segId, errors.New("still down"))
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL &&
 			s.ErrorMessage != "" && !s.QuorumNotifyStatus["node2"]
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
 	require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestNotifyManager_ExistingCompletedRecord_FastPath(t *testing.T) {
 	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
 		LogId: logId, SegmentId: segId,
 		State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
-	}, nil).Once()
+	}, int64(7), nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
 	require.NoError(t, err)
@@ -227,12 +227,12 @@ func TestNotifyManager_SeedSkipsSettledRecords(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": false},
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", 3, []string{"node1"})
 	expectNotifyToNode(t, mockPool, "node1", logId, 3, nil)
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.SegmentId == 3 && s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err = mgr.EnsureSegmentNotified(ctx, "test-log", logId, 3)
 	require.NoError(t, err)
@@ -252,12 +252,12 @@ func TestNotifyManager_QuorumChange_AddsMissingNode(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": true}, // node2 missing from the record
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1", "node2"})
 	expectNotifyToNode(t, mockPool, "node2", logId, segId, nil)
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED && s.QuorumNotifyStatus["node2"]
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
 	require.NoError(t, err)
@@ -311,7 +311,7 @@ func TestNotifyManager_SeedListError(t *testing.T) {
 	mockMeta.EXPECT().ListSegmentCompactedNotifyStatus(mock.Anything, int64(1)).Return(nil, errors.New("etcd down")).Once()
 	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCompactedNotifyStatus{
 		LogId: 1, SegmentId: 2, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 2)
 	require.NoError(t, err, "a seed failure must degrade, not block")
 	assert.False(t, advanced)
@@ -339,7 +339,7 @@ func TestNotifyManager_MarkSegmentReaped(t *testing.T) {
 
 func TestNotifyManager_GetStatusError(t *testing.T) {
 	mgr, mockMeta, _ := newNotifyTestManager(t)
-	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(nil, errors.New("etcd timeout")).Once()
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(nil, int64(0), errors.New("etcd timeout")).Once()
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 2)
 	require.Error(t, err)
 	assert.True(t, advanced)
@@ -347,9 +347,9 @@ func TestNotifyManager_GetStatusError(t *testing.T) {
 
 func TestNotifyManager_CreateRecordError(t *testing.T) {
 	mgr, mockMeta, _ := newNotifyTestManager(t)
-	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(3)).Return(nil, nil).Once()
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(3)).Return(nil, int64(0), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", 3, []string{"node1"})
-	mockMeta.EXPECT().CreateSegmentCompactedNotifyStatus(mock.Anything, mock.Anything).Return(errors.New("txn failed")).Once()
+	mockMeta.EXPECT().CreateSegmentCompactedNotifyStatus(mock.Anything, mock.Anything).Return(int64(0), errors.New("txn failed")).Once()
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 3)
 	require.Error(t, err)
 	assert.True(t, advanced)
@@ -357,7 +357,7 @@ func TestNotifyManager_CreateRecordError(t *testing.T) {
 
 func TestNotifyManager_GetSegmentMetadataError(t *testing.T) {
 	mgr, mockMeta, _ := newNotifyTestManager(t)
-	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(4)).Return(nil, nil).Once()
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(4)).Return(nil, int64(0), nil).Once()
 	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(4)).Return(nil, errors.New("meta gone")).Once()
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", 1, 4)
 	require.Error(t, err)
@@ -370,18 +370,18 @@ func TestNotifyManager_NilQuorumFallsBackToEmbedNode(t *testing.T) {
 	mgr, mockMeta, mockPool := newNotifyTestManager(t)
 	logId, segId := int64(1), int64(5)
 
-	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(nil, nil).Once()
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(nil, int64(0), nil).Once()
 	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", segId).Return(&meta.SegmentMeta{
 		Metadata: &proto.SegmentMetadata{}, // no quorum info
 	}, nil).Once()
 	mockMeta.EXPECT().CreateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		_, ok := s.QuorumNotifyStatus["127.0.0.1"]
 		return len(s.QuorumNotifyStatus) == 1 && ok
-	})).Return(nil).Once()
+	})).Return(int64(7), nil).Once()
 	expectNotifyToNode(t, mockPool, "127.0.0.1", logId, segId, nil)
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
 	require.NoError(t, err)
@@ -399,12 +399,12 @@ func TestNotifyManager_ClientLookupFailure(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": false},
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("no route")).Once()
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS && !s.QuorumNotifyStatus["node1"]
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
 	require.NoError(t, err)
@@ -420,10 +420,10 @@ func TestNotifyManager_FinalizeUpdateError(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": false},
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
 	expectNotifyToNode(t, mockPool, "node1", logId, segId, nil)
-	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.Anything).Return(errors.New("etcd txn failed")).Once()
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.Anything, mock.Anything).Return(errors.New("etcd txn failed")).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
 	require.Error(t, err)
@@ -441,11 +441,11 @@ func TestNotifyManager_ResumedFullyAckedRecord_CompletesWithoutRPC(t *testing.T)
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": true},
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
 	require.NoError(t, err)
@@ -489,7 +489,7 @@ func TestNotifyManager_OperatorConfirmed_IsSettled(t *testing.T) {
 	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
 		LogId: logId, SegmentId: segId,
 		State: proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED,
-	}, nil).Once()
+	}, int64(7), nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
 	require.NoError(t, err)
@@ -531,14 +531,14 @@ func TestNotifyManager_Resume_PrunesRemovedNode(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 		StartTime:          uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": false, "node2": true}, // node1 removed, unacked
-	}, nil).Once()
+	}, int64(7), nil).Once()
 	// Current quorum no longer contains node1.
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node2"})
 	// node2 already acked, node1 pruned -> nothing to notify -> COMPLETED, node1 dropped.
 	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
 		_, node1Present := s.QuorumNotifyStatus["node1"]
 		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED && !node1Present
-	})).Return(nil).Once()
+	}), mock.Anything).Return(nil).Once()
 
 	advanced, err := mgr.EnsureSegmentNotified(context.Background(), "test-log", logId, segId)
 	require.NoError(t, err)

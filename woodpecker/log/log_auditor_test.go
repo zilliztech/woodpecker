@@ -21,6 +21,7 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,7 +39,10 @@ func segMeta(segNo int64, state proto.SegmentState) *meta.SegmentMeta {
 
 // countingNotifyManager records which segments EnsureSegmentNotified was called for and
 // reports each as "advanced" (real work) so the per-cycle budget accounting can be exercised.
+// All fields are mutex-guarded: the distributor tests invoke it from a separate goroutine
+// while the test polls with require.Eventually (the race detector flags unguarded access).
 type countingNotifyManager struct {
+	mu          sync.Mutex
 	called      []int64
 	sweepBounds []int64
 	reaped      []int64
@@ -47,17 +51,35 @@ type countingNotifyManager struct {
 }
 
 func (c *countingNotifyManager) EnsureSegmentNotified(_ context.Context, _ string, _ int64, segmentId int64) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.called = append(c.called, segmentId)
 	return c.advanced, c.err
 }
 
 func (c *countingNotifyManager) CleanupOrphanedStatuses(_ context.Context, _ int64, minSegmentId int64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.sweepBounds = append(c.sweepBounds, minSegmentId)
 	return nil
 }
 
 func (c *countingNotifyManager) MarkSegmentReaped(segmentId int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.reaped = append(c.reaped, segmentId)
+}
+
+func (c *countingNotifyManager) calledSegments() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]int64(nil), c.called...)
+}
+
+func (c *countingNotifyManager) sweepBoundsSnapshot() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]int64(nil), c.sweepBounds...)
 }
 
 // recordingCleanupManager records the orphan-sweep bounds it was invoked with.
@@ -107,8 +129,9 @@ func TestDistributeCompactedMarks_OnlySealedAndDrivenCount(t *testing.T) {
 	driven := distributeCompactedMarks(context.Background(), lh, nm, segs, true)
 
 	assert.Equal(t, 2, driven, "both Sealed segments did real work")
-	sort.Slice(nm.called, func(i, j int) bool { return nm.called[i] < nm.called[j] })
-	assert.Equal(t, []int64{2, 4}, nm.called, "only Sealed segments are notified")
+	called := nm.calledSegments()
+	sort.Slice(called, func(i, j int) bool { return called[i] < called[j] })
+	assert.Equal(t, []int64{2, 4}, called, "only Sealed segments are notified")
 }
 
 // TestDistributeCompactedMarks_NonServiceModeIsNoOp verifies the client-side storage-mode gate:
@@ -127,7 +150,7 @@ func TestDistributeCompactedMarks_NonServiceModeIsNoOp(t *testing.T) {
 	driven := distributeCompactedMarks(context.Background(), lh, nm, segs, false)
 
 	assert.Equal(t, 0, driven, "non-service mode drives nothing")
-	assert.Empty(t, nm.called, "non-service mode must not notify any segment")
+	assert.Empty(t, nm.calledSegments(), "non-service mode must not notify any segment")
 }
 
 // TestDistributeCompactedMarks_SettledNotCounted verifies settled (advanced==false) segments
@@ -145,7 +168,7 @@ func TestDistributeCompactedMarks_SettledNotCounted(t *testing.T) {
 	driven := distributeCompactedMarks(context.Background(), lh, nm, segs, true)
 
 	assert.Equal(t, 0, driven, "settled segments don't consume the budget")
-	assert.Len(t, nm.called, 2, "but they are still asked (the manager fast-paths internally)")
+	assert.Len(t, nm.calledSegments(), 2, "but they are still asked (the manager fast-paths internally)")
 }
 
 // TestDistributeCompactedMarks_ErrorDoesNotAbort verifies a per-segment notify error is
@@ -163,7 +186,7 @@ func TestDistributeCompactedMarks_ErrorDoesNotAbort(t *testing.T) {
 	driven := distributeCompactedMarks(context.Background(), lh, nm, segs, true)
 
 	assert.Equal(t, 0, driven)
-	assert.Len(t, nm.called, 2, "both segments attempted despite the error")
+	assert.Len(t, nm.calledSegments(), 2, "both segments attempted despite the error")
 }
 
 // TestCompactCompletedSegments_CountsAndSkips verifies the compact pass only touches Completed
@@ -205,7 +228,7 @@ func TestRunNotifyDistributor_NonServiceReturnsImmediately(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runNotifyDistributor should return immediately in non-service mode")
 	}
-	assert.Empty(t, nm.called)
+	assert.Empty(t, nm.calledSegments())
 }
 
 // TestRunNotifyDistributor_ConsumesSnapshotsThenStops verifies the service-mode loop consumes
@@ -230,7 +253,7 @@ func TestRunNotifyDistributor_ConsumesSnapshotsThenStops(t *testing.T) {
 	})
 	require.Eventually(t, func() bool {
 		lh.Mock.Test(t)
-		return len(nm.called) > 0
+		return len(nm.calledSegments()) > 0
 	}, 3*time.Second, 10*time.Millisecond, "the distributor consumed the published snapshot")
 
 	close(closeCh)
@@ -239,7 +262,7 @@ func TestRunNotifyDistributor_ConsumesSnapshotsThenStops(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runNotifyDistributor should stop after closeCh fires")
 	}
-	assert.Contains(t, nm.called, int64(1))
+	assert.Contains(t, nm.calledSegments(), int64(1))
 }
 
 // TestPublishSegmentsSnapshot_ReplacesStale verifies the non-blocking publish: an unconsumed
@@ -288,11 +311,11 @@ func TestSweepOrphanedCleanupRecords(t *testing.T) {
 		9: segMeta(9, proto.SegmentState_Truncated),
 	})
 	assert.Equal(t, []int64{5}, cm.sweepBounds)
-	assert.Equal(t, []int64{5}, nm.sweepBounds)
+	assert.Equal(t, []int64{5}, nm.sweepBoundsSnapshot())
 
 	// Empty log: both sweeps run with MaxInt64 — every leftover record (e.g. a PENDING_MANUAL
 	// marking record whose delete failed while reaping the log's last segment) is reclaimed.
 	sweepOrphanedCleanupRecords(context.Background(), lh, cm, nm, map[int64]*meta.SegmentMeta{})
 	assert.Equal(t, []int64{5, math.MaxInt64}, cm.sweepBounds)
-	assert.Equal(t, []int64{5, math.MaxInt64}, nm.sweepBounds)
+	assert.Equal(t, []int64{5, math.MaxInt64}, nm.sweepBoundsSnapshot())
 }

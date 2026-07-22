@@ -53,7 +53,7 @@ func setupStagedFileTest(t *testing.T, rootDir string) (storageclient.ObjectStor
 
 	StagedTestBucket = cfg.Minio.BucketName
 	currentTime := time.Now().Unix()
-	cfg.Minio.RootPath = rootDir
+	cfg.Minio.RootPath = strings.TrimPrefix(rootDir, "/") // relative, as config.Validate requires
 	storageCli, err := storageclient.NewObjectStorage(context.Background(), cfg)
 	require.NoError(t, err)
 

@@ -2776,11 +2776,14 @@ func testCreateSegmentCompactedNotifyStatus(t *testing.T) {
 			"node2": true,
 		},
 	}
-	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+	createdRev, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+	assert.Positive(t, createdRev, "create must return the record's revision for later CAS updates")
 
-	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	stored, rev, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
 	assert.NoError(t, err)
 	assert.NotNil(t, stored)
+	assert.Equal(t, createdRev, rev, "get must return the same revision the create produced")
 	assert.Equal(t, logId, stored.LogId)
 	assert.Equal(t, segmentId, stored.SegmentId)
 	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS, stored.State)
@@ -2805,19 +2808,40 @@ func testUpdateSegmentCompactedNotifyStatus(t *testing.T) {
 		LastUpdateTime:     nowMs,
 		QuorumNotifyStatus: map[string]bool{"node1": false},
 	}
-	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+	rev, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
 
-	// Advance to PENDING_MANUAL with an error message (the operator-triage transition).
+	// Advance to PENDING_MANUAL with an error message (the operator-triage transition),
+	// CAS-guarded by the revision the create returned.
 	status.State = proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL
 	status.ErrorMessage = "nodes unacked after 30m0s of retries: node1"
 	status.LastUpdateTime = uint64(time.Now().UnixMilli())
-	require.NoError(t, provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status))
+	require.NoError(t, provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status, rev))
 
-	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	stored, newRev, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
 	assert.NoError(t, err)
 	assert.NotNil(t, stored)
 	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL, stored.State)
 	assert.Contains(t, stored.ErrorMessage, "node1")
+	assert.Greater(t, newRev, rev, "a successful update advances the revision")
+
+	// A STALE write-back (using the pre-update revision) must fail with a revision conflict
+	// and leave the record untouched — this is the guard that keeps the notify manager's
+	// multi-second read→distribute→write-back pass from clobbering a concurrent
+	// "wp marking confirm" (NOTIFY_OPERATOR_CONFIRMED would otherwise be silently lost).
+	stale := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	err = provider.UpdateSegmentCompactedNotifyStatus(context.Background(), stale, rev)
+	assert.True(t, werr.ErrMetadataRevisionConflict.Is(err), "stale revision must be rejected, got: %v", err)
+
+	unchanged, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL, unchanged.State,
+		"the concurrent writer's state must survive the stale write-back attempt")
 }
 
 func testListSegmentCompactedNotifyStatus(t *testing.T) {
@@ -2832,7 +2856,8 @@ func testListSegmentCompactedNotifyStatus(t *testing.T) {
 			LastUpdateTime:     uint64(time.Now().UnixMilli()),
 			QuorumNotifyStatus: map[string]bool{"node1": false},
 		}
-		require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+		_, createErr := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+		require.NoError(t, createErr)
 	}
 
 	statuses, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
@@ -2863,11 +2888,12 @@ func testDeleteSegmentCompactedNotifyStatus(t *testing.T) {
 		LastUpdateTime:     uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": true},
 	}
-	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
 
 	require.NoError(t, provider.DeleteSegmentCompactedNotifyStatus(context.Background(), logId, segmentId))
 
-	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	stored, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
 	assert.NoError(t, err)
 	assert.Nil(t, stored)
 
@@ -2886,8 +2912,9 @@ func testCreateCompactedNotifyStatusAlreadyExists(t *testing.T) {
 		LastUpdateTime:     uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": false},
 	}
-	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
-	err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+	_, err = provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 }
@@ -2901,9 +2928,10 @@ func testUpdateCompactedNotifyStatusNotExists(t *testing.T) {
 		State:              proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
 		QuorumNotifyStatus: map[string]bool{"node1": true},
 	}
-	err := provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "does not exist")
+	// A missing record has ModRevision 0, so any positive expected revision fails the CAS —
+	// updates can neither create nor resurrect a record.
+	err := provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status, 42)
+	assert.True(t, werr.ErrMetadataRevisionConflict.Is(err), "got: %v", err)
 }
 
 func testCorruptedCompactedNotifyStatusData(t *testing.T) {
@@ -2918,7 +2946,7 @@ func testCorruptedCompactedNotifyStatusData(t *testing.T) {
 	_, err = etcdCli.Put(context.Background(), key, invalidProto)
 	require.NoError(t, err)
 
-	_, err = provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
+	_, _, err = provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
 	assert.Error(t, err, "a targeted Get of the corrupt record still surfaces the error")
 
 	// List SKIPS the corrupt record instead of failing wholesale: one bad value must not
@@ -2954,12 +2982,13 @@ func testDeleteLogMetadataWipesMarkingRecords(t *testing.T) {
 		LastUpdateTime:     uint64(time.Now().UnixMilli()),
 		QuorumNotifyStatus: map[string]bool{"node1": false},
 	}
-	require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), status))
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
 
 	// Whole-log delete must wipe the marking/<logId>/ prefix along with the rest.
 	require.NoError(t, provider.DeleteLogMetadata(context.Background(), logName, true))
 
-	stored, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
+	stored, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
 	assert.NoError(t, err)
 	assert.Nil(t, stored, "marking record must be wiped by the whole-log delete transaction")
 }
@@ -2972,12 +3001,13 @@ func testListSegmentCompactedNotifyStatusNoCrossLog(t *testing.T) {
 	provider, _, _ := setupSegmentCleanupTest(t)
 
 	put := func(logId, segId int64) {
-		require.NoError(t, provider.CreateSegmentCompactedNotifyStatus(context.Background(), &proto.SegmentCompactedNotifyStatus{
+		_, putErr := provider.CreateSegmentCompactedNotifyStatus(context.Background(), &proto.SegmentCompactedNotifyStatus{
 			LogId: logId, SegmentId: segId,
 			State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
 			StartTime:          uint64(time.Now().UnixMilli()),
 			QuorumNotifyStatus: map[string]bool{"n1": false},
-		}))
+		})
+		require.NoError(t, putErr)
 	}
 	// Log 1 has segment 3; sibling logs 10, 12, 100 (whose ids share the "1" prefix) also have it.
 	put(1, 3)

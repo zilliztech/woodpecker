@@ -148,13 +148,16 @@ waiting forever.
 ## rootPath expectations
 
 `minio.rootPath` is operator-set configuration (not request input) and MUST be a clean
-relative path ("files", "wp/data") or empty (bucket root). This is enforced once, at startup:
-`config.Validate()` rejects a non-canonical value (leading/trailing/doubled slashes, `.`/`..`
-segments) and the process refuses to start. Every consumer — the staged writer/reader/delete-GC,
+relative path ("files", "wp/data") or empty (bucket root). This is enforced at every entry
+point: `config.Validate()` (run by `NewConfiguration` for both the config-file and the
+all-defaults path) rejects a non-canonical value (leading/trailing/doubled slashes, `.`/`..`
+segments), and the server (`NewServerWithConfig`) and client (`NewClient`/`NewEmbedClient`)
+constructors re-validate, so a config mutated programmatically after load is caught before
+anything consumes it. Every consumer — the staged writer/reader/delete-GC,
 the cleanup footer HEAD, the pure object-storage writer/reader, the client's direct reader, and
 the local-storage metric labels — then uses the value **verbatim**, with no normalization
-anywhere on the chain; fail-fast validation at the single entry point is what keeps all of
-those sites trivially consistent with each other.
+anywhere on the chain; fail-fast validation at the entry points is what keeps all of those
+sites trivially consistent with each other.
 
 ## Config knobs
 

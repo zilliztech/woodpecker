@@ -196,14 +196,15 @@ var (
 	ErrPersistenceError        = newWoodpeckerError("persistence error", 8008, true)
 
 	// Data state errors (8100-8199)
-	ErrInvalidMessage      = newWoodpeckerError("invalid message", 8100, false)
-	ErrEmptyPayload        = newWoodpeckerError("empty payload", 8101, false)
-	ErrEntryNotFound       = newWoodpeckerError("entry not found", 8102, true)
-	ErrStorageNotWritable  = newWoodpeckerError("storage not writable", 8103, false)
-	ErrSegmentFenced       = newWoodpeckerError("segment fenced", 8104, false)
-	ErrSegmentNotFound     = newWoodpeckerError("segment not found", 8105, true)
-	ErrObjectAlreadyExists = newWoodpeckerError("object already exists", 8106, false)
-	ErrInvalidLACAlignment = newWoodpeckerError("invalid lac alignment", 8107, false)
+	ErrInvalidMessage           = newWoodpeckerError("invalid message", 8100, false)
+	ErrEmptyPayload             = newWoodpeckerError("empty payload", 8101, false)
+	ErrEntryNotFound            = newWoodpeckerError("entry not found", 8102, true)
+	ErrStorageNotWritable       = newWoodpeckerError("storage not writable", 8103, false)
+	ErrSegmentFenced            = newWoodpeckerError("segment fenced", 8104, false)
+	ErrSegmentNotFound          = newWoodpeckerError("segment not found", 8105, true)
+	ErrObjectAlreadyExists      = newWoodpeckerError("object already exists", 8106, false)
+	ErrInvalidLACAlignment      = newWoodpeckerError("invalid lac alignment", 8107, false)
+	ErrMetadataRevisionConflict = newWoodpeckerError("metadata revision conflict", 8108, true)
 
 	// ---------------------------------------------
 	// External Errors

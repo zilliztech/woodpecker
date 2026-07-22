@@ -538,6 +538,20 @@ func (f *fakeLogStore) EvictSegmentWriter(ctx context.Context, bucketName, rootP
 	return nil
 }
 
+// TestNewServer_InvalidMinioRootPathRejected pins the consumption-point validation: a config
+// mutated after load (bypassing NewConfiguration's gate) with a non-canonical minio rootPath
+// must be rejected at server construction — every key-building site consumes the value
+// verbatim and relies on it being validated before the process serves anything.
+func TestNewServer_InvalidMinioRootPathRejected(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	cfg.Minio.RootPath = "/wp//root/" // mutated post-load: absolute + doubled + trailing slash
+
+	_, err = NewServer(context.Background(), cfg, 0, 0, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid minio rootPath")
+}
+
 func createTestServerWithFakeLogStore(fake *fakeLogStore) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg, _ := config.NewConfiguration()
