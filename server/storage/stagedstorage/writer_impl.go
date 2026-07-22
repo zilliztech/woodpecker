@@ -104,7 +104,13 @@ type StagedFileWriter struct {
 	finalizing     atomic.Bool
 	fenced         atomic.Bool
 	inRecoveryMode atomic.Bool
-	recovered      atomic.Bool
+	// compacted marks a writer opened on a segment whose directory carries the
+	// data.compacted tombstone: the segment is durably compacted in object storage and its
+	// local data.log has been (or is being) reclaimed. Such a writer holds NO local file and
+	// only serves the idempotent tail of the lifecycle (Fence/Finalize return the footer's
+	// LAC, Compact hits the remote-footer idempotency branch, appends are rejected).
+	compacted atomic.Bool
+	recovered atomic.Bool
 
 	// Async flush management
 	flushTaskChan                chan *blockFlushTask // flushTasksQueue
@@ -157,6 +163,19 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.Bool("recoveryMode", recoveryMode))
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
+	if HasCompactedMark(segmentDir) {
+		// The tombstone means this segment is durably compacted and its data.log reclaimed
+		// (or pending reclaim). A normal writer here would RESURRECT a local data.log —
+		// recovery mode via O_CREATE|O_APPEND, non-recovery via O_CREATE|O_TRUNC (which would
+		// also wipe a still-present drop-pending file) — and a present local file shadows
+		// object storage on the read path, making a compacted segment read as empty on this
+		// node until the next reconcile walk. Reachable through two windows of the protocol's
+		// own failure model: a stale client's append after a node restart cleared the
+		// in-memory fence, and the crash-recovery fence/complete/re-Compact of a segment
+		// whose meta update to Sealed was lost. Serve those with a fileless compacted writer
+		// instead: appends are rejected, fence/complete/compact converge idempotently.
+		return newCompactedStagedFileWriter(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg)
+	}
 	// Ensure directory exists
 	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
@@ -307,6 +326,67 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.String("writerInstance", fmt.Sprintf("%p", writer)))
 
 	return writer, nil
+}
+
+// newCompactedStagedFileWriter builds the fileless writer for a tombstoned segment (see the
+// branch in NewStagedFileWriterWithMode). State is loaded from the remote compacted footer —
+// the single durable source once the local data.log is gone: lastEntryID = footer LAC, so
+// Fence and Finalize (which fast-return on the pre-set flags below) answer the coordinator
+// with the correct value, and Compact's remote-footer idempotency branch reports
+// already-compacted. No local file is opened or created, no flush machinery runs, and
+// WriteDataAsync rejects via the finalized guard.
+func newCompactedStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileWriter, error) {
+	if storageCli == nil {
+		return nil, fmt.Errorf("segment %d/%d carries a compacted tombstone but no object storage client is available to serve it", logId, segmentId)
+	}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	w := &StagedFileWriter{
+		localBaseDir:        localBaseDir,
+		segmentFilePath:     getSegmentFilePath(localBaseDir, logId, segmentId),
+		logId:               logId,
+		segmentId:           segmentId,
+		logIdStr:            strconv.FormatInt(logId, 10),
+		logNs:               bucket + "/" + rootPath,
+		bucket:              bucket,
+		rootPath:            rootPath,
+		storageCli:          storageCli,
+		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
+		blockIndexes:        make([]*codec.IndexRecord, 0),
+		maxFlushSize:        cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64(),
+		maxBufferEntries:    int64(cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries),
+		runCtx:              runCtx,
+		runCancel:           runCancel,
+	}
+	w.firstEntryID.Store(-1)
+	w.lastEntryID.Store(-1)
+	// The pre-set flags do the heavy lifting: finalized rejects appends (ErrFileWriterFinalized)
+	// and fast-returns Finalize; allUploadingTaskDone fast-returns Fence; compacted
+	// short-circuits Close.
+	w.compacted.Store(true)
+	w.finalized.Store(true)
+	w.fenced.Store(true)
+	w.allUploadingTaskDone.Store(true)
+	w.recovered.Store(true)
+	w.storageWritable.Store(false)
+
+	footer, _, err := w.readRemoteFooter(ctx)
+	if err != nil {
+		runCancel()
+		return nil, fmt.Errorf("compacted segment %d/%d: cannot load remote footer: %w", logId, segmentId, err)
+	}
+	if footer == nil || !codec.IsCompacted(footer.Flags) {
+		// Tombstone without a compacted footer is the same anomaly the cleanup task warns
+		// about; surface it instead of serving guessed state.
+		runCancel()
+		return nil, fmt.Errorf("compacted segment %d/%d: tombstone present but no compacted footer in object storage (unexpected state)", logId, segmentId)
+	}
+	w.recoveredFooter = footer
+	w.lastEntryID.Store(footer.LAC)
+	w.buffer.Store(cache.NewSequentialBuffer(logId, segmentId, footer.LAC+1, w.maxBufferEntries, w.logNs))
+
+	logger.Ctx(ctx).Info("opened compacted (fileless) staged writer for tombstoned segment",
+		zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Int64("lac", footer.LAC))
+	return w, nil
 }
 
 // Sync forces immediate sync of all buffered data
@@ -1192,6 +1272,12 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 	startTime := time.Now()
 	if !w.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("inst", fmt.Sprintf("%p", w)))
+		return nil
+	}
+	if w.compacted.Load() {
+		// Fileless compacted writer: no file, no flush machinery, no WpFileWriters gauge was
+		// registered — nothing to drain or release beyond the run context.
+		w.runCancel()
 		return nil
 	}
 	// Ensure goroutine, file, channel cleanup always runs,

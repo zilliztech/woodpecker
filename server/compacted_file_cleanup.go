@@ -42,6 +42,14 @@ import (
 // walk. Raising this lowers the full-scan frequency; the push path is unaffected.
 const reconcileEveryNPasses = 60
 
+// maxDrainPerTick bounds how many queued segments a single tick processes (each costs a
+// footer HEAD — unless push-confirmed — plus eviction and unlink I/O). Without a cap, the
+// startup reconcile enqueues a node's whole backlog and one tick then serializes every HEAD
+// in a single Run() — tens of minutes on a node with tens of thousands of staged segments,
+// with push-notified segments starved behind it. The remainder simply stays queued for the
+// next 5s tick. (The client-side analog is maxCompactedNotifyPerCycle.)
+const maxDrainPerTick = 256
+
 // pendingSeg identifies a segment whose local data.log should be dropped once its compacted
 // footer is confirmed present in object storage. It carries just enough to run the footer HEAD
 // and the drop; the marked state is re-read from disk when the segment is processed.
@@ -51,6 +59,11 @@ type pendingSeg struct {
 	rootPath string
 	logId    int64
 	segId    int64
+	// footerConfirmed marks a push-path entry: the NotifySegmentCompacted handler verified
+	// the compacted footer moments ago in this same process, so the drop skips the duplicate
+	// HEAD (halving the per-segment bookkeeping requests). Reconcile-walk entries leave it
+	// false — a walked mark's provenance is unknown, so the drop re-verifies.
+	footerConfirmed bool
 	// Retry state for transient footer-HEAD failures: attempts counts consecutive failed
 	// HEADs; nextAttemptAt gates the next try (exponential backoff capped at the reconcile
 	// cadence), so an object-storage outage costs a bounded, decaying HEAD rate per segment
@@ -117,6 +130,15 @@ func (t *compactedFileCleanupTask) Interval() time.Duration {
 func (t *compactedFileCleanupTask) enqueue(segDir, bucket, rootPath string, logId, segId int64) {
 	t.mu.Lock()
 	t.pending[segDir] = pendingSeg{segDir: segDir, bucket: bucket, rootPath: rootPath, logId: logId, segId: segId}
+	t.mu.Unlock()
+}
+
+// enqueueFooterConfirmed is the push-path variant of enqueue: the caller (the notify
+// handler) has just verified the compacted footer itself, so the entry carries that
+// confirmation and the drop path skips its own HEAD for it.
+func (t *compactedFileCleanupTask) enqueueFooterConfirmed(segDir, bucket, rootPath string, logId, segId int64) {
+	t.mu.Lock()
+	t.pending[segDir] = pendingSeg{segDir: segDir, bucket: bucket, rootPath: rootPath, logId: logId, segId: segId, footerConfirmed: true}
 	t.mu.Unlock()
 }
 
@@ -271,15 +293,24 @@ func (t *compactedFileCleanupTask) drainPending(ctx context.Context) {
 		t.mu.Unlock()
 		return
 	}
-	batch := make([]pendingSeg, 0, len(t.pending))
+	batch := make([]pendingSeg, 0, min(len(t.pending), maxDrainPerTick))
+	deferred := 0
 	for key, s := range t.pending {
 		if s.nextAttemptAt.After(now) {
 			continue // still backing off after a failed footer HEAD; leave queued
+		}
+		if len(batch) >= maxDrainPerTick {
+			deferred++ // due, but over this tick's budget: stays queued for the next tick
+			continue
 		}
 		batch = append(batch, s)
 		delete(t.pending, key)
 	}
 	t.mu.Unlock()
+	if deferred > 0 {
+		logger.Ctx(ctx).Info("compacted-file-cleanup: drain batch capped; deferring remainder to the next tick",
+			zap.Int("processed", len(batch)), zap.Int("deferred", deferred))
+	}
 
 	for _, s := range batch {
 		t.processSegment(ctx, s)
@@ -296,12 +327,16 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 	if _, err := os.Stat(filepath.Join(s.segDir, "data.log")); os.IsNotExist(err) {
 		return // data.log already gone (dropped earlier, or removed by the truncate GC): nothing to do
 	}
-	footer, statErr := compactedFooterExists(ctx, t.store.storageClient, s.bucket, s.rootPath, s.logId, s.segId)
-	if statErr != nil {
-		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; will retry with backoff",
-			zap.String("segDir", s.segDir), zap.Int("attempts", s.attempts+1), zap.Error(statErr))
-		t.requeueAfterFailure(s) // transient: retried with exponential backoff, capped at the reconcile cadence
-		return
+	footer := s.footerConfirmed // push path: the notify handler HEADed the footer in this process moments ago
+	if !footer {
+		var statErr error
+		footer, statErr = compactedFooterExists(ctx, t.store.storageClient, s.bucket, s.rootPath, s.logId, s.segId)
+		if statErr != nil {
+			logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; will retry with backoff",
+				zap.String("segDir", s.segDir), zap.Int("attempts", s.attempts+1), zap.Error(statErr))
+			t.requeueAfterFailure(s) // transient: retried with exponential backoff, capped at the reconcile cadence
+			return
+		}
 	}
 	marked := hasCompactedMark(s.segDir)
 	if !footer {

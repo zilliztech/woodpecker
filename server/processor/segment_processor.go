@@ -293,7 +293,11 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 		// back to minio when the local file is gone (R1). Retry exactly once.
 		logger.Ctx(ctx).Info("cached segment reader already closed, rebuilding and retrying once",
 			zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId))
-		s.InvalidateReader(ctx)
+		// Identity-checked: only clear the cache if it still holds the instance that failed.
+		// The unconditional InvalidateReader would close whatever is cached NOW — a
+		// replacement reader another request already rebuilt — cascading AlreadyClosed
+		// through every concurrent reader that has spent its single retry.
+		s.invalidateReaderIfCurrent(ctx, reader)
 		reader, err = s.getOrCreateSegmentReader(ctx)
 		if err != nil {
 			return nil, err
@@ -349,6 +353,24 @@ func (s *segmentProcessor) InvalidateWriter(ctx context.Context) {
 				zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
 		}
 	}
+}
+
+// invalidateReaderIfCurrent drops the cached reader ONLY when it is still the given failed
+// instance. Concurrent retriers that lost the race (the cache already holds a replacement)
+// must leave the replacement alone — closing it would invalidate other requests' reads in a
+// cascade. The failed instance itself is already closed (that is why the read failed), so no
+// extra Close is needed here; maintenance paths keep using the unconditional
+// InvalidateReader.
+func (s *segmentProcessor) invalidateReaderIfCurrent(ctx context.Context, failed storage.Reader) {
+	s.Lock()
+	if s.currentSegmentReader != failed {
+		s.Unlock()
+		return
+	}
+	s.currentSegmentReader = nil
+	s.Unlock()
+	// Close is idempotent; harmless on an already-closed reader.
+	_ = failed.Close(ctx)
 }
 
 func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int64, error) {

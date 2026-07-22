@@ -689,7 +689,7 @@ func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootP
 	// Feed the event-driven drop queue so the local data.log is reclaimed on the next
 	// maintenance tick, without waiting for the low-frequency reconcile walk.
 	if l.compactedCleanup != nil {
-		l.compactedCleanup.enqueue(dir, bucketName, rootPath, logId, segmentId)
+		l.compactedCleanup.enqueueFooterConfirmed(dir, bucketName, rootPath, logId, segmentId)
 	}
 	return nil
 }

@@ -775,6 +775,75 @@ func TestCompactedFileCleanup_StartupWalkSeedsStoredGauges(t *testing.T) {
 // GC — which did its own decrement on ITS successful remove), running the Sub/Dec here too
 // would double-count the file and drive the series permanently negative. dropSegmentLocalData
 // is invoked directly to model exactly that race window.
+// TestCompactedFileCleanup_PushConfirmedEntry_SkipsDuplicateHead pins the request-dedup:
+// a push-path entry carries the notify handler's just-performed footer confirmation, so the
+// drop must NOT issue a second HEAD for it — the strict mock carries no StatObject
+// expectation at all, and any probe fails the test. Reconcile entries (plain enqueue) keep
+// re-verifying.
+func TestCompactedFileCleanup_PushConfirmedEntry_SkipsDuplicateHead(t *testing.T) {
+	store, root, _ := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(31), int64(23)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueueFooterConfirmed(segDir, bucket, rp, logId, segId)
+	require.NoError(t, task.runOnce(ctx, false))
+
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.True(t, os.IsNotExist(statErr), "the confirmed entry must be dropped without a duplicate HEAD")
+	assert.True(t, hasCompactedMark(segDir))
+}
+
+// TestCompactedFileCleanup_DrainCappedPerTick pins the per-tick budget: with more due
+// segments than maxDrainPerTick, one tick processes exactly the cap and defers the rest,
+// so a startup backlog cannot serialize its entire HEAD sweep inside a single Run() and
+// starve push-notified segments; the next tick finishes the remainder.
+func TestCompactedFileCleanup_DrainCappedPerTick(t *testing.T) {
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId := int64(32)
+	mockStorage.EXPECT().StatObject(mock.Anything, bucket, mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(128), false, nil).Maybe() // footer present for every segment
+
+	task := newCompactedFileCleanupTask(store)
+	total := maxDrainPerTick + 4
+	dirs := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		segDir := makeSegmentDir(t, root, bucket, rp, logId, int64(i))
+		require.NoError(t, writeCompactedMark(ctx, segDir))
+		task.enqueue(segDir, bucket, rp, logId, int64(i))
+		dirs = append(dirs, segDir)
+	}
+
+	require.NoError(t, task.runOnce(ctx, false))
+	remaining := 0
+	for _, d := range dirs {
+		if _, err := os.Stat(filepath.Join(d, "data.log")); err == nil {
+			remaining++
+		}
+	}
+	assert.Equal(t, 4, remaining, "one tick processes exactly maxDrainPerTick segments")
+	task.mu.Lock()
+	queued := len(task.pending)
+	task.mu.Unlock()
+	assert.Equal(t, 4, queued, "the overflow stays queued for the next tick")
+
+	require.NoError(t, task.runOnce(ctx, false)) // next tick finishes the remainder
+	remaining = 0
+	for _, d := range dirs {
+		if _, err := os.Stat(filepath.Join(d, "data.log")); err == nil {
+			remaining++
+		}
+	}
+	assert.Zero(t, remaining)
+}
+
 func TestCompactedFileCleanup_AlreadyRemovedFile_DoesNotTouchGauges(t *testing.T) {
 	store, root, _ := setupCompactedCleanupStore(t)
 	ctx := context.Background()

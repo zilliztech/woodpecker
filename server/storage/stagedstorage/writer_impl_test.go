@@ -34,6 +34,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
@@ -2209,6 +2210,114 @@ func TestCompact_ZeroBlocksNonEmptyLAC_Refuses(t *testing.T) {
 	assert.Error(t, err, "a data-less replica of a non-empty segment must refuse to compact")
 	assert.Contains(t, err.Error(), "refusing empty compaction")
 	assert.Equal(t, int64(-1), result)
+}
+
+// === Compacted (fileless) writer on a tombstoned segment ===
+
+// TestCompactedWriter_TombstoneOpen_NoResurrection pins the fix for the post-drop
+// resurrection hazard: opening a writer on a tombstoned segment (data.compacted, no
+// data.log) must yield the fileless compacted writer — appends rejected, NO data.log
+// created — while the idempotent lifecycle tail (Fence/Finalize/Compact) still converges
+// from the remote footer, covering the crash-recovery window where segment meta never
+// reached Sealed.
+func TestCompactedWriter_TombstoneOpen_NoResurrection(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	logId, segId := int64(9), int64(1)
+
+	segDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	footerData, _ := compactedSingleBlockFixture(t) // TotalBlocks=1, LAC=4, compacted flag set
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil).Maybe() // ctor + Compact idempotency probe
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, _ string, _, _ int64, _, _ string) (minioHandler.FileReader, error) {
+			return &readerMockFileReader{data: footerData}, nil
+		}).Maybe()
+
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false)
+	require.NoError(t, err)
+	require.True(t, writer.compacted.Load(), "tombstoned segment must open as the compacted writer")
+
+	// Appends are rejected and no local file may appear.
+	_, err = writer.WriteDataAsync(context.Background(), 5, []byte("zombie"), nil)
+	assert.True(t, werr.ErrFileWriterFinalized.Is(err), "got %v", err)
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.True(t, os.IsNotExist(statErr), "opening the writer must NOT resurrect data.log")
+
+	// The idempotent tail converges from the remote footer.
+	lac, err := writer.Fence(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), lac, "fence answers with the remote footer's LAC")
+	last, err := writer.Finalize(context.Background(), 4)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), last)
+	size, err := writer.Compact(context.Background())
+	require.NoError(t, err)
+	assert.Positive(t, size, "compact reports already-compacted via the remote footer")
+
+	_, statErr = os.Stat(filepath.Join(segDir, "data.log"))
+	assert.True(t, os.IsNotExist(statErr), "the lifecycle tail must not create data.log either")
+	require.NoError(t, writer.Close(context.Background()))
+}
+
+// TestCompactedWriter_DropPendingFile_NotTruncated covers the marked-but-not-yet-dropped
+// state: a non-recovery open used to O_TRUNC the still-present data.log (wiping the file the
+// cleanup task is about to account for). With the tombstone branch it opens the fileless
+// compacted writer and leaves the file byte-identical.
+func TestCompactedWriter_DropPendingFile_NotTruncated(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	logId, segId := int64(9), int64(2)
+
+	segDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("staged payload pending drop"), 0o644))
+
+	footerData, _ := compactedSingleBlockFixture(t)
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil).Maybe()
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, _ string, _, _ int64, _, _ string) (minioHandler.FileReader, error) {
+			return &readerMockFileReader{data: footerData}, nil
+		}).Maybe()
+
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false)
+	require.NoError(t, err)
+	require.True(t, writer.compacted.Load())
+	defer writer.Close(context.Background())
+
+	content, readErr := os.ReadFile(filepath.Join(segDir, "data.log"))
+	require.NoError(t, readErr)
+	assert.Equal(t, "staged payload pending drop", string(content), "the drop-pending data.log must not be truncated")
+}
+
+// TestCompactedWriter_TombstoneWithoutFooter_Errors: tombstone with no compacted footer is
+// the anomaly state — the writer must refuse loudly rather than serve guessed state.
+func TestCompactedWriter_TombstoneWithoutFooter_Errors(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	logId, segId := int64(9), int64(3)
+
+	segDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+
+	_, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no compacted footer")
 }
 
 // === Compact - Invalid LAC ===

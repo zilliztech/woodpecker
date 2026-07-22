@@ -15,8 +15,10 @@ Applies to **service (staged) storage mode**: nodes stage writes in a local
 Everything below is built around two rules; any change must preserve both.
 
 1. **Never delete a local `data.log` without a confirmed compacted footer.** The one
-   place that deletes it performs a `StatObject` HEAD on `footer.blk` immediately before
-   the delete. Consequently a segment's data is never absent from both local disk and
+   place that deletes it requires a `StatObject` HEAD on `footer.blk`: performed immediately
+   before the delete for reconcile-discovered segments, or carried from the notify handler's
+   own verification seconds earlier in the same process for push-path entries (skipping the
+   duplicate probe). Consequently a segment's data is never absent from both local disk and
    object storage at once — every crash/reorder state is read-safe.
 2. **The tombstone is removed only by the truncate/delete GC.** After the drop, the empty
    `data.compacted` marker and the segment directory are KEPT. Deleting the tombstone any
@@ -112,8 +114,10 @@ Active → Completed ──Compact──→ Sealed ──────truncate─
 The `compacted-file-cleanup` maintenance task never walks the tree on the frequent path:
 
 - the notify handler enqueues the segment on an in-memory drop queue; every 5s tick
-  drains it — one footer HEAD, then the `data.log` delete, cached-reader eviction, and
-  the tombstone is kept;
+  drains up to 256 segments (`maxDrainPerTick`; the remainder waits for the next tick, so a
+  startup backlog cannot monopolize one pass) — the footer confirmation carried from the
+  handler (or a fresh HEAD for reconcile entries), then the `data.log` delete, cached
+  writer/reader eviction, and the tombstone is kept;
 - a full-tree reconcile walk runs only at startup and then every 60th pass (~5m): it
   re-enqueues marked dirs still holding a `data.log` (this is also the restart recovery —
   the on-disk marker *is* the node's persisted queue) and reconciles

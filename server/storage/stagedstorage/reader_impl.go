@@ -113,8 +113,10 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 			// Local staged data.log is gone. Distinguish "compacted -> served from object
 			// storage" from "genuinely no data on this node" using the durable compacted
 			// tombstone mark, so a genuinely-absent segment costs no object-storage HEAD.
-			// (A replica that never held this segment locally has no mark and returns
-			// not-found; the client retries another quorum replica, which is expected.)
+			// (By design, notify fans the mark to EVERY quorum node — including replicas
+			// that never held the segment's bytes — so any marked replica serves the
+			// segment from object storage directly instead of bouncing the client. The
+			// no-mark not-found path is for segments that were never compacted here.)
 			if !HasCompactedMark(segmentDir) {
 				logger.Ctx(ctx).Debug("local staged file absent and no compacted mark, returning ErrEntryNotFound",
 					zap.String("filePath", filePath))

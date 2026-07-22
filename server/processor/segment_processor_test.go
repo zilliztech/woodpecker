@@ -148,6 +148,33 @@ func TestSegmentProcessor_InvalidateWriter_CloseErrorStillDrops(t *testing.T) {
 	assert.Nil(t, sp.currentSegmentWriter, "writer must be dropped even when Close errors")
 }
 
+// === invalidateReaderIfCurrent Tests ===
+
+// TestSegmentProcessor_InvalidateReaderIfCurrent_StaleFailedLeavesReplacement pins the
+// cascade fix: a retrier whose failed reader has ALREADY been replaced must not clear (or
+// close) the replacement — otherwise concurrent retriers close each other's rebuilt readers
+// in a chain and surface non-retryable AlreadyClosed errors.
+func TestSegmentProcessor_InvalidateReaderIfCurrent_StaleFailedLeavesReplacement(t *testing.T) {
+	sp := newTestProcessor(t)
+	replacement := mocks_storage.NewReader(t) // strict: any Close call fails the test
+	failed := mocks_storage.NewReader(t)
+	failed.EXPECT().Close(mock.Anything).Return(nil).Maybe()
+	sp.currentSegmentReader = replacement
+
+	sp.invalidateReaderIfCurrent(context.Background(), failed)
+	assert.Same(t, replacement, sp.currentSegmentReader, "the replacement reader must survive a stale invalidation")
+}
+
+func TestSegmentProcessor_InvalidateReaderIfCurrent_MatchingFailedClears(t *testing.T) {
+	sp := newTestProcessor(t)
+	failed := mocks_storage.NewReader(t)
+	failed.EXPECT().Close(mock.Anything).Return(nil).Once()
+	sp.currentSegmentReader = failed
+
+	sp.invalidateReaderIfCurrent(context.Background(), failed)
+	assert.Nil(t, sp.currentSegmentReader)
+}
+
 // === Fence Tests ===
 
 func TestSegmentProcessor_Fence_Success(t *testing.T) {
