@@ -1549,6 +1549,11 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 	return nil, werr.ErrSegmentHandleCompactionFailed.WithCauseErrMsg("all quorum nodes failed compaction")
 }
 
+// notifySegmentCompactedTimeout bounds each per-node NotifySegmentCompacted RPC so a node
+// that connects but stalls cannot hold a distribution pass beyond this (used by
+// SegmentCompactedNotifyManager; the next auditor cycle retries the node).
+const notifySegmentCompactedTimeout = 10 * time.Second
+
 func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
 	defer sp.End()
@@ -1824,6 +1829,13 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "success").Observe(float64(compactionDuration.Milliseconds()))
+
+	// Note: compacted-mark distribution (NotifySegmentCompacted fanout) is deliberately NOT
+	// done here. The writer's auditor drives it asynchronously for Sealed segments via
+	// SegmentCompactedNotifyManager, with durable per-node progress (root/marking/...), so
+	// compaction is never gated by mark distribution; the server-side pull reconcile remains
+	// the backstop for nodes the push never reaches.
+
 	return updateMetaErr
 }
 

@@ -19,10 +19,14 @@ package segment
 import (
 	"bytes"
 	"context"
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
@@ -245,4 +249,50 @@ func TestDirectReadBatch_ClosesDirectReaderOnEOFAndReopens(t *testing.T) {
 	assert.Nil(t, result)
 	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
 	assert.Nil(t, impl.directReader)
+}
+
+// TestGetOrCreateDirectReader_UsesRootPathVerbatim verifies the direct reader targets the SAME
+// object keys the writers store under: rootPath is validated clean at startup and every
+// key-building site uses it verbatim, so the reader's keys must carry the exact configured
+// prefix — any transformation on either side would silently split the key space.
+func TestGetOrCreateDirectReader_UsesRootPathVerbatim(t *testing.T) {
+	cfg := newTestCfgWithDirectRead(true)
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.RootPath = "test-root/x"
+
+	var mu sync.Mutex
+	var requestedKeys []string
+	record := func(key string) {
+		mu.Lock()
+		requestedKeys = append(requestedKeys, key)
+		mu.Unlock()
+	}
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, key, _, _ string) (int64, bool, error) {
+			record(key)
+			return 0, false, errors.New("not found")
+		}).Maybe()
+	mockStorage.EXPECT().GetObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, key string, _, _ int64, _, _ string) (minioHandler.FileReader, error) {
+			record(key)
+			return nil, errors.New("not found")
+		}).Maybe()
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).Return(true).Maybe()
+	mockStorage.EXPECT().WalkWithObjects(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, prefix string, _ bool, _ storageclient.ChunkObjectWalkFunc, _, _ string) error {
+			record(prefix)
+			return nil
+		}).Maybe()
+
+	handle := newTestSegmentHandleImpl(proto.SegmentState_Sealed, cfg, mockStorage)
+	_, _ = handle.getOrCreateDirectReader(context.Background()) // construction may fail (no objects); we only assert the keys
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, requestedKeys, "the direct reader must have consulted object storage")
+	for _, key := range requestedKeys {
+		assert.True(t, strings.HasPrefix(key, "test-root/x/"),
+			"key %q must use the configured rootPath verbatim as its prefix", key)
+	}
 }

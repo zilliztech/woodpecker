@@ -55,9 +55,26 @@ func (m *mockCleanupManager) CleanupOrphanedStatuses(ctx context.Context, logId 
 	return args.Error(0)
 }
 
+// stubNotifyManager is a no-op SegmentCompactedNotifyManager for tests that don't
+// exercise compacted-mark distribution.
+type stubNotifyManager struct{}
+
+func (s *stubNotifyManager) EnsureSegmentNotified(ctx context.Context, logName string, logId int64, segmentId int64) (bool, error) {
+	return false, nil
+}
+
+func (s *stubNotifyManager) CleanupOrphanedStatuses(ctx context.Context, logId int64, minSegmentId int64) error {
+	return nil
+}
+
+func (s *stubNotifyManager) MarkSegmentReaped(_ int64) {}
+
 // createTestInternalWriter creates an internalLogWriterImpl for testing without goroutines.
 func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segment.SegmentCleanupManager) *internalLogWriterImpl {
 	cfg := newTestConfig()
+	if cleanupMgr == nil {
+		cleanupMgr = &recordingCleanupManager{}
+	}
 	w := &internalLogWriterImpl{
 		logIdStr:           "1",
 		logHandle:          logHandle,
@@ -66,6 +83,7 @@ func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segm
 		logNs:              "",
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
+		notifyManager:      &stubNotifyManager{},
 	}
 	w.isWriterValid.Store(true)
 	w.onWriterInvalidated = func(ctx context.Context, reason string) {
@@ -615,6 +633,9 @@ func TestWriteResult_Structure(t *testing.T) {
 // createTestSessionWriter creates a logWriterImpl for testing without goroutines.
 func createTestSessionWriter(t *testing.T, logHandle LogHandle, cleanupMgr segment.SegmentCleanupManager, sessionLock *meta.SessionLock) *logWriterImpl {
 	cfg := newTestConfig()
+	if cleanupMgr == nil {
+		cleanupMgr = &recordingCleanupManager{}
+	}
 	w := &logWriterImpl{
 		logIdStr:           "1",
 		logHandle:          logHandle,
@@ -623,6 +644,7 @@ func createTestSessionWriter(t *testing.T, logHandle LogHandle, cleanupMgr segme
 		logNs:              "",
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
+		notifyManager:      &stubNotifyManager{},
 		sessionLock:        sessionLock,
 	}
 	w.onWriterInvalidated = func(ctx context.Context, reason string) {

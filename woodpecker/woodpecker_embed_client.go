@@ -274,6 +274,12 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 }
 
 func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, storageClient storageclient.ObjectStorage, managed bool) (Client, error) {
+	// Re-validate the object-storage section at the consumption point (the config may have
+	// been mutated after load); the client builds object-storage keys and RPC rootPath values
+	// from it verbatim. Scoped to the minio section so hand-rolled partial configs still work.
+	if err := cfg.ValidateMinioConfig(); err != nil {
+		return nil, err
+	}
 	// init logger
 	logger.InitLogger(cfg)
 	// Initialize metadata provider
