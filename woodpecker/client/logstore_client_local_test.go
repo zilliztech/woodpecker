@@ -282,6 +282,31 @@ func TestLocalClient_SegmentCompact_Error(t *testing.T) {
 	assert.Equal(t, expectedErr, err)
 }
 
+func TestLocalClient_NotifySegmentCompacted_Success(t *testing.T) {
+	client, mockStore := newLocalClientWithMock(t)
+	ctx := context.Background()
+
+	mockStore.EXPECT().NotifySegmentCompacted(mock.Anything, "bucket", "root", int64(1), int64(0)).
+		Return(nil)
+
+	err := client.NotifySegmentCompacted(ctx, "bucket", "root", 1, 0)
+	assert.NoError(t, err)
+}
+
+func TestLocalClient_NotifySegmentCompacted_Error(t *testing.T) {
+	client, mockStore := newLocalClientWithMock(t)
+	ctx := context.Background()
+
+	expectedErr := fmt.Errorf("notify compacted failed")
+
+	mockStore.EXPECT().NotifySegmentCompacted(mock.Anything, "bucket", "root", int64(1), int64(0)).
+		Return(expectedErr)
+
+	err := client.NotifySegmentCompacted(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+}
+
 func TestLocalClient_SegmentClean_Success(t *testing.T) {
 	client, mockStore := newLocalClientWithMock(t)
 	ctx := context.Background()

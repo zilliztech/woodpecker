@@ -28,6 +28,7 @@ const (
 	LogStore_FenceSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/FenceSegment"
 	LogStore_CompleteSegment_FullMethodName            = "/woodpecker.proto.logstore.LogStore/CompleteSegment"
 	LogStore_CompactSegment_FullMethodName             = "/woodpecker.proto.logstore.LogStore/CompactSegment"
+	LogStore_NotifySegmentCompacted_FullMethodName     = "/woodpecker.proto.logstore.LogStore/NotifySegmentCompacted"
 	LogStore_GetSegmentLastAddConfirmed_FullMethodName = "/woodpecker.proto.logstore.LogStore/GetSegmentLastAddConfirmed"
 	LogStore_GetSegmentBlockCount_FullMethodName       = "/woodpecker.proto.logstore.LogStore/GetSegmentBlockCount"
 	LogStore_UpdateLastAddConfirmed_FullMethodName     = "/woodpecker.proto.logstore.LogStore/UpdateLastAddConfirmed"
@@ -59,6 +60,9 @@ type LogStoreClient interface {
 	FenceSegment(ctx context.Context, in *FenceSegmentRequest, opts ...grpc.CallOption) (*FenceSegmentResponse, error)
 	CompleteSegment(ctx context.Context, in *CompleteSegmentRequest, opts ...grpc.CallOption) (*CompleteSegmentResponse, error)
 	CompactSegment(ctx context.Context, in *CompactSegmentRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error)
+	// NotifySegmentCompacted informs a node that a segment's data is durably compacted in
+	// object storage, authorizing it to mark (and later reclaim) its local copy.
+	NotifySegmentCompacted(ctx context.Context, in *NotifySegmentCompactedRequest, opts ...grpc.CallOption) (*NotifySegmentCompactedResponse, error)
 	// Segment introspection
 	GetSegmentLastAddConfirmed(ctx context.Context, in *GetSegmentLastAddConfirmedRequest, opts ...grpc.CallOption) (*GetSegmentLastAddConfirmedResponse, error)
 	GetSegmentBlockCount(ctx context.Context, in *GetSegmentBlockCountRequest, opts ...grpc.CallOption) (*GetSegmentBlockCountResponse, error)
@@ -160,6 +164,16 @@ func (c *logStoreClient) CompactSegment(ctx context.Context, in *CompactSegmentR
 	return out, nil
 }
 
+func (c *logStoreClient) NotifySegmentCompacted(ctx context.Context, in *NotifySegmentCompactedRequest, opts ...grpc.CallOption) (*NotifySegmentCompactedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotifySegmentCompactedResponse)
+	err := c.cc.Invoke(ctx, LogStore_NotifySegmentCompacted_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *logStoreClient) GetSegmentLastAddConfirmed(ctx context.Context, in *GetSegmentLastAddConfirmedRequest, opts ...grpc.CallOption) (*GetSegmentLastAddConfirmedResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetSegmentLastAddConfirmedResponse)
@@ -252,6 +266,9 @@ type LogStoreServer interface {
 	FenceSegment(context.Context, *FenceSegmentRequest) (*FenceSegmentResponse, error)
 	CompleteSegment(context.Context, *CompleteSegmentRequest) (*CompleteSegmentResponse, error)
 	CompactSegment(context.Context, *CompactSegmentRequest) (*CompactSegmentResponse, error)
+	// NotifySegmentCompacted informs a node that a segment's data is durably compacted in
+	// object storage, authorizing it to mark (and later reclaim) its local copy.
+	NotifySegmentCompacted(context.Context, *NotifySegmentCompactedRequest) (*NotifySegmentCompactedResponse, error)
 	// Segment introspection
 	GetSegmentLastAddConfirmed(context.Context, *GetSegmentLastAddConfirmedRequest) (*GetSegmentLastAddConfirmedResponse, error)
 	GetSegmentBlockCount(context.Context, *GetSegmentBlockCountRequest) (*GetSegmentBlockCountResponse, error)
@@ -291,6 +308,9 @@ func (UnimplementedLogStoreServer) CompleteSegment(context.Context, *CompleteSeg
 }
 func (UnimplementedLogStoreServer) CompactSegment(context.Context, *CompactSegmentRequest) (*CompactSegmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CompactSegment not implemented")
+}
+func (UnimplementedLogStoreServer) NotifySegmentCompacted(context.Context, *NotifySegmentCompactedRequest) (*NotifySegmentCompactedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NotifySegmentCompacted not implemented")
 }
 func (UnimplementedLogStoreServer) GetSegmentLastAddConfirmed(context.Context, *GetSegmentLastAddConfirmedRequest) (*GetSegmentLastAddConfirmedResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSegmentLastAddConfirmed not implemented")
@@ -423,6 +443,24 @@ func _LogStore_CompactSegment_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(LogStoreServer).CompactSegment(ctx, req.(*CompactSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_NotifySegmentCompacted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NotifySegmentCompactedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).NotifySegmentCompacted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_NotifySegmentCompacted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).NotifySegmentCompacted(ctx, req.(*NotifySegmentCompactedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -575,6 +613,10 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CompactSegment",
 			Handler:    _LogStore_CompactSegment_Handler,
+		},
+		{
+			MethodName: "NotifySegmentCompacted",
+			Handler:    _LogStore_NotifySegmentCompacted_Handler,
 		},
 		{
 			MethodName: "GetSegmentLastAddConfirmed",
