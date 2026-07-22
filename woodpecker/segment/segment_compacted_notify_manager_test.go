@@ -25,7 +25,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
@@ -482,6 +485,109 @@ func TestNotifyManager_CleanupOrphaned_DeleteError(t *testing.T) {
 // TestNotifyManager_OperatorConfirmed_IsSettled verifies #4: an OPERATOR_CONFIRMED record is
 // terminal/settled — EnsureSegmentNotified returns (false, nil) without creating or notifying,
 // even across a writer restart (fresh manager re-seeds it as settled).
+// TestNotifyManager_ConcurrentConfirm_DiscardsStaleWriteBack pins the CAS guard on the
+// pass's single write-back: the manager reads the record (revision 41), spends the pass
+// notifying nodes, and meanwhile an operator lands "wp marking confirm --force"
+// (NOTIFY_OPERATOR_CONFIRMED, advancing the revision). The stale write-back must be
+// REJECTED by the revision CAS and simply discarded — no error, no in-memory settle — so
+// the next cycle re-reads the fresh record and settles on the operator's state instead of
+// silently resurrecting IN_PROGRESS over it.
+func TestNotifyManager_ConcurrentConfirm_DiscardsStaleWriteBack(t *testing.T) {
+	mgr, mockMeta, mockPool := newNotifyTestManager(t)
+	ctx := context.Background()
+	logId, segId := int64(7), int64(11)
+
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}, int64(41), nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
+	expectNotifyToNode(t, mockPool, "node1", logId, segId, nil)
+	// The write-back must carry EXACTLY the revision the record was read at (41) — and the
+	// concurrent operator write makes that CAS fail.
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.Anything, int64(41)).
+		Return(werr.ErrMetadataRevisionConflict.WithCauseErrMsg("changed since revision 41")).Once()
+
+	advanced, err := mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
+	require.NoError(t, err, "a revision conflict is a benign outcome, not an error")
+	assert.True(t, advanced)
+
+	// NOT settled in memory: the next cycle re-reads and finds the operator's terminal state.
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED,
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}, int64(50), nil).Once()
+
+	advanced, err = mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.False(t, advanced, "the operator-confirmed record settles on re-read")
+
+	// Third call: settled fast path, no further expectations.
+	advanced, err = mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.False(t, advanced)
+}
+
+// TestNotifyManager_PeerUnimplemented_DefersBudgetInsteadOfParking pins the rolling-upgrade
+// behavior: a node that does not serve NotifySegmentCompacted yet answers
+// codes.Unimplemented. Even with the 30m budget long spent, the record must stay
+// IN_PROGRESS with its budget anchor slid forward — parking it as PENDING_MANUAL would
+// settle it permanently (never retried once the fleet finishes upgrading) and page an
+// operator for a non-actionable state. Once the peer upgrades, distribution completes
+// normally.
+func TestNotifyManager_PeerUnimplemented_DefersBudgetInsteadOfParking(t *testing.T) {
+	mgr, mockMeta, mockPool := newNotifyTestManager(t)
+	ctx := context.Background()
+	logId, segId := int64(7), int64(13)
+
+	staleStart := uint64(time.Now().Add(-2 * time.Hour).UnixMilli()) // budget long since spent
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          staleStart,
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}, int64(11), nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", segId, []string{"node1"})
+	// One client, sequential answers: first pass Unimplemented (old binary), second pass ok
+	// (the node has been upgraded). expectNotifyToNode is not used because its expectations
+	// are not Once-scoped and the first registration would answer both passes.
+	cli := mocks_logstore_client.NewLogStoreClient(t)
+	cli.EXPECT().NotifySegmentCompacted(mock.Anything, "bucket", "root", logId, segId).
+		Return(status.Error(codes.Unimplemented, "unknown method NotifySegmentCompacted")).Once()
+	cli.EXPECT().NotifySegmentCompacted(mock.Anything, "bucket", "root", logId, segId).
+		Return(nil).Once()
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(cli, nil)
+
+	beforeMs := uint64(time.Now().UnixMilli())
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
+		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS &&
+			s.StartTime >= beforeMs && // budget anchor slid forward
+			!s.QuorumNotifyStatus["node1"] // still unacked
+	}), mock.Anything).Return(nil).Once()
+
+	advanced, err := mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.True(t, advanced)
+
+	// NOT settled: the next cycle re-reads and retries. The peer has upgraded by now.
+	mockMeta.EXPECT().GetSegmentCompactedNotifyStatus(mock.Anything, logId, segId).Return(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: segId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}, int64(12), nil).Once()
+	mockMeta.EXPECT().UpdateSegmentCompactedNotifyStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCompactedNotifyStatus) bool {
+		return s.State == proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED && s.QuorumNotifyStatus["node1"]
+	}), mock.Anything).Return(nil).Once()
+
+	advanced, err = mgr.EnsureSegmentNotified(ctx, "test-log", logId, segId)
+	require.NoError(t, err)
+	assert.True(t, advanced)
+}
+
 func TestNotifyManager_OperatorConfirmed_IsSettled(t *testing.T) {
 	mgr, mockMeta, _ := newNotifyTestManager(t)
 	logId, segId := int64(1), int64(20)

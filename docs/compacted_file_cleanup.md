@@ -165,7 +165,7 @@ sites trivially consistent with each other.
 |---|---|---|
 | `logstore.maintenanceStrategy.compactedFileCleanupInterval` | 5s | node-side tick (queue drain) |
 | `logstore.maintenanceStrategy.reconcileMinDataLogAge` | 30m | pull reconcile age gate; `<=0` disables |
-| `client.auditor.maxInterval` | 5s | auditor cycle driving compaction, marking, truncate cleanup |
+| `client.auditor.maxInterval` | 5s in code, 10s in the shipped yaml | auditor cycle driving compaction, marking, truncate cleanup |
 
 The distribution retry budget (30m → PENDING_MANUAL) and the per-cycle budget (64) are
 constants (`notifyPendingManualAfter`, `maxCompactedNotifyPerCycle`).

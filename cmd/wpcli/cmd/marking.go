@@ -389,7 +389,7 @@ managed automatically and normally need no operator action).`,
 		},
 	}
 	flags.register(cmd)
-	cmd.Flags().BoolVar(&force, "force", false, "delete even if the record is not PENDING_MANUAL")
+	cmd.Flags().BoolVar(&force, "force", false, "confirm (transition to OPERATOR_CONFIRMED) even if the record is not PENDING_MANUAL; IN_PROGRESS/COMPLETED are normally managed automatically")
 	return cmd
 }
 

@@ -186,9 +186,10 @@ func markTruncatedSegmentsReaped(notifyManager segment.SegmentCompactedNotifyMan
 }
 
 // orphanSweepEveryNAuditCycles throttles the auditor-driven orphan sweep of cleanup-domain
-// records (cleaning/ + marking/) to roughly every 5m at the default auditor interval. The
-// batch-time sweeps inside cleanupTruncatedSegmentsIfNecessary remain the immediate path;
-// this periodic one is the backstop that still runs when NO truncate batch is pending.
+// records (cleaning/ + marking/) to every 60 auditor cycles — about 5m at the in-code
+// default auditor interval (5s), about 10m with the shipped config's auditor.maxInterval of
+// 10s. The batch-time sweeps inside cleanupTruncatedSegmentsIfNecessary remain the immediate
+// path; this periodic one is the backstop that still runs when NO truncate batch is pending.
 const orphanSweepEveryNAuditCycles = 60
 
 // orphanSweepBound returns the exclusive upper bound for the cleanup-record orphan sweeps:

@@ -629,7 +629,147 @@ func TestCompactedFileCleanup_BackendNotFound_ConvergesWithoutRequeue(t *testing
 	assert.NoError(t, statErr, "not-yet-compacted data.log is left alone")
 }
 
-// TestCompactedFileCleanup_AlreadyRemovedFile_DoesNotTouchGauges pins the accounting rule:
+// TestCompactedFileCleanup_MarkWriteFailure_BacksOff pins the retry pacing for the mark
+// write-back: when writeCompactedMark fails (read-only / full staged volume — the very
+// disk-pressure case this feature targets), the segment must be rescheduled with backoff
+// like a failed footer HEAD, not freshly re-enqueued for a retry on every 5s tick.
+func TestCompactedFileCleanup_MarkWriteFailure_BacksOff(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based test is meaningless as root")
+	}
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(26), int64(18)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId) // unmarked
+
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "26").
+		Return(int64(128), false, nil).Once() // footer present -> mark backfill attempted
+
+	require.NoError(t, os.Chmod(segDir, 0o555)) // mark write will fail
+	t.Cleanup(func() { _ = os.Chmod(segDir, 0o755) })
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId)
+	require.NoError(t, task.runOnce(ctx, false))
+
+	task.mu.Lock()
+	entry, queued := task.pending[segDir]
+	task.mu.Unlock()
+	require.True(t, queued, "the failed segment must stay queued")
+	assert.Equal(t, 1, entry.attempts, "mark-write failure must consume a backoff attempt")
+	assert.True(t, entry.nextAttemptAt.After(time.Now()), "the retry must be scheduled in the future")
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.NoError(t, statErr, "data.log untouched without a durable mark")
+}
+
+// TestCompactedFileCleanup_RemoveFailure_BacksOff pins the same pacing for the unlink: an
+// os.Remove failure (EACCES/read-only) reschedules with backoff instead of silently waiting
+// for the next ~5m reconcile walk (the entry was already drained from the queue).
+func TestCompactedFileCleanup_RemoveFailure_BacksOff(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based test is meaningless as root")
+	}
+	store, root, mockStorage := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(27), int64(19)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	mockStorage.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "27").
+		Return(int64(128), false, nil).Once()
+
+	require.NoError(t, os.Chmod(segDir, 0o555)) // unlink of data.log will fail
+	t.Cleanup(func() { _ = os.Chmod(segDir, 0o755) })
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId)
+	require.NoError(t, task.runOnce(ctx, false))
+
+	task.mu.Lock()
+	entry, queued := task.pending[segDir]
+	task.mu.Unlock()
+	require.True(t, queued, "the failed segment must stay queued for a backoff retry")
+	assert.Equal(t, 1, entry.attempts)
+	assert.True(t, entry.nextAttemptAt.After(time.Now()))
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.NoError(t, statErr, "data.log must survive the failed unlink")
+}
+
+// TestCompactedFileCleanup_NilStorageClient_Inert pins the precondition guard: with no
+// object storage client the task cannot verify footers, so it must be a quiet no-op (one
+// warning), not a panic-and-recover in the maintenance loop every 5s.
+func TestCompactedFileCleanup_NilStorageClient_Inert(t *testing.T) {
+	store, root, _ := setupCompactedCleanupStore(t)
+	store.storageClient = nil
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(28), int64(20)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId)
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId)
+	require.NoError(t, task.runOnce(ctx, false))
+	require.NoError(t, task.runOnce(ctx, true)) // reconcile pass is inert too
+
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.NoError(t, statErr, "nothing may be reclaimed without footer verification")
+}
+
+// TestCompactedFileCleanup_StartupWalkSeedsStoredGauges pins restart correctness of the
+// stored-file gauges: they are in-process and reset to zero on restart while their
+// increments happened in the PREVIOUS process, so the pass-1 reconcile walk re-establishes
+// them for every data.log that predates the task (mtime guard) — otherwise the startup
+// backlog drop would drive both series negative. Files created after the task started are
+// counted by the writer's create branch and must NOT be seeded (no double count), and a
+// second walk must not re-seed.
+func TestCompactedFileCleanup_StartupWalkSeedsStoredGauges(t *testing.T) {
+	store, root, _ := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	oldLogId, freshLogId := int64(29), int64(30)
+	oldDir := makeSegmentDir(t, root, bucket, rp, oldLogId, 21) // "staged data" = 11 bytes
+	// Backdate WITHIN the reconcile min-age window (10m < 30m): seeding must still happen
+	// even though the walk performs no footer HEAD for this segment.
+	ageDataLog(t, oldDir, 10*time.Minute)
+
+	task := newCompactedFileCleanupTask(store) // startTime = now: oldDir predates it
+
+	// Created AFTER the task started: this process's writer accounted for it (create
+	// branch), so the mtime guard must skip it.
+	makeSegmentDir(t, root, bucket, rp, freshLogId, 22)
+
+	logNs := bucket + "/" + rp
+	oldBytesBefore := testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, "29"))
+	oldCountBefore := testutil.ToFloat64(metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, "29"))
+	freshBytesBefore := testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, "30"))
+
+	require.NoError(t, task.runOnce(ctx, true)) // pass 1: reconcile walk seeds
+
+	assert.Equal(t, oldBytesBefore+11,
+		testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, "29")),
+		"pre-existing data.log must be seeded with its size")
+	assert.Equal(t, oldCountBefore+1,
+		testutil.ToFloat64(metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, "29")))
+	assert.Equal(t, freshBytesBefore,
+		testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, "30")),
+		"a file created after task start was counted by the writer; seeding it would double-count")
+
+	require.NoError(t, task.runOnce(ctx, true)) // second walk: no re-seeding
+	assert.Equal(t, oldBytesBefore+11,
+		testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, "29")),
+		"gauges must not be seeded twice")
+}
+
+// TestCompactedFileCleanup_AlreadyRemovedFile_DoesNotTouchGauges// TestCompactedFileCleanup_AlreadyRemovedFile_DoesNotTouchGauges pins the accounting rule:
 // the drop path decrements the stored-file gauges ONLY for a removal it performed itself.
 // When data.log vanished between the queue check and the unlink (concurrent truncate/delete
 // GC — which did its own decrement on ITS successful remove), running the Sub/Dec here too
@@ -646,19 +786,19 @@ func TestCompactedFileCleanup_AlreadyRemovedFile_DoesNotTouchGauges(t *testing.T
 	// The concurrent GC got there first: data.log is already gone.
 	require.NoError(t, os.Remove(filepath.Join(segDir, "data.log")))
 
-	storedNs := bucket + "/" + rp
+	logNs := bucket + "/" + rp
 	logIdStr := "24"
-	bytesBefore := testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, storedNs, logIdStr))
-	countBefore := testutil.ToFloat64(metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, storedNs, logIdStr))
+	bytesBefore := testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr))
+	countBefore := testutil.ToFloat64(metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr))
 
 	task := newCompactedFileCleanupTask(store)
 	task.dropSegmentLocalData(ctx, segDir, bucket, rp, logId, segId)
 
 	assert.Equal(t, bytesBefore,
-		testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, storedNs, logIdStr)),
+		testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr)),
 		"byte gauge must not move for a removal this task did not perform")
 	assert.Equal(t, countBefore,
-		testutil.ToFloat64(metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, storedNs, logIdStr)),
+		testutil.ToFloat64(metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr)),
 		"count gauge must not move for a removal this task did not perform")
 	assert.True(t, hasCompactedMark(segDir), "tombstone semantics unchanged")
 }

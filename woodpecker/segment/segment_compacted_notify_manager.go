@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -98,6 +100,12 @@ type nodeNotifyResult struct {
 	nodeAddress string
 	success     bool
 	errorMsg    string
+	// peerUnsupported marks a codes.Unimplemented response: the node has not been upgraded
+	// to a version that serves NotifySegmentCompacted yet (the RPC is new). This must not
+	// count toward the PENDING_MANUAL budget — a rolling upgrade longer than the budget
+	// would otherwise park every in-flight segment in the operator queue, and a parked
+	// record is settled and never retried even after the fleet finishes upgrading.
+	peerUnsupported bool
 }
 
 // isSettledNotifyState reports whether a marking record is terminal for the manager: no more
@@ -320,6 +328,11 @@ func (s *segmentCompactedNotifyManagerImpl) sendNotifyToNodes(ctx context.Contex
 			result := nodeNotifyResult{nodeAddress: addr, success: err == nil}
 			if err != nil {
 				result.errorMsg = err.Error()
+				// The remote client returns the gRPC error verbatim, so the status code
+				// survives to here.
+				if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+					result.peerUnsupported = true
+				}
 				logger.Ctx(ctx).Debug("notify segment compacted to node failed; will retry next cycle",
 					zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId),
 					zap.String("node", addr), zap.Error(err))
@@ -346,9 +359,12 @@ func (s *segmentCompactedNotifyManagerImpl) sendNotifyRequestToNode(ctx context.
 // COMPLETED when every node acked, PENDING_MANUAL when the retry budget (from StartTime) is
 // spent with nodes still unacked, IN_PROGRESS otherwise (retried next auditor cycle).
 func (s *segmentCompactedNotifyManagerImpl) finalizeStatus(ctx context.Context, logName string, status *proto.SegmentCompactedNotifyStatus, readRevision int64, results []nodeNotifyResult) error {
+	sawUnsupported := false
 	for _, r := range results {
 		if r.success {
 			status.QuorumNotifyStatus[r.nodeAddress] = true
+		} else if r.peerUnsupported {
+			sawUnsupported = true
 		}
 	}
 
@@ -363,6 +379,17 @@ func (s *segmentCompactedNotifyManagerImpl) finalizeStatus(ctx context.Context, 
 	case len(unacked) == 0:
 		status.State = proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED
 		status.ErrorMessage = ""
+	case sawUnsupported:
+		// Rolling upgrade in progress: at least one node does not serve the RPC yet. Keep the
+		// record IN_PROGRESS and slide the budget anchor forward — parking would settle the
+		// record permanently (never retried once the fleet is upgraded), and the un-upgraded
+		// state is not an operator-actionable failure. Distribution resumes normally on the
+		// first cycle after the node upgrades.
+		status.State = proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS
+		status.StartTime = uint64(time.Now().UnixMilli())
+		logger.Ctx(ctx).Info("compacted-mark distribution deferred: peer(s) do not serve NotifySegmentCompacted yet (rolling upgrade); budget restarted",
+			zap.String("logName", logName), zap.Int64("logId", status.LogId), zap.Int64("segmentId", status.SegmentId),
+			zap.Strings("unackedNodes", unacked))
 	case time.Since(time.UnixMilli(int64(status.StartTime))) > notifyPendingManualAfter:
 		status.State = proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL
 		status.ErrorMessage = fmt.Sprintf("nodes unacked after %s of retries: %s",

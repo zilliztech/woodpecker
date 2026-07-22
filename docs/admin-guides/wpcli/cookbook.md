@@ -169,7 +169,8 @@ wp marking list --log 42
 # Investigate the unacked node shown in the record
 wp node show <node>
 
-# Node is permanently dead or removed? Confirm (deletes the record)
+# Node is permanently dead or removed? Confirm (transitions the record to
+# OPERATOR_CONFIRMED — settled; it is physically removed at truncate-reap)
 wp marking confirm 42 7
 ```
 

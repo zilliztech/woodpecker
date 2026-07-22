@@ -73,7 +73,6 @@ type StagedFileWriter struct {
 	file            *os.File
 	logIdStr        string // for metrics only
 	logNs           string // for metrics only
-	storedNs        string // log_ns label for the local-storage gauges (see storedGaugeNs)
 
 	// Configuration
 	maxFlushSize     int64 // Max buffer size before triggering sync
@@ -181,7 +180,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		segmentId:           segmentId,
 		logIdStr:            strconv.FormatInt(logId, 10),
 		logNs:               bucket + "/" + rootPath,
-		storedNs:            storedGaugeNs(bucket, rootPath),
 		bucket:              bucket,
 		rootPath:            rootPath,
 		storageCli:          storageCli,
@@ -261,7 +259,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		logger.Ctx(ctx).Debug("opening file for writing (truncate mode)")
 		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err == nil {
-			metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, writer.storedNs, writer.logIdStr).Inc()
+			metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, writer.logNs, writer.logIdStr).Inc()
 		}
 	}
 
@@ -586,7 +584,7 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		if status == "success" {
 			metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Add(float64(actualDataSize))
 			metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
-			metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.storedNs, w.logIdStr).Add(float64(actualDataSize))
+			metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Add(float64(actualDataSize))
 		}
 	}()
 
@@ -2213,17 +2211,6 @@ const CompactedMarkFileName = "data.compacted"
 func HasCompactedMark(segmentDir string) bool {
 	_, err := os.Stat(filepath.Join(segmentDir, CompactedMarkFileName))
 	return err == nil
-}
-
-// storedGaugeNs builds the log_ns label for the WpFileStoredBytes/WpFileStoredCount gauges.
-// The gauges are incremented by the staged writer (rootPath as received over RPC) and
-// decremented by deleteLocalFiles and the compacted-file-cleanup drop path (whose pull branch
-// re-derives rootPath from the on-disk layout); all sides must build the label the same way.
-// Canonical form is client-enforced (config.Validate at client startup rejects non-canonical
-// values in service mode) and the NotifySegmentCompacted boundary re-checks it server-side
-// before the cleanup machinery consumes it.
-func storedGaugeNs(bucket, rootPath string) string {
-	return bucket + "/" + rootPath
 }
 
 // validateLACAlignment validates that the segment contains complete data for the LAC range
