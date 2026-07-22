@@ -19,6 +19,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -372,6 +373,21 @@ type MaintenanceStrategyConfig struct {
 	// DeleteReclaimInterval is how often the reclaim task scans delete markers.
 	// Default 2s, so deleted data disappears within ~grace+interval of the request.
 	DeleteReclaimInterval DurationSeconds `yaml:"deleteReclaimInterval"`
+	// CompactedFileCleanupInterval is how often the compacted-file-cleanup task scans
+	// staged segment directories for local data.log files that can be dropped now that
+	// their data is durably compacted in object storage. Default 5s. The task's pull-based
+	// reconcile pass (footer HEAD for segments not yet locally marked compacted) runs at a
+	// much lower cadence than this to bound object-storage request cost; see
+	// reconcileEveryNPasses in server/compacted_file_cleanup.go.
+	CompactedFileCleanupInterval DurationSeconds `yaml:"compactedFileCleanupInterval"`
+	// ReconcileMinDataLogAge gates the pull-based reconcile: the footer HEAD for an
+	// unmarked segment only runs once its local data.log has been idle (unmodified) for at
+	// least this long. Default 30m — comfortably past the client's segment roll interval
+	// plus compaction/upload time — so the reconcile only acts on data.log files old enough
+	// to be certainly compacted, avoiding wasted object-storage HEADs on segments still in
+	// the write->roll->compact pipeline. It does NOT gate the marked/push delete path (push
+	// is the intended fast reclaim). A value <= 0 disables the age gate.
+	ReconcileMinDataLogAge DurationSeconds `yaml:"reconcileMinDataLogAge"`
 }
 
 // NodeSelectionPolicyConfig controls load-aware quorum node selection (issue #114).
@@ -455,6 +471,11 @@ func NewConfiguration(files ...string) (*Configuration, error) {
 		Minio:      minioConfig,
 	}
 	if len(files) == 0 {
+		// The all-defaults / programmatic path is validated too: for embedding callers this
+		// is the only validation gate before the config is consumed.
+		if err := config.Validate(); err != nil {
+			return nil, err
+		}
 		return config, nil
 	}
 
@@ -486,9 +507,61 @@ func (c *Configuration) Validate() error {
 		return fmt.Errorf("woodpecker config validation failed: %w", err)
 	}
 
-	// Validate other configurations if needed
-	// TODO: Add validation for dependent configurations, such as trace config, etcd config, minio config, etc.
+	// Validate Minio configuration
+	if err := c.ValidateMinioConfig(); err != nil {
+		return fmt.Errorf("minio config validation failed: %w", err)
+	}
 
+	// Validate other configurations if needed
+	// TODO: Add validation for dependent configurations, such as trace config, etcd config, etc.
+
+	return nil
+}
+
+// ValidateRootPathValue checks that a rootPath value is in the canonical form woodpecker
+// consumes VERBATIM — for object keys (<rootPath>/<logId>/<segId>/...), local staged
+// directories, and metric labels there is deliberately no normalization anywhere on the
+// chain. Shared by the local-config validation below and by RPC boundaries that receive a
+// caller-managed rootPath (service mode's NotifySegmentCompacted).
+func ValidateRootPathValue(rp string) error {
+	if rp == "" {
+		return nil // empty = bucket root
+	}
+	if rp == "." || rp == ".." || strings.HasPrefix(rp, "/") || strings.HasSuffix(rp, "/") ||
+		strings.HasPrefix(rp, "../") || rp != path.Clean(rp) {
+		return fmt.Errorf("invalid minio rootPath %q: must be a clean relative path such as "+
+			"\"woodpecker\" or \"wp/data\" (no leading/trailing/doubled slashes, no \".\" or \"..\" "+
+			"segments), or empty for the bucket root", rp)
+	}
+	return nil
+}
+
+// ValidateMinioConfig checks the object-storage configuration. Enforcement is scoped by
+// storage mode:
+//
+//   - service (staged) mode HARD-FAILS on a non-canonical rootPath: the pull-reconcile path
+//     re-derives rootPath from the on-disk layout (path.Join-canonicalized), so push and pull
+//     only agree when the configured value is already canonical.
+//   - minio/local modes only WARN: every key/dir/label-building site uses the raw value
+//     verbatim, so even a non-canonical value is self-consistent end-to-end — exactly as it
+//     was before validation existed. Hard-failing here would break existing deployments on
+//     upgrade for no correctness gain (and normalizing instead would silently re-key their
+//     object space, orphaning previously written objects — strictly worse).
+//
+// It is exported separately so consumption points (the server and client constructors) can
+// re-check the object-storage section of a possibly hand-rolled or post-load-mutated config
+// without imposing the full Validate() on partial configurations.
+func (c *Configuration) ValidateMinioConfig() error {
+	err := ValidateRootPathValue(c.Minio.RootPath)
+	if err == nil {
+		return nil
+	}
+	if c.Woodpecker.Storage.IsStorageService() {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "[WARN] woodpecker: %v — tolerated in %q storage mode (keys are built "+
+		"verbatim and stay self-consistent), but service mode rejects this value\n",
+		err, c.Woodpecker.Storage.Type)
 	return nil
 }
 
@@ -754,6 +827,9 @@ func (c *Configuration) validateLogstoreConfig() error {
 	if logstore.MaintenanceStrategy.DeleteReclaimInterval.Milliseconds() <= 0 {
 		return fmt.Errorf("maintenance strategy delete reclaim interval must be positive, got %d", logstore.MaintenanceStrategy.DeleteReclaimInterval.Milliseconds())
 	}
+	if logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Milliseconds() <= 0 {
+		return fmt.Errorf("maintenance strategy compacted file cleanup interval must be positive, got %d", logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Milliseconds())
+	}
 
 	p := logstore.NodeSelectionPolicy
 	if p.LoadAwareEnabled {
@@ -886,8 +962,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}},  // 15s
 			},
 			MaintenanceStrategy: MaintenanceStrategyConfig{
-				DeleteGracePeriod:     DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
-				DeleteReclaimInterval: DurationSeconds{Duration: Duration{duration: 2 * time.Second}},
+				DeleteGracePeriod:            DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
+				DeleteReclaimInterval:        DurationSeconds{Duration: Duration{duration: 2 * time.Second}},
+				CompactedFileCleanupInterval: DurationSeconds{Duration: Duration{duration: 5 * time.Second}},
+				ReconcileMinDataLogAge:       DurationSeconds{Duration: Duration{duration: 30 * time.Minute}},
 			},
 			NodeSelectionPolicy: NodeSelectionPolicyConfig{
 				LoadAwareEnabled:   true,

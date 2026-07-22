@@ -21,3 +21,19 @@ func UnmarshalSegmentCleanupStatus(data []byte, status *SegmentCleanupStatus) er
 	}
 	return pb.Unmarshal(data, status)
 }
+
+// MarshalSegmentCompactedNotifyStatus marshals a SegmentCompactedNotifyStatus struct to bytes
+func MarshalSegmentCompactedNotifyStatus(status *SegmentCompactedNotifyStatus) ([]byte, error) {
+	if status == nil {
+		return nil, fmt.Errorf("cannot marshal nil SegmentCompactedNotifyStatus")
+	}
+	return pb.Marshal(status)
+}
+
+// UnmarshalSegmentCompactedNotifyStatus unmarshals bytes to a SegmentCompactedNotifyStatus struct
+func UnmarshalSegmentCompactedNotifyStatus(data []byte, status *SegmentCompactedNotifyStatus) error {
+	if status == nil {
+		return fmt.Errorf("cannot unmarshal to nil SegmentCompactedNotifyStatus")
+	}
+	return pb.Unmarshal(data, status)
+}

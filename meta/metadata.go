@@ -103,6 +103,25 @@ type MetadataProvider interface {
 	// ListSegmentCleanupStatus lists all cleanup statuses for a log
 	ListSegmentCleanupStatus(ctx context.Context, logId int64) ([]*proto.SegmentCleanupStatus, error)
 
+	// CreateSegmentCompactedNotifyStatus creates a new compacted-mark distribution status record.
+	// Returns the created record's etcd ModRevision for use as UpdateSegmentCompactedNotifyStatus's
+	// expectedRevision.
+	// (root/marking/<logId>/<segId> — the Sealed-phase sibling of the cleanup status).
+	CreateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) (int64, error)
+	// UpdateSegmentCompactedNotifyStatus updates an existing compacted-mark distribution status,
+	// guarded by a compare-and-swap on the record's ModRevision: the write succeeds only if the
+	// record has not been modified since it was read at expectedRevision. A concurrent writer
+	// (e.g. "wp marking confirm" transitioning the record to NOTIFY_OPERATOR_CONFIRMED) makes
+	// the update fail with ErrMetadataRevisionConflict instead of being silently overwritten.
+	UpdateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus, expectedRevision int64) error
+	// GetSegmentCompactedNotifyStatus retrieves the compacted-mark distribution status for a
+	// segment along with its etcd ModRevision (0 when the record does not exist).
+	GetSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCompactedNotifyStatus, int64, error)
+	// DeleteSegmentCompactedNotifyStatus deletes the compacted-mark distribution status for a segment
+	DeleteSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) error
+	// ListSegmentCompactedNotifyStatus lists all compacted-mark distribution statuses for a log
+	ListSegmentCompactedNotifyStatus(ctx context.Context, logId int64) ([]*proto.SegmentCompactedNotifyStatus, error)
+
 	// StoreOrGetConditionWriteResult attempts to store the condition write detection result.
 	// If the key doesn't exist, it stores the value and returns it.
 	// If the key already exists, it retrieves and returns the existing value.

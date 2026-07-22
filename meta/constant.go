@@ -158,3 +158,25 @@ func (b *KeyBuilder) BuildLogDeletedSegmentKey(logName string, deletedTs int64, 
 func (b *KeyBuilder) BuildLogCleanupStatusPrefix(logId int64) string {
 	return fmt.Sprintf("%s/%d/", b.SegmentCleanupStatusPrefix(), logId)
 }
+
+// SegmentCompactedNotifyStatusPrefix returns the prefix for segment compacted-mark
+// distribution status ("marking" — the Sealed-phase sibling of "cleaning").
+func (b *KeyBuilder) SegmentCompactedNotifyStatusPrefix() string {
+	return fmt.Sprintf("%s/marking", b.prefix)
+}
+
+// BuildAllSegmentsCompactedNotifyStatusKey builds a key for all compacted-notify status of a log.
+func (b *KeyBuilder) BuildAllSegmentsCompactedNotifyStatusKey(logId int64) string {
+	return fmt.Sprintf("%s/%d", b.SegmentCompactedNotifyStatusPrefix(), logId)
+}
+
+// BuildSegmentCompactedNotifyStatusKey builds a key for one segment's compacted-notify status.
+func (b *KeyBuilder) BuildSegmentCompactedNotifyStatusKey(logId int64, segmentId int64) string {
+	return fmt.Sprintf("%s/%d/%d", b.SegmentCompactedNotifyStatusPrefix(), logId, segmentId)
+}
+
+// BuildLogCompactedNotifyStatusPrefix returns the compacted-notify prefix for one log WITH a
+// trailing slash, so a prefix-delete of marking/12 cannot also match marking/123.
+func (b *KeyBuilder) BuildLogCompactedNotifyStatusPrefix(logId int64) string {
+	return fmt.Sprintf("%s/%d/", b.SegmentCompactedNotifyStatusPrefix(), logId)
+}

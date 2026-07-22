@@ -1575,7 +1575,9 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 	defer sp.End()
 	startTime := time.Now()
 	// Create a prefix key for the log to retrieve all segments
-	prefix := e.keyBuilder.BuildAllSegmentsCleanupStatusKey(logId)
+	// Trailing-slash prefix so listing cleaning/12 cannot also match cleaning/123, cleaning/120, ...
+	// (records are handled by SegmentId alone downstream, so a cross-log match would corrupt state).
+	prefix := e.keyBuilder.BuildLogCleanupStatusPrefix(logId)
 
 	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
@@ -1598,16 +1600,218 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 		status := &proto.SegmentCleanupStatus{}
 		err = proto.UnmarshalSegmentCleanupStatus(kv.Value, status)
 		if err != nil {
-			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "list_segment_cleanup_status", "error").Inc()
-			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "list_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-			logger.Ctx(ctx).Warn("unmarshal segment cleanup status failed", zap.Error(err))
-			return nil, fmt.Errorf("failed to unmarshal segment cleanup status: %w", err)
+			// Skip the corrupt record instead of failing the whole list (same hardening as the
+			// sibling marking list): one bad value must not poison the truncate cleanup and the
+			// orphan sweep for the entire log.
+			logger.Ctx(ctx).Warn("skipping unparseable segment cleanup status",
+				zap.String("key", string(kv.Key)), zap.Error(err))
+			continue
 		}
 		statuses = append(statuses, status)
 	}
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "list_segment_cleanup_status", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "list_segment_cleanup_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return statuses, nil
+}
+
+// CreateSegmentCompactedNotifyStatus creates a new compacted-mark distribution status record
+func (e *metadataProviderEtcd) CreateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) (int64, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CreateSegmentCompactedNotifyStatus")
+	defer sp.End()
+	startTime := time.Now()
+	key := e.keyBuilder.BuildSegmentCompactedNotifyStatusKey(status.LogId, status.SegmentId)
+	bytes, err := proto.MarshalSegmentCompactedNotifyStatus(status)
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal segment compacted notify status failed", zap.Error(err))
+		return 0, fmt.Errorf("failed to marshal segment compacted notify status: %w", err)
+	}
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	// Create-if-absent transaction
+	txn := e.client.Txn(ctx1)
+	cmp := clientv3.Compare(clientv3.CreateRevision(key), "=", 0)
+	put := clientv3.OpPut(key, string(bytes))
+
+	resp, err := txn.If(cmp).Then(put).Commit()
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("create segment compacted notify status transaction failed", zap.Error(err))
+		return 0, fmt.Errorf("failed to create segment compacted notify status: %w", err)
+	}
+
+	if !resp.Succeeded {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("segment compacted notify status already exists", zap.String("key", key))
+		return 0, fmt.Errorf("segment compacted notify status already exists: %s", key)
+	}
+
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	// A single-put txn: the created key's ModRevision equals the txn's header revision.
+	return resp.Header.Revision, nil
+}
+
+// UpdateSegmentCompactedNotifyStatus updates an existing compacted-mark distribution status
+func (e *metadataProviderEtcd) UpdateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus, expectedRevision int64) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateSegmentCompactedNotifyStatus")
+	defer sp.End()
+	startTime := time.Now()
+	key := e.keyBuilder.BuildSegmentCompactedNotifyStatusKey(status.LogId, status.SegmentId)
+	bytes, err := proto.MarshalSegmentCompactedNotifyStatus(status)
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal segment compacted notify status failed", zap.Error(err))
+		return fmt.Errorf("failed to marshal segment compacted notify status: %w", err)
+	}
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	// Compare-and-swap on the record's ModRevision: the update lands only if the record is
+	// exactly the version the caller read (expectedRevision). This closes the manager's
+	// read → distribute (seconds) → write-back race against a concurrent operator action
+	// ("wp marking confirm"): the stale write-back fails with ErrMetadataRevisionConflict
+	// instead of silently clobbering NOTIFY_OPERATOR_CONFIRMED. A deleted (reaped) record
+	// fails the same compare (ModRevision 0), which is equally correct — do not resurrect it.
+	txn := e.client.Txn(ctx1)
+	cmp := clientv3.Compare(clientv3.ModRevision(key), "=", expectedRevision)
+	put := clientv3.OpPut(key, string(bytes))
+
+	resp, err := txn.If(cmp).Then(put).Commit()
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("update segment compacted notify status transaction failed", zap.Error(err))
+		return fmt.Errorf("failed to update segment compacted notify status: %w", err)
+	}
+
+	if !resp.Succeeded {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("segment compacted notify status modified concurrently (or deleted); not overwriting",
+			zap.String("key", key), zap.Int64("expectedRevision", expectedRevision))
+		return werr.ErrMetadataRevisionConflict.WithCauseErrMsg(fmt.Sprintf("segment compacted notify status %s changed since revision %d", key, expectedRevision))
+	}
+
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return nil
+}
+
+// GetSegmentCompactedNotifyStatus retrieves the compacted-mark distribution status for a segment
+func (e *metadataProviderEtcd) GetSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCompactedNotifyStatus, int64, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetSegmentCompactedNotifyStatus")
+	defer sp.End()
+	startTime := time.Now()
+	key := e.keyBuilder.BuildSegmentCompactedNotifyStatusKey(logId, segmentId)
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	resp, err := e.client.Get(ctx1, key)
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get segment compacted notify status failed", zap.Error(err))
+		return nil, 0, fmt.Errorf("failed to get segment compacted notify status: %w", err)
+	}
+
+	if len(resp.Kvs) == 0 {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "success").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		return nil, 0, nil
+	}
+
+	status := &proto.SegmentCompactedNotifyStatus{}
+	err = proto.UnmarshalSegmentCompactedNotifyStatus(resp.Kvs[0].Value, status)
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("unmarshal segment compacted notify status failed", zap.Error(err))
+		return nil, 0, fmt.Errorf("failed to unmarshal segment compacted notify status: %w", err)
+	}
+
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return status, resp.Kvs[0].ModRevision, nil
+}
+
+// DeleteSegmentCompactedNotifyStatus deletes the compacted-mark distribution status for a segment
+func (e *metadataProviderEtcd) DeleteSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "DeleteSegmentCompactedNotifyStatus")
+	defer sp.End()
+	startTime := time.Now()
+	key := e.keyBuilder.BuildSegmentCompactedNotifyStatusKey(logId, segmentId)
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	_, err := e.client.Delete(ctx1, key)
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("delete segment compacted notify status failed", zap.Error(err))
+		return fmt.Errorf("failed to delete segment compacted notify status: %w", err)
+	}
+
+	logger.Ctx(ctx).Info("Deleted segment compacted notify status",
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.String("key", key))
+
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_segment_compacted_notify_status", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return nil
+}
+
+// ListSegmentCompactedNotifyStatus lists all compacted-mark distribution statuses for a log
+func (e *metadataProviderEtcd) ListSegmentCompactedNotifyStatus(ctx context.Context, logId int64) ([]*proto.SegmentCompactedNotifyStatus, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListSegmentCompactedNotifyStatus")
+	defer sp.End()
+	startTime := time.Now()
+	// Trailing-slash prefix so listing marking/12 cannot also match marking/123, marking/120, ...
+	// Without it a settled record from another log (segments start at 0 in every log) would seed
+	// this log's same-numbered segment as settled and silently skip its mark distribution.
+	prefix := e.keyBuilder.BuildLogCompactedNotifyStatusPrefix(logId)
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	resp, err := e.client.Get(ctx1, prefix, clientv3.WithPrefix())
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "list_segment_compacted_notify_status", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "list_segment_compacted_notify_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("list segment compacted notify statuses failed", zap.Error(err))
+		return nil, fmt.Errorf("failed to list segment compacted notify statuses: %w", err)
+	}
+
+	if len(resp.Kvs) == 0 {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "list_segment_compacted_notify_status", "success").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "list_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		return []*proto.SegmentCompactedNotifyStatus{}, nil
+	}
+
+	statuses := make([]*proto.SegmentCompactedNotifyStatus, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		status := &proto.SegmentCompactedNotifyStatus{}
+		err = proto.UnmarshalSegmentCompactedNotifyStatus(kv.Value, status)
+		if err != nil {
+			// Skip the corrupt record instead of failing the whole list: one bad value must not
+			// poison every consumer (the notify seed, the orphan sweep, wp marking) for the
+			// entire log — the CLI already tolerates unparseable records the same way. The bad
+			// key itself is bounded (reaped with the log) and loudly logged here.
+			logger.Ctx(ctx).Warn("skipping unparseable segment compacted notify status",
+				zap.String("key", string(kv.Key)), zap.Error(err))
+			continue
+		}
+		statuses = append(statuses, status)
+	}
+
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "list_segment_compacted_notify_status", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "list_segment_compacted_notify_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return statuses, nil
 }
 
@@ -1839,6 +2043,7 @@ func (e *metadataProviderEtcd) buildActiveSubtreeDeleteOps(logName string, logId
 		clientv3.OpDelete(kb.BuildSegmentInstanceKey(logName, ""), clientv3.WithPrefix()),
 		clientv3.OpDelete(kb.BuildLogAllReaderTempInfosKey(logId), clientv3.WithPrefix()),
 		clientv3.OpDelete(kb.BuildLogCleanupStatusPrefix(logId), clientv3.WithPrefix()),
+		clientv3.OpDelete(kb.BuildLogCompactedNotifyStatusPrefix(logId), clientv3.WithPrefix()),
 	}
 }
 

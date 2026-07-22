@@ -444,6 +444,111 @@ func (_c *MetadataProvider_CreateSegmentCleanupStatus_Call) RunAndReturn(run fun
 	return _c
 }
 
+// CreateSegmentCompactedNotifyStatus provides a mock function with given fields: ctx, status
+func (_m *MetadataProvider) CreateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) (int64, error) {
+	ret := _m.Called(ctx, status)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateSegmentCompactedNotifyStatus")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *proto.SegmentCompactedNotifyStatus) (int64, error)); ok {
+		return rf(ctx, status)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *proto.SegmentCompactedNotifyStatus) int64); ok {
+		r0 = rf(ctx, status)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, *proto.SegmentCompactedNotifyStatus) error); ok {
+		r1 = rf(ctx, status)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MetadataProvider_CreateSegmentCompactedNotifyStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateSegmentCompactedNotifyStatus'
+type MetadataProvider_CreateSegmentCompactedNotifyStatus_Call struct {
+	*mock.Call
+}
+
+// CreateSegmentCompactedNotifyStatus is a helper method to define mock.On call
+//   - ctx context.Context
+//   - status *proto.SegmentCompactedNotifyStatus
+func (_e *MetadataProvider_Expecter) CreateSegmentCompactedNotifyStatus(ctx interface{}, status interface{}) *MetadataProvider_CreateSegmentCompactedNotifyStatus_Call {
+	return &MetadataProvider_CreateSegmentCompactedNotifyStatus_Call{Call: _e.mock.On("CreateSegmentCompactedNotifyStatus", ctx, status)}
+}
+
+func (_c *MetadataProvider_CreateSegmentCompactedNotifyStatus_Call) Run(run func(ctx context.Context, status *proto.SegmentCompactedNotifyStatus)) *MetadataProvider_CreateSegmentCompactedNotifyStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*proto.SegmentCompactedNotifyStatus))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_CreateSegmentCompactedNotifyStatus_Call) Return(_a0 int64, _a1 error) *MetadataProvider_CreateSegmentCompactedNotifyStatus_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MetadataProvider_CreateSegmentCompactedNotifyStatus_Call) RunAndReturn(run func(context.Context, *proto.SegmentCompactedNotifyStatus) (int64, error)) *MetadataProvider_CreateSegmentCompactedNotifyStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeleteLogMetadata provides a mock function with given fields: ctx, logName, force
+func (_m *MetadataProvider) DeleteLogMetadata(ctx context.Context, logName string, force bool) error {
+	ret := _m.Called(ctx, logName, force)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteLogMetadata")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, bool) error); ok {
+		r0 = rf(ctx, logName, force)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_DeleteLogMetadata_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteLogMetadata'
+type MetadataProvider_DeleteLogMetadata_Call struct {
+	*mock.Call
+}
+
+// DeleteLogMetadata is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logName string
+//   - force bool
+func (_e *MetadataProvider_Expecter) DeleteLogMetadata(ctx interface{}, logName interface{}, force interface{}) *MetadataProvider_DeleteLogMetadata_Call {
+	return &MetadataProvider_DeleteLogMetadata_Call{Call: _e.mock.On("DeleteLogMetadata", ctx, logName, force)}
+}
+
+func (_c *MetadataProvider_DeleteLogMetadata_Call) Run(run func(ctx context.Context, logName string, force bool)) *MetadataProvider_DeleteLogMetadata_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(bool))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_DeleteLogMetadata_Call) Return(_a0 error) *MetadataProvider_DeleteLogMetadata_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_DeleteLogMetadata_Call) RunAndReturn(run func(context.Context, string, bool) error) *MetadataProvider_DeleteLogMetadata_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteReaderTempInfo provides a mock function with given fields: ctx, logId, readerName
 func (_m *MetadataProvider) DeleteReaderTempInfo(ctx context.Context, logId int64, readerName string) error {
 	ret := _m.Called(ctx, logId, readerName)
@@ -536,6 +641,54 @@ func (_c *MetadataProvider_DeleteSegmentCleanupStatus_Call) Return(_a0 error) *M
 }
 
 func (_c *MetadataProvider_DeleteSegmentCleanupStatus_Call) RunAndReturn(run func(context.Context, int64, int64) error) *MetadataProvider_DeleteSegmentCleanupStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeleteSegmentCompactedNotifyStatus provides a mock function with given fields: ctx, logId, segmentId
+func (_m *MetadataProvider) DeleteSegmentCompactedNotifyStatus(ctx context.Context, logId int64, segmentId int64) error {
+	ret := _m.Called(ctx, logId, segmentId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteSegmentCompactedNotifyStatus")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) error); ok {
+		r0 = rf(ctx, logId, segmentId)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteSegmentCompactedNotifyStatus'
+type MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call struct {
+	*mock.Call
+}
+
+// DeleteSegmentCompactedNotifyStatus is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+func (_e *MetadataProvider_Expecter) DeleteSegmentCompactedNotifyStatus(ctx interface{}, logId interface{}, segmentId interface{}) *MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call {
+	return &MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call{Call: _e.mock.On("DeleteSegmentCompactedNotifyStatus", ctx, logId, segmentId)}
+}
+
+func (_c *MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call) Return(_a0 error) *MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call) RunAndReturn(run func(context.Context, int64, int64) error) *MetadataProvider_DeleteSegmentCompactedNotifyStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1002,6 +1155,73 @@ func (_c *MetadataProvider_GetSegmentCleanupStatus_Call) RunAndReturn(run func(c
 	return _c
 }
 
+// GetSegmentCompactedNotifyStatus provides a mock function with given fields: ctx, logId, segmentId
+func (_m *MetadataProvider) GetSegmentCompactedNotifyStatus(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentCompactedNotifyStatus, int64, error) {
+	ret := _m.Called(ctx, logId, segmentId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetSegmentCompactedNotifyStatus")
+	}
+
+	var r0 *proto.SegmentCompactedNotifyStatus
+	var r1 int64
+	var r2 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (*proto.SegmentCompactedNotifyStatus, int64, error)); ok {
+		return rf(ctx, logId, segmentId)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) *proto.SegmentCompactedNotifyStatus); ok {
+		r0 = rf(ctx, logId, segmentId)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*proto.SegmentCompactedNotifyStatus)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) int64); ok {
+		r1 = rf(ctx, logId, segmentId)
+	} else {
+		r1 = ret.Get(1).(int64)
+	}
+
+	if rf, ok := ret.Get(2).(func(context.Context, int64, int64) error); ok {
+		r2 = rf(ctx, logId, segmentId)
+	} else {
+		r2 = ret.Error(2)
+	}
+
+	return r0, r1, r2
+}
+
+// MetadataProvider_GetSegmentCompactedNotifyStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetSegmentCompactedNotifyStatus'
+type MetadataProvider_GetSegmentCompactedNotifyStatus_Call struct {
+	*mock.Call
+}
+
+// GetSegmentCompactedNotifyStatus is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+func (_e *MetadataProvider_Expecter) GetSegmentCompactedNotifyStatus(ctx interface{}, logId interface{}, segmentId interface{}) *MetadataProvider_GetSegmentCompactedNotifyStatus_Call {
+	return &MetadataProvider_GetSegmentCompactedNotifyStatus_Call{Call: _e.mock.On("GetSegmentCompactedNotifyStatus", ctx, logId, segmentId)}
+}
+
+func (_c *MetadataProvider_GetSegmentCompactedNotifyStatus_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *MetadataProvider_GetSegmentCompactedNotifyStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_GetSegmentCompactedNotifyStatus_Call) Return(_a0 *proto.SegmentCompactedNotifyStatus, _a1 int64, _a2 error) *MetadataProvider_GetSegmentCompactedNotifyStatus_Call {
+	_c.Call.Return(_a0, _a1, _a2)
+	return _c
+}
+
+func (_c *MetadataProvider_GetSegmentCompactedNotifyStatus_Call) RunAndReturn(run func(context.Context, int64, int64) (*proto.SegmentCompactedNotifyStatus, int64, error)) *MetadataProvider_GetSegmentCompactedNotifyStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetSegmentMetadata provides a mock function with given fields: ctx, logName, segmentId
 func (_m *MetadataProvider) GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*meta.SegmentMeta, error) {
 	ret := _m.Called(ctx, logName, segmentId)
@@ -1338,6 +1558,65 @@ func (_c *MetadataProvider_ListSegmentCleanupStatus_Call) Return(_a0 []*proto.Se
 }
 
 func (_c *MetadataProvider_ListSegmentCleanupStatus_Call) RunAndReturn(run func(context.Context, int64) ([]*proto.SegmentCleanupStatus, error)) *MetadataProvider_ListSegmentCleanupStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListSegmentCompactedNotifyStatus provides a mock function with given fields: ctx, logId
+func (_m *MetadataProvider) ListSegmentCompactedNotifyStatus(ctx context.Context, logId int64) ([]*proto.SegmentCompactedNotifyStatus, error) {
+	ret := _m.Called(ctx, logId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListSegmentCompactedNotifyStatus")
+	}
+
+	var r0 []*proto.SegmentCompactedNotifyStatus
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64) ([]*proto.SegmentCompactedNotifyStatus, error)); ok {
+		return rf(ctx, logId)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64) []*proto.SegmentCompactedNotifyStatus); ok {
+		r0 = rf(ctx, logId)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*proto.SegmentCompactedNotifyStatus)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = rf(ctx, logId)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MetadataProvider_ListSegmentCompactedNotifyStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListSegmentCompactedNotifyStatus'
+type MetadataProvider_ListSegmentCompactedNotifyStatus_Call struct {
+	*mock.Call
+}
+
+// ListSegmentCompactedNotifyStatus is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+func (_e *MetadataProvider_Expecter) ListSegmentCompactedNotifyStatus(ctx interface{}, logId interface{}) *MetadataProvider_ListSegmentCompactedNotifyStatus_Call {
+	return &MetadataProvider_ListSegmentCompactedNotifyStatus_Call{Call: _e.mock.On("ListSegmentCompactedNotifyStatus", ctx, logId)}
+}
+
+func (_c *MetadataProvider_ListSegmentCompactedNotifyStatus_Call) Run(run func(ctx context.Context, logId int64)) *MetadataProvider_ListSegmentCompactedNotifyStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_ListSegmentCompactedNotifyStatus_Call) Return(_a0 []*proto.SegmentCompactedNotifyStatus, _a1 error) *MetadataProvider_ListSegmentCompactedNotifyStatus_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MetadataProvider_ListSegmentCompactedNotifyStatus_Call) RunAndReturn(run func(context.Context, int64) ([]*proto.SegmentCompactedNotifyStatus, error)) *MetadataProvider_ListSegmentCompactedNotifyStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1801,6 +2080,54 @@ func (_c *MetadataProvider_UpdateSegmentCleanupStatus_Call) RunAndReturn(run fun
 	return _c
 }
 
+// UpdateSegmentCompactedNotifyStatus provides a mock function with given fields: ctx, status, expectedRevision
+func (_m *MetadataProvider) UpdateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus, expectedRevision int64) error {
+	ret := _m.Called(ctx, status, expectedRevision)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateSegmentCompactedNotifyStatus")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *proto.SegmentCompactedNotifyStatus, int64) error); ok {
+		r0 = rf(ctx, status, expectedRevision)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateSegmentCompactedNotifyStatus'
+type MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call struct {
+	*mock.Call
+}
+
+// UpdateSegmentCompactedNotifyStatus is a helper method to define mock.On call
+//   - ctx context.Context
+//   - status *proto.SegmentCompactedNotifyStatus
+//   - expectedRevision int64
+func (_e *MetadataProvider_Expecter) UpdateSegmentCompactedNotifyStatus(ctx interface{}, status interface{}, expectedRevision interface{}) *MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call {
+	return &MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call{Call: _e.mock.On("UpdateSegmentCompactedNotifyStatus", ctx, status, expectedRevision)}
+}
+
+func (_c *MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call) Run(run func(ctx context.Context, status *proto.SegmentCompactedNotifyStatus, expectedRevision int64)) *MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*proto.SegmentCompactedNotifyStatus), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call) Return(_a0 error) *MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call) RunAndReturn(run func(context.Context, *proto.SegmentCompactedNotifyStatus, int64) error) *MetadataProvider_UpdateSegmentCompactedNotifyStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateSegmentMetadata provides a mock function with given fields: ctx, logName, logId, segmentMeta, oldState
 func (_m *MetadataProvider) UpdateSegmentMetadata(ctx context.Context, logName string, logId int64, segmentMeta *meta.SegmentMeta, oldState proto.SegmentState) error {
 	ret := _m.Called(ctx, logName, logId, segmentMeta, oldState)
@@ -1847,54 +2174,6 @@ func (_c *MetadataProvider_UpdateSegmentMetadata_Call) Return(_a0 error) *Metada
 }
 
 func (_c *MetadataProvider_UpdateSegmentMetadata_Call) RunAndReturn(run func(context.Context, string, int64, *meta.SegmentMeta, proto.SegmentState) error) *MetadataProvider_UpdateSegmentMetadata_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// DeleteLogMetadata provides a mock function with given fields: ctx, logName, force
-func (_m *MetadataProvider) DeleteLogMetadata(ctx context.Context, logName string, force bool) error {
-	ret := _m.Called(ctx, logName, force)
-
-	if len(ret) == 0 {
-		panic("no return value specified for DeleteLogMetadata")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, bool) error); ok {
-		r0 = rf(ctx, logName, force)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// MetadataProvider_DeleteLogMetadata_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteLogMetadata'
-type MetadataProvider_DeleteLogMetadata_Call struct {
-	*mock.Call
-}
-
-// DeleteLogMetadata is a helper method to define mock.On call
-//   - ctx context.Context
-//   - logName string
-//   - force bool
-func (_e *MetadataProvider_Expecter) DeleteLogMetadata(ctx interface{}, logName interface{}, force interface{}) *MetadataProvider_DeleteLogMetadata_Call {
-	return &MetadataProvider_DeleteLogMetadata_Call{Call: _e.mock.On("DeleteLogMetadata", ctx, logName, force)}
-}
-
-func (_c *MetadataProvider_DeleteLogMetadata_Call) Run(run func(ctx context.Context, logName string, force bool)) *MetadataProvider_DeleteLogMetadata_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(bool))
-	})
-	return _c
-}
-
-func (_c *MetadataProvider_DeleteLogMetadata_Call) Return(_a0 error) *MetadataProvider_DeleteLogMetadata_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *MetadataProvider_DeleteLogMetadata_Call) RunAndReturn(run func(context.Context, string, bool) error) *MetadataProvider_DeleteLogMetadata_Call {
 	_c.Call.Return(run)
 	return _c
 }
