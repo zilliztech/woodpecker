@@ -95,6 +95,33 @@ func TestDeleteFileData_EmptyDir(t *testing.T) {
 	assert.Equal(t, 0, deleteCount)
 }
 
+func TestDeleteFileData_RemovesCompactedMarkAndPrunesDir(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	logId := int64(7)
+	segId := int64(3)
+	segmentDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segmentDir, 0o755))
+	// A compacted tombstone mark left behind after the compacted-file-cleanup GC dropped
+	// data.log. The full-delete (truncate) path must remove it and prune the dir.
+	markPath := filepath.Join(segmentDir, CompactedMarkFileName)
+	require.NoError(t, os.WriteFile(markPath, nil, 0o644)) // empty marker: only existence matters
+
+	client := mocks_objectstorage.NewObjectStorage(t)
+	client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", mock.Anything, false, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	seg := NewStagedSegmentImpl(context.Background(), "test-bucket", "test-root", dir, logId, segId, client, cfg)
+
+	_, err = seg.DeleteFileData(context.Background(), 0)
+	assert.NoError(t, err)
+	assert.NoFileExists(t, markPath, "compacted tombstone mark must be removed on full delete")
+	_, dirErr := os.Stat(segmentDir)
+	assert.True(t, os.IsNotExist(dirErr), "segment dir should be pruned after full delete")
+}
+
 func TestDeleteFileData_NonExistentLocalDir(t *testing.T) {
 	dir := t.TempDir()
 	nonExistDir := filepath.Join(dir, "nonexist")
@@ -640,4 +667,29 @@ func TestDeleteFileData_ReadDirError(t *testing.T) {
 	// flag=0: os.ReadDir should fail with permission error (not IsNotExist)
 	_, err = seg.DeleteFileData(context.Background(), 0)
 	assert.Error(t, err)
+}
+
+// TestDeleteFileData_WalkPrefixMatchesWriterKeys pins the delete-GC walk prefix to the exact
+// verbatim <rootPath>/<logId>/<segId> layout the writer stores objects under (getFooterBlockKey /
+// getCompactedBlockKey build "<rootPath>/<logId>/<segId>/..."). rootPath is validated clean at
+// startup and used raw on both sides; if either side ever diverges from this layout the strict
+// mock expectation fails and flags the delete as leaking every compacted object.
+func TestDeleteFileData_WalkPrefixMatchesWriterKeys(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	logId, segId := int64(7), int64(4)
+	segmentDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segmentDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segmentDir, "data.log"), []byte("staged"), 0o644))
+
+	client := mocks_objectstorage.NewObjectStorage(t)
+	// Must equal the prefix of the writer's object keys for (rootPath="test-root", 7, 4).
+	client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-root/7/4", false, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	seg := NewStagedSegmentImpl(context.Background(), "test-bucket", "test-root", dir, logId, segId, client, cfg)
+	_, err = seg.DeleteFileData(context.Background(), 0)
+	assert.NoError(t, err)
 }

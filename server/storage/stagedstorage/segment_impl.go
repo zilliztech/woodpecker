@@ -59,6 +59,7 @@ type StagedSegmentImpl struct {
 	client         objectstorage.ObjectStorage
 	logIdStr       string // for metrics label only
 	logNs          string // for metrics log_ns label
+	storedNs       string // log_ns label for the local-storage gauges (see storedGaugeNs)
 }
 
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
@@ -85,6 +86,7 @@ func NewStagedSegmentImpl(ctx context.Context, bucket string, rootPath string, l
 		client:          storageCli,
 		logIdStr:        strconv.FormatInt(logId, 10),
 		logNs:           bucket + "/" + rootPath,
+		storedNs:        storedGaugeNs(bucket, rootPath),
 	}
 	return segmentImpl
 }
@@ -159,7 +161,9 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 		zap.String("bucket", rs.bucket),
 		zap.Int("flag", flag))
 
-	// List all objects in the segment directory
+	// List all objects in the segment directory. The prefix is built verbatim from rootPath —
+	// exactly how the writer built the object keys — so the walk covers everything the writer
+	// stored. rootPath is validated clean at startup (config.Validate); no normalization here.
 	listPrefix := fmt.Sprintf("%s/%s", rs.rootPath, rs.segmentFileKey)
 	type objectToDelete struct {
 		path string
@@ -283,10 +287,13 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 		// Determine what to delete based on flag and file type
 		switch flag {
 		case 0:
-			// Delete all segment-related files
+			// Delete all segment-related files, including the compacted tombstone mark.
+			// This truncate/delete path is the only place that removes the mark; the
+			// compacted-file-cleanup GC keeps it as a tombstone after dropping data.log.
 			shouldDelete = strings.HasSuffix(fileName, ".log") ||
 				strings.HasSuffix(fileName, ".lock") ||
-				strings.HasSuffix(fileName, ".fence")
+				strings.HasSuffix(fileName, ".fence") ||
+				fileName == CompactedMarkFileName
 		case 1, 2:
 			// For partial deletion, only delete .log files (main segment data)
 			shouldDelete = strings.HasSuffix(fileName, ".log")
@@ -318,8 +325,8 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 					zap.String("filePath", filePath))
 				deletedCount++
 				if isDataFile {
-					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(fileSize))
-					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
+					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.storedNs, rs.logIdStr).Sub(float64(fileSize))
+					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.storedNs, rs.logIdStr).Dec()
 				}
 			}
 		}
@@ -329,6 +336,13 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 		zap.String("segmentDir", rs.segmentDir),
 		zap.Int("deletedCount", deletedCount),
 		zap.Int("errorCount", len(deleteErrors)))
+
+	// On a full delete (flag 0), best-effort prune the now-empty segment directory so a
+	// compacted-tombstone dir (mark removed just above) does not linger. Ignore a
+	// "not empty" or any other error.
+	if flag == 0 && len(deleteErrors) == 0 {
+		_ = os.Remove(rs.segmentDir)
+	}
 
 	if len(deleteErrors) > 0 {
 		return deletedCount, fmt.Errorf("failed to delete %d local files", len(deleteErrors))

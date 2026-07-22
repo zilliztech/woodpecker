@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1405,8 +1406,11 @@ func TestStagedFileWriter_Compact_NoBlocks(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
+	// An empty segment must still establish the "Sealed => footer exists" invariant, which is
+	// impossible without an object storage client — Compact must surface that, not silently
+	// succeed into Sealed-without-footer (see TestCompact_EmptyBlocks for the with-client path).
 	totalSize, err := writer.Compact(context.Background())
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.Equal(t, int64(-1), totalSize)
 }
 
@@ -2129,10 +2133,32 @@ func TestValidateLACAlignment_SegmentIncomplete(t *testing.T) {
 
 // === Compact - Empty Blocks ===
 
+// TestCompact_EmptyBlocks pins the "Sealed => footer exists" invariant for EMPTY segments:
+// compacting a finalized zero-entry segment must still upload a footer.blk (TotalBlocks=0)
+// instead of silently succeeding without one. Without the footer, the segment becomes
+// Sealed-without-footer: compacted marks get distributed for it, the cleanup task's anomaly
+// branch warns forever and never reclaims its data.log, and the decommission drain gate
+// disagrees with the cleanup task.
 func TestCompact_EmptyBlocks(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
-	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	// Finalize/recovery probes may HEAD the footer; report it absent.
+	mockStorage.EXPECT().StatObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Maybe()
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).Return(true).Maybe()
+	var uploadedFooter []byte
+	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, _ string, reader io.Reader, size int64, _, _ string) error {
+			data := make([]byte, size)
+			_, readErr := io.ReadFull(reader, data)
+			require.NoError(t, readErr)
+			uploadedFooter = data
+			return nil
+		}).Once()
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
 	require.NoError(t, err)
 
 	// Finalize empty writer
@@ -2140,9 +2166,48 @@ func TestCompact_EmptyBlocks(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
-	// Compact with empty blocks should be a no-op (returns -1, nil)
 	result, err := writer.Compact(context.Background())
 	assert.NoError(t, err)
+	assert.Greater(t, result, int64(0), "an empty segment must upload a footer and report its size")
+
+	// The uploaded object is exactly the serialized footer (zero index records precede it);
+	// it must parse as a compacted zero-block footer with zero records.
+	require.NotEmpty(t, uploadedFooter)
+	footer, parseErr := codec.ParseFooterFromBytes(uploadedFooter)
+	require.NoError(t, parseErr)
+	assert.Equal(t, int32(0), footer.TotalBlocks)
+	assert.Equal(t, uint32(0), footer.TotalRecords)
+	assert.True(t, codec.IsCompacted(footer.Flags))
+}
+
+// TestCompact_ZeroBlocksNonEmptyLAC_Refuses is the regression for the quorum data-loss
+// vector: a replica that missed the segment's appends but was quorum-completed carries a
+// local footer with the coordinator's LAC (>= 0) and ZERO local blocks. Compacting on such a
+// replica must FAIL — publishing a TotalBlocks=0 compacted footer would commit "empty"
+// globally and authorize every data-holding replica to drop its data.log. The strict mock
+// has no PutObject expectation, so any upload attempt fails the test.
+func TestCompact_ZeroBlocksNonEmptyLAC_Refuses(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	// Idempotency probe: no remote footer yet.
+	mockStorage.EXPECT().StatObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Maybe()
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).Return(true).Maybe()
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	// Quorum-complete the data-less replica: Finalize with the coordinator's LAC even though
+	// this writer holds zero blocks (Finalize does not cross-check local coverage).
+	_, err = writer.Finalize(context.Background(), 999)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	result, err := writer.Compact(context.Background())
+	assert.Error(t, err, "a data-less replica of a non-empty segment must refuse to compact")
+	assert.Contains(t, err.Error(), "refusing empty compaction")
 	assert.Equal(t, int64(-1), result)
 }
 
