@@ -32,6 +32,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_segment"
@@ -709,6 +710,7 @@ func TestNotifySegmentCompacted_WritesMarkIdempotent(t *testing.T) {
 	// The handler verifies the compacted footer before writing the mark ("mark ⇒ footer
 	// exists" is enforced server-side, not on the caller's word). Each notify HEADs once.
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
 		Return(int64(128), false, nil).Twice()
 	store.storageClient = mockStorage
@@ -735,6 +737,7 @@ func TestNotifySegmentCompacted_FooterAbsentRefusesMark(t *testing.T) {
 	store.cfg.Woodpecker.Storage.Type = "service"
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Once()
 	store.storageClient = mockStorage
@@ -748,6 +751,28 @@ func TestNotifySegmentCompacted_FooterAbsentRefusesMark(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "no segment dir may be fabricated without a confirmed footer")
 }
 
+// TestNotifySegmentCompacted_BackendNotFoundRefusesWithClassifiedError: a backend-shaped
+// 404 (dispatched predicate says absent) must produce the classified ErrSegmentNotFound
+// refusal, not the raw backend error (which the MinIO-only predicate caused on Azure).
+func TestNotifySegmentCompacted_BackendNotFoundRefusesWithClassifiedError(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+
+	azureLike404 := fmt.Errorf("HEAD footer.blk: 404 BlobNotFound")
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
+		Return(int64(0), false, azureLike404).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(azureLike404).Return(true).Once()
+	store.storageClient = mockStorage
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2)
+	assert.ErrorIs(t, err, werr.ErrSegmentNotFound)
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	assert.False(t, hasCompactedMark(seg))
+}
+
 // TestNotifySegmentCompacted_FooterHeadTransientErrorPropagates: a transport-level StatObject
 // failure (not NoSuchKey) must surface as an error so the client retries, rather than being
 // treated as either "exists" or "absent".
@@ -758,6 +783,7 @@ func TestNotifySegmentCompacted_FooterHeadTransientErrorPropagates(t *testing.T)
 	store.cfg.Woodpecker.Storage.Type = "service"
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
 		Return(int64(0), false, fmt.Errorf("connection refused")).Once()
 	store.storageClient = mockStorage

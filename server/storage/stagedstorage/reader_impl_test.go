@@ -35,6 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/proto"
@@ -918,7 +919,7 @@ func TestStagedFileReaderAdv_GetLastEntryID_NoBlocks(t *testing.T) {
 	assert.ErrorIs(t, err, werr.ErrFileReaderNoBlockFound)
 }
 
-// === parseMinioFooterDataUnsafe ===
+// === parseCompactedFooterDataUnsafe ===
 
 func TestStagedFileReaderAdv_ParseMinioFooterData_Valid(t *testing.T) {
 	dir := t.TempDir()
@@ -951,7 +952,7 @@ func TestStagedFileReaderAdv_ParseMinioFooterData_Valid(t *testing.T) {
 	reader.blockIndexes = nil
 	reader.isIncompleteFile.Store(true)
 
-	err := reader.parseMinioFooterDataUnsafe(context.Background(), footerData)
+	err := reader.parseCompactedFooterDataUnsafe(context.Background(), footerData)
 	assert.NoError(t, err)
 	assert.NotNil(t, reader.footer)
 	assert.Len(t, reader.blockIndexes, 1)
@@ -963,7 +964,7 @@ func TestStagedFileReaderAdv_ParseMinioFooterData_TooSmall(t *testing.T) {
 	reader := createTestReaderFromWriter(t, dir, 31, 31, 3, 2)
 	defer reader.Close(context.Background())
 
-	err := reader.parseMinioFooterDataUnsafe(context.Background(), []byte{0x01, 0x02})
+	err := reader.parseCompactedFooterDataUnsafe(context.Background(), []byte{0x01, 0x02})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "footer data too small")
 }
@@ -1117,25 +1118,26 @@ func TestStagedFileReaderAdv_DetermineBlocksToRead_OutOfRange(t *testing.T) {
 	assert.Empty(t, blocks)
 }
 
-// === tryParseMinioFooterUnsafe ===
+// === tryParseCompactedFooterUnsafe ===
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_NilClient(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_NilClient(t *testing.T) {
 	dir := t.TempDir()
 	reader := createTestReaderFromWriter(t, dir, 60, 60, 3, 2)
 	defer reader.Close(context.Background())
 
 	reader.storageCli = nil
-	err := reader.tryParseMinioFooterUnsafe(context.Background())
+	err := reader.tryParseCompactedFooterUnsafe(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "storage client not available")
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_NotFound(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_NotFound(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
 	// Create a minimal file for reader creation
 	localBaseDir := filepath.Join(dir, "local")
@@ -1163,12 +1165,13 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_NotFound(t *testing.T) {
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_ValidFooter(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_ValidFooter(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
 	logId := int64(62)
 	segId := int64(62)
@@ -1227,7 +1230,7 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_ValidFooter(t *testing.T) {
 	assert.Equal(t, int64(4), reader.footer.LAC)
 }
 
-// === readCompactedDataFromMinio ===
+// === readCompactedDataFromObjectStorage ===
 
 // readerMockFileReader implements minioHandler.FileReader for tests
 type readerMockFileReader struct {
@@ -1283,6 +1286,7 @@ func TestStagedFileReaderAdv_ReadCompactedDataFromMinio(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(70)
 	segId := int64(70)
 
@@ -1390,6 +1394,7 @@ func TestStagedReader_LocalAbsent(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(100)
 	segId := int64(100)
 
@@ -1502,6 +1507,7 @@ func TestStagedReader_Compacted_IgnoresCrossProvenanceLastReadState(t *testing.T
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(103)
 	segId := int64(103)
 
@@ -1577,6 +1583,7 @@ func TestStagedReader_Compacted_SameProvenanceResumeUsesBlockId(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(104)
 	segId := int64(104)
 
@@ -1677,6 +1684,7 @@ func TestStagedReader_Compacted_FirstReadPastEnd_ReturnsEOF(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
 	reader := stagedCompactedReaderWithOneBlock(t, dir, cfg, mockStorage, 120, 120)
 	defer reader.Close(context.Background())
@@ -1686,7 +1694,7 @@ func TestStagedReader_Compacted_FirstReadPastEnd_ReturnsEOF(t *testing.T) {
 	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile, "first read past the last entry of a sealed compacted segment must return EOF")
 }
 
-// TestStagedReader_Compacted_ResumeBeyondBlocks_ReturnsEOF drives readCompactedDataFromMinio's
+// TestStagedReader_Compacted_ResumeBeyondBlocks_ReturnsEOF drives readCompactedDataFromObjectStorage's
 // "no block found" path (startBlockIndex == -1): a same-provenance compacted resume whose
 // LastBlockId points past every block in the footer. On a sealed segment this means "no more
 // data", so it must return ErrFileReaderEndOfFile (advance), not an empty batch — which the
@@ -1696,6 +1704,7 @@ func TestStagedReader_Compacted_ResumeBeyondBlocks_ReturnsEOF(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
 	reader := stagedCompactedReaderWithOneBlock(t, dir, cfg, mockStorage, 121, 121)
 	defer reader.Close(context.Background())
@@ -1720,6 +1729,7 @@ func TestStagedReader_Compacted_EmptySegment_ReturnsEOF(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
 	logId, segId := int64(122), int64(122)
 	footer := &codec.FooterRecord{
@@ -1758,6 +1768,7 @@ func TestStagedReader_LocalAbsent_MarkPresentButNoFooter(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(101)
 	segId := int64(101)
 
@@ -1788,6 +1799,7 @@ func TestStagedReader_LocalAbsent_NoMark_NoMinioCall(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(102)
 	segId := int64(102)
 
@@ -1868,14 +1880,15 @@ func TestStagedFileReaderAdv_ExtractEntriesFromBlockDataWithBytes_FilterStart(t 
 	assert.Equal(t, int64(4), entries[1].EntryId)
 }
 
-// === readBlockFromMinioByKey ===
+// === readBlockFromObjectStorageByKey ===
 
-func TestStagedFileReaderAdv_ReadBlockFromMinioByKey_Success(t *testing.T) {
+func TestStagedFileReaderAdv_ReadBlockFromObjectStorageByKey_Success(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(90)
 	segId := int64(90)
 
@@ -1903,17 +1916,18 @@ func TestStagedFileReaderAdv_ReadBlockFromMinioByKey_Success(t *testing.T) {
 	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", "test-root/90/90/m_0.blk", int64(0), int64(len(blockContent)), mock.Anything, mock.Anything).
 		Return(&readerMockFileReader{data: blockContent}, nil)
 
-	data, err := reader.readBlockFromMinioByKey(context.Background(), "test-root/90/90/m_0.blk", int64(len(blockContent)))
+	data, err := reader.readBlockFromObjectStorageByKey(context.Background(), "test-root/90/90/m_0.blk", int64(len(blockContent)))
 	assert.NoError(t, err)
 	assert.Equal(t, blockContent, data)
 }
 
-func TestStagedFileReaderAdv_ReadBlockFromMinioByKey_Error(t *testing.T) {
+func TestStagedFileReaderAdv_ReadBlockFromObjectStorageByKey_Error(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(91)
 	segId := int64(91)
 
@@ -1939,7 +1953,7 @@ func TestStagedFileReaderAdv_ReadBlockFromMinioByKey_Error(t *testing.T) {
 	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("get error"))
 
-	_, err = reader.readBlockFromMinioByKey(context.Background(), "test-root/91/91/m_0.blk", 100)
+	_, err = reader.readBlockFromObjectStorageByKey(context.Background(), "test-root/91/91/m_0.blk", 100)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get block object")
 }
@@ -1952,6 +1966,7 @@ func TestStagedFileReaderAdv_ReadAndExtractBlockConcurrently_Success(t *testing.
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(95)
 	segId := int64(95)
 
@@ -2135,7 +2150,7 @@ func TestStagedFileReaderAdv_IsFooterExists_False(t *testing.T) {
 	assert.False(t, exists)
 }
 
-// === readCompactedDataFromMinio edge cases ===
+// === readCompactedDataFromObjectStorage edge cases ===
 
 func TestStagedFileReaderAdv_ReadCompactedDataFromMinio_NoBlocks(t *testing.T) {
 	dir := t.TempDir()
@@ -2149,7 +2164,7 @@ func TestStagedFileReaderAdv_ReadCompactedDataFromMinio_NoBlocks(t *testing.T) {
 	reader.blockIndexes = nil
 
 	opt := storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}
-	result, err := reader.readCompactedDataFromMinio(context.Background(), opt, 999, 0)
+	result, err := reader.readCompactedDataFromObjectStorage(context.Background(), opt, 999, 0)
 	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile)
 	assert.Nil(t, result)
 }
@@ -2163,6 +2178,7 @@ func TestStagedFileReaderAdv_ReadNextBatchAdv_CompactedWithLastReadState(t *test
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(130)
 	segId := int64(130)
 
@@ -2270,15 +2286,16 @@ func TestNewStagedFileReaderAdv_OpenFileError_NotPermission(t *testing.T) {
 	assert.Contains(t, err.Error(), "open file")
 }
 
-// === tryParseMinioFooterUnsafe error branches ===
+// === tryParseCompactedFooterUnsafe error branches ===
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_StatObjectError(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_StatObjectError(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(210)
 	segId := int64(210)
 
@@ -2307,13 +2324,14 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_StatObjectError(t *testing.T) {
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_GetObjectError(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_GetObjectError(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(211)
 	segId := int64(211)
 
@@ -2344,13 +2362,14 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_GetObjectError(t *testing.T) {
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_ReadFullError(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_ReadFullError(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(212)
 	segId := int64(212)
 
@@ -2381,13 +2400,14 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_ReadFullError(t *testing.T) {
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_InvalidFooterData(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_InvalidFooterData(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(213)
 	segId := int64(213)
 
@@ -2420,7 +2440,7 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_InvalidFooterData(t *testing.T)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
-	// parseMinioFooterDataUnsafe should fail, fall back to incomplete
+	// parseCompactedFooterDataUnsafe should fail, fall back to incomplete
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
@@ -3226,7 +3246,7 @@ func TestScanForAllBlockInfo_CRCVerifyFailed(t *testing.T) {
 	assert.Empty(t, reader.blockIndexes)
 }
 
-// === readCompactedDataFromMinio - GetObject failure ===
+// === readCompactedDataFromObjectStorage - GetObject failure ===
 
 func TestReadCompactedData_ReadBlockError(t *testing.T) {
 	dir := t.TempDir()
@@ -3234,6 +3254,7 @@ func TestReadCompactedData_ReadBlockError(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(112)
 	segId := int64(112)
 
@@ -3299,7 +3320,7 @@ func TestReadCompactedData_ReadBlockError(t *testing.T) {
 		"a transient block-read failure must not be converted into end-of-segment")
 }
 
-// === readCompactedDataFromMinio - no entries match (all below startEntryID) ===
+// === readCompactedDataFromObjectStorage - no entries match (all below startEntryID) ===
 
 func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 	dir := t.TempDir()
@@ -3307,6 +3328,7 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(113)
 	segId := int64(113)
 
@@ -3345,10 +3367,10 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 		Flags: codec.SetCompacted(0),
 	}
 
-	// Call readCompactedDataFromMinio directly with startEntryID=100 (beyond all block entries
+	// Call readCompactedDataFromObjectStorage directly with startEntryID=100 (beyond all block entries
 	// 0-4): the consumed-block skip advances past every block and returns EOF with no fetch.
 	opt := storage.ReaderOpt{StartEntryID: 100, MaxBatchEntries: 10}
-	_, err = reader.readCompactedDataFromMinio(context.Background(), opt, 0, 0)
+	_, err = reader.readCompactedDataFromObjectStorage(context.Background(), opt, 0, 0)
 	assert.Error(t, err)
 	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
 }
@@ -3387,6 +3409,7 @@ func TestStagedReader_Compacted_ResumePastFullyConsumedLargeBlock(t *testing.T) 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId, segId := int64(140), int64(140)
 
 	// Footer with TWO blocks: block 0 = entries 0..4, block 1 = entries 5..9.

@@ -225,6 +225,7 @@ func TestStagedReaderStates_CompactionFlipsLocalReaderToMinio(t *testing.T) {
 	// compaction completing between two reads.
 	var compacted atomic.Bool
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, _, _, _, _ string) (int64, bool, error) {
 			if compacted.Load() {
@@ -304,6 +305,36 @@ func TestStagedReaderStates_MarkWithDataLogStillServesLocally(t *testing.T) {
 		"local serving in the drop-pending state emits local provenance")
 }
 
+// TestStagedReaderStates_ReclaimedSegment_BackendNotFoundIsNotFound pins the predicate
+// DISPATCH: absence must be recognized via the client's IsObjectNotExistsError, not the
+// MinIO-only minioHandler.IsObjectNotExists. The mock returns a non-MinIO-shaped error
+// (like Azure's raw *azcore.ResponseError 404, which minio.ToErrorResponse can never match)
+// while its dispatched predicate says "not found" — the reader must classify it as a
+// definitive ErrEntryNotFound, not fall into the transient branch and retry unboundedly.
+func TestStagedReaderStates_ReclaimedSegment_BackendNotFoundIsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	logId, segId := int64(209), int64(209)
+
+	segDir := getSegmentDir(dir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	azureLike404 := fmt.Errorf("GET https://acct.blob.core.windows.net/c/footer.blk: 404 BlobNotFound")
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	// consulted twice: the helper's absent branch and the caller's re-check
+	mockStorage.EXPECT().IsObjectNotExistsError(azureLike404).Return(true)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId), mock.Anything, mock.Anything).
+		Return(int64(0), false, azureLike404).Once()
+
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+	require.Error(t, err)
+	assert.True(t, werr.ErrEntryNotFound.Is(err),
+		"a backend-recognized 404 is a definitive absence and must map to ErrEntryNotFound, got %v", err)
+}
+
 // TestStagedReaderStates_ParseAfterClose_ReturnsAlreadyClosed pins the under-lock closed
 // check on the parse path: tryParseFooterAndIndexesIfExists runs BEFORE ReadNextBatchAdv's
 // read lock and takes the writer lock itself, so a read racing an eviction-triggered Close
@@ -355,6 +386,7 @@ func TestStagedReaderStates_ConcurrentCloseAndRead_OnlyAlreadyClosedSurfaces(t *
 	blockKey := fmt.Sprintf("test-root/%d/%d/m_0.blk", logId, segId)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
 		Return(int64(len(footerData)), false, nil).Maybe()
 	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -438,6 +470,7 @@ func TestStagedReaderStates_ReclaimedSegment_FooterGenuinelyAbsentIsNotFound(t *
 	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId), mock.Anything, mock.Anything).
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Once()
 

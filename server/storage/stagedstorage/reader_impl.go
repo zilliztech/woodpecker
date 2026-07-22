@@ -144,14 +144,14 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 			r.lastAddConfirmed.Store(-1)
 
 			r.isIncompleteFile.Store(true)
-			if perr := r.tryParseMinioFooterUnsafe(ctx); perr != nil || r.isIncompleteFile.Load() {
-				if perr != nil && !minioHandler.IsObjectNotExists(perr) {
+			if perr := r.tryParseCompactedFooterUnsafe(ctx); perr != nil || r.isIncompleteFile.Load() {
+				if perr != nil && (r.storageCli == nil || !r.storageCli.IsObjectNotExistsError(perr)) {
 					// Transient object-storage failure (throttle/5xx/timeout/parse) — NOT
 					// evidence of absence. With the local data.log reclaimed this is the only
 					// source, and mapping it to ErrEntryNotFound would silently stall reads
 					// (that error is the suppressed steady-state signal). Surface it as a
-					// retriable error, mirroring footerExistsInMinio's absent-vs-error split.
-					logger.Ctx(ctx).Warn("failed to load minio compacted footer for reclaimed staged segment; surfacing retriable error",
+					// retriable error, mirroring compactedFooterExists's absent-vs-error split.
+					logger.Ctx(ctx).Warn("failed to load compacted footer from object storage for reclaimed staged segment; surfacing retriable error",
 						zap.String("filePath", filePath), zap.Error(perr))
 					if r.pool != nil {
 						r.pool.Release()
@@ -264,7 +264,7 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 	}
 
 	// Priority 1: Try to read footer from minio (compacted data)
-	if err := r.tryParseMinioFooterUnsafe(ctx); err != nil {
+	if err := r.tryParseCompactedFooterUnsafe(ctx); err != nil {
 		logger.Ctx(ctx).Debug("failed to parse minio footer, trying local file",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
@@ -280,14 +280,16 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 	return r.tryParseLocalFooterUnsafe(ctx)
 }
 
-// tryParseMinioFooterUnsafe attempts to parse footer from minio object storage.
+// tryParseCompactedFooterUnsafe attempts to parse the compacted footer from object storage.
 // The "footer genuinely absent" outcome returns the ORIGINAL StatObject error untouched, so
-// callers distinguish it with the same minioHandler.IsObjectNotExists predicate the rest of
-// the codebase uses (footerExistsInMinio et al.) — absence is the only outcome that may be
-// translated into ErrEntryNotFound; every other failure (nil client, StatObject/GetObject/
-// ReadFull/parse) must stay visible and retriable.
-func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseMinioFooterUnsafe")
+// callers distinguish it with the same backend-dispatched IsObjectNotExistsError predicate
+// used here — the MinIO-only minioHandler.IsObjectNotExists would never recognize the Azure
+// backend's raw 404 (*azcore.ResponseError), turning a definitive not-found into an unbounded
+// retry. Absence is the only outcome that may be translated into ErrEntryNotFound; every
+// other failure (nil client, StatObject/GetObject/ReadFull/parse) must stay visible and
+// retriable.
+func (r *StagedFileReaderAdv) tryParseCompactedFooterUnsafe(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseCompactedFooterUnsafe")
 	defer sp.End()
 
 	if r.storageCli == nil {
@@ -304,10 +306,10 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	// Check if footer exists
 	objSize, _, err := r.storageCli.StatObject(ctx, r.bucket, footerKey, r.logNs, r.logIdStr)
 	if err != nil {
-		if minioHandler.IsObjectNotExists(err) {
-			logger.Ctx(ctx).Debug("no compacted footer found in minio",
+		if r.storageCli.IsObjectNotExistsError(err) {
+			logger.Ctx(ctx).Debug("no compacted footer found in object storage",
 				zap.String("footerKey", footerKey))
-			return err // untouched: callers re-check with minioHandler.IsObjectNotExists
+			return err // untouched: callers re-check with the same backend-dispatched predicate
 		}
 		logger.Ctx(ctx).Warn("failed to stat footer object in minio",
 			zap.String("footerKey", footerKey),
@@ -335,7 +337,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	}
 
 	// Parse footer and indexes from minio data
-	if err := r.parseMinioFooterDataUnsafe(ctx, footerData); err != nil {
+	if err := r.parseCompactedFooterDataUnsafe(ctx, footerData); err != nil {
 		logger.Ctx(ctx).Warn("failed to parse minio footer data",
 			zap.String("footerKey", footerKey),
 			zap.Error(err))
@@ -354,9 +356,9 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	return nil
 }
 
-// parseMinioFooterDataUnsafe parses footer and indexes from minio data
-func (r *StagedFileReaderAdv) parseMinioFooterDataUnsafe(ctx context.Context, footerData []byte) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "parseMinioFooterDataUnsafe")
+// parseCompactedFooterDataUnsafe parses footer and indexes from minio data
+func (r *StagedFileReaderAdv) parseCompactedFooterDataUnsafe(ctx context.Context, footerData []byte) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "parseCompactedFooterDataUnsafe")
 	defer sp.End()
 
 	// The footer data contains: [IndexRecord1][IndexRecord2]...[IndexRecordN][FooterRecord]
@@ -454,7 +456,7 @@ func (r *StagedFileReaderAdv) tryParseLocalFooterUnsafe(ctx context.Context) err
 	if r.file == nil {
 		// Defensive guard: this fallback path is only meaningful when a local file was
 		// opened. A compacted (minio-backed) reader resolves its footer in
-		// tryParseMinioFooterUnsafe and never reaches here in normal operation.
+		// tryParseCompactedFooterUnsafe and never reaches here in normal operation.
 		return werr.ErrEntryNotFound.WithCauseErrMsg("no local file to parse footer from")
 	}
 
@@ -989,7 +991,7 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 		logger.Ctx(ctx).Debug("reading compacted data from minio",
 			zap.String("filePath", r.filePath),
 			zap.Int64("startBlockID", startBlockID))
-		return r.readCompactedDataFromMinio(ctx, opt, startBlockID, startBlockOffset)
+		return r.readCompactedDataFromObjectStorage(ctx, opt, startBlockID, startBlockOffset)
 	}
 
 	logger.Ctx(ctx).Debug("reading data from staged local file",
@@ -1360,9 +1362,9 @@ func (r *StagedFileReaderAdv) GetTotalBlocks() int32 {
 	return 0
 }
 
-// readCompactedDataFromMinio reads data from minio for compacted segments using concurrent block fetching
-func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*proto.BatchReadResult, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readCompactedDataFromMinio")
+// readCompactedDataFromObjectStorage reads data from minio for compacted segments using concurrent block fetching
+func (r *StagedFileReaderAdv) readCompactedDataFromObjectStorage(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*proto.BatchReadResult, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readCompactedDataFromObjectStorage")
 	defer sp.End()
 	startTime := time.Now()
 
@@ -1578,7 +1580,7 @@ func (r *StagedFileReaderAdv) readAndExtractBlockConcurrently(ctx context.Contex
 	}
 
 	// Read block data from minio
-	blockData, err := r.readBlockFromMinioByKey(ctx, blockToRead.objKey, blockToRead.size)
+	blockData, err := r.readBlockFromObjectStorageByKey(ctx, blockToRead.objKey, blockToRead.size)
 	if err != nil {
 		result.err = fmt.Errorf("failed to read block %d from minio: %w", blockToRead.blockID, err)
 		return result
@@ -1596,9 +1598,9 @@ func (r *StagedFileReaderAdv) readAndExtractBlockConcurrently(ctx context.Contex
 	return result
 }
 
-// readBlockFromMinioByKey reads a block from minio using the object key
-func (r *StagedFileReaderAdv) readBlockFromMinioByKey(ctx context.Context, objKey string, objSize int64) ([]byte, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readBlockFromMinioByKey")
+// readBlockFromObjectStorageByKey reads a block from minio using the object key
+func (r *StagedFileReaderAdv) readBlockFromObjectStorageByKey(ctx context.Context, objKey string, objSize int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readBlockFromObjectStorageByKey")
 	defer sp.End()
 
 	logger.Ctx(ctx).Debug("reading block from minio by key",

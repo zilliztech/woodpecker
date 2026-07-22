@@ -32,7 +32,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 )
 
@@ -251,7 +250,7 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 	if _, err := os.Stat(filepath.Join(s.segDir, "data.log")); os.IsNotExist(err) {
 		return // data.log already gone (dropped earlier, or removed by the truncate GC): nothing to do
 	}
-	footer, statErr := footerExistsInMinio(ctx, t.store.storageClient, s.bucket, s.rootPath, s.logId, s.segId)
+	footer, statErr := compactedFooterExists(ctx, t.store.storageClient, s.bucket, s.rootPath, s.logId, s.segId)
 	if statErr != nil {
 		logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; will retry with backoff",
 			zap.String("segDir", s.segDir), zap.Int("attempts", s.attempts+1), zap.Error(statErr))
@@ -346,12 +345,14 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 		zap.String("segDir", segDir), zap.Int64("logId", logId), zap.Int64("segId", segId))
 }
 
-// footerExistsInMinio checks whether the compacted footer object for (logId, segId)
-// is present in object storage, using the exact same key format as the segment reader
+// compactedFooterExists checks whether the compacted footer object for (logId, segId)
+// is present in object storage (backend-agnostic: absence is detected via the client's
+// dispatched IsObjectNotExistsError, not a MinIO-specific code), using the exact same key
+// format as the segment reader
 // (getFooterBlockKey in server/storage/stagedstorage/reader_impl.go). Shared by the cleanup
 // task (verify-before-drop / reconcile backfill) and the NotifySegmentCompacted handler
 // (verify-before-mark), so every consumer of the "footer exists" fact probes the same key.
-func footerExistsInMinio(ctx context.Context, client storageclient.ObjectStorage, bucket, rootPath string, logId, segId int64) (bool, error) {
+func compactedFooterExists(ctx context.Context, client storageclient.ObjectStorage, bucket, rootPath string, logId, segId int64) (bool, error) {
 	// Same verbatim key format as the staged writer/reader (getFooterBlockKey): rootPath is
 	// validated clean at startup, so raw concatenation is the canonical key.
 	footerKey := fmt.Sprintf("%s/%d/%d/footer.blk", rootPath, logId, segId)
@@ -359,7 +360,7 @@ func footerExistsInMinio(ctx context.Context, client storageclient.ObjectStorage
 	logIdStr := strconv.FormatInt(logId, 10)
 	_, _, err := client.StatObject(ctx, bucket, footerKey, logNs, logIdStr)
 	if err != nil {
-		if minioHandler.IsObjectNotExists(err) {
+		if client.IsObjectNotExistsError(err) {
 			return false, nil
 		}
 		return false, err

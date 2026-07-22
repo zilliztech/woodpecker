@@ -40,7 +40,7 @@ import (
 //  1. Write N entries through a real StagedFileWriter, finalize, and Compact(ctx) it,
 //     so the data is durably uploaded to real minio.
 //  2. Assert the compacted footer object actually exists in real object storage
-//     (mirrors footerExistsInMinio in server/compacted_file_cleanup.go, which is what
+//     (mirrors compactedFooterExists in server/compacted_file_cleanup.go, which is what
 //     authorizes the cleanup task to drop the local data.log).
 //  3. Simulate what the compacted-file-cleanup task's dropSegmentLocalData does:
 //     os.Remove the local data.log for the segment (that logic itself is unit-tested
@@ -110,7 +110,7 @@ func TestCompactedLocalCleanup_ReadFromRealMinioAfterLocalDataLogRemoved(t *test
 	require.FileExists(t, dataLogPath, "local data.log should still exist right after compact (compaction does not delete it)")
 
 	// Step 2: assert the compacted footer actually exists in REAL object storage. This
-	// is exactly the HEAD check footerExistsInMinio (server/compacted_file_cleanup.go)
+	// is exactly the HEAD check compactedFooterExists (server/compacted_file_cleanup.go)
 	// performs before authorizing local data.log removal.
 	footerKey := fmt.Sprintf("%s/%d/%d/footer.blk", cfg.Minio.RootPath, logId, segmentId)
 	_, _, statErr := storageCli.StatObject(ctx, StagedTestBucket, footerKey, "test-ns", "0")

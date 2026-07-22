@@ -33,6 +33,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_segment"
 	"github.com/zilliztech/woodpecker/server/processor"
@@ -48,6 +49,7 @@ func setupCompactedCleanupStore(t *testing.T) (*logStore, string, *mocks_objects
 	store.cfg.Woodpecker.Storage.Type = "service"
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	store.storageClient = mockStorage
 
 	return store, root, mockStorage
@@ -589,6 +591,42 @@ func TestCompactedFileCleanup_DropEvictsCachedWriterAndReader(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.True(t, os.IsNotExist(statErr))
 	assert.True(t, hasCompactedMark(segDir), "mark kept as tombstone")
+}
+
+// TestCompactedFileCleanup_BackendNotFound_ConvergesWithoutRequeue pins the predicate
+// DISPATCH in compactedFooterExists: a backend-shaped 404 (non-MinIO error whose dispatched
+// IsObjectNotExistsError says "not found" — e.g. Azure's raw 404) must classify as
+// "footer absent" -> (false, nil) -> the queued not-yet-compacted segment is dropped from
+// the queue. With the MinIO-only predicate it read as a transient stat failure, so every
+// such segment was requeued with a warning forever and the queue never converged on Azure.
+func TestCompactedFileCleanup_BackendNotFound_ConvergesWithoutRequeue(t *testing.T) {
+	store, root, _ := setupCompactedCleanupStore(t)
+	ctx := context.Background()
+
+	bucket, rp := "b", "rp"
+	logId, segId := int64(25), int64(17)
+	segDir := makeSegmentDir(t, root, bucket, rp, logId, segId) // unmarked, not yet compacted
+
+	// A dedicated mock: the setup helper's MinIO-passthrough IsObjectNotExistsError stub
+	// would shadow the backend-shaped expectation below (first-registered wins).
+	azureLike404 := fmt.Errorf("HEAD footer.blk: 404 BlobNotFound")
+	azureMock := mocks_objectstorage.NewObjectStorage(t)
+	azureMock.EXPECT().
+		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "25").
+		Return(int64(0), false, azureLike404).Once()
+	azureMock.EXPECT().IsObjectNotExistsError(azureLike404).Return(true).Once()
+	store.storageClient = azureMock
+
+	task := newCompactedFileCleanupTask(store)
+	task.enqueue(segDir, bucket, rp, logId, segId)
+	require.NoError(t, task.runOnce(ctx, false))
+
+	task.mu.Lock()
+	pendingLen := len(task.pending)
+	task.mu.Unlock()
+	assert.Zero(t, pendingLen, "a definitive not-found must NOT be requeued as a transient failure")
+	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
+	assert.NoError(t, statErr, "not-yet-compacted data.log is left alone")
 }
 
 // TestCompactedFileCleanup_AlreadyRemovedFile_DoesNotTouchGauges pins the accounting rule:

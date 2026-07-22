@@ -673,7 +673,7 @@ func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootP
 	if l.storageClient == nil {
 		return werr.ErrInternalError.WithCauseErrMsg("no object storage client; cannot verify compacted footer")
 	}
-	footerOk, footerErr := footerExistsInMinio(ctx, l.storageClient, bucketName, rootPath, logId, segmentId)
+	footerOk, footerErr := compactedFooterExists(ctx, l.storageClient, bucketName, rootPath, logId, segmentId)
 	if footerErr != nil {
 		return footerErr
 	}
