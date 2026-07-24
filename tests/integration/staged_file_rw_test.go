@@ -252,7 +252,7 @@ func TestStagedFileWriter_CompactOperation(t *testing.T) {
 
 	// Now test compact operation
 	t.Run("CompactOperation", func(t *testing.T) {
-		compactedSize, err := writer.Compact(ctx)
+		compactedSize, err := writer.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize, int64(0), "Should have compacted some data")
 
@@ -346,7 +346,7 @@ func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 	})
 
 	// Step 3: Compact the data
-	compactedSize, err := writer.Compact(ctx)
+	compactedSize, err := writer.Compact(ctx, -1)
 	require.NoError(t, err)
 	assert.Greater(t, compactedSize, int64(0))
 
@@ -523,7 +523,7 @@ func TestStagedFileWriter_ErrorHandling(t *testing.T) {
 		require.NoError(t, result.Err)
 
 		// Try to compact before finalize
-		_, err = writer.Compact(ctx)
+		_, err = writer.Compact(ctx, -1)
 		assert.Error(t, err, "Should not be able to compact before finalize")
 	})
 }
@@ -738,7 +738,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 	})
 
 	// Step 3: Compact the data
-	compactedSize, err := writer.Compact(ctx)
+	compactedSize, err := writer.Compact(ctx, -1)
 	require.NoError(t, err)
 	assert.Greater(t, compactedSize, int64(0))
 

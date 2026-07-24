@@ -100,7 +100,7 @@ func TestCompactedLocalCleanup_ReadFromRealMinioAfterLocalDataLogRemoved(t *test
 	_, err = writer.Finalize(ctx, int64(numEntries-1))
 	require.NoError(t, err)
 
-	compactedSize, err := writer.Compact(ctx)
+	compactedSize, err := writer.Compact(ctx, -1)
 	require.NoError(t, err)
 	require.Greater(t, compactedSize, int64(0), "compaction should have uploaded data to minio")
 	require.NoError(t, writer.Close(ctx))

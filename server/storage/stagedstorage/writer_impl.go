@@ -1360,7 +1360,7 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 }
 
 // Compact performs compaction by reading local file, merging blocks and uploading to minio
-func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
+func (w *StagedFileWriter) Compact(ctx context.Context, expectedLastEntryId int64) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Compact")
 	defer sp.End()
 	op := metrics.StartOp("file.compact", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
@@ -1397,6 +1397,26 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 		logger.Ctx(ctx).Warn("segment must be finalized before compaction",
 			zap.String("segmentFilePath", w.segmentFilePath))
 		return -1, fmt.Errorf("segment must be finalized before compaction")
+	}
+
+	// Refuse if this replica's local data is behind the coordinator-confirmed LastEntryId.
+	// Compaction seals the segment from THIS node's local data, so a lagging or empty replica
+	// would seal a segment shorter than the confirmed sequence and silently drop an
+	// already-acknowledged entry. Returning here (before the empty-footer and merge paths below)
+	// lets compactSegmentQuorum move on to a caught-up node. This is the authoritative check:
+	// unlike validateLACAlignment / the empty-block guard below, it compares against the
+	// coordinator's value rather than this node's own (possibly stale) footer LAC.
+	// expectedLastEntryId < 0 disables it (manual/force compaction, genuinely-empty segments).
+	if expectedLastEntryId >= 0 {
+		localLast := w.lastEntryID.Load()
+		if localLast < expectedLastEntryId {
+			logger.Ctx(ctx).Warn("refusing to compact: local data is behind the expected last entry id",
+				zap.String("segmentFilePath", w.segmentFilePath),
+				zap.Int64("localLastEntryId", localLast),
+				zap.Int64("expectedLastEntryId", expectedLastEntryId))
+			return -1, werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
+				fmt.Sprintf("local lastEntryId %d < expected %d", localLast, expectedLastEntryId))
+		}
 	}
 
 	// An EMPTY sealed segment still gets a footer.blk (TotalBlocks=0): "Sealed => footer exists

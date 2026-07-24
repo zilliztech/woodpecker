@@ -647,7 +647,7 @@ func TestLogStore_CompactSegment_Stopped(t *testing.T) {
 	store := createTestLogStore()
 	store.stopped.Store(true)
 
-	_, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	_, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, -1)
 	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
 }
 
@@ -657,14 +657,14 @@ func TestLogStore_CompactSegment_Success(t *testing.T) {
 
 	expectedMeta := &proto.SegmentMetadata{SegNo: 0}
 	mockProcessor := mocks_segment.NewSegmentProcessor(t)
-	mockProcessor.EXPECT().Compact(mock.Anything).Return(expectedMeta, nil).Once()
+	mockProcessor.EXPECT().Compact(mock.Anything, mock.Anything).Return(expectedMeta, nil).Once()
 
 	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
 	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
 		0: mockProcessor,
 	}
 
-	meta, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	meta, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, -1)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedMeta, meta)
 }
@@ -949,14 +949,14 @@ func TestLogStore_CompactSegment_Error(t *testing.T) {
 	store.stopped.Store(false)
 
 	mockProcessor := mocks_segment.NewSegmentProcessor(t)
-	mockProcessor.EXPECT().Compact(mock.Anything).Return(nil, assert.AnError).Once()
+	mockProcessor.EXPECT().Compact(mock.Anything, mock.Anything).Return(nil, assert.AnError).Once()
 
 	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
 	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
 		0: mockProcessor,
 	}
 
-	_, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	_, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, -1)
 	assert.Error(t, err)
 }
 

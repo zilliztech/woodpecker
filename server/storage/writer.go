@@ -52,7 +52,11 @@ type Writer interface {
 	Fence(ctx context.Context) (int64, error)
 
 	// Compact small blocks into larger blocks, return size after compacted
-	Compact(ctx context.Context) (int64, error)
+	// Compact merges small blocks into larger ones and seals the segment in object storage.
+	// expectedLastEntryId is the coordinator-confirmed last entry id the segment must contain;
+	// a writer whose local data is behind it must refuse rather than seal short (staged mode).
+	// expectedLastEntryId < 0 means "no expectation" and disables that check.
+	Compact(ctx context.Context, expectedLastEntryId int64) (int64, error)
 
 	// Snapshot returns a lightweight state summary of this writer.
 	Snapshot() WriterSnapshot

@@ -701,9 +701,77 @@ func TestStagedFileWriter_Compact_NotFinalized(t *testing.T) {
 	defer writer.Close(context.Background())
 
 	// Compact without finalization should fail
-	_, err = writer.Compact(context.Background())
+	_, err = writer.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "segment must be finalized before compaction")
+}
+
+// --- Compact: behind/empty replica guard (expected_last_entry_id) ---
+
+// TestStagedFileWriter_Compact_RefusesEmptyReplicaBehindExpected is the exact production incident:
+// an empty finalized replica (lastEntryID == -1) that never received the segment's data must refuse
+// to compact when the quorum confirmed entries (expectedLastEntryId >= 0), rather than seal an empty
+// segment that leaves object storage short of the confirmed data.
+func TestStagedFileWriter_Compact_RefusesEmptyReplicaBehindExpected(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+	writer.finalized.Store(true) // lastEntryID stays at its -1 default (empty replica)
+
+	_, err = writer.Compact(context.Background(), 1)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrSegmentCompactionDataBehind.Is(err), "expected ErrSegmentCompactionDataBehind, got %v", err)
+}
+
+// TestStagedFileWriter_Compact_RefusesPartialReplicaBehindExpected: a replica holding only [0,3]
+// (lastEntryID == 3) must refuse when the quorum confirmed entry 4.
+func TestStagedFileWriter_Compact_RefusesPartialReplicaBehindExpected(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+	writer.finalized.Store(true)
+	writer.lastEntryID.Store(3)
+
+	_, err = writer.Compact(context.Background(), 4)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrSegmentCompactionDataBehind.Is(err), "expected ErrSegmentCompactionDataBehind, got %v", err)
+}
+
+// TestStagedFileWriter_Compact_MeetsExpectedPassesBehindCheck: when local data reaches the expected
+// LastEntryId the data-behind check passes. Compaction then continues into the downstream
+// merge/empty-footer paths (here it stops on the no-object-storage-client error) — the point is it
+// is NOT refused as data-behind.
+func TestStagedFileWriter_Compact_MeetsExpectedPassesBehindCheck(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+	writer.finalized.Store(true)
+	writer.lastEntryID.Store(5)
+
+	_, err = writer.Compact(context.Background(), 5) // local(5) >= expected(5): behind-check passes
+	assert.Error(t, err)
+	assert.False(t, werr.ErrSegmentCompactionDataBehind.Is(err), "must not be refused as data-behind, got %v", err)
+}
+
+// TestStagedFileWriter_Compact_NoExpectationSkipsBehindCheck: expectedLastEntryId < 0 disables the
+// behind check even for an empty replica (manual/force compaction, genuinely-empty segments).
+func TestStagedFileWriter_Compact_NoExpectationSkipsBehindCheck(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+	writer.finalized.Store(true) // empty replica
+
+	_, err = writer.Compact(context.Background(), -1)
+	assert.Error(t, err)
+	assert.False(t, werr.ErrSegmentCompactionDataBehind.Is(err), "expected the check to be skipped, got %v", err)
 }
 
 // --- getFooterBlockKey / getCompactedBlockKey ---
@@ -1212,7 +1280,7 @@ func TestStagedFileWriter_Compact_FullFlow(t *testing.T) {
 		return true // accept any key
 	}), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	totalSize, err := writer.Compact(context.Background())
+	totalSize, err := writer.Compact(context.Background(), -1)
 	assert.NoError(t, err)
 	assert.Greater(t, totalSize, int64(0))
 	writer.Close(context.Background())
@@ -1271,7 +1339,7 @@ func TestStagedFileWriter_Compact_MergedBlockFormat(t *testing.T) {
 		}).
 		Return(nil)
 
-	totalSize, err := writer.Compact(context.Background())
+	totalSize, err := writer.Compact(context.Background(), -1)
 	assert.NoError(t, err)
 	assert.Greater(t, totalSize, int64(0))
 
@@ -1368,7 +1436,7 @@ func TestStagedFileWriter_Compact_FlagsPreserved(t *testing.T) {
 		}).
 		Return(nil)
 
-	totalSize, err := writer.Compact(context.Background())
+	totalSize, err := writer.Compact(context.Background(), -1)
 	assert.NoError(t, err)
 	assert.Greater(t, totalSize, int64(0))
 
@@ -1410,7 +1478,7 @@ func TestStagedFileWriter_Compact_NoBlocks(t *testing.T) {
 	// An empty segment must still establish the "Sealed => footer exists" invariant, which is
 	// impossible without an object storage client — Compact must surface that, not silently
 	// succeed into Sealed-without-footer (see TestCompact_EmptyBlocks for the with-client path).
-	totalSize, err := writer.Compact(context.Background())
+	totalSize, err := writer.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Equal(t, int64(-1), totalSize)
 }
@@ -1464,7 +1532,7 @@ func TestStagedFileWriter_Compact_Idempotent(t *testing.T) {
 		Return(nil)
 
 	// First compact
-	size1, err := writer.Compact(context.Background())
+	size1, err := writer.Compact(context.Background(), -1)
 	assert.NoError(t, err)
 	assert.Greater(t, size1, int64(0))
 	require.NotEmpty(t, capturedFooterData, "footer should have been uploaded")
@@ -1483,7 +1551,7 @@ func TestStagedFileWriter_Compact_Idempotent(t *testing.T) {
 		Return(mockReader, nil).Once()
 
 	// Second compact — should return immediately with same size, no new PutObject calls
-	size2, err := writer.Compact(context.Background())
+	size2, err := writer.Compact(context.Background(), -1)
 	assert.NoError(t, err)
 	assert.Equal(t, size1, size2, "second Compact should return same size")
 	assert.Equal(t, firstCompactCalls, putCallCount, "second Compact should not trigger any PutObject calls")
@@ -1527,7 +1595,7 @@ func TestStagedFileWriter_Compact_CancelledContext(t *testing.T) {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = writer.Compact(cancelCtx)
+	_, err = writer.Compact(cancelCtx, -1)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
@@ -1728,7 +1796,7 @@ func TestCompact_UploadMergedBlockFails(t *testing.T) {
 	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(fmt.Errorf("upload failed"))
 
-	_, err = writer.Compact(context.Background())
+	_, err = writer.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read local file and upload to minio")
 	writer.Close(context.Background())
@@ -2167,7 +2235,7 @@ func TestCompact_EmptyBlocks(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
-	result, err := writer.Compact(context.Background())
+	result, err := writer.Compact(context.Background(), -1)
 	assert.NoError(t, err)
 	assert.Greater(t, result, int64(0), "an empty segment must upload a footer and report its size")
 
@@ -2206,7 +2274,7 @@ func TestCompact_ZeroBlocksNonEmptyLAC_Refuses(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
-	result, err := writer.Compact(context.Background())
+	result, err := writer.Compact(context.Background(), -1)
 	assert.Error(t, err, "a data-less replica of a non-empty segment must refuse to compact")
 	assert.Contains(t, err.Error(), "refusing empty compaction")
 	assert.Equal(t, int64(-1), result)
@@ -2256,7 +2324,7 @@ func TestCompactedWriter_TombstoneOpen_NoResurrection(t *testing.T) {
 	last, err := writer.Finalize(context.Background(), 4)
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), last)
-	size, err := writer.Compact(context.Background())
+	size, err := writer.Compact(context.Background(), -1)
 	require.NoError(t, err)
 	assert.Positive(t, size, "compact reports already-compacted via the remote footer")
 
@@ -2343,7 +2411,7 @@ func TestCompact_InvalidLAC(t *testing.T) {
 
 	// Override LAC to -1 to trigger validation failure
 	writer.recoveredFooter.LAC = -1
-	_, err = writer.Compact(context.Background())
+	_, err = writer.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no valid LAC")
 }
@@ -2388,7 +2456,7 @@ func TestCompact_UploadFooterFails(t *testing.T) {
 			return nil
 		})
 
-	_, err = writer.Compact(context.Background())
+	_, err = writer.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "footer upload failed")
 }

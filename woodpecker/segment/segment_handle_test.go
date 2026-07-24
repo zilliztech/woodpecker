@@ -4201,7 +4201,7 @@ func TestCompact_Success(t *testing.T) {
 			segMeta.Metadata.State == proto.SegmentState_Sealed &&
 			segMeta.Metadata.Size == 1024
 	}), proto.SegmentState_Completed).Return(nil)
-	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(compactedSegMetaInfo, nil)
 	// No NotifySegmentCompacted expectation: mark distribution is auditor-driven
 	// (SegmentCompactedNotifyManager), not inline in Compact; the strict mock fails
 	// this test if Compact ever notifies.
@@ -4278,7 +4278,7 @@ func TestCompact_SealedTimeFromCompactResponse(t *testing.T) {
 		// Key assertion: SealedTime must equal the compact response's SealedTime, not 0
 		return segMeta.Metadata.SealedTime == expectedSealedTime
 	}), proto.SegmentState_Completed).Return(nil)
-	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(compactedSegMetaInfo, nil)
 	// No NotifySegmentCompacted expectation: mark distribution is auditor-driven
 	// (SegmentCompactedNotifyManager), not inline in Compact; the strict mock fails
 	// this test if Compact ever notifies.
@@ -4327,7 +4327,7 @@ func TestCompact_CompactionFails(t *testing.T) {
 	}
 
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(completedMeta, nil).Once()
-	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil, errors.New("compaction failed"))
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil, errors.New("compaction failed"))
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -4394,8 +4394,8 @@ func TestCompact_AlreadyCompacting(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Completed).Return(nil).Maybe()
 	// Use a channel to delay the SegmentCompact response
 	blockCh := make(chan struct{})
-	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).RunAndReturn(
-		func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).RunAndReturn(
+		func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 			<-blockCh
 			return compactedResult, nil
 		},
@@ -4494,7 +4494,7 @@ func TestCompact_DoesNotNotifyInline(t *testing.T) {
 
 	// compactSegmentQuorum tries nodes in order and stops at the first success. No other
 	// node is dialed and no NotifySegmentCompacted expectation exists anywhere.
-	mockClient0.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
+	mockClient0.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(compactedSegMetaInfo, nil)
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -5411,7 +5411,7 @@ func TestCompactSegmentQuorum_AllNodesFail(t *testing.T) {
 
 	// First node: get client succeeds, compact fails
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
-	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil, errors.New("compact failed"))
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil, errors.New("compact failed"))
 	// Second node: get client fails
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(nil, errors.New("conn error"))
 
@@ -5423,7 +5423,7 @@ func TestCompactSegmentQuorum_AllNodesFail(t *testing.T) {
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
-	_, err := impl.compactSegmentQuorum(context.Background(), quorum)
+	_, err := impl.compactSegmentQuorum(context.Background(), quorum, int64(-1))
 	assert.Error(t, err)
 }
 
@@ -5442,11 +5442,11 @@ func TestCompactSegmentQuorum_SecondNodeSucceeds(t *testing.T) {
 
 	// First node fails
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
-	mockClient1.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil, errors.New("compact failed"))
+	mockClient1.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil, errors.New("compact failed"))
 	// Second node succeeds
 	expectedMeta := &proto.SegmentMetadata{SegNo: 1, Size: 100, LastEntryId: 10}
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
-	mockClient2.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(expectedMeta, nil)
+	mockClient2.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(expectedMeta, nil)
 
 	segmentMeta := &meta.SegmentMeta{
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
@@ -5456,9 +5456,51 @@ func TestCompactSegmentQuorum_SecondNodeSucceeds(t *testing.T) {
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
-	result, err := impl.compactSegmentQuorum(context.Background(), quorum)
+	result, err := impl.compactSegmentQuorum(context.Background(), quorum, int64(-1))
 	assert.NoError(t, err)
 	assert.Equal(t, expectedMeta, result)
+}
+
+// TestCompactSegmentQuorum_SkipsLaggingNode is the end-to-end guard for the silent data-loss
+// bug: the first node is behind and refuses (ErrSegmentCompactionDataBehind), so compaction
+// must skip it and seal from the caught-up second node — never accepting the lagging node's
+// short result. It also pins that the confirmed LastEntryId is forwarded to every node.
+func TestCompactSegmentQuorum_SkipsLaggingNode(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	const expectedLAC = int64(1)
+	// node1 is behind and refuses. The 6th matcher pins that it receives the confirmed LAC.
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
+	mockClient1.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), expectedLAC).
+		Return(nil, werr.ErrSegmentCompactionDataBehind)
+	// node2 is caught up and seals the full segment (LastEntryId == confirmed LAC).
+	fullMeta := &proto.SegmentMetadata{SegNo: 1, Size: 100, LastEntryId: expectedLAC}
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+	mockClient2.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), expectedLAC).
+		Return(fullMeta, nil)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
+	result, err := impl.compactSegmentQuorum(context.Background(), quorum, expectedLAC)
+	assert.NoError(t, err)
+	assert.Equal(t, fullMeta, result)
+	assert.Equal(t, expectedLAC, result.LastEntryId)
 }
 
 // === doCloseWritingAndUpdateMetaIfNecessaryUnsafe tests ===
