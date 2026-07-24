@@ -238,9 +238,9 @@ func (_c *SegmentProcessor_Close_Call) RunAndReturn(run func(context.Context) er
 	return _c
 }
 
-// Compact provides a mock function with given fields: ctx
-func (_m *SegmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
-	ret := _m.Called(ctx)
+// Compact provides a mock function with given fields: ctx, expectedLastEntryId
+func (_m *SegmentProcessor) Compact(ctx context.Context, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
+	ret := _m.Called(ctx, expectedLastEntryId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Compact")
@@ -248,19 +248,19 @@ func (_m *SegmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata
 
 	var r0 *proto.SegmentMetadata
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (*proto.SegmentMetadata, error)); ok {
-		return rf(ctx)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) (*proto.SegmentMetadata, error)); ok {
+		return rf(ctx, expectedLastEntryId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context) *proto.SegmentMetadata); ok {
-		r0 = rf(ctx)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) *proto.SegmentMetadata); ok {
+		r0 = rf(ctx, expectedLastEntryId)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*proto.SegmentMetadata)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(ctx)
+	if rf, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = rf(ctx, expectedLastEntryId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -275,13 +275,14 @@ type SegmentProcessor_Compact_Call struct {
 
 // Compact is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *SegmentProcessor_Expecter) Compact(ctx interface{}) *SegmentProcessor_Compact_Call {
-	return &SegmentProcessor_Compact_Call{Call: _e.mock.On("Compact", ctx)}
+//   - expectedLastEntryId int64
+func (_e *SegmentProcessor_Expecter) Compact(ctx interface{}, expectedLastEntryId interface{}) *SegmentProcessor_Compact_Call {
+	return &SegmentProcessor_Compact_Call{Call: _e.mock.On("Compact", ctx, expectedLastEntryId)}
 }
 
-func (_c *SegmentProcessor_Compact_Call) Run(run func(ctx context.Context)) *SegmentProcessor_Compact_Call {
+func (_c *SegmentProcessor_Compact_Call) Run(run func(ctx context.Context, expectedLastEntryId int64)) *SegmentProcessor_Compact_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -291,7 +292,7 @@ func (_c *SegmentProcessor_Compact_Call) Return(_a0 *proto.SegmentMetadata, _a1 
 	return _c
 }
 
-func (_c *SegmentProcessor_Compact_Call) RunAndReturn(run func(context.Context) (*proto.SegmentMetadata, error)) *SegmentProcessor_Compact_Call {
+func (_c *SegmentProcessor_Compact_Call) RunAndReturn(run func(context.Context, int64) (*proto.SegmentMetadata, error)) *SegmentProcessor_Compact_Call {
 	_c.Call.Return(run)
 	return _c
 }

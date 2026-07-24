@@ -57,7 +57,7 @@ type SegmentProcessor interface {
 	ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	Fence(ctx context.Context) (int64, error)
 	Complete(ctx context.Context, lac int64) (int64, error)
-	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
+	Compact(ctx context.Context, expectedLastEntryId int64) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
 	GetBlocksCount(ctx context.Context) (int64, error)
 	GetLastAccessTime() int64
@@ -624,7 +624,7 @@ func (s *segmentProcessor) getLogBaseDir() string {
 	return s.rootPath
 }
 
-func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
+func (s *segmentProcessor) Compact(ctx context.Context, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Compact")
 	defer sp.End()
 	s.updateAccessTime()
@@ -662,7 +662,11 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId))
 
-	segmentSizeAfterCompact, mergedErr := writer.Compact(ctx)
+	// The behind/empty-replica completeness guard lives in the writer: the staged writer refuses
+	// (ErrSegmentCompactionDataBehind) when its local data is behind expectedLastEntryId, before
+	// merging or uploading; minio mode is a single authoritative copy and ignores it. This keeps
+	// the compaction-completeness decision next to the other footer/LAC validation.
+	segmentSizeAfterCompact, mergedErr := writer.Compact(ctx, expectedLastEntryId)
 	if mergedErr != nil {
 		logger.Ctx(ctx).Warn("Segment merge operation failed",
 			zap.Int64("logId", s.logId),

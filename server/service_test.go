@@ -482,7 +482,7 @@ func (f *fakeLogStore) CompleteSegment(ctx context.Context, bucketName, rootPath
 	return f.completeFn(ctx, bucketName, rootPath, logId, segmentId, lac)
 }
 
-func (f *fakeLogStore) CompactSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+func (f *fakeLogStore) CompactSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, _ int64) (*proto.SegmentMetadata, error) {
 	return f.compactFn(ctx, bucketName, rootPath, logId, segmentId)
 }
 

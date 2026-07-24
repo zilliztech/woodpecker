@@ -72,7 +72,9 @@ func (l *logStore) ForceCompact(ctx context.Context, logID, segmentID int64) err
 	if sp == nil {
 		return fmt.Errorf("segment %d:%d not found", logID, segmentID)
 	}
-	_, err := sp.Compact(ctx)
+	// Manual/admin force-compaction has no quorum-confirmed target, so it opts out of the
+	// data-behind check (-1). Quorum-driven compaction passes the real expected LAC.
+	_, err := sp.Compact(ctx, -1)
 	return err
 }
 

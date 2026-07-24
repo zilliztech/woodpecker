@@ -597,7 +597,7 @@ func (s *Server) CompleteSegment(ctx context.Context, request *proto.CompleteSeg
 }
 
 func (s *Server) CompactSegment(ctx context.Context, request *proto.CompactSegmentRequest) (*proto.CompactSegmentResponse, error) {
-	meta, err := s.logStore.CompactSegment(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId)
+	meta, err := s.logStore.CompactSegment(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, request.ExpectedLastEntryId)
 	if err != nil {
 		return &proto.CompactSegmentResponse{Status: werr.Status(err)}, nil
 	}

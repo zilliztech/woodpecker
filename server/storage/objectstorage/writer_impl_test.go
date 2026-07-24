@@ -1188,7 +1188,7 @@ func TestMinioFileWriter_Compact_AlreadyCompacted(t *testing.T) {
 	mockClient.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", mock.Anything, false, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 
-	size, err := w.Compact(ctx)
+	size, err := w.Compact(ctx, -1)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(500), size)
 }
@@ -1218,7 +1218,7 @@ func TestMinioFileWriter_Compact_CancelledContext(t *testing.T) {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := w.Compact(cancelCtx)
+	_, err := w.Compact(cancelCtx, -1)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
@@ -1228,7 +1228,7 @@ func TestMinioFileWriter_Compact_NotFinalized(t *testing.T) {
 	w := newTestMinioFileWriter()
 	w.footerRecord = nil // not finalized
 
-	_, err := w.Compact(ctx)
+	_, err := w.Compact(ctx, -1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "finalized before compaction")
 }
@@ -1422,8 +1422,28 @@ func TestMinioFileWriter_Compact_NoBlocksToCompact(t *testing.T) {
 	}
 	w.blockIndexes = []*codec.IndexRecord{} // No blocks
 
-	size, err := w.Compact(ctx)
+	size, err := w.Compact(ctx, -1)
 	assert.Nil(t, err)
+	assert.Equal(t, int64(-1), size)
+}
+
+// TestMinioFileWriter_Compact_IgnoresExpectedLastEntryId confirms minio mode disregards
+// expected_last_entry_id: its segment is a single authoritative copy in object storage, so there
+// is no "behind replica" to guard against. Passing a value far above the segment's data must NOT
+// refuse — same result as -1.
+func TestMinioFileWriter_Compact_IgnoresExpectedLastEntryId(t *testing.T) {
+	ctx := context.Background()
+	w := newTestMinioFileWriter()
+	w.footerRecord = &codec.FooterRecord{
+		TotalBlocks: 0,
+		TotalSize:   0,
+		Version:     codec.FormatVersion,
+		Flags:       0,
+	}
+	w.blockIndexes = []*codec.IndexRecord{}
+
+	size, err := w.Compact(ctx, 1_000_000)
+	assert.NoError(t, err)
 	assert.Equal(t, int64(-1), size)
 }
 
@@ -1752,7 +1772,7 @@ func TestMinioFileWriter_Compact_FullFlow(t *testing.T) {
 	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/1.blk", mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	size, err := w.Compact(ctx)
+	size, err := w.Compact(ctx, -1)
 	assert.NoError(t, err)
 	assert.Greater(t, size, int64(0))
 	assert.True(t, codec.IsCompacted(w.footerRecord.Flags))
@@ -1812,7 +1832,7 @@ func TestMinioFileWriter_Compact_PreservesLAC(t *testing.T) {
 	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	size, err := w.Compact(ctx)
+	size, err := w.Compact(ctx, -1)
 	assert.NoError(t, err)
 	assert.Greater(t, size, int64(0))
 
@@ -1907,7 +1927,7 @@ func TestMinioFileWriter_Compact_MetricsAccuracy(t *testing.T) {
 	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/1.blk", mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	_, err := w.Compact(ctx)
+	_, err := w.Compact(ctx, -1)
 	assert.NoError(t, err)
 
 	bytesAfter := getGauge(metrics.WpObjectStorageStoredBytes)
@@ -2787,7 +2807,7 @@ func TestMinioFileWriter_Compact_AlreadyCompacted_WithCleanup(t *testing.T) {
 	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	size, err := w.Compact(ctx)
+	size, err := w.Compact(ctx, -1)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1000), size)
 }
@@ -2815,7 +2835,7 @@ func TestMinioFileWriter_Compact_TargetBlockSizeZero(t *testing.T) {
 	}
 	w.blockIndexes = []*codec.IndexRecord{} // No blocks → streamMergeAndUploadBlocks returns empty
 
-	size, err := w.Compact(ctx)
+	size, err := w.Compact(ctx, -1)
 	// No blocks to compact → returns -1, nil
 	assert.Nil(t, err)
 	assert.Equal(t, int64(-1), size)
@@ -2861,7 +2881,7 @@ func TestMinioFileWriter_Compact_PutFooterFails(t *testing.T) {
 	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(errors.New("footer upload failed")).Once()
 
-	size, err := w.Compact(ctx)
+	size, err := w.Compact(ctx, -1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to upload compacted footer")
 	assert.Equal(t, int64(-1), size)

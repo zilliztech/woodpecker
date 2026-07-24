@@ -329,9 +329,9 @@ func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, bucketName str
 	return resp.GetBlockCount(), nil
 }
 
-func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (metadata *proto.SegmentMetadata, err error) {
+func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (metadata *proto.SegmentMetadata, err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
-	resp, err := l.innerClient.CompactSegment(ctx, &proto.CompactSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
+	resp, err := l.innerClient.CompactSegment(ctx, &proto.CompactSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, ExpectedLastEntryId: expectedLastEntryId})
 	if err != nil {
 		return nil, err
 	}

@@ -516,7 +516,7 @@ func TestRemoteClient_SegmentCompact_Success(t *testing.T) {
 	mockClient.On("CompactSegment", ctx, mock.AnythingOfType("*proto.CompactSegmentRequest")).
 		Return(&proto.CompactSegmentResponse{Metadata: expectedMeta}, nil)
 
-	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0)
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, -1)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedMeta, meta)
 }
@@ -528,7 +528,7 @@ func TestRemoteClient_SegmentCompact_GrpcError(t *testing.T) {
 	mockClient.On("CompactSegment", ctx, mock.Anything).
 		Return(nil, fmt.Errorf("compact error"))
 
-	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0)
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, -1)
 	assert.Error(t, err)
 	assert.Nil(t, meta)
 }
@@ -542,7 +542,7 @@ func TestRemoteClient_SegmentCompact_StatusError(t *testing.T) {
 			Status: werr.Status(werr.ErrSegmentNotFound),
 		}, nil)
 
-	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0)
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, -1)
 	assert.Error(t, err)
 	assert.Nil(t, meta)
 }
