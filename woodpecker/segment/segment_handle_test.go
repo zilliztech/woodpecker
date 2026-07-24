@@ -5427,6 +5427,43 @@ func TestCompactSegmentQuorum_AllNodesFail(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestCompactSegmentQuorum_AllNodesBehindFails: when every quorum node refuses as data-behind, the
+// segment is NOT sealed — compaction fails (and is retried later), never accepting a short seal.
+func TestCompactSegmentQuorum_AllNodesBehindFails(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	const expectedLAC = int64(5)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
+	mockClient1.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), expectedLAC).
+		Return(nil, werr.ErrSegmentCompactionDataBehind)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+	mockClient2.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), expectedLAC).
+		Return(nil, werr.ErrSegmentCompactionDataBehind)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
+	result, err := impl.compactSegmentQuorum(context.Background(), quorum, expectedLAC)
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrSegmentCompactionDataBehind.Is(err), "surfaced error should be data-behind, got %v", err)
+}
+
 func TestCompactSegmentQuorum_SecondNodeSucceeds(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)

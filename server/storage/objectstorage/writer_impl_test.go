@@ -1427,6 +1427,26 @@ func TestMinioFileWriter_Compact_NoBlocksToCompact(t *testing.T) {
 	assert.Equal(t, int64(-1), size)
 }
 
+// TestMinioFileWriter_Compact_IgnoresExpectedLastEntryId confirms minio mode disregards
+// expected_last_entry_id: its segment is a single authoritative copy in object storage, so there
+// is no "behind replica" to guard against. Passing a value far above the segment's data must NOT
+// refuse — same result as -1.
+func TestMinioFileWriter_Compact_IgnoresExpectedLastEntryId(t *testing.T) {
+	ctx := context.Background()
+	w := newTestMinioFileWriter()
+	w.footerRecord = &codec.FooterRecord{
+		TotalBlocks: 0,
+		TotalSize:   0,
+		Version:     codec.FormatVersion,
+		Flags:       0,
+	}
+	w.blockIndexes = []*codec.IndexRecord{}
+
+	size, err := w.Compact(ctx, 1_000_000)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(-1), size)
+}
+
 // writerMockFileReader implements minioHandler.FileReader for writer tests
 type writerMockFileReader struct {
 	data     []byte

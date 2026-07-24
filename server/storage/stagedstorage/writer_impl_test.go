@@ -1286,6 +1286,83 @@ func TestStagedFileWriter_Compact_FullFlow(t *testing.T) {
 	writer.Close(context.Background())
 }
 
+// TestStagedFileWriter_Compact_RealWrites_RefusesWhenBehindExpected drives a REAL staged writer end
+// to end: it writes and finalizes entries [0,3], then asks to compact expecting the quorum-confirmed
+// entry 5. The writer must refuse (ErrSegmentCompactionDataBehind) and upload NOTHING — the strict
+// object-storage mock has no PutObject expectation, so any compacted-object write fails the test.
+// (Without the behind-guard this replica would seal [0,3]: validateLACAlignment only checks its own
+// footer LAC=3, not the quorum's 5 — exactly the production data-loss bug.)
+func TestStagedFileWriter_Compact_RealWrites_RefusesWhenBehindExpected(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	for i := int64(0); i <= 3; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte("real data"), nil)
+		require.NoError(t, err)
+	}
+	require.NoError(t, writer.Sync(context.Background()))
+	time.Sleep(200 * time.Millisecond)
+	_, err = writer.Finalize(context.Background(), 3)
+	require.NoError(t, err)
+
+	// Compact's idempotency guard reads the (absent) remote footer before the behind-check runs.
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Maybe()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Maybe()
+	// No PutObject expectation on purpose: a refused compaction must not upload anything.
+
+	_, err = writer.Compact(context.Background(), 5) // quorum confirmed entry 5; this replica only has [0,3]
+	assert.Error(t, err)
+	assert.True(t, werr.ErrSegmentCompactionDataBehind.Is(err), "expected ErrSegmentCompactionDataBehind, got %v", err)
+}
+
+// TestStagedFileWriter_Compact_RealWrites_ProceedsWhenCaughtUp drives a REAL staged writer through
+// the full merge+upload path: it writes and finalizes [0,9], then compacts with an expected value it
+// satisfies (== lastEntryId, and < lastEntryId). Compaction must proceed (not refuse) and upload the
+// compacted segment.
+func TestStagedFileWriter_Compact_RealWrites_ProceedsWhenCaughtUp(t *testing.T) {
+	for _, expected := range []int64{9, 5} {
+		t.Run(fmt.Sprintf("expected_%d", expected), func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := newTestConfig(t)
+			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 4
+			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 4
+			mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+			writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+			require.NoError(t, err)
+			defer writer.Close(context.Background())
+
+			for i := int64(0); i < 10; i++ {
+				_, err = writer.WriteDataAsync(context.Background(), i, []byte("real data"), nil)
+				require.NoError(t, err)
+			}
+			require.NoError(t, writer.Sync(context.Background()))
+			time.Sleep(200 * time.Millisecond)
+			_, err = writer.Finalize(context.Background(), 9)
+			require.NoError(t, err)
+
+			notFoundErr := fmt.Errorf("object not found")
+			mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+				Return(int64(0), false, notFoundErr).Once()
+			mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+			mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.MatchedBy(func(key string) bool {
+				return true
+			}), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+			totalSize, err := writer.Compact(context.Background(), expected)
+			assert.NoError(t, err)
+			assert.Greater(t, totalSize, int64(0))
+		})
+	}
+}
+
 // TestStagedFileWriter_Compact_MergedBlockFormat verifies that compacted merged blocks
 // have the correct format: [HeaderRecord] + [single BlockHeaderRecord] + [DataRecords].
 // Regression test: previously raw block data (including multiple BlockHeaderRecords) was
