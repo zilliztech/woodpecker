@@ -39,6 +39,21 @@ import (
 )
 
 // TestDetectAndStoreConditionWriteCapability_Disabled tests that detection is skipped when explicitly disabled
+// TestNewEmbedClient_InvalidMinioRootPathRejected pins the client-side consumption-point
+// validation: the client ships cfg.Minio.RootPath verbatim over RPC and builds direct-read
+// object keys from it, so a post-load mutation to a non-canonical value must fail client
+// construction instead of silently splitting the key space.
+func TestNewEmbedClient_InvalidMinioRootPathRejected(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	cfg.Woodpecker.Storage.Type = "service" // the mode that REQUIRES a canonical rootPath
+	cfg.Minio.RootPath = "wp/"              // mutated post-load: trailing slash
+
+	_, err = NewEmbedClient(context.Background(), cfg, nil, nil, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid minio rootPath")
+}
+
 func TestDetectAndStoreConditionWriteCapability_Disabled(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Configuration{

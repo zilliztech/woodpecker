@@ -89,14 +89,15 @@ var (
 	// ---------------------------------------------
 
 	// logstore errors (2000-2099)
-	ErrLogStoreNotStarted     = newWoodpeckerError("logstore not started", 2000, false)
-	ErrLogStoreAlreadyStarted = newWoodpeckerError("logstore already started", 2001, false)
-	ErrLogStoreShutdown       = newWoodpeckerError("logstore is shutting down", 2002, false)
-	ErrLogStoreRegisterFailed = newWoodpeckerError("failed to register logstore", 2003, true)
-	ErrLogStoreInvalidAddress = newWoodpeckerError("invalid logstore address", 2004, false)
-	ErrLogBeingDeleted        = newWoodpeckerError("log is being deleted", 2005, false)
-	ErrMarkDeleteFailed       = newWoodpeckerError("failed to durably mark log/instance deleted", 2006, true)
-	ErrLogStoreDiskPressure   = newWoodpeckerError("logstore local disk above hard watermark, write backpressure active", 2007, true)
+	ErrLogStoreNotStarted      = newWoodpeckerError("logstore not started", 2000, false)
+	ErrLogStoreAlreadyStarted  = newWoodpeckerError("logstore already started", 2001, false)
+	ErrLogStoreShutdown        = newWoodpeckerError("logstore is shutting down", 2002, false)
+	ErrLogStoreRegisterFailed  = newWoodpeckerError("failed to register logstore", 2003, true)
+	ErrLogStoreInvalidAddress  = newWoodpeckerError("invalid logstore address", 2004, false)
+	ErrLogBeingDeleted         = newWoodpeckerError("log is being deleted", 2005, false)
+	ErrMarkDeleteFailed        = newWoodpeckerError("failed to durably mark log/instance deleted", 2006, true)
+	ErrLogStoreDiskPressure    = newWoodpeckerError("logstore local disk above hard watermark, write backpressure active", 2007, true)
+	ErrLogStoreInvalidRootPath = newWoodpeckerError("invalid rootPath", 2008, false)
 
 	// segment_processor errors (2100-2199)
 	ErrSegmentProcessorNotFound          = newWoodpeckerError("segment processor not found", 2100, false)
@@ -196,14 +197,15 @@ var (
 	ErrPersistenceError        = newWoodpeckerError("persistence error", 8008, true)
 
 	// Data state errors (8100-8199)
-	ErrInvalidMessage      = newWoodpeckerError("invalid message", 8100, false)
-	ErrEmptyPayload        = newWoodpeckerError("empty payload", 8101, false)
-	ErrEntryNotFound       = newWoodpeckerError("entry not found", 8102, true)
-	ErrStorageNotWritable  = newWoodpeckerError("storage not writable", 8103, false)
-	ErrSegmentFenced       = newWoodpeckerError("segment fenced", 8104, false)
-	ErrSegmentNotFound     = newWoodpeckerError("segment not found", 8105, true)
-	ErrObjectAlreadyExists = newWoodpeckerError("object already exists", 8106, false)
-	ErrInvalidLACAlignment = newWoodpeckerError("invalid lac alignment", 8107, false)
+	ErrInvalidMessage           = newWoodpeckerError("invalid message", 8100, false)
+	ErrEmptyPayload             = newWoodpeckerError("empty payload", 8101, false)
+	ErrEntryNotFound            = newWoodpeckerError("entry not found", 8102, true)
+	ErrStorageNotWritable       = newWoodpeckerError("storage not writable", 8103, false)
+	ErrSegmentFenced            = newWoodpeckerError("segment fenced", 8104, false)
+	ErrSegmentNotFound          = newWoodpeckerError("segment not found", 8105, true)
+	ErrObjectAlreadyExists      = newWoodpeckerError("object already exists", 8106, false)
+	ErrInvalidLACAlignment      = newWoodpeckerError("invalid lac alignment", 8107, false)
+	ErrMetadataRevisionConflict = newWoodpeckerError("metadata revision conflict", 8108, true)
 
 	// ---------------------------------------------
 	// External Errors

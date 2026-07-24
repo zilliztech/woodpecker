@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func setupStagedAdvTest(t *testing.T, rootDir string) (storageclient.ObjectStora
 
 	// Set log level to debug for detailed logging
 	cfg.Log.Level = "debug"
-	cfg.Minio.RootPath = rootDir
+	cfg.Minio.RootPath = strings.TrimPrefix(rootDir, "/") // relative, as config.Validate requires
 
 	// Initialize logger with debug level
 	logger.InitLogger(cfg)

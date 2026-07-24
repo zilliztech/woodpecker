@@ -84,6 +84,12 @@ type woodpeckerClient struct {
 }
 
 func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clientv3.Client, managed bool) (Client, error) {
+	// Re-validate the object-storage section at the consumption point (the config may have
+	// been mutated after load); the client builds object-storage keys and RPC rootPath values
+	// from it verbatim. Scoped to the minio section so hand-rolled partial configs still work.
+	if err := cfg.ValidateMinioConfig(); err != nil {
+		return nil, err
+	}
 	logger.InitLogger(cfg)
 	initTraceErr := tracer.InitTracer(cfg, "woodpecker", 1001)
 	if initTraceErr != nil {

@@ -546,6 +546,56 @@ func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) RunAndReturn(run func(context
 	return _c
 }
 
+// NotifySegmentCompacted provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId
+func (_m *LogStoreClient) NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for NotifySegmentCompacted")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) error); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStoreClient_NotifySegmentCompacted_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'NotifySegmentCompacted'
+type LogStoreClient_NotifySegmentCompacted_Call struct {
+	*mock.Call
+}
+
+// NotifySegmentCompacted is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
+//   - logId int64
+//   - segmentId int64
+func (_e *LogStoreClient_Expecter) NotifySegmentCompacted(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_NotifySegmentCompacted_Call {
+	return &LogStoreClient_NotifySegmentCompacted_Call{Call: _e.mock.On("NotifySegmentCompacted", ctx, bucketName, rootPath, logId, segmentId)}
+}
+
+func (_c *LogStoreClient_NotifySegmentCompacted_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64)) *LogStoreClient_NotifySegmentCompacted_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_NotifySegmentCompacted_Call) Return(_a0 error) *LogStoreClient_NotifySegmentCompacted_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_NotifySegmentCompacted_Call) RunAndReturn(run func(context.Context, string, string, int64, int64) error) *LogStoreClient_NotifySegmentCompacted_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SegmentClean provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId, flag
 func (_m *LogStoreClient) SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {
 	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId, flag)

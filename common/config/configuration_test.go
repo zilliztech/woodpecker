@@ -86,8 +86,10 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 60, config.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, config.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, config.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
-	assert.Equal(t, 5, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())     // near-real-time reclaim
-	assert.Equal(t, 2, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds()) // near-real-time reclaim
+	assert.Equal(t, 5, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())            // near-real-time reclaim
+	assert.Equal(t, 2, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds())        // near-real-time reclaim
+	assert.Equal(t, 5, config.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Seconds()) // compacted local data.log reclaim scan
+	assert.Equal(t, 1800, config.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", config.Log.Level)
@@ -187,8 +189,10 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 60, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
-	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())     // near-real-time reclaim
-	assert.Equal(t, 2, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds()) // near-real-time reclaim
+	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())            // near-real-time reclaim
+	assert.Equal(t, 2, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds())        // near-real-time reclaim
+	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Seconds()) // compacted local data.log reclaim scan
+	assert.Equal(t, 1800, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", defaultConfig.Log.Level)
@@ -476,8 +480,10 @@ func TestQuorumConfigValidation(t *testing.T) {
 							MaxFetchThreads: 32,
 						},
 						MaintenanceStrategy: MaintenanceStrategyConfig{
-							DeleteGracePeriod:     NewDurationSecondsFromInt(259200),
-							DeleteReclaimInterval: NewDurationSecondsFromInt(600),
+							DeleteGracePeriod:            NewDurationSecondsFromInt(259200),
+							DeleteReclaimInterval:        NewDurationSecondsFromInt(600),
+							CompactedFileCleanupInterval: NewDurationSecondsFromInt(5),
+							ReconcileMinDataLogAge:       NewDurationSecondsFromInt(1800),
 						},
 					},
 					Storage: StorageConfig{
@@ -821,6 +827,54 @@ func TestValidateStorageConfig_Errors(t *testing.T) {
 	})
 }
 
+func TestValidateMinioRootPath(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	// rootPath is consumed verbatim by every key/dir/label-building site, so canonical values
+	// must be accepted in every storage mode. (ValidateMinioConfig is asserted directly: full
+	// Validate() drags in unrelated per-mode requirements like service-mode quorum seeds.)
+	valid := []string{"", "woodpecker", "wp/data", "a/b/c", "wp-1_x.y"}
+	for _, rp := range valid {
+		for _, mode := range []string{"service", "minio", "local", "default"} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Storage.Type = mode
+			cfg.Minio.RootPath = rp
+			assert.NoError(t, cfg.ValidateMinioConfig(), "rootPath %q should be accepted in %s mode", rp, mode)
+		}
+		// And through the full config gate in the default mode.
+		cfg := newValidCfg()
+		cfg.Minio.RootPath = rp
+		assert.NoError(t, cfg.Validate(), "rootPath %q should pass full validation", rp)
+	}
+
+	invalid := []string{"/wp", "wp/", "/wp/", "wp//data", "a/./b", "a/../b", ".", "..", "../wp", "/"}
+	for _, rp := range invalid {
+		// SERVICE mode hard-fails: the pull-reconcile path re-derives rootPath from the
+		// on-disk layout, so push and pull only agree for a canonical value.
+		cfg := newValidCfg()
+		cfg.Woodpecker.Storage.Type = "service"
+		cfg.Minio.RootPath = rp
+		assert.ErrorContains(t, cfg.ValidateMinioConfig(), "invalid minio rootPath", "rootPath %q should be rejected in service mode", rp)
+
+		// minio/local modes only WARN: the raw value is used verbatim everywhere and stays
+		// self-consistent, exactly as before validation existed — hard-failing would break
+		// existing deployments on upgrade for no correctness gain; and through the full gate
+		// too (default mode), pinning the no-upgrade-break behavior end-to-end.
+		for _, mode := range []string{"minio", "local", "default"} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Storage.Type = mode
+			cfg.Minio.RootPath = rp
+			assert.NoError(t, cfg.ValidateMinioConfig(), "rootPath %q should be tolerated (warn-only) in %s mode", rp, mode)
+		}
+		full := newValidCfg()
+		full.Minio.RootPath = rp
+		assert.NoError(t, full.Validate(), "rootPath %q must not fail full validation in the default mode", rp)
+	}
+}
+
 func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 	makeServiceCfg := func(q QuorumConfig) *Configuration {
 		cfg, _ := NewConfiguration()
@@ -1076,8 +1130,10 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					MaxFetchThreads: 32,
 				},
 				MaintenanceStrategy: MaintenanceStrategyConfig{
-					DeleteGracePeriod:     NewDurationSecondsFromInt(259200),
-					DeleteReclaimInterval: NewDurationSecondsFromInt(600),
+					DeleteGracePeriod:            NewDurationSecondsFromInt(259200),
+					DeleteReclaimInterval:        NewDurationSecondsFromInt(600),
+					CompactedFileCleanupInterval: NewDurationSecondsFromInt(5),
+					ReconcileMinDataLogAge:       NewDurationSecondsFromInt(1800),
 				},
 			},
 			Storage: StorageConfig{

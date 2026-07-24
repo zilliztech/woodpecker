@@ -64,6 +64,12 @@ type SegmentProcessor interface {
 	Clean(ctx context.Context, flag int) error
 	UpdateSegmentLastAddConfirmed(ctx context.Context, lac int64) error
 	Close(ctx context.Context) error
+	// InvalidateReader drops the cached segment reader (if any) so the next read
+	// rebuilds it from scratch (e.g. after its local data.log has been reclaimed).
+	InvalidateReader(ctx context.Context)
+	// InvalidateWriter closes and drops the cached segment writer (if any), releasing its
+	// open fd on the local data.log so an unlinked file's blocks are actually reclaimed.
+	InvalidateWriter(ctx context.Context)
 
 	// GetWriterSnapshot returns a snapshot of the writer state, or nil if no writer is active.
 	GetWriterSnapshot() *storage.WriterSnapshot
@@ -273,12 +279,31 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 		lastState = lastReadState
 	}
 
-	// read batch entries
-	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+	readerOpt := storage.ReaderOpt{
 		StartEntryID:    fromEntryId,
 		EndEntryID:      0, // means no stop point, currently not use
 		MaxBatchEntries: maxEntries,
-	}, lastState)
+	}
+
+	// read batch entries
+	batch, err := reader.ReadNextBatchAdv(ctx, readerOpt, lastState)
+	if err != nil && werr.ErrFileReaderAlreadyClosed.Is(err) {
+		// The cached reader was invalidated concurrently (e.g. its local data.log was
+		// reclaimed after compaction). Drop it and rebuild once: the rebuild path falls
+		// back to minio when the local file is gone (R1). Retry exactly once.
+		logger.Ctx(ctx).Info("cached segment reader already closed, rebuilding and retrying once",
+			zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId))
+		// Identity-checked: only clear the cache if it still holds the instance that failed.
+		// The unconditional InvalidateReader would close whatever is cached NOW — a
+		// replacement reader another request already rebuilt — cascading AlreadyClosed
+		// through every concurrent reader that has spent its single retry.
+		s.invalidateReaderIfCurrent(ctx, reader)
+		reader, err = s.getOrCreateSegmentReader(ctx)
+		if err != nil {
+			return nil, err
+		}
+		batch, err = reader.ReadNextBatchAdv(ctx, readerOpt, lastState)
+	}
 	if err != nil {
 		// ErrEntryNotFound is the steady-state of a caught-up tail reader; stay
 		// silent on it (issue #190) and only log genuine EOF/errors.
@@ -290,6 +315,62 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 		return nil, err
 	}
 	return batch, nil
+}
+
+// InvalidateReader drops the cached segment reader (if any) so the next
+// getOrCreateSegmentReader call rebuilds it from scratch. Used when the cached
+// reader's underlying local data.log has been reclaimed and it starts returning
+// ErrFileReaderAlreadyClosed, or by maintenance tasks that need to force a rebuild.
+func (s *segmentProcessor) InvalidateReader(ctx context.Context) {
+	s.Lock()
+	r := s.currentSegmentReader
+	s.currentSegmentReader = nil
+	s.Unlock()
+	if r != nil {
+		// Close takes r's own lock, so it waits for any read already inside its locked
+		// section; a read that loses the race instead observes closed under the lock and
+		// returns ErrFileReaderAlreadyClosed, which the read path handles by rebuilding.
+		// Close is idempotent, so this is safe even if the reader already closed itself.
+		_ = r.Close(ctx)
+	}
+}
+
+// InvalidateWriter closes and drops the cached segment writer (if any) so its open fd on the
+// local data.log is released. The compacted-file cleanup calls this before unlinking the
+// data.log: the node that ran the compaction still holds the file open O_APPEND in its cached
+// writer, and an unlinked inode's blocks are not reclaimed while any fd is open — without
+// this, the "prompt" reclaim would silently wait for the idle cleanup (MaxIdleTime) to close
+// the writer. The segment is sealed and durably compacted by then, so the writer is inert;
+// Close is idempotent and has nothing left to sync.
+func (s *segmentProcessor) InvalidateWriter(ctx context.Context) {
+	s.Lock()
+	w := s.currentSegmentWriter
+	s.currentSegmentWriter = nil
+	s.Unlock()
+	if w != nil {
+		if err := w.Close(ctx); err != nil {
+			logger.Ctx(ctx).Warn("failed to close evicted segment writer",
+				zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
+		}
+	}
+}
+
+// invalidateReaderIfCurrent drops the cached reader ONLY when it is still the given failed
+// instance. Concurrent retriers that lost the race (the cache already holds a replacement)
+// must leave the replacement alone — closing it would invalidate other requests' reads in a
+// cascade. The failed instance itself is already closed (that is why the read failed), so no
+// extra Close is needed here; maintenance paths keep using the unconditional
+// InvalidateReader.
+func (s *segmentProcessor) invalidateReaderIfCurrent(ctx context.Context, failed storage.Reader) {
+	s.Lock()
+	if s.currentSegmentReader != failed {
+		s.Unlock()
+		return
+	}
+	s.currentSegmentReader = nil
+	s.Unlock()
+	// Close is idempotent; harmless on an already-closed reader.
+	_ = failed.Close(ctx)
 }
 
 func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int64, error) {

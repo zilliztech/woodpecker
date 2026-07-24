@@ -148,3 +148,46 @@ Exit code interpretation:
 - **0**: all green
 - **8**: yellow finding (warning, investigate)
 - **9**: red finding (critical, act now)
+
+## 11. Triage stuck compacted-mark distribution (PENDING_MANUAL)
+
+After a segment is compacted, the writer's auditor distributes a "compacted" mark to every
+quorum node (durable progress under `root/marking/<logId>/<segId>` in etcd; see
+`docs/compacted_file_cleanup.md`). A node that keeps failing for ~30 minutes parks its
+record as `NOTIFY_PENDING_MANUAL` — excluded from auto-retry, waiting for an operator.
+You'll also see a `compacted-mark distribution parked for manual handling` warning in the
+writer's logs.
+
+```bash
+# List records waiting for an operator (across all logs)
+wp marking list
+
+# Include in-flight / completed records, or narrow to one log
+wp marking list --all-states
+wp marking list --log 42
+
+# Investigate the unacked node shown in the record
+wp node show <node>
+
+# Node is permanently dead or removed? Confirm (transitions the record to
+# OPERATOR_CONFIRMED — settled; it is physically removed at truncate-reap)
+wp marking confirm 42 7
+```
+
+Notes:
+- These commands read etcd directly; endpoints, the meta prefix, AND the cluster's etcd
+  TLS/auth settings are discovered from any node's `/admin/config` automatically. Override
+  with `--etcd` / `--meta-prefix` if the admin plane is unreachable, and
+  `--etcd-cert/-key/-cacert` / `--etcd-username/-password` for a secured etcd (the
+  discovered cert paths are server-side paths — valid when running in-pod).
+- `confirm` marks the record `OPERATOR_CONFIRMED` — durable across writer restarts and
+  hidden from the default list — rather than deleting it; the record is physically reaped
+  when the segment is truncated.
+- Confirming is low-stakes: a data-holding node self-heals its mark via the server-side
+  pull reconcile once it comes back; a node that never held the segment's bytes only loses
+  a read optimization.
+- Doing nothing is also safe: the record is reaped automatically when the segment is
+  truncated. The queue exists for visibility ("a node has been unreachable for 30m — look
+  at it"), not because data is at risk.
+- `confirm` refuses `IN_PROGRESS`/`COMPLETED` records (they're managed automatically);
+  `--force` overrides.

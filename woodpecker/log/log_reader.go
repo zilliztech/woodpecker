@@ -196,7 +196,18 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			return nil, readBatchErr
 		}
 
-		// assert batchResult.Entries is not empty, and extract one entry from batchResult.Entries
+		// Defensive: a rebuilt reader (e.g. after the local data.log was reclaimed post-compaction)
+		// can hand back an empty batch for a resume that no longer resolves; treat it as "no entry
+		// available yet" (wait + retry) instead of indexing into an empty slice.
+		if batchResult == nil || len(batchResult.Entries) == 0 {
+			l.batch = nil
+			if waitErr := l.waitWithContext(ctx); waitErr != nil {
+				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
+				return nil, waitErr
+			}
+			continue
+		}
+
 		// update batch
 		l.batch = batchResult
 		l.next = 0

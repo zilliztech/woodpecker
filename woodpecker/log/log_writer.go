@@ -66,6 +66,8 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		logNs:              metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		notifyManager:      segment.NewSegmentCompactedNotifyManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		notifySegsCh:       make(chan map[int64]*meta.SegmentMeta, 1),
 		sessionLock:        sessionLock,
 	}
 	// Set trigger expired
@@ -86,6 +88,8 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	// Monitor keepAlive channel
 	go w.monitorSession()
 	go w.runAuditor()
+	// Compacted-mark distribution runs on its own goroutine so a slow node can't stall the auditor.
+	go runNotifyDistributor(w.logHandle, w.notifyManager, cfg.Woodpecker.Storage.IsStorageService(), w.notifySegsCh, w.writerClose)
 	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(sessionLock.GetSession().Lease())))
 	return w
 }
@@ -102,6 +106,8 @@ type logWriterImpl struct {
 	logNs              string
 	writerClose        chan struct{}
 	cleanupManager     segment.SegmentCleanupManager
+	notifyManager      segment.SegmentCompactedNotifyManager
+	notifySegsCh       chan map[int64]*meta.SegmentMeta // auditor -> notify distributor snapshot handoff
 
 	// Session related fields
 	sessionLock         *meta.SessionLock
@@ -307,9 +313,11 @@ func (l *logWriterImpl) runAuditor() {
 		zap.Int64("logId", l.logHandle.GetId()),
 		zap.Int("intervalSeconds", l.auditorMaxInterval))
 
+	auditCycle := uint64(0)
 	for {
 		select {
 		case <-ticker.C:
+			auditCycle++
 			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 
@@ -337,54 +345,38 @@ func (l *logWriterImpl) runAuditor() {
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Int("totalSegments", len(segmentMetaList)))
 
-			// compact/recover if necessary
-			// NOTE: Segments are compacted sequentially by design to minimize per-log resource usage.
-			// The cluster may host many logs, so keeping each log's background work lightweight is preferred.
-			truncatedSegmentExists := make([]int64, 0)
-			segmentsProcessed := 0
-			segmentsCompacted := 0
-			segmentsFailed := 0
+			// Per-segment maintenance, split by work type for readability (a segment is in
+			// exactly one state per snapshot, so these passes are independent): compact the
+			// Completed segments, distribute compacted marks for the Sealed ones, and collect
+			// the Truncated ones to clean up.
+			// Share the freshly loaded snapshot with the notify distributor so it does not
+			// issue a second identical etcd range scan per cycle.
+			publishSegmentsSnapshot(l.notifySegsCh, segmentMetaList)
 
-			for _, seg := range segmentMetaList {
-				stateBefore := seg.Metadata.State
-				if stateBefore == proto.SegmentState_Completed {
-					segmentsProcessed++
-					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(ctx, seg.Metadata.SegNo)
-					if getRecoverySegmentHandleErr != nil {
-						logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(getRecoverySegmentHandleErr))
-						segmentsFailed++
-						continue
-					}
-					maintainErr := recoverySegmentHandle.Compact(ctx)
-					if maintainErr != nil {
-						logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(maintainErr))
-						segmentsFailed++
-						continue
-					}
+			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
+			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
+			// In-process reap sync: a Truncated segment must never be notified again, even if the
+			// distributor is mid-round on a stale snapshot that still shows it Sealed.
+			markTruncatedSegmentsReaped(l.notifyManager, truncatedSegmentExists)
 
-					// Check if segment was recovered or compacted by checking its new state
-					// This is a best-effort attempt to track the operation type
-					if stateBefore == proto.SegmentState_Completed {
-						segmentsCompacted++
-						logger.Ctx(ctx).Info("Successfully compacted segment",
-							zap.String("logName", l.logHandle.GetName()),
-							zap.Int64("logId", l.logHandle.GetId()),
-							zap.Int64("segmentId", seg.Metadata.SegNo))
-					}
-				} else if stateBefore == proto.SegmentState_Truncated {
-					truncatedSegmentExists = append(truncatedSegmentExists, seg.Metadata.SegNo)
-				}
+			// Periodic orphan sweep (pass 1 = startup recovery, then every Nth cycle): reclaims
+			// cleanup-domain records whose segment metadata is already gone, covering the
+			// idle-log case the batch-time sweeps (gated on a pending truncate batch) never
+			// reach — e.g. a transiently failed best-effort record delete on the log's last
+			// truncated segment.
+			if auditCycle%orphanSweepEveryNAuditCycles == 1 {
+				sweepOrphanedCleanupRecords(ctx, l.logHandle, l.cleanupManager, l.notifyManager, segmentMetaList)
 			}
 
 			logger.Ctx(ctx).Info("Auditor segment processing completed",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
-				zap.Int("segmentsProcessed", segmentsProcessed),
-				zap.Int("segmentsCompacted", segmentsCompacted),
-				zap.Int("segmentsFailed", segmentsFailed),
+				zap.Int("segmentsProcessed", cs.processed),
+				zap.Int("segmentsCompacted", cs.compacted),
+				zap.Int("segmentsFailed", cs.failed),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))
 
-			// Check for truncated segments to clean up
+			// Clean up truncated segments (object-storage data + local files + tombstones).
 			if len(truncatedSegmentExists) > 0 {
 				logger.Ctx(ctx).Info("auditor try to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64s("truncatedSegmentExists", truncatedSegmentExists))
 				l.cleanupTruncatedSegmentsIfNecessary(ctx)
@@ -576,6 +568,16 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 	minSegId := segmentIdsToClean[0]
 	if err := l.cleanupManager.CleanupOrphanedStatuses(ctx, logId, minSegId); err != nil {
 		logger.Ctx(ctx).Warn("Failed to clean orphaned cleanup statuses",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("minSegmentId", minSegId),
+			zap.Error(err))
+	}
+	// Same sweep for the sibling marking records (compacted-mark distribution): their
+	// segment metadata is gone, so the records — including PENDING_MANUAL ones — are
+	// orphans; the need for a mark dies with the segment.
+	if err := l.notifyManager.CleanupOrphanedStatuses(ctx, logId, minSegId); err != nil {
+		logger.Ctx(ctx).Warn("Failed to clean orphaned compacted notify statuses",
 			zap.String("logName", logName),
 			zap.Int64("logId", logId),
 			zap.Int64("minSegmentId", minSegId),

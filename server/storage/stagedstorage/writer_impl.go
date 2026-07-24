@@ -104,7 +104,13 @@ type StagedFileWriter struct {
 	finalizing     atomic.Bool
 	fenced         atomic.Bool
 	inRecoveryMode atomic.Bool
-	recovered      atomic.Bool
+	// compacted marks a writer opened on a segment whose directory carries the
+	// data.compacted tombstone: the segment is durably compacted in object storage and its
+	// local data.log has been (or is being) reclaimed. Such a writer holds NO local file and
+	// only serves the idempotent tail of the lifecycle (Fence/Finalize return the footer's
+	// LAC, Compact hits the remote-footer idempotency branch, appends are rejected).
+	compacted atomic.Bool
+	recovered atomic.Bool
 
 	// Async flush management
 	flushTaskChan                chan *blockFlushTask // flushTasksQueue
@@ -157,6 +163,19 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.Bool("recoveryMode", recoveryMode))
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
+	if HasCompactedMark(segmentDir) {
+		// The tombstone means this segment is durably compacted and its data.log reclaimed
+		// (or pending reclaim). A normal writer here would RESURRECT a local data.log —
+		// recovery mode via O_CREATE|O_APPEND, non-recovery via O_CREATE|O_TRUNC (which would
+		// also wipe a still-present drop-pending file) — and a present local file shadows
+		// object storage on the read path, making a compacted segment read as empty on this
+		// node until the next reconcile walk. Reachable through two windows of the protocol's
+		// own failure model: a stale client's append after a node restart cleared the
+		// in-memory fence, and the crash-recovery fence/complete/re-Compact of a segment
+		// whose meta update to Sealed was lost. Serve those with a fileless compacted writer
+		// instead: appends are rejected, fence/complete/compact converge idempotently.
+		return newCompactedStagedFileWriter(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg)
+	}
 	// Ensure directory exists
 	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
@@ -307,6 +326,67 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.String("writerInstance", fmt.Sprintf("%p", writer)))
 
 	return writer, nil
+}
+
+// newCompactedStagedFileWriter builds the fileless writer for a tombstoned segment (see the
+// branch in NewStagedFileWriterWithMode). State is loaded from the remote compacted footer —
+// the single durable source once the local data.log is gone: lastEntryID = footer LAC, so
+// Fence and Finalize (which fast-return on the pre-set flags below) answer the coordinator
+// with the correct value, and Compact's remote-footer idempotency branch reports
+// already-compacted. No local file is opened or created, no flush machinery runs, and
+// WriteDataAsync rejects via the finalized guard.
+func newCompactedStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileWriter, error) {
+	if storageCli == nil {
+		return nil, fmt.Errorf("segment %d/%d carries a compacted tombstone but no object storage client is available to serve it", logId, segmentId)
+	}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	w := &StagedFileWriter{
+		localBaseDir:        localBaseDir,
+		segmentFilePath:     getSegmentFilePath(localBaseDir, logId, segmentId),
+		logId:               logId,
+		segmentId:           segmentId,
+		logIdStr:            strconv.FormatInt(logId, 10),
+		logNs:               bucket + "/" + rootPath,
+		bucket:              bucket,
+		rootPath:            rootPath,
+		storageCli:          storageCli,
+		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
+		blockIndexes:        make([]*codec.IndexRecord, 0),
+		maxFlushSize:        cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64(),
+		maxBufferEntries:    int64(cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries),
+		runCtx:              runCtx,
+		runCancel:           runCancel,
+	}
+	w.firstEntryID.Store(-1)
+	w.lastEntryID.Store(-1)
+	// The pre-set flags do the heavy lifting: finalized rejects appends (ErrFileWriterFinalized)
+	// and fast-returns Finalize; allUploadingTaskDone fast-returns Fence; compacted
+	// short-circuits Close.
+	w.compacted.Store(true)
+	w.finalized.Store(true)
+	w.fenced.Store(true)
+	w.allUploadingTaskDone.Store(true)
+	w.recovered.Store(true)
+	w.storageWritable.Store(false)
+
+	footer, _, err := w.readRemoteFooter(ctx)
+	if err != nil {
+		runCancel()
+		return nil, fmt.Errorf("compacted segment %d/%d: cannot load remote footer: %w", logId, segmentId, err)
+	}
+	if footer == nil || !codec.IsCompacted(footer.Flags) {
+		// Tombstone without a compacted footer is the same anomaly the cleanup task warns
+		// about; surface it instead of serving guessed state.
+		runCancel()
+		return nil, fmt.Errorf("compacted segment %d/%d: tombstone present but no compacted footer in object storage (unexpected state)", logId, segmentId)
+	}
+	w.recoveredFooter = footer
+	w.lastEntryID.Store(footer.LAC)
+	w.buffer.Store(cache.NewSequentialBuffer(logId, segmentId, footer.LAC+1, w.maxBufferEntries, w.logNs))
+
+	logger.Ctx(ctx).Info("opened compacted (fileless) staged writer for tombstoned segment",
+		zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Int64("lac", footer.LAC))
+	return w, nil
 }
 
 // Sync forces immediate sync of all buffered data
@@ -1194,6 +1274,12 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("inst", fmt.Sprintf("%p", w)))
 		return nil
 	}
+	if w.compacted.Load() {
+		// Fileless compacted writer: no file, no flush machinery, no WpFileWriters gauge was
+		// registered — nothing to drain or release beyond the run context.
+		w.runCancel()
+		return nil
+	}
 	// Ensure goroutine, file, channel cleanup always runs,
 	// even if awaitAllFlushTasks fails (e.g., timeout or context cancellation).
 	defer func() {
@@ -1313,11 +1399,47 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 		return -1, fmt.Errorf("segment must be finalized before compaction")
 	}
 
-	// Check if we have any blocks to compact
+	// An EMPTY sealed segment still gets a footer.blk (TotalBlocks=0): "Sealed => footer exists
+	// in object storage" must hold unconditionally, because compacted-mark distribution and the
+	// decommission drain gate both rely on the mark, and the mark's own invariant is
+	// footer-confirmed-before-drop. Without this, an empty segment becomes Sealed-without-footer:
+	// marks get distributed for it, the cleanup task's anomaly branch warns forever and never
+	// reclaims its data.log, and HasLocalSegmentData reports drained while the file is still on
+	// disk. A reader of a zero-block compacted segment returns EOF, so reads are unaffected.
 	if len(w.blockIndexes) == 0 {
-		logger.Ctx(ctx).Info("no blocks to compact",
+		if w.storageCli == nil {
+			// Without an object storage client the footer invariant cannot be established;
+			// surface it instead of silently "succeeding" into Sealed-without-footer.
+			return -1, fmt.Errorf("cannot compact empty segment without an object storage client")
+		}
+		// The empty-footer path may ONLY run for a genuinely empty segment: the local footer's
+		// LAC (the coordinator-acknowledged last entry, written by Finalize) must say "no
+		// entries" (< 0). A replica that missed the segment's appends and was then
+		// quorum-completed carries LAC >= 0 with zero local blocks — publishing a
+		// TotalBlocks=0 compacted footer from it would COMMIT an empty segment globally,
+		// authorize every data-holding replica to drop its data.log, and silently lose all
+		// entries up to that LAC. Refuse instead, so compactSegmentQuorum moves on to a
+		// replica that actually holds the data. (recoveredFooter == nil while finalized
+		// should be impossible — Finalize sets it before the flag — treat it as the same
+		// refusal rather than guessing.)
+		if w.recoveredFooter == nil || w.recoveredFooter.LAC >= 0 {
+			lac := int64(-1)
+			if w.recoveredFooter != nil {
+				lac = w.recoveredFooter.LAC
+			}
+			logger.Ctx(ctx).Warn("refusing to compact: zero local blocks but footer LAC says the segment has entries (this replica is missing the data)",
+				zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("footerLac", lac))
+			return -1, fmt.Errorf("refusing empty compaction: local footer LAC %d expects entries but this replica holds zero blocks", lac)
+		}
+		logger.Ctx(ctx).Info("no blocks to compact; uploading an empty compacted footer",
 			zap.String("segmentFilePath", w.segmentFilePath))
-		return -1, nil
+		footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, -1)
+		if footerErr != nil {
+			logger.Ctx(ctx).Warn("failed to upload empty compacted footer",
+				zap.String("segmentFilePath", w.segmentFilePath), zap.Error(footerErr))
+			return -1, fmt.Errorf("failed to upload empty compacted footer: %w", footerErr)
+		}
+		return footerSize, nil
 	}
 
 	// Read and validate footer LAC against segment data for completeness
@@ -1351,9 +1473,15 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 	}
 
 	if len(newBlockIndexes) == 0 {
-		logger.Ctx(ctx).Info("no blocks uploaded during compaction",
-			zap.String("segmentFilePath", w.segmentFilePath))
-		return -1, nil
+		// Unreachable today: the merge plan covers every local block, so it is empty only when
+		// blockIndexes is empty — handled (and guarded) above. If this ever fires, something
+		// upstream broke; the one thing this branch must NOT do is publish a zero-block footer
+		// with a non-negative LAC — footer.blk is the commit point that authorizes every
+		// replica to delete its local data.log. Fail loudly instead.
+		logger.Ctx(ctx).Warn("no blocks uploaded during compaction of a non-empty segment; refusing to publish an empty footer",
+			zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("lac", lac),
+			zap.Int("localBlocks", len(w.blockIndexes)))
+		return -1, fmt.Errorf("compaction produced zero merged blocks for a segment with %d local blocks (lac %d)", len(w.blockIndexes), lac)
 	}
 
 	// Create footer with compacted flag and LAC, then upload
@@ -1721,16 +1849,25 @@ func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndex
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "uploadCompactedFooter")
 	defer sp.End()
 
-	// Create footer with compacted flag and LAC
+	// Create footer with compacted flag and LAC. An empty segment (no blocks) records zero
+	// entries; the entry-span arithmetic below would wrongly yield 1 for it.
+	totalRecords := uint32(0)
+	if len(blockIndexes) > 0 {
+		totalRecords = uint32(w.lastEntryID.Load() - w.firstEntryID.Load() + 1)
+	}
+	baseFlags := uint16(0)
+	if w.recoveredFooter != nil {
+		baseFlags = w.recoveredFooter.Flags
+	}
 	footer := &codec.FooterRecord{
 		TotalBlocks:  int32(len(blockIndexes)),
-		TotalRecords: uint32(w.lastEntryID.Load() - w.firstEntryID.Load() + 1),
+		TotalRecords: totalRecords,
 		TotalSize:    uint64(fileSizeAfterCompact),
 		IndexOffset:  0,
 		IndexLength:  uint32(len(blockIndexes) * (codec.RecordHeaderSize + codec.IndexRecordSize)),
 		Version:      codec.FormatVersion,
-		Flags:        codec.SetCompacted(w.recoveredFooter.Flags), // Preserve existing flags, set compacted bit
-		LAC:          lac,                                         // Set Last Add Confirmed ID from validation
+		Flags:        codec.SetCompacted(baseFlags), // Preserve existing flags, set compacted bit
+		LAC:          lac,                           // Set Last Add Confirmed ID from validation
 	}
 
 	// Serialize footer and indexes
@@ -2143,6 +2280,23 @@ func getSegmentDir(baseDir string, logId int64, segmentId int64) string {
 
 func getSegmentFilePath(baseDir string, logId int64, segmentId int64) string {
 	return filepath.Join(baseDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
+}
+
+// CompactedMarkFileName is the empty sentinel file (a sibling of data.log, named to mirror
+// it) marking a staged segment whose data is durably compacted in object storage. Only its
+// existence carries meaning — no content is written or read; its mtime records when the mark
+// was created. It is written when the segment is confirmed compacted and kept as a TOMBSTONE
+// after the local data.log is reclaimed, so a reader can distinguish "compacted -> serve from
+// object storage" from "genuinely no data here" via a local stat instead of an object-storage
+// HEAD. It is removed only when the segment is fully truncated/deleted (see deleteLocalFiles
+// flag=0). This is the single source of truth for the mark filename; server/compacted_mark.go
+// references it.
+const CompactedMarkFileName = "data.compacted"
+
+// HasCompactedMark reports whether segmentDir carries the compacted tombstone mark.
+func HasCompactedMark(segmentDir string) bool {
+	_, err := os.Stat(filepath.Join(segmentDir, CompactedMarkFileName))
+	return err == nil
 }
 
 // validateLACAlignment validates that the segment contains complete data for the LAC range

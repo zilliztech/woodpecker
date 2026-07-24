@@ -124,6 +124,8 @@ woodpecker:
     maintenanceStrategy:
       deleteGracePeriod: 5 # Seconds after a log is marked deleted before local data is reclaimed. Near-real-time by default: calling the delete API means the caller has confirmed the data is no longer needed.
       deleteReclaimInterval: 2 # How often the reclaim task scans delete markers, in seconds. Deleted data disappears within ~gracePeriod+interval of the request.
+      compactedFileCleanupInterval: 5 # Seconds; scan interval for reclaiming local staged data.log after compaction is durably confirmed in object storage.
+      reconcileMinDataLogAge: 1800 # Seconds (default 30m); the compacted-file-cleanup pull reconcile only HEADs a segment's footer once its local data.log has been idle this long (> roll interval + compaction time), avoiding wasted object-storage HEADs on segments still being written/compacted. Does not affect the push (marked) fast path. <=0 disables.
     nodeSelectionPolicy:
       loadAwareEnabled: true    # Prefer lower-load nodes among eligible candidates (issue #114)
       loadReportInterval: 10    # Seconds between a node publishing its own load factor

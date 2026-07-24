@@ -19,18 +19,22 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_segment"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
@@ -689,6 +693,163 @@ func TestLogStore_CleanSegment_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestLogStore_NotifySegmentCompacted_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	err := store.NotifySegmentCompacted(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestNotifySegmentCompacted_WritesMarkIdempotent(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+
+	// The handler verifies the compacted footer before writing the mark ("mark ⇒ footer
+	// exists" is enforced server-side, not on the caller's word). Each notify HEADs once.
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
+		Return(int64(128), false, nil).Twice()
+	store.storageClient = mockStorage
+
+	ctx := context.Background()
+	require.NoError(t, store.NotifySegmentCompacted(ctx, "b", "rp", 1, 2))
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	assert.True(t, hasCompactedMark(seg))
+
+	require.NoError(t, store.NotifySegmentCompacted(ctx, "b", "rp", 1, 2)) // idempotent
+	assert.True(t, hasCompactedMark(seg))
+}
+
+// TestNotifySegmentCompacted_FooterAbsentRefusesMark pins the handler-side invariant: a
+// notify for a segment whose compacted footer is NOT in object storage (stale or mis-routed
+// retry, external caller of the public RPC, or a notify arriving after the truncate GC
+// already removed the segment's objects) must be rejected — no mark written, no directory
+// fabricated — so a bare RPC can never make decommission report data as drained, and a late
+// notify can never resurrect a truncate-reaped segment dir.
+func TestNotifySegmentCompacted_FooterAbsentRefusesMark(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Once()
+	store.storageClient = mockStorage
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2)
+	assert.ErrorIs(t, err, werr.ErrSegmentNotFound)
+
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	assert.False(t, hasCompactedMark(seg), "no mark may be written without a confirmed footer")
+	_, statErr := os.Stat(seg)
+	assert.True(t, os.IsNotExist(statErr), "no segment dir may be fabricated without a confirmed footer")
+}
+
+// TestNotifySegmentCompacted_BackendNotFoundRefusesWithClassifiedError: a backend-shaped
+// 404 (dispatched predicate says absent) must produce the classified ErrSegmentNotFound
+// refusal, not the raw backend error (which the MinIO-only predicate caused on Azure).
+func TestNotifySegmentCompacted_BackendNotFoundRefusesWithClassifiedError(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+
+	azureLike404 := fmt.Errorf("HEAD footer.blk: 404 BlobNotFound")
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
+		Return(int64(0), false, azureLike404).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(azureLike404).Return(true).Once()
+	store.storageClient = mockStorage
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2)
+	assert.ErrorIs(t, err, werr.ErrSegmentNotFound)
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	assert.False(t, hasCompactedMark(seg))
+}
+
+// TestNotifySegmentCompacted_FooterHeadTransientErrorPropagates: a transport-level StatObject
+// failure (not NoSuchKey) must surface as an error so the client retries, rather than being
+// treated as either "exists" or "absent".
+func TestNotifySegmentCompacted_FooterHeadTransientErrorPropagates(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	mockStorage.EXPECT().StatObject(mock.Anything, "b", "rp/1/2/footer.blk", "b/rp", "1").
+		Return(int64(0), false, fmt.Errorf("connection refused")).Once()
+	store.storageClient = mockStorage
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2)
+	assert.Error(t, err)
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	assert.False(t, hasCompactedMark(seg))
+}
+
+// TestNotifySegmentCompacted_NonCanonicalRootPathRejected pins the RPC-boundary validation:
+// rootPath is caller-managed in service mode, so the local config validation cannot vouch
+// for it. A non-canonical value must be rejected before anything consumes it — no footer
+// HEAD (the strict mock has no StatObject expectation), no mark, no fabricated directory —
+// otherwise the push path (raw value) and the pull reconcile (disk-derived, canonicalized)
+// would silently split keys and metric series.
+func TestNotifySegmentCompacted_NonCanonicalRootPathRejected(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.storageClient = mocks_objectstorage.NewObjectStorage(t)
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "/rp//x/", 1, 2)
+	assert.ErrorIs(t, err, werr.ErrLogStoreInvalidRootPath)
+}
+
+// TestNotifySegmentCompacted_NilStorageClientErrors: without an object-storage client the
+// footer cannot be verified, so the handler must refuse rather than trust the caller.
+func TestNotifySegmentCompacted_NilStorageClientErrors(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.storageClient = nil
+
+	err := store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2)
+	assert.ErrorIs(t, err, werr.ErrInternalError)
+}
+
+func TestLogStore_NotifySegmentCompacted_NoLocalDataDir(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "minio" // pure object-storage mode: no local data dir
+
+	err := store.NotifySegmentCompacted(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+}
+
+// TestLogStore_NotifySegmentCompacted_LocalModeIsNoOp verifies the storage-mode gate: local
+// storage has a node-local data dir but no object-storage footer to reclaim against, and its
+// cleanup task never runs (it gates on service mode), so the handler must NOT write a mark
+// (which would otherwise linger, and — in local mode — enqueue into a never-drained queue).
+func TestLogStore_NotifySegmentCompacted_LocalModeIsNoOp(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	store.cfg.Woodpecker.Storage.Type = "local" // local storage: localSegmentDataDir is non-empty
+
+	require.NoError(t, store.NotifySegmentCompacted(context.Background(), "b", "rp", 1, 2))
+	seg := localSegmentDataDir(store.cfg, "b", "rp", 1, 2)
+	require.NotEmpty(t, seg, "precondition: local mode has a non-empty segment dir")
+	assert.False(t, hasCompactedMark(seg), "local mode must not write a compacted mark")
+}
+
 func TestLogStore_UpdateLastAddConfirmed_Stopped(t *testing.T) {
 	store := createTestLogStore()
 	store.stopped.Store(true)
@@ -1033,6 +1194,60 @@ func TestLogStore_HasLocalSegmentData_OnlyManagementFiles(t *testing.T) {
 	assert.False(t, ls.HasLocalSegmentData())
 }
 
+func TestLogStore_HasLocalSegmentData_MarkedSegmentIgnored(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Segment has a non-empty data.log AND a data.compacted — its data.log is
+	// redundant (durably compacted, awaiting physical GC) and must not block
+	// decommission.
+	segDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("staged data"), 0o644))
+	require.NoError(t, writeCompactedMark(ctx, segDir))
+
+	assert.False(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_HasLocalSegmentData_UnmarkedSegmentBlocks(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Non-empty data.log with no data.compacted still blocks decommission.
+	segDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("staged data"), 0o644))
+
+	assert.True(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_HasLocalSegmentData_MixedMarkedAndUnmarked(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Segment 0: marked — should be ignored.
+	markedDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(markedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(markedDir, "data.log"), []byte("staged data"), 0o644))
+	require.NoError(t, writeCompactedMark(ctx, markedDir))
+
+	// Segment 1: unmarked — still blocks decommission.
+	unmarkedDir := filepath.Join(dir, "1", "1")
+	require.NoError(t, os.MkdirAll(unmarkedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(unmarkedDir, "data.log"), []byte("staged data"), 0o644))
+
+	assert.True(t, ls.HasLocalSegmentData())
+}
+
 // === EvictLog / EvictInstance tests ===
 
 func TestLogStore_EvictLog_RejectsServing(t *testing.T) {
@@ -1321,4 +1536,88 @@ func TestNewLogStore_DiskWatermarkTaskRegistration(t *testing.T) {
 	cfg3.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
 	ls3 := NewLogStore(ctx, cfg3, nil).(*logStore)
 	assert.False(t, hasMaintenanceTaskNamed(ls3, "disk-watermark"))
+}
+
+// === EvictSegmentReader Tests ===
+
+func TestLogStore_EvictSegmentReader_InvalidatesCachedProcessorReader(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	mockProc.EXPECT().InvalidateReader(mock.Anything).Return().Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{7: mockProc}
+
+	err := store.EvictSegmentReader(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+}
+
+func TestLogStore_EvictSegmentReader_AbsentKeyIsNoop(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	// No processor cached for this bucket/rootPath/logId/segId at all.
+	err := store.EvictSegmentReader(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+
+	// Must not have created a processor as a side effect.
+	store.spMu.RLock()
+	_, logExists := store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)]
+	store.spMu.RUnlock()
+	assert.False(t, logExists, "EvictSegmentReader must not create a processor for an absent key")
+}
+
+func TestLogStore_EvictSegmentReader_AbsentSegmentUnderExistingLogIsNoop(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	// A processor exists for a different segment under the same log; InvalidateReader
+	// must NOT be called on it, and no processor should be created for segId 7.
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{3: mockProc}
+
+	err := store.EvictSegmentReader(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+
+	store.spMu.RLock()
+	_, segExists := store.segmentProcessors[logKey][7]
+	store.spMu.RUnlock()
+	assert.False(t, segExists, "EvictSegmentReader must not create a processor for an absent segment")
+}
+
+// === EvictSegmentWriter Tests ===
+
+func TestLogStore_EvictSegmentWriter_InvalidatesCachedProcessorWriter(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	mockProc := mocks_segment.NewSegmentProcessor(t)
+	mockProc.EXPECT().InvalidateWriter(mock.Anything).Return().Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{7: mockProc}
+
+	err := store.EvictSegmentWriter(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+}
+
+func TestLogStore_EvictSegmentWriter_AbsentKeyIsNoop(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	ctx := context.Background()
+
+	err := store.EvictSegmentWriter(ctx, testBucketName, testRootPath, testLogId, 7)
+	assert.NoError(t, err)
+
+	store.spMu.RLock()
+	_, logExists := store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)]
+	store.spMu.RUnlock()
+	assert.False(t, logExists, "EvictSegmentWriter must not create a processor for an absent key")
 }

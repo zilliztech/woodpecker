@@ -400,11 +400,35 @@ func TestCleanupSegment_ExistingStatus_Completed(t *testing.T) {
 	}, nil)
 	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
 
-	// Should delete segment metadata and cleanup status
+	// Should delete segment metadata, cleanup status, AND the sibling marking record.
 	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(2), proto.SegmentState_Truncated).Return(nil)
 	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(nil)
 
 	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.NoError(t, err)
+}
+
+// TestCleanupSegment_ExistingStatus_Completed_ReapsMarkingRecord_BestEffort verifies the
+// last-segment orphan fix: on CLEANUP_COMPLETED the sibling marking record is deleted, and a
+// failure to delete it is best-effort — it does not fail the cleanup (the auditor's marking
+// orphan sweep still covers non-last segments).
+func TestCleanupSegment_ExistingStatus_Completed_ReapsMarkingRecord_BestEffort(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(9)).Return(&proto.SegmentCleanupStatus{
+		LogId: 1, SegmentId: 9, State: proto.SegmentCleanupState_CLEANUP_COMPLETED,
+	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(9), []string{"127.0.0.1"})
+	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(9), proto.SegmentState_Truncated).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(9)).Return(nil)
+	// Marking-record delete fails: cleanup must still succeed.
+	mockMeta.EXPECT().DeleteSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(9)).Return(errors.New("etcd down"))
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 9)
 	assert.NoError(t, err)
 }
 
@@ -447,6 +471,7 @@ func TestCleanupSegment_ExistingStatus_Completed_SegmentNotFoundIgnored(t *testi
 	// Delete returns ErrSegmentNotFound - should be ignored
 	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(2), proto.SegmentState_Truncated).Return(werr.ErrSegmentNotFound)
 	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(nil)
 
 	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
 	assert.NoError(t, err)

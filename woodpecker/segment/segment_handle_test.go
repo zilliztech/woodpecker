@@ -4202,6 +4202,9 @@ func TestCompact_Success(t *testing.T) {
 			segMeta.Metadata.Size == 1024
 	}), proto.SegmentState_Completed).Return(nil)
 	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
+	// No NotifySegmentCompacted expectation: mark distribution is auditor-driven
+	// (SegmentCompactedNotifyManager), not inline in Compact; the strict mock fails
+	// this test if Compact ever notifies.
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -4276,6 +4279,9 @@ func TestCompact_SealedTimeFromCompactResponse(t *testing.T) {
 		return segMeta.Metadata.SealedTime == expectedSealedTime
 	}), proto.SegmentState_Completed).Return(nil)
 	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
+	// No NotifySegmentCompacted expectation: mark distribution is auditor-driven
+	// (SegmentCompactedNotifyManager), not inline in Compact; the strict mock fails
+	// this test if Compact ever notifies.
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -4394,6 +4400,7 @@ func TestCompact_AlreadyCompacting(t *testing.T) {
 			return compactedResult, nil
 		},
 	).Maybe()
+	mockClient.EXPECT().NotifySegmentCompacted(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil).Maybe()
 
 	// For refresh after compaction
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(sealedMeta, nil).Maybe()
@@ -4432,6 +4439,80 @@ func TestCompact_AlreadyCompacting(t *testing.T) {
 	// Unblock the first compact
 	close(blockCh)
 	wg.Wait()
+}
+
+// TestCompact_DoesNotNotifyInline verifies the async-marking contract on the Compact side:
+// a successful compaction updates the metadata to Sealed and returns WITHOUT sending any
+// NotifySegmentCompacted RPC and without dialing the other quorum nodes — mark distribution
+// belongs to the auditor-driven SegmentCompactedNotifyManager (covered by its own tests).
+// The strict mocks enforce the negative: any notify or extra dial fails this test.
+func TestCompact_DoesNotNotifyInline(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient0 := mocks_logstore_client.NewLogStoreClient(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node0").Return(mockClient0, nil)
+
+	completedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 10,
+			Size:        2048,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    2,
+				Es:    3,
+				Wq:    2,
+				Nodes: []string{"node0", "node1", "node2"},
+			},
+		},
+		Revision: 1,
+	}
+
+	sealedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Sealed,
+			LastEntryId: 10,
+			Size:        1024,
+		},
+		Revision: 2,
+	}
+
+	expectedSealedTime := time.Now().UnixMilli()
+	compactedSegMetaInfo := &proto.SegmentMetadata{
+		SegNo:       1,
+		LastEntryId: 10,
+		Size:        1024,
+		SealedTime:  expectedSealedTime,
+	}
+
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(completedMeta, nil).Once()
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(sealedMeta, nil).Once()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Completed).Return(nil)
+
+	// compactSegmentQuorum tries nodes in order and stops at the first success. No other
+	// node is dialed and no NotifySegmentCompacted expectation exists anywhere.
+	mockClient0.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+			Storage: config.StorageConfig{
+				Type: "minio",
+			},
+		},
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	err := segmentHandle.Compact(context.Background())
+	assert.NoError(t, err)
 }
 
 // TestSetWriterInvalidationNotifier tests the SetWriterInvalidationNotifier method

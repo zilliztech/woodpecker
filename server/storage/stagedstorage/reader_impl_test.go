@@ -35,8 +35,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
@@ -917,7 +919,7 @@ func TestStagedFileReaderAdv_GetLastEntryID_NoBlocks(t *testing.T) {
 	assert.ErrorIs(t, err, werr.ErrFileReaderNoBlockFound)
 }
 
-// === parseMinioFooterDataUnsafe ===
+// === parseCompactedFooterDataUnsafe ===
 
 func TestStagedFileReaderAdv_ParseMinioFooterData_Valid(t *testing.T) {
 	dir := t.TempDir()
@@ -950,7 +952,7 @@ func TestStagedFileReaderAdv_ParseMinioFooterData_Valid(t *testing.T) {
 	reader.blockIndexes = nil
 	reader.isIncompleteFile.Store(true)
 
-	err := reader.parseMinioFooterDataUnsafe(context.Background(), footerData)
+	err := reader.parseCompactedFooterDataUnsafe(context.Background(), footerData)
 	assert.NoError(t, err)
 	assert.NotNil(t, reader.footer)
 	assert.Len(t, reader.blockIndexes, 1)
@@ -962,7 +964,7 @@ func TestStagedFileReaderAdv_ParseMinioFooterData_TooSmall(t *testing.T) {
 	reader := createTestReaderFromWriter(t, dir, 31, 31, 3, 2)
 	defer reader.Close(context.Background())
 
-	err := reader.parseMinioFooterDataUnsafe(context.Background(), []byte{0x01, 0x02})
+	err := reader.parseCompactedFooterDataUnsafe(context.Background(), []byte{0x01, 0x02})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "footer data too small")
 }
@@ -1116,25 +1118,26 @@ func TestStagedFileReaderAdv_DetermineBlocksToRead_OutOfRange(t *testing.T) {
 	assert.Empty(t, blocks)
 }
 
-// === tryParseMinioFooterUnsafe ===
+// === tryParseCompactedFooterUnsafe ===
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_NilClient(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_NilClient(t *testing.T) {
 	dir := t.TempDir()
 	reader := createTestReaderFromWriter(t, dir, 60, 60, 3, 2)
 	defer reader.Close(context.Background())
 
 	reader.storageCli = nil
-	err := reader.tryParseMinioFooterUnsafe(context.Background())
+	err := reader.tryParseCompactedFooterUnsafe(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "storage client not available")
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_NotFound(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_NotFound(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
 	// Create a minimal file for reader creation
 	localBaseDir := filepath.Join(dir, "local")
@@ -1162,12 +1165,13 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_NotFound(t *testing.T) {
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_ValidFooter(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_ValidFooter(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
 	logId := int64(62)
 	segId := int64(62)
@@ -1226,7 +1230,7 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_ValidFooter(t *testing.T) {
 	assert.Equal(t, int64(4), reader.footer.LAC)
 }
 
-// === readCompactedDataFromMinio ===
+// === readCompactedDataFromObjectStorage ===
 
 // readerMockFileReader implements minioHandler.FileReader for tests
 type readerMockFileReader struct {
@@ -1282,6 +1286,7 @@ func TestStagedFileReaderAdv_ReadCompactedDataFromMinio(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(70)
 	segId := int64(70)
 
@@ -1377,6 +1382,437 @@ func TestStagedFileReaderAdv_ReadCompactedDataFromMinio(t *testing.T) {
 	assert.Equal(t, int64(4), result.Entries[4].EntryId)
 }
 
+// === NewStagedFileReaderAdv local-file-absent fallback to minio (R1) ===
+
+// TestStagedReader_LocalAbsent verifies that when the local staged data.log file has been
+// removed (e.g. after compaction cleanup), NewStagedFileReaderAdv falls back to reading the
+// compacted footer + blocks from minio instead of immediately returning ErrEntryNotFound.
+// It also asserts that no local file is created (no re-caching to local disk).
+func TestStagedReader_LocalAbsent(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	logId := int64(100)
+	segId := int64(100)
+
+	// Build valid footer data (compacted, 1 block, 5 entries)
+	blockIndex := &codec.IndexRecord{
+		BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4,
+	}
+	footer := &codec.FooterRecord{
+		TotalBlocks:  1,
+		TotalRecords: 5,
+		TotalSize:    200,
+		IndexLength:  uint32(codec.RecordHeaderSize + codec.IndexRecordSize),
+		Version:      codec.FormatVersion,
+		Flags:        codec.SetCompacted(0),
+		LAC:          4,
+	}
+
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(blockIndex))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+
+	footerKey := "test-root/100/100/footer.blk"
+
+	// Mock StatObject for footer
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+
+	// Mock GetObject for footer
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	// Build valid compacted block data for m_0.blk
+	var blockBuf bytes.Buffer
+	headerRecord := &codec.HeaderRecord{
+		Version:      codec.FormatVersion,
+		Flags:        codec.SetCompacted(0),
+		FirstEntryID: 0,
+	}
+	blockBuf.Write(codec.EncodeRecord(headerRecord))
+
+	dataRecords := make([]codec.Record, 0, 5)
+	for i := 0; i < 5; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	blockDataOnly := encodeRecordList(dataRecords)
+	blockHeaderRecord := &codec.BlockHeaderRecord{
+		BlockNumber:  0,
+		FirstEntryID: 0,
+		LastEntryID:  4,
+		BlockLength:  uint32(len(blockDataOnly)),
+		BlockCrc:     crc32.ChecksumIEEE(blockDataOnly),
+	}
+	blockBuf.Write(codec.EncodeRecord(blockHeaderRecord))
+	blockBuf.Write(blockDataOnly)
+	blockData := blockBuf.Bytes()
+
+	blockKey := "test-root/100/100/m_0.blk"
+
+	// Mock GetObject for block data
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", blockKey, int64(0), mock.Anything, mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: blockData}, nil)
+
+	// Deliberately do NOT create the local data.log file — only the segment directory
+	// exists. A compacted tombstone mark is present (segment durably compacted, local
+	// data.log reclaimed), so the reader must serve from object storage.
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+	filePath := getSegmentFilePath(localBaseDir, logId, segId)
+	_, statErr := os.Stat(filePath)
+	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+
+	// Reader should be a compacted, minio-backed reader with no local file handle.
+	assert.True(t, reader.isCompacted.Load())
+	assert.False(t, reader.isIncompleteFile.Load())
+	assert.Nil(t, reader.file)
+
+	opt := storage.ReaderOpt{
+		StartEntryID:    0,
+		MaxBatchEntries: 10,
+	}
+
+	result, err := reader.ReadNextBatchAdv(context.Background(), opt, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 5, len(result.Entries))
+	assert.Equal(t, int64(0), result.Entries[0].EntryId)
+	assert.Equal(t, int64(4), result.Entries[4].EntryId)
+
+	// Assert no local file was created (no re-caching to local disk).
+	_, statErrAfter := os.Stat(filePath)
+	assert.True(t, os.IsNotExist(statErrAfter), "local staged file must not be re-created by the minio fallback path")
+}
+
+// TestStagedReader_Compacted_IgnoresCrossProvenanceLastReadState verifies the fix for the
+// local->compacted resume bug: a compacted (minio-backed) reader given a LastReadState produced
+// by the LOCAL path (non-compacted flags + a local block id with no compacted counterpart) must
+// NOT reuse that block id (which resolves to nothing -> empty batch -> downstream panic). It
+// resolves the resume point by StartEntryID instead, and its emitted state carries compacted
+// provenance so subsequent reads take the same-backend fast path.
+func TestStagedReader_Compacted_IgnoresCrossProvenanceLastReadState(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	logId := int64(103)
+	segId := int64(103)
+
+	// Compacted footer + block fixture (1 block, 5 entries) served from object storage.
+	blockIndex := &codec.IndexRecord{BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4}
+	footer := &codec.FooterRecord{
+		TotalBlocks: 1, TotalRecords: 5, TotalSize: 200,
+		IndexLength: uint32(codec.RecordHeaderSize + codec.IndexRecordSize),
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: 4,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(blockIndex))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := "test-root/103/103/footer.blk"
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	var blockBuf bytes.Buffer
+	blockBuf.Write(codec.EncodeRecord(&codec.HeaderRecord{Version: codec.FormatVersion, Flags: codec.SetCompacted(0), FirstEntryID: 0}))
+	dataRecords := make([]codec.Record, 0, 5)
+	for i := 0; i < 5; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	blockDataOnly := encodeRecordList(dataRecords)
+	blockBuf.Write(codec.EncodeRecord(&codec.BlockHeaderRecord{
+		BlockNumber: 0, FirstEntryID: 0, LastEntryID: 4,
+		BlockLength: uint32(len(blockDataOnly)), BlockCrc: crc32.ChecksumIEEE(blockDataOnly),
+	}))
+	blockBuf.Write(blockDataOnly)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", "test-root/103/103/m_0.blk", int64(0), mock.Anything, mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: blockBuf.Bytes()}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+	require.True(t, reader.isCompacted.Load())
+
+	// A LastReadState from the LOCAL path: non-compacted flags + a local block id (50) that has no
+	// compacted counterpart. Pre-fix, block id 50 -> startBlockIndex == -1 -> empty batch (then a
+	// panic in log_reader). Post-fix, the provenance mismatch forces a resolve by StartEntryID.
+	staleLocalState := &proto.LastReadState{
+		SegmentId:   segId,
+		Flags:       0,
+		Version:     uint32(codec.FormatVersion),
+		LastBlockId: 50,
+		BlockOffset: 0,
+	}
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}, staleLocalState)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 5, len(result.Entries), "resume must resolve by entry id, not the stale local block id")
+	assert.Equal(t, int64(0), result.Entries[0].EntryId)
+	assert.Equal(t, int64(4), result.Entries[4].EntryId)
+	require.NotNil(t, result.LastReadState)
+	assert.True(t, codec.IsCompacted(uint16(result.LastReadState.Flags)), "emitted state must carry compacted provenance")
+}
+
+// TestStagedReader_Compacted_SameProvenanceResumeUsesBlockId covers the "if" branch of the
+// resume gate: a compacted reader given a SAME-provenance (compacted) LastReadState resolves by
+// its block id, reads that block, and filters to entries >= StartEntryID — returning the correct
+// continuation (entries 2..4 here) rather than re-scanning from the footer.
+func TestStagedReader_Compacted_SameProvenanceResumeUsesBlockId(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	logId := int64(104)
+	segId := int64(104)
+
+	blockIndex := &codec.IndexRecord{BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4}
+	footer := &codec.FooterRecord{
+		TotalBlocks: 1, TotalRecords: 5, TotalSize: 200,
+		IndexLength: uint32(codec.RecordHeaderSize + codec.IndexRecordSize),
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: 4,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(blockIndex))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := "test-root/104/104/footer.blk"
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	var blockBuf bytes.Buffer
+	blockBuf.Write(codec.EncodeRecord(&codec.HeaderRecord{Version: codec.FormatVersion, Flags: codec.SetCompacted(0), FirstEntryID: 0}))
+	dataRecords := make([]codec.Record, 0, 5)
+	for i := 0; i < 5; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	blockDataOnly := encodeRecordList(dataRecords)
+	blockBuf.Write(codec.EncodeRecord(&codec.BlockHeaderRecord{
+		BlockNumber: 0, FirstEntryID: 0, LastEntryID: 4,
+		BlockLength: uint32(len(blockDataOnly)), BlockCrc: crc32.ChecksumIEEE(blockDataOnly),
+	}))
+	blockBuf.Write(blockDataOnly)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", "test-root/104/104/m_0.blk", int64(0), mock.Anything, mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: blockBuf.Bytes()}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+	require.True(t, reader.isCompacted.Load())
+
+	// SAME-provenance (compacted) resume state with a valid compacted block id.
+	compactedResumeState := &proto.LastReadState{
+		SegmentId:   segId,
+		Flags:       uint32(codec.SetCompacted(0)),
+		Version:     uint32(codec.FormatVersion),
+		LastBlockId: 0,
+		BlockOffset: 0,
+	}
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 2, MaxBatchEntries: 10}, compactedResumeState)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 3, len(result.Entries), "block-id resume must return the block filtered to entries >= StartEntryID")
+	assert.Equal(t, int64(2), result.Entries[0].EntryId)
+	assert.Equal(t, int64(4), result.Entries[2].EntryId)
+}
+
+// stagedCompactedReaderWithOneBlock builds a compacted (minio-backed, local-absent) reader
+// over a sealed segment with exactly one block (entries 0..4). Only the footer Stat+Get are
+// mocked; callers that expect to actually read the block must add its GetObject expectation.
+func stagedCompactedReaderWithOneBlock(t *testing.T, dir string, cfg *config.Configuration, mockStorage *mocks_objectstorage.ObjectStorage, logId, segId int64) *StagedFileReaderAdv {
+	t.Helper()
+	blockIndex := &codec.IndexRecord{BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4}
+	footer := &codec.FooterRecord{
+		TotalBlocks: 1, TotalRecords: 5, TotalSize: 200,
+		IndexLength: uint32(codec.RecordHeaderSize + codec.IndexRecordSize),
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: 4,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(blockIndex))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	require.True(t, reader.isCompacted.Load())
+	return reader
+}
+
+// TestStagedReader_Compacted_FirstReadPastEnd_ReturnsEOF verifies that a first read whose
+// StartEntryID is past the sealed segment's last entry returns ErrFileReaderEndOfFile (so the
+// consumer advances to the next segment), not ErrEntryNotFound (which would make it wait).
+func TestStagedReader_Compacted_FirstReadPastEnd_ReturnsEOF(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+
+	reader := stagedCompactedReaderWithOneBlock(t, dir, cfg, mockStorage, 120, 120)
+	defer reader.Close(context.Background())
+
+	// Entries are 0..4; ask for 10 (strictly past LAC=4).
+	_, err = reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 10, MaxBatchEntries: 10}, nil)
+	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile, "first read past the last entry of a sealed compacted segment must return EOF")
+}
+
+// TestStagedReader_Compacted_ResumeBeyondBlocks_ReturnsEOF drives readCompactedDataFromObjectStorage's
+// "no block found" path (startBlockIndex == -1): a same-provenance compacted resume whose
+// LastBlockId points past every block in the footer. On a sealed segment this means "no more
+// data", so it must return ErrFileReaderEndOfFile (advance), not an empty batch — which the
+// consumer (log_reader) treats as "wait" and would spin forever on a segment that never grows.
+func TestStagedReader_Compacted_ResumeBeyondBlocks_ReturnsEOF(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+
+	reader := stagedCompactedReaderWithOneBlock(t, dir, cfg, mockStorage, 121, 121)
+	defer reader.Close(context.Background())
+
+	// Same-provenance (compacted) resume whose block id is beyond the footer's only block (0).
+	resumeState := &proto.LastReadState{
+		SegmentId:   121,
+		Flags:       uint32(codec.SetCompacted(0)),
+		Version:     uint32(codec.FormatVersion),
+		LastBlockId: 99,
+		BlockOffset: 0,
+	}
+	_, err = reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 5, MaxBatchEntries: 10}, resumeState)
+	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile, "resume beyond all blocks of a sealed compacted segment must return EOF, not an empty batch")
+}
+
+// TestStagedReader_Compacted_EmptySegment_ReturnsEOF verifies that a compacted segment with
+// zero blocks (genuinely no data) returns EOF on read, so the consumer advances rather than
+// waiting on data that will never arrive.
+func TestStagedReader_Compacted_EmptySegment_ReturnsEOF(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+
+	logId, segId := int64(122), int64(122)
+	footer := &codec.FooterRecord{
+		TotalBlocks: 0, TotalRecords: 0, TotalSize: 0,
+		IndexLength: 0,
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: -1,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+
+	_, err = reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}, nil)
+	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile, "reading an empty (zero-block) compacted segment must return EOF")
+}
+
+// TestStagedReader_LocalAbsent_MarkPresentButNoFooter verifies that when the local staged
+// file is absent but a compacted tombstone mark IS present, the reader consults object
+// storage; if the footer is unexpectedly absent there, it returns ErrEntryNotFound.
+func TestStagedReader_LocalAbsent_MarkPresentButNoFooter(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	logId := int64(101)
+	segId := int64(101)
+
+	// Mark present -> the reader DOES consult object storage; footer absent there.
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+	filePath := getSegmentFilePath(localBaseDir, logId, segId)
+	_, statErr := os.Stat(filePath)
+	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	assert.Nil(t, reader)
+	assert.ErrorIs(t, err, werr.ErrEntryNotFound)
+}
+
+// TestStagedReader_LocalAbsent_NoMark_NoMinioCall verifies the cost-saving tombstone gate:
+// when both the local staged file AND the compacted mark are absent, NewStagedFileReaderAdv
+// returns ErrEntryNotFound WITHOUT any object-storage call. The mock has no StatObject
+// expectation, so mockery's strict mode fails the test if a HEAD is issued.
+func TestStagedReader_LocalAbsent_NoMark_NoMinioCall(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	logId := int64(102)
+	segId := int64(102)
+
+	localBaseDir := filepath.Join(dir, "local")
+	filePath := getSegmentFilePath(localBaseDir, logId, segId)
+	_, statErr := os.Stat(filePath)
+	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	assert.Nil(t, reader)
+	assert.ErrorIs(t, err, werr.ErrEntryNotFound)
+}
+
 // === extractEntriesFromBlockData / extractEntriesFromBlockDataWithBytes ===
 
 func TestStagedFileReaderAdv_ExtractEntriesFromBlockData(t *testing.T) {
@@ -1444,14 +1880,15 @@ func TestStagedFileReaderAdv_ExtractEntriesFromBlockDataWithBytes_FilterStart(t 
 	assert.Equal(t, int64(4), entries[1].EntryId)
 }
 
-// === readBlockFromMinioByKey ===
+// === readBlockFromObjectStorageByKey ===
 
-func TestStagedFileReaderAdv_ReadBlockFromMinioByKey_Success(t *testing.T) {
+func TestStagedFileReaderAdv_ReadBlockFromObjectStorageByKey_Success(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(90)
 	segId := int64(90)
 
@@ -1479,17 +1916,18 @@ func TestStagedFileReaderAdv_ReadBlockFromMinioByKey_Success(t *testing.T) {
 	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", "test-root/90/90/m_0.blk", int64(0), int64(len(blockContent)), mock.Anything, mock.Anything).
 		Return(&readerMockFileReader{data: blockContent}, nil)
 
-	data, err := reader.readBlockFromMinioByKey(context.Background(), "test-root/90/90/m_0.blk", int64(len(blockContent)))
+	data, err := reader.readBlockFromObjectStorageByKey(context.Background(), "test-root/90/90/m_0.blk", int64(len(blockContent)))
 	assert.NoError(t, err)
 	assert.Equal(t, blockContent, data)
 }
 
-func TestStagedFileReaderAdv_ReadBlockFromMinioByKey_Error(t *testing.T) {
+func TestStagedFileReaderAdv_ReadBlockFromObjectStorageByKey_Error(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(91)
 	segId := int64(91)
 
@@ -1515,7 +1953,7 @@ func TestStagedFileReaderAdv_ReadBlockFromMinioByKey_Error(t *testing.T) {
 	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("get error"))
 
-	_, err = reader.readBlockFromMinioByKey(context.Background(), "test-root/91/91/m_0.blk", 100)
+	_, err = reader.readBlockFromObjectStorageByKey(context.Background(), "test-root/91/91/m_0.blk", 100)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get block object")
 }
@@ -1528,6 +1966,7 @@ func TestStagedFileReaderAdv_ReadAndExtractBlockConcurrently_Success(t *testing.
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(95)
 	segId := int64(95)
 
@@ -1711,22 +2150,23 @@ func TestStagedFileReaderAdv_IsFooterExists_False(t *testing.T) {
 	assert.False(t, exists)
 }
 
-// === readCompactedDataFromMinio edge cases ===
+// === readCompactedDataFromObjectStorage edge cases ===
 
 func TestStagedFileReaderAdv_ReadCompactedDataFromMinio_NoBlocks(t *testing.T) {
 	dir := t.TempDir()
 	reader := createTestReaderFromWriter(t, dir, 120, 120, 3, 2)
 	defer reader.Close(context.Background())
 
-	// Manually set compacted state with no block indexes
+	// Manually set compacted state with no block indexes: a sealed segment with nothing at or
+	// after the requested block id must report EOF (so the consumer advances), not an empty
+	// batch (which the consumer treats as "wait" and would spin on forever).
 	reader.isCompacted.Store(true)
 	reader.blockIndexes = nil
 
 	opt := storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}
-	result, err := reader.readCompactedDataFromMinio(context.Background(), opt, 999, 0)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Empty(t, result.Entries)
+	result, err := reader.readCompactedDataFromObjectStorage(context.Background(), opt, 999, 0)
+	assert.ErrorIs(t, err, werr.ErrFileReaderEndOfFile)
+	assert.Nil(t, result)
 }
 
 // === ReadNextBatchAdv with compacted footer and lastReadState ===
@@ -1738,6 +2178,7 @@ func TestStagedFileReaderAdv_ReadNextBatchAdv_CompactedWithLastReadState(t *test
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(130)
 	segId := int64(130)
 
@@ -1845,15 +2286,16 @@ func TestNewStagedFileReaderAdv_OpenFileError_NotPermission(t *testing.T) {
 	assert.Contains(t, err.Error(), "open file")
 }
 
-// === tryParseMinioFooterUnsafe error branches ===
+// === tryParseCompactedFooterUnsafe error branches ===
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_StatObjectError(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_StatObjectError(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(210)
 	segId := int64(210)
 
@@ -1882,13 +2324,14 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_StatObjectError(t *testing.T) {
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_GetObjectError(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_GetObjectError(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(211)
 	segId := int64(211)
 
@@ -1919,13 +2362,14 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_GetObjectError(t *testing.T) {
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_ReadFullError(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_ReadFullError(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(212)
 	segId := int64(212)
 
@@ -1956,13 +2400,14 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_ReadFullError(t *testing.T) {
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
-func TestStagedFileReaderAdv_TryParseMinioFooter_InvalidFooterData(t *testing.T) {
+func TestStagedFileReaderAdv_TryParseCompactedFooter_InvalidFooterData(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(213)
 	segId := int64(213)
 
@@ -1995,7 +2440,7 @@ func TestStagedFileReaderAdv_TryParseMinioFooter_InvalidFooterData(t *testing.T)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
-	// parseMinioFooterDataUnsafe should fail, fall back to incomplete
+	// parseCompactedFooterDataUnsafe should fail, fall back to incomplete
 	assert.True(t, reader.isIncompleteFile.Load())
 }
 
@@ -2801,7 +3246,7 @@ func TestScanForAllBlockInfo_CRCVerifyFailed(t *testing.T) {
 	assert.Empty(t, reader.blockIndexes)
 }
 
-// === readCompactedDataFromMinio - GetObject failure ===
+// === readCompactedDataFromObjectStorage - GetObject failure ===
 
 func TestReadCompactedData_ReadBlockError(t *testing.T) {
 	dir := t.TempDir()
@@ -2809,6 +3254,7 @@ func TestReadCompactedData_ReadBlockError(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(112)
 	segId := int64(112)
 
@@ -2866,12 +3312,15 @@ func TestReadCompactedData_ReadBlockError(t *testing.T) {
 
 	opt := storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}
 	_, err = reader.ReadNextBatchAdv(context.Background(), opt, nil)
-	// Should get EOF since the block read failed and no entries were collected
+	// A failed block fetch with nothing collected must surface as a READ ERROR, never EOF:
+	// EOF would make the consumer advance to the next segment and silently skip the rest of
+	// this sealed segment on a transient object-storage error.
 	assert.Error(t, err)
-	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+	assert.False(t, werr.ErrFileReaderEndOfFile.Is(err),
+		"a transient block-read failure must not be converted into end-of-segment")
 }
 
-// === readCompactedDataFromMinio - no entries match (all below startEntryID) ===
+// === readCompactedDataFromObjectStorage - no entries match (all below startEntryID) ===
 
 func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 	dir := t.TempDir()
@@ -2879,33 +3328,14 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 	require.NoError(t, err)
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId := int64(113)
 	segId := int64(113)
 
-	// Build valid block data with entries 0-4
-	var blockBuf bytes.Buffer
-	hdrRec := &codec.HeaderRecord{Version: codec.FormatVersion, Flags: codec.SetCompacted(0), FirstEntryID: 0}
-	blockBuf.Write(codec.EncodeRecord(hdrRec))
-
-	dataRecords := make([]codec.Record, 0, 5)
-	for i := 0; i < 5; i++ {
-		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("data")})
-	}
-	blockDataOnly := encodeRecordList(dataRecords)
-	blockHdr := &codec.BlockHeaderRecord{
-		BlockNumber:  0,
-		FirstEntryID: 0,
-		LastEntryID:  4,
-		BlockLength:  uint32(len(blockDataOnly)),
-		BlockCrc:     crc32.ChecksumIEEE(blockDataOnly),
-	}
-	blockBuf.Write(codec.EncodeRecord(blockHdr))
-	blockBuf.Write(blockDataOnly)
-	blockData := blockBuf.Bytes()
-
-	blockKey := fmt.Sprintf("test-root/%d/%d/m_0.blk", logId, segId)
-	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", blockKey, int64(0), mock.Anything, mock.Anything, mock.Anything).
-		Return(&readerMockFileReader{data: blockData}, nil)
+	// NOTE: no GetObject expectation exists — with the consumed-block skip, a StartEntryID past
+	// every block's LastEntryID returns EOF WITHOUT fetching any block object (the strict mock
+	// fails this test if a fetch happens; pre-skip the code wastefully fetched block 0, filtered
+	// it to zero entries, and only then returned EOF).
 
 	// Mock StatObject to return "not found" so constructor doesn't try to parse a compacted footer
 	mockStorage.EXPECT().StatObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -2937,10 +3367,114 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 		Flags: codec.SetCompacted(0),
 	}
 
-	// Call readCompactedDataFromMinio directly with startEntryID=100 (beyond all block entries 0-4)
-	// This exercises the "no entries collected" EOF path at L1328-1334
+	// Call readCompactedDataFromObjectStorage directly with startEntryID=100 (beyond all block entries
+	// 0-4): the consumed-block skip advances past every block and returns EOF with no fetch.
 	opt := storage.ReaderOpt{StartEntryID: 100, MaxBatchEntries: 10}
-	_, err = reader.readCompactedDataFromMinio(context.Background(), opt, 0, 0)
+	_, err = reader.readCompactedDataFromObjectStorage(context.Background(), opt, 0, 0)
 	assert.Error(t, err)
 	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+}
+
+// TestStagedReader_LocalEmitterClearsCompactedBit is the regression for the provenance-flag
+// pollution chain: a LOCAL (non-compacted) reader whose r.flags carries a compacted bit
+// absorbed from a prior hop's LastReadState must emit a state with that bit CLEARED — otherwise
+// its LOCAL block number would be mis-resolved as a compacted block index by a downstream
+// compacted reader (silent mis-positioned/missed reads).
+func TestStagedReader_LocalEmitterClearsCompactedBit(t *testing.T) {
+	dir := t.TempDir()
+	reader := createTestReaderFromWriter(t, dir, 130, 130, 5, 4)
+	defer reader.Close(context.Background())
+	require.False(t, reader.isCompacted.Load(), "precondition: this is a local reader")
+
+	// Pollute r.flags with the compacted bit, as if absorbed from a prior compacted hop's state.
+	reader.flags.Store(uint32(codec.SetCompacted(uint16(reader.flags.Load()))))
+
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.LastReadState)
+	assert.False(t, codec.IsCompacted(uint16(result.LastReadState.Flags)),
+		"a local reader must emit a state with the compacted bit cleared, even when r.flags is polluted")
+}
+
+// TestStagedReader_Compacted_ResumePastFullyConsumedLargeBlock is the regression for the
+// multi-block resume data-loss bug: a same-provenance compacted resume restarts at the block
+// holding the LAST delivered entry (block 0, fully consumed). When that block alone reaches the
+// entry budget (MaxBatchEntries), determineBlocksToRead used to admit ONLY it, extraction
+// filtered it to zero entries, and the spurious EOF made the consumer skip every later block of
+// the sealed segment. Post-fix the consumed block is skipped before sizing the batch, so the
+// read returns block 1's entries. The strict mock proves it: only m_1.blk may be fetched.
+func TestStagedReader_Compacted_ResumePastFullyConsumedLargeBlock(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
+	logId, segId := int64(140), int64(140)
+
+	// Footer with TWO blocks: block 0 = entries 0..4, block 1 = entries 5..9.
+	idx0 := &codec.IndexRecord{BlockNumber: 0, StartOffset: 0, BlockSize: 200, FirstEntryID: 0, LastEntryID: 4}
+	idx1 := &codec.IndexRecord{BlockNumber: 1, StartOffset: 200, BlockSize: 200, FirstEntryID: 5, LastEntryID: 9}
+	footer := &codec.FooterRecord{
+		TotalBlocks: 2, TotalRecords: 10, TotalSize: 400,
+		IndexLength: uint32(2 * (codec.RecordHeaderSize + codec.IndexRecordSize)),
+		Version:     codec.FormatVersion, Flags: codec.SetCompacted(0), LAC: 9,
+	}
+	var footerBuf bytes.Buffer
+	footerBuf.Write(codec.EncodeRecord(idx0))
+	footerBuf.Write(codec.EncodeRecord(idx1))
+	footerBuf.Write(codec.EncodeRecord(footer))
+	footerData := footerBuf.Bytes()
+	footerKey := fmt.Sprintf("test-root/%d/%d/footer.blk", logId, segId)
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: footerData}, nil)
+
+	// Only block 1's object may be fetched: no expectation exists for m_0.blk, so re-reading the
+	// consumed block fails the test via the strict mock.
+	var block1Buf bytes.Buffer
+	block1Buf.Write(codec.EncodeRecord(&codec.HeaderRecord{Version: codec.FormatVersion, Flags: codec.SetCompacted(0), FirstEntryID: 5}))
+	dataRecords := make([]codec.Record, 0, 5)
+	for i := 0; i < 5; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	block1DataOnly := encodeRecordList(dataRecords)
+	block1Buf.Write(codec.EncodeRecord(&codec.BlockHeaderRecord{
+		BlockNumber: 1, FirstEntryID: 5, LastEntryID: 9,
+		BlockLength: uint32(len(block1DataOnly)), BlockCrc: crc32.ChecksumIEEE(block1DataOnly),
+	}))
+	block1Buf.Write(block1DataOnly)
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", fmt.Sprintf("test-root/%d/%d/m_1.blk", logId, segId), int64(0), mock.Anything, mock.Anything, mock.Anything).
+		Return(&readerMockFileReader{data: block1Buf.Bytes()}, nil)
+
+	localBaseDir := filepath.Join(dir, "local")
+	segDir := getSegmentDir(localBaseDir, logId, segId)
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+	require.True(t, reader.isCompacted.Load())
+
+	// Same-provenance resume: block 0 fully consumed (entries 0..4 delivered), next wanted
+	// entry is 5. MaxBatchEntries == 5 makes block 0 alone fill the whole entry budget — the
+	// exact trigger for the pre-fix spurious EOF.
+	resumeState := &proto.LastReadState{
+		SegmentId:   segId,
+		Flags:       uint32(codec.SetCompacted(0)),
+		Version:     uint32(codec.FormatVersion),
+		LastBlockId: 0,
+		BlockOffset: 0,
+	}
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{StartEntryID: 5, MaxBatchEntries: 5}, resumeState)
+	require.NoError(t, err, "resume past a fully consumed budget-sized block must NOT return EOF")
+	require.NotNil(t, result)
+	require.Equal(t, 5, len(result.Entries), "all of block 1's entries must be returned")
+	assert.Equal(t, int64(5), result.Entries[0].EntryId)
+	assert.Equal(t, int64(9), result.Entries[4].EntryId)
+	require.NotNil(t, result.LastReadState)
+	assert.Equal(t, int32(1), result.LastReadState.LastBlockId)
+	assert.True(t, codec.IsCompacted(uint16(result.LastReadState.Flags)))
 }

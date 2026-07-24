@@ -63,6 +63,9 @@ service LogStore {
   rpc FenceSegment(FenceSegmentRequest) returns (FenceSegmentResponse);
   rpc CompleteSegment(CompleteSegmentRequest) returns (CompleteSegmentResponse);
   rpc CompactSegment(CompactSegmentRequest) returns (CompactSegmentResponse);
+  // NotifySegmentCompacted informs a node that a segment's data is durably compacted in
+  // object storage, authorizing it to mark (and later reclaim) its local copy.
+  rpc NotifySegmentCompacted(NotifySegmentCompactedRequest) returns (NotifySegmentCompactedResponse);
 
   // Segment introspection
   rpc GetSegmentLastAddConfirmed(GetSegmentLastAddConfirmedRequest) returns (GetSegmentLastAddConfirmedResponse);
@@ -180,6 +183,16 @@ message CompactSegmentRequest {
 message CompactSegmentResponse {
   Status status = 1 ;
   meta.SegmentMetadata metadata = 2;
+}
+
+message NotifySegmentCompactedRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+}
+message NotifySegmentCompactedResponse {
+  Status status = 1;
 }
 
 // Segment introspection

@@ -132,6 +132,16 @@ func TestAll(t *testing.T) {
 	t.Run("test store segment meta already exists", testStoreSegmentMetaAlreadyExists)
 	t.Run("test create cleanup status already exists", testCreateCleanupStatusAlreadyExists)
 	t.Run("test update cleanup status not exists", testUpdateCleanupStatusNotExists)
+	t.Run("test create segment compacted notify status", testCreateSegmentCompactedNotifyStatus)
+	t.Run("test update segment compacted notify status", testUpdateSegmentCompactedNotifyStatus)
+	t.Run("test list segment compacted notify status", testListSegmentCompactedNotifyStatus)
+	t.Run("test delete segment compacted notify status", testDeleteSegmentCompactedNotifyStatus)
+	t.Run("test create compacted notify status already exists", testCreateCompactedNotifyStatusAlreadyExists)
+	t.Run("test update compacted notify status not exists", testUpdateCompactedNotifyStatusNotExists)
+	t.Run("test corrupted compacted notify status data", testCorruptedCompactedNotifyStatusData)
+	t.Run("test delete log metadata wipes marking records", testDeleteLogMetadataWipesMarkingRecords)
+	t.Run("test list compacted notify status no cross log", testListSegmentCompactedNotifyStatusNoCrossLog)
+	t.Run("test list cleanup status no cross log", testListSegmentCleanupStatusNoCrossLog)
 	t.Run("test check segment not exists", testCheckSegmentNotExists)
 	t.Run("test cancelled context etcd errors", testCancelledContextEtcdErrors)
 	t.Run("test corrupted protobuf data", testCorruptedProtobufData)
@@ -2254,9 +2264,11 @@ func testCorruptedProtobufData(t *testing.T) {
 	_, err = provider.GetSegmentCleanupStatus(context.Background(), 1, 1)
 	assert.Error(t, err)
 
-	// ListSegmentCleanupStatus unmarshal error
-	_, err = provider.ListSegmentCleanupStatus(context.Background(), 1)
-	assert.Error(t, err)
+	// ListSegmentCleanupStatus SKIPS the corrupt record (hardened: one bad value must not
+	// poison the truncate cleanup / orphan sweep for the whole log).
+	cleanupStatuses, err := provider.ListSegmentCleanupStatus(context.Background(), 1)
+	assert.NoError(t, err)
+	assert.Empty(t, cleanupStatuses, "the corrupt record is skipped, not returned")
 }
 
 // testCreateLogEdgeCases covers CreateLog error branches for missing/invalid idgen
@@ -2742,4 +2754,293 @@ func testStoreSegmentMetadata_RejectsAfterLogDeleted(t *testing.T) {
 	segResp, err := etcdCli.Get(context.Background(), kb.BuildSegmentInstanceKey("ghost", ""), clientv3.WithPrefix())
 	require.NoError(t, err)
 	assert.Equal(t, 0, len(segResp.Kvs), "no segment key must exist under deleted log 'ghost'")
+}
+
+// === SegmentCompactedNotifyStatus (root/marking) provider tests ===
+// Mirror of the SegmentCleanupStatus tests for the Sealed-phase sibling record.
+
+func testCreateSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(1)
+	nowMs := uint64(time.Now().UnixMilli())
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:          logId,
+		SegmentId:      segmentId,
+		State:          proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:      nowMs,
+		LastUpdateTime: nowMs,
+		QuorumNotifyStatus: map[string]bool{
+			"node1": false,
+			"node2": true,
+		},
+	}
+	createdRev, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+	assert.Positive(t, createdRev, "create must return the record's revision for later CAS updates")
+
+	stored, rev, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.NotNil(t, stored)
+	assert.Equal(t, createdRev, rev, "get must return the same revision the create produced")
+	assert.Equal(t, logId, stored.LogId)
+	assert.Equal(t, segmentId, stored.SegmentId)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS, stored.State)
+	assert.Equal(t, nowMs, stored.StartTime)
+	assert.Equal(t, nowMs, stored.LastUpdateTime)
+	assert.Equal(t, 2, len(stored.QuorumNotifyStatus))
+	assert.False(t, stored.QuorumNotifyStatus["node1"])
+	assert.True(t, stored.QuorumNotifyStatus["node2"])
+}
+
+func testUpdateSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(2)
+	nowMs := uint64(time.Now().UnixMilli())
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          nowMs,
+		LastUpdateTime:     nowMs,
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	rev, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+
+	// Advance to PENDING_MANUAL with an error message (the operator-triage transition),
+	// CAS-guarded by the revision the create returned.
+	status.State = proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL
+	status.ErrorMessage = "nodes unacked after 30m0s of retries: node1"
+	status.LastUpdateTime = uint64(time.Now().UnixMilli())
+	require.NoError(t, provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status, rev))
+
+	stored, newRev, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.NotNil(t, stored)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL, stored.State)
+	assert.Contains(t, stored.ErrorMessage, "node1")
+	assert.Greater(t, newRev, rev, "a successful update advances the revision")
+
+	// A STALE write-back (using the pre-update revision) must fail with a revision conflict
+	// and leave the record untouched — this is the guard that keeps the notify manager's
+	// multi-second read→distribute→write-back pass from clobbering a concurrent
+	// "wp marking confirm" (NOTIFY_OPERATOR_CONFIRMED would otherwise be silently lost).
+	stale := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	err = provider.UpdateSegmentCompactedNotifyStatus(context.Background(), stale, rev)
+	assert.True(t, werr.ErrMetadataRevisionConflict.Is(err), "stale revision must be rejected, got: %v", err)
+
+	unchanged, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL, unchanged.State,
+		"the concurrent writer's state must survive the stale write-back attempt")
+}
+
+func testListSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	for _, segId := range []int64{1, 2, 3} {
+		status := &proto.SegmentCompactedNotifyStatus{
+			LogId:              logId,
+			SegmentId:          segId,
+			State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+			StartTime:          uint64(time.Now().UnixMilli()),
+			LastUpdateTime:     uint64(time.Now().UnixMilli()),
+			QuorumNotifyStatus: map[string]bool{"node1": false},
+		}
+		_, createErr := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+		require.NoError(t, createErr)
+	}
+
+	statuses, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(statuses))
+	segIds := make([]int64, 0, len(statuses))
+	for _, s := range statuses {
+		segIds = append(segIds, s.SegmentId)
+	}
+	sort.Slice(segIds, func(i, j int) bool { return segIds[i] < segIds[j] })
+	assert.Equal(t, []int64{1, 2, 3}, segIds)
+
+	// Empty list for a log with no records.
+	empty, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId+999)
+	assert.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func testDeleteSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(4)
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": true},
+	}
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+
+	require.NoError(t, provider.DeleteSegmentCompactedNotifyStatus(context.Background(), logId, segmentId))
+
+	stored, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.Nil(t, stored)
+
+	// Deleting a missing record is idempotent.
+	assert.NoError(t, provider.DeleteSegmentCompactedNotifyStatus(context.Background(), logId, segmentId))
+}
+
+func testCreateCompactedNotifyStatusAlreadyExists(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          5,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+	_, err = provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
+func testUpdateCompactedNotifyStatusNotExists(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          77,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+		QuorumNotifyStatus: map[string]bool{"node1": true},
+	}
+	// A missing record has ModRevision 0, so any positive expected revision fails the CAS —
+	// updates can neither create nor resurrect a record.
+	err := provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status, 42)
+	assert.True(t, werr.ErrMetadataRevisionConflict.Is(err), "got: %v", err)
+}
+
+func testCorruptedCompactedNotifyStatusData(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Invalid protobuf: field 1, length-delimited, claims length=10 but no data follows.
+	invalidProto := string([]byte{0x0a, 0x0a})
+	logId := int64(31415)
+	key := legacyKeyBuilder().BuildSegmentCompactedNotifyStatusKey(logId, 1)
+	_, err = etcdCli.Put(context.Background(), key, invalidProto)
+	require.NoError(t, err)
+
+	_, _, err = provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
+	assert.Error(t, err, "a targeted Get of the corrupt record still surfaces the error")
+
+	// List SKIPS the corrupt record instead of failing wholesale: one bad value must not
+	// poison the notify seed / orphan sweep for the entire log. A good sibling record is
+	// still returned.
+	goodKey := legacyKeyBuilder().BuildSegmentCompactedNotifyStatusKey(logId, 2)
+	goodVal, err := proto.MarshalSegmentCompactedNotifyStatus(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: 2, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+	})
+	require.NoError(t, err)
+	_, err = etcdCli.Put(context.Background(), goodKey, string(goodVal))
+	require.NoError(t, err)
+
+	statuses, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
+	assert.NoError(t, err, "List must tolerate a corrupt record")
+	require.Len(t, statuses, 1, "the good record survives; the corrupt one is skipped")
+	assert.Equal(t, int64(2), statuses[0].SegmentId)
+
+	_, err = etcdCli.Delete(context.Background(), key)
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), goodKey)
+	require.NoError(t, err)
+}
+
+func testDeleteLogMetadataWipesMarkingRecords(t *testing.T) {
+	provider, logName, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          1,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+
+	// Whole-log delete must wipe the marking/<logId>/ prefix along with the rest.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), logName, true))
+
+	stored, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
+	assert.NoError(t, err)
+	assert.Nil(t, stored, "marking record must be wiped by the whole-log delete transaction")
+}
+
+// testListSegmentCompactedNotifyStatusNoCrossLog is the regression for the trailing-slash
+// prefix fix: List(logId=1) must NOT also match marking/12/*, marking/10/* etc. (records are
+// keyed by SegmentId alone downstream, so a cross-log match would seed the wrong log's
+// same-numbered segment as settled and silently skip its distribution).
+func testListSegmentCompactedNotifyStatusNoCrossLog(t *testing.T) {
+	provider, _, _ := setupSegmentCleanupTest(t)
+
+	put := func(logId, segId int64) {
+		_, putErr := provider.CreateSegmentCompactedNotifyStatus(context.Background(), &proto.SegmentCompactedNotifyStatus{
+			LogId: logId, SegmentId: segId,
+			State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+			StartTime:          uint64(time.Now().UnixMilli()),
+			QuorumNotifyStatus: map[string]bool{"n1": false},
+		})
+		require.NoError(t, putErr)
+	}
+	// Log 1 has segment 3; sibling logs 10, 12, 100 (whose ids share the "1" prefix) also have it.
+	put(1, 3)
+	put(10, 3)
+	put(12, 7)
+	put(100, 9)
+
+	got, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "List(1) must return only log 1's records, not marking/10, marking/12, marking/100")
+	assert.Equal(t, int64(1), got[0].LogId)
+	assert.Equal(t, int64(3), got[0].SegmentId)
+}
+
+// testListSegmentCleanupStatusNoCrossLog is the same regression for the sibling cleanup-status
+// scan (which had the identical prefix bug).
+func testListSegmentCleanupStatusNoCrossLog(t *testing.T) {
+	provider, _, _ := setupSegmentCleanupTest(t)
+
+	put := func(logId, segId int64) {
+		require.NoError(t, provider.CreateSegmentCleanupStatus(context.Background(), &proto.SegmentCleanupStatus{
+			LogId: logId, SegmentId: segId,
+			State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+			StartTime:           uint64(time.Now().UnixMilli()),
+			QuorumCleanupStatus: map[string]bool{"n1": false},
+		}))
+	}
+	put(1, 3)
+	put(10, 3)
+	put(12, 7)
+
+	got, err := provider.ListSegmentCleanupStatus(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "List(1) must return only log 1's cleanup records")
+	assert.Equal(t, int64(1), got[0].LogId)
 }

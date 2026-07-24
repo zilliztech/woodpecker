@@ -63,6 +63,9 @@ type LogStore interface {
 	FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error)
 	CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	// NotifySegmentCompacted marks a segment's local data as durably compacted in object
+	// storage (writes a local data.compacted), authorizing later reclaim of its data.log.
+	NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error
 	GetSegmentLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	GetSegmentBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error
@@ -73,6 +76,16 @@ type LogStore interface {
 	HasLocalSegmentData() bool
 	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error
 	EvictInstance(ctx context.Context, bucketName string, rootPath string) error
+	// EvictSegmentReader invalidates the cached segment reader (if any) for an
+	// already-created segment processor, without creating one. No-op if no
+	// processor is cached for this key. Used by maintenance tasks after a
+	// segment's local data.log is reclaimed, so subsequent reads rebuild
+	// against minio instead of hitting a stale/closed local reader.
+	EvictSegmentReader(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error
+	// EvictSegmentWriter closes the cached segment writer (if any) for an already-cached
+	// segment processor, releasing its open fd on the local data.log. Like
+	// EvictSegmentReader it never creates a processor; absent key is a no-op.
+	EvictSegmentWriter(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error
 }
 
 var _ LogStore = (*logStore)(nil)
@@ -94,10 +107,11 @@ type logStore struct {
 	deletingLogs      map[string]struct{} // logKey set
 	deletingInstances map[string]struct{} // instanceKey set
 
-	maintenance   *NodeMaintenanceManager
-	stopped       atomic.Bool
-	rejectWrites  atomic.Bool  // separate from stopped: only blocks new writes during decommission, not reads
-	diskRejectBps atomic.Int32 // rejection probability in basis points (0..10000), set by diskWatermarkTask; gates new appends only
+	maintenance      *NodeMaintenanceManager
+	compactedCleanup *compactedFileCleanupTask // event queue fed by NotifySegmentCompacted; drop path for compacted data.log
+	stopped          atomic.Bool
+	rejectWrites     atomic.Bool  // separate from stopped: only blocks new writes during decommission, not reads
+	diskRejectBps    atomic.Int32 // rejection probability in basis points (0..10000), set by diskWatermarkTask; gates new appends only
 }
 
 // admitAppend returns false when the disk-watermark policy rejects this append.
@@ -132,6 +146,8 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 	logStore.maintenance = NewNodeMaintenanceManager(ctx)
 	logStore.maintenance.Register(newIdleProcessorCleanupTask(logStore))
 	logStore.maintenance.Register(newDeletedLogReclaimTask(logStore, cfg.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Duration.Duration()))
+	logStore.compactedCleanup = newCompactedFileCleanupTask(logStore)
+	logStore.maintenance.Register(logStore.compactedCleanup)
 
 	// Disk-watermark backpressure (issue #215): only meaningful when this node keeps
 	// WAL data on a local disk (service/local storage modes).
@@ -370,6 +386,48 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 	return s, nil
 }
 
+// EvictSegmentReader invalidates the cached segment reader for an already-cached
+// segment processor, identified by the same key computation as
+// getOrCreateSegmentProcessor. It does NOT create a processor if one is not
+// already cached; absent key is a no-op.
+func (l *logStore) EvictSegmentReader(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error {
+	logKey := GetLogKey(bucketName, rootPath, logId)
+
+	l.spMu.RLock()
+	var segProcessor processor.SegmentProcessor
+	if processors, logExists := l.segmentProcessors[logKey]; logExists {
+		segProcessor = processors[segId]
+	}
+	l.spMu.RUnlock()
+
+	if segProcessor == nil {
+		return nil
+	}
+	segProcessor.InvalidateReader(ctx)
+	return nil
+}
+
+// EvictSegmentWriter closes and drops the cached segment writer for an already-cached
+// segment processor, releasing its open fd on the local data.log so the unlinked inode's
+// blocks are reclaimed immediately. It does NOT create a processor if one is not already
+// cached; absent key is a no-op.
+func (l *logStore) EvictSegmentWriter(ctx context.Context, bucketName string, rootPath string, logId int64, segId int64) error {
+	logKey := GetLogKey(bucketName, rootPath, logId)
+
+	l.spMu.RLock()
+	var segProcessor processor.SegmentProcessor
+	if processors, logExists := l.segmentProcessors[logKey]; logExists {
+		segProcessor = processors[segId]
+	}
+	l.spMu.RUnlock()
+
+	if segProcessor == nil {
+		return nil
+	}
+	segProcessor.InvalidateWriter(ctx)
+	return nil
+}
+
 // Test Only
 func (l *logStore) getExistsSegmentProcessor(bucketName string, rootPath string, logId int64, segmentId int64) processor.SegmentProcessor {
 	l.spMu.RLock()
@@ -579,6 +637,63 @@ func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPa
 	return metadata, nil
 }
 
+// NotifySegmentCompacted writes a local data.compacted for the segment, authorizing the
+// compacted-file-cleanup task to later drop its local data.log. It is a no-op (returns nil)
+// when the node keeps no local data for this segment (pure object-storage mode).
+func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootPath string, logId, segmentId int64) error {
+	if l.stopped.Load() {
+		return werr.ErrLogStoreShutdown
+	}
+	// Compacted-mark cleanup only applies to service (staged) storage — that is the only mode
+	// with a node-local data.log to reclaim. Gate here (matching the compacted-file-cleanup task
+	// and the client-side distributeCompactedMarks) so a non-service node never writes a mark or
+	// enqueues into a drop queue its cleanup task never drains.
+	if !l.cfg.Woodpecker.Storage.IsStorageService() {
+		return nil
+	}
+	// The rootPath arrives per-RPC (service mode: bucket/rootPath are caller-managed) — the
+	// local config validation cannot vouch for it. The cleanup machinery consumes it verbatim
+	// for the footer key, the local dir, and the gauge label, while the pull reconcile
+	// re-derives a path.Join-canonicalized value from disk; accepting a non-canonical value
+	// here would silently split those. Reject it loudly instead.
+	if rpErr := config.ValidateRootPathValue(rootPath); rpErr != nil {
+		return werr.ErrLogStoreInvalidRootPath.WithCauseErr(rpErr)
+	}
+	dir := localSegmentDataDir(l.cfg, bucketName, rootPath, logId, segmentId)
+	if dir == "" {
+		return nil // no local data dir (e.g. empty RootPath): nothing to mark
+	}
+	// Verify the compaction is actually durable BEFORE writing the tombstone. The mark is
+	// load-bearing — HasLocalSegmentData treats a marked data.log as drained and the cleanup
+	// task reclaims against it — so the "mark ⇒ footer exists" invariant is enforced here,
+	// not on the caller's word: a stale retry, a mis-routed notify, or an external caller of
+	// the public RPC must not fabricate a drained state. This also closes the truncate race
+	// end-to-end: a notify arriving after the truncate GC removed the segment's objects finds
+	// no footer and cannot resurrect the reaped directory.
+	if l.storageClient == nil {
+		return werr.ErrInternalError.WithCauseErrMsg("no object storage client; cannot verify compacted footer")
+	}
+	footerOk, footerErr := compactedFooterExists(ctx, l.storageClient, bucketName, rootPath, logId, segmentId)
+	if footerErr != nil {
+		return footerErr
+	}
+	if !footerOk {
+		logger.Ctx(ctx).Warn("NotifySegmentCompacted: compacted footer not found; refusing to write mark",
+			zap.String("bucket", bucketName), zap.String("rootPath", rootPath),
+			zap.Int64("logId", logId), zap.Int64("segId", segmentId))
+		return werr.ErrSegmentNotFound.WithCauseErrMsg("compacted footer not found in object storage; segment is not durably compacted")
+	}
+	if err := writeCompactedMark(ctx, dir); err != nil {
+		return err
+	}
+	// Feed the event-driven drop queue so the local data.log is reclaimed on the next
+	// maintenance tick, without waiting for the low-frequency reconcile walk.
+	if l.compactedCleanup != nil {
+		l.compactedCleanup.enqueueFooterConfirmed(dir, bucketName, rootPath, logId, segmentId)
+	}
+	return nil
+}
+
 func (l *logStore) CleanSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {
 	if l.stopped.Load() {
 		return werr.ErrLogStoreShutdown
@@ -690,6 +805,12 @@ func (l *logStore) HasLocalSegmentData() bool {
 		if d.Name() == "data.log" {
 			info, statErr := d.Info()
 			if statErr == nil && info.Size() > 0 {
+				if hasCompactedMark(filepath.Dir(path)) {
+					// Already durably compacted in object storage; this data.log is
+					// redundant and scheduled for physical GC. Don't let it block
+					// decommission — keep walking for other, un-marked segments.
+					return nil
+				}
 				found = true
 				return filepath.SkipAll // stop walking, we found data
 			}

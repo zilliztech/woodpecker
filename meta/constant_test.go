@@ -153,6 +153,10 @@ func TestKeyBuilderWithLegacyPrefix(t *testing.T) {
 	assert.Equal(t, "woodpecker/readers/1/", builder.BuildLogAllReaderTempInfosKey(1))
 	assert.Equal(t, "woodpecker/cleaning/1", builder.BuildAllSegmentsCleanupStatusKey(1))
 	assert.Equal(t, "woodpecker/cleaning/1/2", builder.BuildSegmentCleanupStatusKey(1, 2))
+	assert.Equal(t, "woodpecker/marking", builder.SegmentCompactedNotifyStatusPrefix())
+	assert.Equal(t, "woodpecker/marking/1", builder.BuildAllSegmentsCompactedNotifyStatusKey(1))
+	assert.Equal(t, "woodpecker/marking/1/2", builder.BuildSegmentCompactedNotifyStatusKey(1, 2))
+	assert.Equal(t, "woodpecker/marking/12/", builder.BuildLogCompactedNotifyStatusPrefix(12))
 }
 
 func TestKeyBuilderWithConfiguredPrefix(t *testing.T) {
@@ -162,6 +166,7 @@ func TestKeyBuilderWithConfiguredPrefix(t *testing.T) {
 	assert.Equal(t, "lakebase/wp/instance", builder.ServiceInstanceKey())
 	assert.Equal(t, "lakebase/wp/logs/mylog", builder.BuildLogKey("mylog"))
 	assert.Equal(t, "lakebase/wp/cleaning/1/2", builder.BuildSegmentCleanupStatusKey(1, 2))
+	assert.Equal(t, "lakebase/wp/marking/1/2", builder.BuildSegmentCompactedNotifyStatusKey(1, 2))
 }
 
 func TestKeyBuilder_DeletedLogKeys(t *testing.T) {

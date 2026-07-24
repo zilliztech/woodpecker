@@ -28,31 +28,6 @@ func (_m *SegmentProcessor) EXPECT() *SegmentProcessor_Expecter {
 }
 
 // AddEntry provides a mock function with given fields: ctx, entry, resultCh
-func (_m *SegmentProcessor) AddEntryBatch(ctx context.Context, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
-	ret := _m.Called(ctx, entries, resultChs)
-
-	if len(ret) == 0 {
-		panic("no return value specified for AddEntryBatch")
-	}
-
-	var r0 []int64
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) ([]int64, error)); ok {
-		return rf(ctx, entries, resultChs)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) []int64); ok {
-		r0 = rf(ctx, entries, resultChs)
-	} else if ret.Get(0) != nil {
-		r0 = ret.Get(0).([]int64)
-	}
-	if rf, ok := ret.Get(1).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) error); ok {
-		r1 = rf(ctx, entries, resultChs)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
 func (_m *SegmentProcessor) AddEntry(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
 	ret := _m.Called(ctx, entry, resultCh)
 
@@ -106,6 +81,66 @@ func (_c *SegmentProcessor_AddEntry_Call) Return(_a0 int64, _a1 error) *SegmentP
 }
 
 func (_c *SegmentProcessor_AddEntry_Call) RunAndReturn(run func(context.Context, *proto.LogEntry, channel.ResultChannel) (int64, error)) *SegmentProcessor_AddEntry_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// AddEntryBatch provides a mock function with given fields: ctx, entries, resultChs
+func (_m *SegmentProcessor) AddEntryBatch(ctx context.Context, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error) {
+	ret := _m.Called(ctx, entries, resultChs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AddEntryBatch")
+	}
+
+	var r0 []int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) ([]int64, error)); ok {
+		return rf(ctx, entries, resultChs)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) []int64); ok {
+		r0 = rf(ctx, entries, resultChs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]int64)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, []*proto.LogEntry, []channel.ResultChannel) error); ok {
+		r1 = rf(ctx, entries, resultChs)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentProcessor_AddEntryBatch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddEntryBatch'
+type SegmentProcessor_AddEntryBatch_Call struct {
+	*mock.Call
+}
+
+// AddEntryBatch is a helper method to define mock.On call
+//   - ctx context.Context
+//   - entries []*proto.LogEntry
+//   - resultChs []channel.ResultChannel
+func (_e *SegmentProcessor_Expecter) AddEntryBatch(ctx interface{}, entries interface{}, resultChs interface{}) *SegmentProcessor_AddEntryBatch_Call {
+	return &SegmentProcessor_AddEntryBatch_Call{Call: _e.mock.On("AddEntryBatch", ctx, entries, resultChs)}
+}
+
+func (_c *SegmentProcessor_AddEntryBatch_Call) Run(run func(ctx context.Context, entries []*proto.LogEntry, resultChs []channel.ResultChannel)) *SegmentProcessor_AddEntryBatch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].([]*proto.LogEntry), args[2].([]channel.ResultChannel))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_AddEntryBatch_Call) Return(_a0 []int64, _a1 error) *SegmentProcessor_AddEntryBatch_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentProcessor_AddEntryBatch_Call) RunAndReturn(run func(context.Context, []*proto.LogEntry, []channel.ResultChannel) ([]int64, error)) *SegmentProcessor_AddEntryBatch_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -712,6 +747,72 @@ func (_c *SegmentProcessor_GetWriterSnapshotDetailed_Call) Return(_a0 *storage.W
 
 func (_c *SegmentProcessor_GetWriterSnapshotDetailed_Call) RunAndReturn(run func() *storage.WriterSnapshotDetailed) *SegmentProcessor_GetWriterSnapshotDetailed_Call {
 	_c.Call.Return(run)
+	return _c
+}
+
+// InvalidateReader provides a mock function with given fields: ctx
+func (_m *SegmentProcessor) InvalidateReader(ctx context.Context) {
+	_m.Called(ctx)
+}
+
+// SegmentProcessor_InvalidateReader_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'InvalidateReader'
+type SegmentProcessor_InvalidateReader_Call struct {
+	*mock.Call
+}
+
+// InvalidateReader is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *SegmentProcessor_Expecter) InvalidateReader(ctx interface{}) *SegmentProcessor_InvalidateReader_Call {
+	return &SegmentProcessor_InvalidateReader_Call{Call: _e.mock.On("InvalidateReader", ctx)}
+}
+
+func (_c *SegmentProcessor_InvalidateReader_Call) Run(run func(ctx context.Context)) *SegmentProcessor_InvalidateReader_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_InvalidateReader_Call) Return() *SegmentProcessor_InvalidateReader_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *SegmentProcessor_InvalidateReader_Call) RunAndReturn(run func(context.Context)) *SegmentProcessor_InvalidateReader_Call {
+	_c.Run(run)
+	return _c
+}
+
+// InvalidateWriter provides a mock function with given fields: ctx
+func (_m *SegmentProcessor) InvalidateWriter(ctx context.Context) {
+	_m.Called(ctx)
+}
+
+// SegmentProcessor_InvalidateWriter_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'InvalidateWriter'
+type SegmentProcessor_InvalidateWriter_Call struct {
+	*mock.Call
+}
+
+// InvalidateWriter is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *SegmentProcessor_Expecter) InvalidateWriter(ctx interface{}) *SegmentProcessor_InvalidateWriter_Call {
+	return &SegmentProcessor_InvalidateWriter_Call{Call: _e.mock.On("InvalidateWriter", ctx)}
+}
+
+func (_c *SegmentProcessor_InvalidateWriter_Call) Run(run func(ctx context.Context)) *SegmentProcessor_InvalidateWriter_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_InvalidateWriter_Call) Return() *SegmentProcessor_InvalidateWriter_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *SegmentProcessor_InvalidateWriter_Call) RunAndReturn(run func(context.Context)) *SegmentProcessor_InvalidateWriter_Call {
+	_c.Run(run)
 	return _c
 }
 

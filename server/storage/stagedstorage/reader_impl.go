@@ -110,10 +110,71 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// File doesn't exist yet, return entry not found
-			logger.Ctx(ctx).Debug("file does not exist, returning ErrEntryNotFound",
+			// Local staged data.log is gone. Distinguish "compacted -> served from object
+			// storage" from "genuinely no data on this node" using the durable compacted
+			// tombstone mark, so a genuinely-absent segment costs no object-storage HEAD.
+			// (By design, notify fans the mark to EVERY quorum node — including replicas
+			// that never held the segment's bytes — so any marked replica serves the
+			// segment from object storage directly instead of bouncing the client. The
+			// no-mark not-found path is for segments that were never compacted here.)
+			if !HasCompactedMark(segmentDir) {
+				logger.Ctx(ctx).Debug("local staged file absent and no compacted mark, returning ErrEntryNotFound",
+					zap.String("filePath", filePath))
+				return nil, werr.ErrEntryNotFound
+			}
+			// Mark present: the segment is durably compacted. Serve reads from object
+			// storage with no local file handle and no local re-caching.
+			logger.Ctx(ctx).Debug("local staged file absent but compacted mark present, reading from minio compacted footer",
 				zap.String("filePath", filePath))
-			return nil, werr.ErrEntryNotFound
+			r := &StagedFileReaderAdv{
+				logId:           logId,
+				segId:           segId,
+				logIdStr:        strconv.FormatInt(logId, 10),
+				logNs:           bucket + "/" + rootPath,
+				filePath:        filePath,
+				maxBatchSize:    maxBatchSize,
+				file:            nil,
+				bucket:          bucket,
+				rootPath:        rootPath,
+				maxFetchThreads: maxFetchThreads,
+				pool:            conc.NewPool[*BlockReadResult](maxFetchThreads),
+				storageCli:      storageCli,
+			}
+			r.flags.Store(0)
+			r.version.Store(codec.FormatVersion)
+			r.closed.Store(false)
+			r.lastAddConfirmed.Store(-1)
+
+			r.isIncompleteFile.Store(true)
+			if perr := r.tryParseCompactedFooterUnsafe(ctx); perr != nil || r.isIncompleteFile.Load() {
+				if perr != nil && (r.storageCli == nil || !r.storageCli.IsObjectNotExistsError(perr)) {
+					// Transient object-storage failure (throttle/5xx/timeout/parse) — NOT
+					// evidence of absence. With the local data.log reclaimed this is the only
+					// source, and mapping it to ErrEntryNotFound would silently stall reads
+					// (that error is the suppressed steady-state signal). Surface it as a
+					// retriable error, mirroring compactedFooterExists's absent-vs-error split.
+					logger.Ctx(ctx).Warn("failed to load compacted footer from object storage for reclaimed staged segment; surfacing retriable error",
+						zap.String("filePath", filePath), zap.Error(perr))
+					if r.pool != nil {
+						r.pool.Release()
+					}
+					return nil, perr
+				}
+				// no local file, no minio footer => genuinely not found
+				logger.Ctx(ctx).Debug("no local staged file and no minio compacted footer, returning ErrEntryNotFound",
+					zap.String("filePath", filePath))
+				if r.pool != nil {
+					r.pool.Release()
+				}
+				return nil, werr.ErrEntryNotFound
+			}
+
+			metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Inc()
+			logger.Ctx(ctx).Info("local staged file absent, serving reads from minio compacted footer",
+				zap.String("filePath", filePath),
+				zap.Int64("logId", logId),
+				zap.Int64("segId", segId))
+			return r, nil
 		}
 		logger.Ctx(ctx).Warn("failed to open file for reading",
 			zap.String("filePath", filePath),
@@ -190,6 +251,14 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Closed check UNDER the lock: this runs before ReadNextBatchAdv takes its read lock, so
+	// it races with an eviction-triggered Close the same way — parsing on a closed reader
+	// would hit the nil file and masquerade as ErrEntryNotFound instead of the rebuildable
+	// AlreadyClosed.
+	if r.closed.Load() {
+		return werr.ErrFileReaderAlreadyClosed
+	}
+
 	// double check if already exists
 	if !r.isIncompleteFile.Load() {
 		// already parse an exists footer
@@ -197,7 +266,7 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 	}
 
 	// Priority 1: Try to read footer from minio (compacted data)
-	if err := r.tryParseMinioFooterUnsafe(ctx); err != nil {
+	if err := r.tryParseCompactedFooterUnsafe(ctx); err != nil {
 		logger.Ctx(ctx).Debug("failed to parse minio footer, trying local file",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
@@ -213,9 +282,16 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 	return r.tryParseLocalFooterUnsafe(ctx)
 }
 
-// tryParseMinioFooterUnsafe attempts to parse footer from minio object storage
-func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseMinioFooterUnsafe")
+// tryParseCompactedFooterUnsafe attempts to parse the compacted footer from object storage.
+// The "footer genuinely absent" outcome returns the ORIGINAL StatObject error untouched, so
+// callers distinguish it with the same backend-dispatched IsObjectNotExistsError predicate
+// used here — the MinIO-only minioHandler.IsObjectNotExists would never recognize the Azure
+// backend's raw 404 (*azcore.ResponseError), turning a definitive not-found into an unbounded
+// retry. Absence is the only outcome that may be translated into ErrEntryNotFound; every
+// other failure (nil client, StatObject/GetObject/ReadFull/parse) must stay visible and
+// retriable.
+func (r *StagedFileReaderAdv) tryParseCompactedFooterUnsafe(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseCompactedFooterUnsafe")
 	defer sp.End()
 
 	if r.storageCli == nil {
@@ -232,10 +308,10 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	// Check if footer exists
 	objSize, _, err := r.storageCli.StatObject(ctx, r.bucket, footerKey, r.logNs, r.logIdStr)
 	if err != nil {
-		if minioHandler.IsObjectNotExists(err) {
-			logger.Ctx(ctx).Debug("no compacted footer found in minio",
+		if r.storageCli.IsObjectNotExistsError(err) {
+			logger.Ctx(ctx).Debug("no compacted footer found in object storage",
 				zap.String("footerKey", footerKey))
-			return fmt.Errorf("no footer in minio")
+			return err // untouched: callers re-check with the same backend-dispatched predicate
 		}
 		logger.Ctx(ctx).Warn("failed to stat footer object in minio",
 			zap.String("footerKey", footerKey),
@@ -263,7 +339,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	}
 
 	// Parse footer and indexes from minio data
-	if err := r.parseMinioFooterDataUnsafe(ctx, footerData); err != nil {
+	if err := r.parseCompactedFooterDataUnsafe(ctx, footerData); err != nil {
 		logger.Ctx(ctx).Warn("failed to parse minio footer data",
 			zap.String("footerKey", footerKey),
 			zap.Error(err))
@@ -282,9 +358,9 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	return nil
 }
 
-// parseMinioFooterDataUnsafe parses footer and indexes from minio data
-func (r *StagedFileReaderAdv) parseMinioFooterDataUnsafe(ctx context.Context, footerData []byte) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "parseMinioFooterDataUnsafe")
+// parseCompactedFooterDataUnsafe parses footer and indexes from minio data
+func (r *StagedFileReaderAdv) parseCompactedFooterDataUnsafe(ctx context.Context, footerData []byte) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "parseCompactedFooterDataUnsafe")
 	defer sp.End()
 
 	// The footer data contains: [IndexRecord1][IndexRecord2]...[IndexRecordN][FooterRecord]
@@ -378,6 +454,13 @@ func (r *StagedFileReaderAdv) tryParseLocalFooterUnsafe(ctx context.Context) err
 	defer sp.End()
 
 	logger.Ctx(ctx).Debug("trying to parse footer from staged local file", zap.String("filePath", r.filePath))
+
+	if r.file == nil {
+		// Defensive guard: this fallback path is only meaningful when a local file was
+		// opened. A compacted (minio-backed) reader resolves its footer in
+		// tryParseCompactedFooterUnsafe and never reaches here in normal operation.
+		return werr.ErrEntryNotFound.WithCauseErrMsg("no local file to parse footer from")
+	}
 
 	stat, err := r.file.Stat()
 	if err != nil {
@@ -549,11 +632,27 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	// Re-check closed UNDER the lock: the lock-free pre-check above races with an
+	// eviction-triggered Close (drop path: EvictSegmentReader -> InvalidateReader -> Close),
+	// which holds the write lock while nilling the file and releasing the pool. A read that
+	// passed the pre-check and lost the race would otherwise proceed against those — turning
+	// into ErrEntryNotFound (nil-file guards) or a raw pool-closed error, neither of which
+	// triggers the processor's rebuild. Once we hold the RLock with closed still false, Close
+	// must wait for us, so file/pool stay valid for the whole critical section.
+	if r.closed.Load() {
+		return nil, werr.ErrFileReaderAlreadyClosed
+	}
+
 	// start read batch from a certain point - need to protect blockIndexes read
 	startBlockID := int64(0)
 	startBlockOffset := int64(0)
-	if lastReadBatchInfo != nil {
-		// Scenario 1: Subsequent reads with advanced options
+	// A resume is only valid if lastReadBatchInfo was produced by THIS reader's backend:
+	// compaction renumbers blocks (0..M-1) with no relation to local block numbering, so a
+	// local-produced state replayed into a compacted reader (or vice versa, after the local
+	// data.log was reclaimed) must NOT reuse its block id. On a provenance mismatch, fall
+	// through to resolve the resume point by entry id from the footer.
+	if lastReadBatchInfo != nil && codec.IsCompacted(uint16(lastReadBatchInfo.Flags)) == r.isCompacted.Load() {
+		// Scenario 1: Subsequent reads with advanced options (same-backend resume)
 		// When we have lastReadBatchInfo, start from the block after the last read block
 
 		// TODO: Add a flag to indicate if the block has been fully read. Without this flag,
@@ -606,6 +705,13 @@ func (r *StagedFileReaderAdv) readAtUnsafe(ctx context.Context, offset int64, le
 		zap.Int("length", length),
 		zap.String("filePath", r.filePath))
 
+	if r.file == nil {
+		// Defensive guard: the compacted (minio-backed) reader path never has a local file
+		// and never reaches here in normal operation; this only protects against future
+		// call-path mistakes.
+		return nil, werr.ErrEntryNotFound
+	}
+
 	if offset < 0 || length < 0 {
 		return nil, fmt.Errorf("invalid read parameters: offset=%d, length=%d", offset, length)
 	}
@@ -638,6 +744,12 @@ func (r *StagedFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error)
 
 	// First try to read without write lock
 	r.mu.RLock()
+	// Re-check closed under the lock (same race as ReadNextBatchAdv: the pre-check above is
+	// lock-free and an eviction-triggered Close may have completed in between).
+	if r.closed.Load() {
+		r.mu.RUnlock()
+		return -1, werr.ErrFileReaderAlreadyClosed
+	}
 	if r.footer != nil && len(r.blockIndexes) > 0 {
 		lastBlock := r.blockIndexes[len(r.blockIndexes)-1]
 		lastEntryID := lastBlock.LastEntryID
@@ -650,6 +762,12 @@ func (r *StagedFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error)
 	if r.isIncompleteFile.Load() {
 		r.mu.Lock() // Need write lock for scanning
 		defer r.mu.Unlock()
+
+		// Re-check closed after re-acquiring the lock: Close may have slipped in between the
+		// RUnlock above and this Lock, and scanning would then hit the nil file.
+		if r.closed.Load() {
+			return -1, werr.ErrFileReaderAlreadyClosed
+		}
 
 		// Double-check after acquiring write lock
 		if r.footer != nil && len(r.blockIndexes) > 0 {
@@ -680,6 +798,13 @@ func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) err
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanForAllBlockInfo")
 	defer sp.End()
 	startTime := time.Now()
+
+	if r.file == nil {
+		// Defensive guard: raw-scan is only meaningful for a local file. A compacted
+		// (minio-backed) reader always has a footer (isIncompleteFile=false) and never
+		// reaches here in normal operation.
+		return werr.ErrEntryNotFound.WithCauseErrMsg("no local file to scan")
+	}
 
 	// Get current file stat
 	stat, err := r.file.Stat()
@@ -868,7 +993,7 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 		logger.Ctx(ctx).Debug("reading compacted data from minio",
 			zap.String("filePath", r.filePath),
 			zap.Int64("startBlockID", startBlockID))
-		return r.readCompactedDataFromMinio(ctx, opt, startBlockID, startBlockOffset)
+		return r.readCompactedDataFromObjectStorage(ctx, opt, startBlockID, startBlockOffset)
 	}
 
 	logger.Ctx(ctx).Debug("reading data from staged local file",
@@ -1084,12 +1209,17 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Add(float64(readBytes))
 	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
-	// Create batch with proper error handling for nil lastBlockInfo
+	// Create batch with proper error handling for nil lastBlockInfo.
+	// Emit with the compacted bit CLEARED: this is the local (non-compacted) reader and
+	// LastBlockId is a local block number. r.flags may carry a compacted bit absorbed from a
+	// prior hop's LastReadState (L589 stores it wholesale), and a local block id tagged as
+	// compacted provenance would be mis-resolved as a compacted block index downstream. This
+	// mirrors the compacted emitter's SetCompacted self-correction, in the opposite direction.
 	var lastReadState *proto.LastReadState
 	if lastBlockInfo != nil {
 		lastReadState = &proto.LastReadState{
 			SegmentId:   r.segId,
-			Flags:       r.flags.Load(),
+			Flags:       uint32(codec.ClearCompacted(uint16(r.flags.Load()))),
 			Version:     r.version.Load(),
 			LastBlockId: lastBlockInfo.BlockNumber,
 			BlockOffset: lastBlockInfo.StartOffset,
@@ -1108,6 +1238,13 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "isFooterExists")
 	defer sp.End()
+
+	if r.file == nil {
+		// Defensive guard: only meaningful for a local file. A compacted (minio-backed)
+		// reader never reaches here in normal operation (isCompacted short-circuits in
+		// readDataBlocksUnsafe before this is called).
+		return false
+	}
 
 	// update size
 	stat, err := r.file.Stat()
@@ -1227,9 +1364,9 @@ func (r *StagedFileReaderAdv) GetTotalBlocks() int32 {
 	return 0
 }
 
-// readCompactedDataFromMinio reads data from minio for compacted segments using concurrent block fetching
-func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*proto.BatchReadResult, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readCompactedDataFromMinio")
+// readCompactedDataFromObjectStorage reads data from minio for compacted segments using concurrent block fetching
+func (r *StagedFileReaderAdv) readCompactedDataFromObjectStorage(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*proto.BatchReadResult, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readCompactedDataFromObjectStorage")
 	defer sp.End()
 	startTime := time.Now()
 
@@ -1250,23 +1387,39 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 	}
 
 	if startBlockIndex == -1 {
-		logger.Ctx(ctx).Debug("no blocks found starting from blockID",
+		// A compacted segment is sealed: if no block sits at/after this id, there is no more
+		// data here. Return EOF (not an empty batch) so the consumer advances to the next
+		// segment instead of waiting forever on a segment that can never grow.
+		logger.Ctx(ctx).Debug("no blocks found starting from blockID; end of compacted segment",
 			zap.Int64("startBlockID", startBlockID))
-		return &proto.BatchReadResult{
-			Entries:       make([]*proto.LogEntry, 0),
-			LastReadState: nil,
-		}, nil
+		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+	}
+
+	// A compacted block is always read whole, so a same-provenance resume points at the block
+	// containing the LAST delivered entry — usually a fully consumed block. Skip every block
+	// whose LastEntryID < StartEntryID BEFORE sizing the batch: otherwise the entry budget in
+	// determineBlocksToRead can be exhausted by the consumed block alone (any single block
+	// holding >= maxEntries entries), extraction then filters it to zero entries, and the
+	// resulting spurious EOF makes the consumer silently skip the rest of the sealed segment.
+	if opt.StartEntryID >= 0 {
+		for startBlockIndex < len(r.blockIndexes) && r.blockIndexes[startBlockIndex].LastEntryID < opt.StartEntryID {
+			startBlockIndex++
+		}
+		if startBlockIndex >= len(r.blockIndexes) {
+			// Every remaining block is fully consumed: genuine end of the sealed segment.
+			logger.Ctx(ctx).Debug("all blocks at/after resume point already consumed; end of compacted segment",
+				zap.Int64("startBlockID", startBlockID), zap.Int64("startEntryID", opt.StartEntryID))
+			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+		}
 	}
 
 	// Determine which blocks to read based on limits
 	blocksToRead := r.determineBlocksToRead(startBlockIndex, maxEntries, maxBytes)
 	if len(blocksToRead) == 0 {
-		logger.Ctx(ctx).Debug("no blocks to read",
+		// Same as above: nothing left to read from a sealed segment -> EOF, not an empty batch.
+		logger.Ctx(ctx).Debug("no blocks to read; end of compacted segment",
 			zap.Int64("startBlockID", startBlockID))
-		return &proto.BatchReadResult{
-			Entries:       make([]*proto.LogEntry, 0),
-			LastReadState: nil,
-		}, nil
+		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 	}
 
 	logger.Ctx(ctx).Debug("starting concurrent block reading",
@@ -1295,6 +1448,7 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 	readBytes := int64(0)
 	concurrentReadTime := time.Now()
 
+	var readErr error
 	for i, future := range futures {
 		result, err := future.Await()
 		if err != nil {
@@ -1302,7 +1456,9 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 				zap.Int("blockIndex", i),
 				zap.Error(err))
 			// The data to be read must be sequential. If one block cannot be read here, it will be aborted.
-			// Let subsequent retries continue at this breakpoint
+			// Let subsequent retries continue at this breakpoint. Record the error: if NOTHING was
+			// collected it must surface as a read error, not EOF (see below).
+			readErr = err
 			break
 		}
 
@@ -1327,6 +1483,13 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 	}
 
 	if entriesCollected == 0 {
+		if readErr != nil {
+			// A failed block fetch (transient object-storage error, throttle, timeout) with
+			// nothing collected must surface as a READ ERROR: returning EOF here would make the
+			// consumer treat it as end-of-segment and silently skip the rest of the sealed
+			// segment. This mirrors the local path's hasDataReadError guard on its EOF return.
+			return nil, readErr
+		}
 		// No desired data found in current segment and the entire segment has been scanned.
 		// Return EOF to let client proceed to next segment.
 		logger.Ctx(ctx).Debug("no more entries to read",
@@ -1335,12 +1498,14 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 	}
 
-	// Create last read state from last block info
+	// Create last read state from last block info. Force the compacted bit so the emitted state
+	// carries this compacted reader's provenance (and compacted block ids); subsequent reads then
+	// take the same-backend block-id fast path instead of re-resolving by entry id every batch.
 	var lastReadState *proto.LastReadState
 	if lastBlockInfo != nil {
 		lastReadState = &proto.LastReadState{
 			SegmentId:   r.segId,
-			Flags:       r.flags.Load(),
+			Flags:       uint32(codec.SetCompacted(uint16(r.flags.Load()))),
 			Version:     r.version.Load(),
 			LastBlockId: lastBlockInfo.BlockNumber,
 			BlockOffset: lastBlockInfo.StartOffset,
@@ -1417,7 +1582,7 @@ func (r *StagedFileReaderAdv) readAndExtractBlockConcurrently(ctx context.Contex
 	}
 
 	// Read block data from minio
-	blockData, err := r.readBlockFromMinioByKey(ctx, blockToRead.objKey, blockToRead.size)
+	blockData, err := r.readBlockFromObjectStorageByKey(ctx, blockToRead.objKey, blockToRead.size)
 	if err != nil {
 		result.err = fmt.Errorf("failed to read block %d from minio: %w", blockToRead.blockID, err)
 		return result
@@ -1435,9 +1600,9 @@ func (r *StagedFileReaderAdv) readAndExtractBlockConcurrently(ctx context.Contex
 	return result
 }
 
-// readBlockFromMinioByKey reads a block from minio using the object key
-func (r *StagedFileReaderAdv) readBlockFromMinioByKey(ctx context.Context, objKey string, objSize int64) ([]byte, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readBlockFromMinioByKey")
+// readBlockFromObjectStorageByKey reads a block from minio using the object key
+func (r *StagedFileReaderAdv) readBlockFromObjectStorageByKey(ctx context.Context, objKey string, objSize int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readBlockFromObjectStorageByKey")
 	defer sp.End()
 
 	logger.Ctx(ctx).Debug("reading block from minio by key",
