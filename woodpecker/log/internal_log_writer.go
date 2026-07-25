@@ -59,6 +59,9 @@ type internalLogWriterImpl struct {
 	// validation related fields
 	isWriterValid       atomic.Bool
 	onWriterInvalidated func(ctx context.Context, reason string)
+	maintenanceCtx      context.Context
+	maintenanceCancel   context.CancelFunc
+	auditorWG           sync.WaitGroup
 
 	// Mutex to ensure only one truncation cleanup task is running at a time
 	cleanupMutex      sync.Mutex
@@ -69,6 +72,7 @@ type internalLogWriterImpl struct {
 func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration) LogWriter {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "NewInternalLogWriter")
 	defer sp.End()
+	maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
 	w := &internalLogWriterImpl{
 		logIdStr:           fmt.Sprintf("%d", logHandle.GetId()),
 		logHandle:          logHandle,
@@ -79,6 +83,8 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
 		notifyManager:      segment.NewSegmentCompactedNotifyManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
 		notifySegsCh:       make(chan map[int64]*meta.SegmentMeta, 1),
+		maintenanceCtx:     maintenanceCtx,
+		maintenanceCancel:  maintenanceCancel,
 	}
 	// Set sessionValid to true
 	w.isWriterValid.Store(true)
@@ -86,16 +92,31 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 	// Set trigger expired
 	onWriterInvalidated := func(ctx context.Context, reason string) {
 		w.isWriterValid.Store(false)
+		w.stopMaintenance()
 		logger.Ctx(ctx).Warn("trigger writer lock session expired", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.String("reason", reason))
 	}
 	w.onWriterInvalidated = onWriterInvalidated
 
 	// Monitor keepAlive channel
-	go w.runAuditor()
+	w.startAuditor()
 	// Compacted-mark distribution runs on its own goroutine so a slow node can't stall the auditor.
-	go runNotifyDistributor(w.logHandle, w.notifyManager, cfg.Woodpecker.Storage.IsStorageService(), w.notifySegsCh, w.writerClose)
+	go runNotifyDistributor(w.logHandle, w.notifyManager, cfg.Woodpecker.Storage.IsStorageService(), w.notifySegsCh, w.maintenanceCtx.Done())
 	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
 	return w
+}
+
+func (l *internalLogWriterImpl) startAuditor() {
+	l.auditorWG.Add(1)
+	go func() {
+		defer l.auditorWG.Done()
+		l.runAuditor()
+	}()
+}
+
+func (l *internalLogWriterImpl) stopMaintenance() {
+	if l.maintenanceCancel != nil {
+		l.maintenanceCancel()
+	}
 }
 
 func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResult {
@@ -244,8 +265,12 @@ func (l *internalLogWriterImpl) runAuditor() {
 	for {
 		select {
 		case <-ticker.C:
+			if l.maintenanceCtx.Err() != nil || !l.isWriterValid.Load() {
+				l.stopMaintenance()
+				return
+			}
 			auditCycle++
-			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
+			ctx, sp := logger.NewIntentCtxWithParent(l.maintenanceCtx, WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 
 			logger.Ctx(ctx).Debug("Starting auditor cycle",
@@ -282,6 +307,10 @@ func (l *internalLogWriterImpl) runAuditor() {
 			publishSegmentsSnapshot(l.notifySegsCh, segmentMetaList)
 
 			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
+			if ctx.Err() != nil {
+				sp.End()
+				return
+			}
 			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
 			// In-process reap sync: a Truncated segment must never be notified again, even if the
 			// distributor is mid-round on a stale snapshot that still shows it Sealed.
@@ -324,6 +353,11 @@ func (l *internalLogWriterImpl) runAuditor() {
 			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "auditor_run", "success").Observe(float64(auditDuration.Milliseconds()))
 		case <-l.writerClose:
 			logger.Ctx(context.TODO()).Info("Log auditor stopped",
+				zap.String("logName", l.logHandle.GetName()),
+				zap.Int64("logId", l.logHandle.GetId()))
+			return
+		case <-l.maintenanceCtx.Done():
+			logger.Ctx(context.TODO()).Info("Log auditor stopped after writer invalidation",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()))
 			return
@@ -565,8 +599,10 @@ func (l *internalLogWriterImpl) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("closing log writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 
 		l.isWriterValid.Store(false)
+		l.stopMaintenance()
 		l.writerClose <- struct{}{}
 		close(l.writerClose)
+		l.auditorWG.Wait()
 		status := "success"
 		closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
 		if closeErr != nil {

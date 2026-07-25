@@ -210,6 +210,19 @@ func TestCompactCompletedSegments_CountsAndSkips(t *testing.T) {
 	assert.Equal(t, 1, st.failed)
 }
 
+func TestCompactCompletedSegments_CanceledWriterDoesNotStartCompaction(t *testing.T) {
+	lh := &testLogHandleMock{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	st := compactCompletedSegments(ctx, lh, map[int64]*meta.SegmentMeta{
+		1: segMeta(1, proto.SegmentState_Completed),
+	})
+
+	assert.Equal(t, compactStats{}, st)
+	lh.AssertNotCalled(t, "GetRecoverableSegmentHandle", mock.Anything, mock.Anything)
+}
+
 // TestRunNotifyDistributor_NonServiceReturnsImmediately verifies the distributor goroutine is a
 // no-op outside service storage: it returns at once rather than waiting on the snapshot channel.
 func TestRunNotifyDistributor_NonServiceReturnsImmediately(t *testing.T) {

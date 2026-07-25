@@ -51,10 +51,13 @@ type compactStats struct {
 
 // compactCompletedSegments compacts every Completed segment in the snapshot, sequentially by
 // design (to keep each log's background work light, since a cluster may host many logs). A
-// per-segment failure is logged and skipped; it never aborts the pass.
+// per-segment failure is logged and skipped; writer-lifecycle cancellation stops the pass.
 func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map[int64]*meta.SegmentMeta) compactStats {
 	var st compactStats
 	for _, seg := range segs {
+		if ctx.Err() != nil {
+			break
+		}
 		if seg.Metadata.State != proto.SegmentState_Completed {
 			continue
 		}

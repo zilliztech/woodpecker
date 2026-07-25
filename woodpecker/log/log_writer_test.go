@@ -72,6 +72,7 @@ func (s *stubNotifyManager) MarkSegmentReaped(_ int64) {}
 // createTestInternalWriter creates an internalLogWriterImpl for testing without goroutines.
 func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segment.SegmentCleanupManager) *internalLogWriterImpl {
 	cfg := newTestConfig()
+	maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
 	if cleanupMgr == nil {
 		cleanupMgr = &recordingCleanupManager{}
 	}
@@ -84,10 +85,13 @@ func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segm
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
 		notifyManager:      &stubNotifyManager{},
+		maintenanceCtx:     maintenanceCtx,
+		maintenanceCancel:  maintenanceCancel,
 	}
 	w.isWriterValid.Store(true)
 	w.onWriterInvalidated = func(ctx context.Context, reason string) {
 		w.isWriterValid.Store(false)
+		w.stopMaintenance()
 	}
 	return w
 }
@@ -633,6 +637,7 @@ func TestWriteResult_Structure(t *testing.T) {
 // createTestSessionWriter creates a logWriterImpl for testing without goroutines.
 func createTestSessionWriter(t *testing.T, logHandle LogHandle, cleanupMgr segment.SegmentCleanupManager, sessionLock *meta.SessionLock) *logWriterImpl {
 	cfg := newTestConfig()
+	maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
 	if cleanupMgr == nil {
 		cleanupMgr = &recordingCleanupManager{}
 	}
@@ -646,11 +651,14 @@ func createTestSessionWriter(t *testing.T, logHandle LogHandle, cleanupMgr segme
 		cleanupManager:     cleanupMgr,
 		notifyManager:      &stubNotifyManager{},
 		sessionLock:        sessionLock,
+		maintenanceCtx:     maintenanceCtx,
+		maintenanceCancel:  maintenanceCancel,
 	}
 	w.onWriterInvalidated = func(ctx context.Context, reason string) {
 		if sessionLock != nil {
 			sessionLock.MarkInvalid()
 		}
+		w.stopMaintenance()
 	}
 	return w
 }
@@ -1829,6 +1837,117 @@ func TestLogWriter_RunAuditor_WithCompletedAndTruncated(t *testing.T) {
 	cleanupMgr.AssertCalled(t, "CleanupSegment", mock.Anything, "test-log", int64(1), int64(2))
 }
 
+func TestInternalLogWriter_RunAuditor_InvalidationCancelsInFlightCompact(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(nil)
+	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}},
+	}, nil)
+
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockLogHandle.On("GetRecoverableSegmentHandle", mock.Anything, int64(1)).Return(mockSegHandle, nil)
+	compactStarted := make(chan struct{})
+	compactCanceled := make(chan struct{})
+	mockSegHandle.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		close(compactStarted)
+		<-ctx.Done()
+		close(compactCanceled)
+		return ctx.Err()
+	}).Once()
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+	w.auditorMaxInterval = 1
+	auditorDone := make(chan struct{})
+	go func() {
+		w.runAuditor()
+		close(auditorDone)
+	}()
+
+	select {
+	case <-compactStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("auditor did not start compaction")
+	}
+	w.onWriterInvalidated(context.Background(), "writer taken over")
+
+	select {
+	case <-compactCanceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer invalidation did not cancel in-flight compaction")
+	}
+	select {
+	case <-auditorDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("auditor did not stop after writer invalidation")
+	}
+	assert.False(t, w.isWriterValid.Load())
+}
+
+func TestLogWriter_RunAuditor_SessionExpirationCancelsInFlightCompact(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(nil)
+	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}},
+	}, nil)
+
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockLogHandle.On("GetRecoverableSegmentHandle", mock.Anything, int64(1)).Return(mockSegHandle, nil)
+	compactStarted := make(chan struct{})
+	compactCanceled := make(chan struct{})
+	mockSegHandle.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		close(compactStarted)
+		<-ctx.Done()
+		close(compactCanceled)
+		return ctx.Err()
+	}).Once()
+
+	sessionDone := make(chan struct{})
+	sessionLock := meta.NewSessionLockForTest(newTestSession(sessionDone))
+	w := createTestSessionWriter(t, mockLogHandle, nil, sessionLock)
+	w.auditorMaxInterval = 1
+	w.cfg.Woodpecker.Client.SessionMonitor.CheckInterval = config.NewDurationSecondsFromInt(100)
+	auditorDone := make(chan struct{})
+	go func() {
+		w.runAuditor()
+		close(auditorDone)
+	}()
+	monitorDone := make(chan struct{})
+	go func() {
+		w.monitorSession()
+		close(monitorDone)
+	}()
+
+	select {
+	case <-compactStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("auditor did not start compaction")
+	}
+	close(sessionDone)
+
+	select {
+	case <-compactCanceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("session expiration did not cancel in-flight compaction")
+	}
+	select {
+	case <-auditorDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("auditor did not stop after session expiration")
+	}
+	select {
+	case <-monitorDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("session monitor did not stop after session expiration")
+	}
+	assert.False(t, sessionLock.IsValid())
+}
+
 // === cleanupTruncatedSegmentsIfNecessary remaining paths ===
 
 func TestLogWriter_CleanupTruncatedSegments_AlreadyInProgress(t *testing.T) {
@@ -2216,6 +2335,11 @@ func TestMonitorSession_SessionDone(t *testing.T) {
 	}
 
 	assert.False(t, sessionLock.IsValid())
+	select {
+	case <-w.maintenanceCtx.Done():
+	default:
+		t.Fatal("session expiration did not cancel writer maintenance")
+	}
 }
 
 func TestMonitorSession_CheckAlive_LeaseExpired(t *testing.T) {
