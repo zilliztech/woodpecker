@@ -18,5 +18,5 @@ type WriterRegistry interface {
 	ForceFence(ctx context.Context, logID, segmentID int64, reason string) error
 
 	// ForceCompact forces compaction on the specified writer.
-	ForceCompact(ctx context.Context, logID, segmentID int64) error
+	ForceCompact(ctx context.Context, logID, segmentID, expectedLastEntryId int64) error
 }

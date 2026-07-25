@@ -67,14 +67,12 @@ func (l *logStore) ForceFence(ctx context.Context, logID, segmentID int64, _ str
 }
 
 // ForceCompact forces compaction on the specified writer.
-func (l *logStore) ForceCompact(ctx context.Context, logID, segmentID int64) error {
+func (l *logStore) ForceCompact(ctx context.Context, logID, segmentID, expectedLastEntryId int64) error {
 	sp := l.findSegmentProcessor(logID, segmentID)
 	if sp == nil {
 		return fmt.Errorf("segment %d:%d not found", logID, segmentID)
 	}
-	// Manual/admin force-compaction has no quorum-confirmed target, so it opts out of the
-	// data-behind check (-1). Quorum-driven compaction passes the real expected LAC.
-	_, err := sp.Compact(ctx, -1)
+	_, err := sp.Compact(ctx, expectedLastEntryId)
 	return err
 }
 

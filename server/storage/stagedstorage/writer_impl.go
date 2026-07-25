@@ -20,6 +20,7 @@ package stagedstorage
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -1359,7 +1360,8 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	return lastEntryId, nil
 }
 
-// Compact performs compaction by reading local file, merging blocks and uploading to minio
+// Compact publishes exactly the caller-confirmed entry range to object storage.
+// A successful return means the shared compacted footer LAC equals expectedLastEntryId.
 func (w *StagedFileWriter) Compact(ctx context.Context, expectedLastEntryId int64) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Compact")
 	defer sp.End()
@@ -1380,102 +1382,29 @@ func (w *StagedFileWriter) Compact(ctx context.Context, expectedLastEntryId int6
 
 	logger.Ctx(ctx).Info("starting staged file segment compaction",
 		zap.String("segmentFilePath", w.segmentFilePath),
-		zap.Int("currentBlockCount", len(w.blockIndexes)))
+		zap.Int("currentBlockCount", len(w.blockIndexes)),
+		zap.Int64("expectedLastEntryId", expectedLastEntryId))
 
-	// Check if segment is already compacted by reading MinIO footer (idempotency guard).
-	// This handles both in-process re-entry and cross-process recovery after interrupted compact.
-	if existingFooter, footerObjSize, err := w.readRemoteFooter(ctx); err == nil && existingFooter != nil && codec.IsCompacted(existingFooter.Flags) {
-		totalSize := int64(existingFooter.TotalSize) + footerObjSize
-		logger.Ctx(ctx).Info("segment is already compacted (remote footer has compacted flag), skipping",
-			zap.String("segmentFilePath", w.segmentFilePath),
-			zap.Int64("totalSize", totalSize))
-		return totalSize, nil
+	if expectedLastEntryId < -1 {
+		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("invalid expected last entry id for compaction: %d", expectedLastEntryId))
 	}
 
-	// Ensure segment is finalized before compaction
-	if !w.finalized.Load() {
-		logger.Ctx(ctx).Warn("segment must be finalized before compaction",
-			zap.String("segmentFilePath", w.segmentFilePath))
-		return -1, fmt.Errorf("segment must be finalized before compaction")
+	if totalSize, handled, err := w.compactRemoteFooterIfPresent(ctx, expectedLastEntryId); handled {
+		return totalSize, err
 	}
 
-	// Refuse if this replica's local data is behind the coordinator-confirmed LastEntryId.
-	// Compaction seals the segment from THIS node's local data, so a lagging or empty replica
-	// would seal a segment shorter than the confirmed sequence and silently drop an
-	// already-acknowledged entry. Returning here (before the empty-footer and merge paths below)
-	// lets compactSegmentQuorum move on to a caught-up node. This is the authoritative check:
-	// unlike validateLACAlignment / the empty-block guard below, it compares against the
-	// coordinator's value rather than this node's own (possibly stale) footer LAC.
-	// expectedLastEntryId < 0 disables it (manual/force compaction, genuinely-empty segments).
-	if expectedLastEntryId >= 0 {
-		localLast := w.lastEntryID.Load()
-		if localLast < expectedLastEntryId {
-			logger.Ctx(ctx).Warn("refusing to compact: local data is behind the expected last entry id",
-				zap.String("segmentFilePath", w.segmentFilePath),
-				zap.Int64("localLastEntryId", localLast),
-				zap.Int64("expectedLastEntryId", expectedLastEntryId))
-			return -1, werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
-				fmt.Sprintf("local lastEntryId %d < expected %d", localLast, expectedLastEntryId))
-		}
-	}
-
-	// An EMPTY sealed segment still gets a footer.blk (TotalBlocks=0): "Sealed => footer exists
-	// in object storage" must hold unconditionally, because compacted-mark distribution and the
-	// decommission drain gate both rely on the mark, and the mark's own invariant is
-	// footer-confirmed-before-drop. Without this, an empty segment becomes Sealed-without-footer:
-	// marks get distributed for it, the cleanup task's anomaly branch warns forever and never
-	// reclaims its data.log, and HasLocalSegmentData reports drained while the file is still on
-	// disk. A reader of a zero-block compacted segment returns EOF, so reads are unaffected.
-	if len(w.blockIndexes) == 0 {
-		if w.storageCli == nil {
-			// Without an object storage client the footer invariant cannot be established;
-			// surface it instead of silently "succeeding" into Sealed-without-footer.
-			return -1, fmt.Errorf("cannot compact empty segment without an object storage client")
-		}
-		// The empty-footer path may ONLY run for a genuinely empty segment: the local footer's
-		// LAC (the coordinator-acknowledged last entry, written by Finalize) must say "no
-		// entries" (< 0). A replica that missed the segment's appends and was then
-		// quorum-completed carries LAC >= 0 with zero local blocks — publishing a
-		// TotalBlocks=0 compacted footer from it would COMMIT an empty segment globally,
-		// authorize every data-holding replica to drop its data.log, and silently lose all
-		// entries up to that LAC. Refuse instead, so compactSegmentQuorum moves on to a
-		// replica that actually holds the data. (recoveredFooter == nil while finalized
-		// should be impossible — Finalize sets it before the flag — treat it as the same
-		// refusal rather than guessing.)
-		if w.recoveredFooter == nil || w.recoveredFooter.LAC >= 0 {
-			lac := int64(-1)
-			if w.recoveredFooter != nil {
-				lac = w.recoveredFooter.LAC
-			}
-			logger.Ctx(ctx).Warn("refusing to compact: zero local blocks but footer LAC says the segment has entries (this replica is missing the data)",
-				zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("footerLac", lac))
-			return -1, fmt.Errorf("refusing empty compaction: local footer LAC %d expects entries but this replica holds zero blocks", lac)
-		}
-		logger.Ctx(ctx).Info("no blocks to compact; uploading an empty compacted footer",
-			zap.String("segmentFilePath", w.segmentFilePath))
-		footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, -1)
-		if footerErr != nil {
-			logger.Ctx(ctx).Warn("failed to upload empty compacted footer",
-				zap.String("segmentFilePath", w.segmentFilePath), zap.Error(footerErr))
-			return -1, fmt.Errorf("failed to upload empty compacted footer: %w", footerErr)
-		}
-		return footerSize, nil
-	}
-
-	// Read and validate footer LAC against segment data for completeness
-	lac, err := w.validateLACAlignment(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Warn("LAC validation failed",
-			zap.String("segmentFilePath", w.segmentFilePath),
-			zap.Error(err))
+	if err := w.requireFinalizedForCompact(ctx); err != nil {
 		return -1, err
 	}
 
-	logger.Ctx(ctx).Info("LAC validation passed for compaction",
-		zap.String("segmentFilePath", w.segmentFilePath),
-		zap.Int64("lac", lac),
-		zap.Int64("firstEntryID", w.firstEntryID.Load()),
-		zap.Int64("lastEntryID", w.lastEntryID.Load()))
+	if len(w.blockIndexes) == 0 {
+		return w.compactEmptyFinalizedSegment(ctx, expectedLastEntryId)
+	}
+
+	if err := w.validateLocalDataCoversExpected(ctx, expectedLastEntryId); err != nil {
+		return -1, err
+	}
 
 	// Get target block size for compaction
 	maxCompactedBlockSize := w.compactPolicyConfig.MaxBytes.Int64()
@@ -1484,7 +1413,7 @@ func (w *StagedFileWriter) Compact(ctx context.Context, expectedLastEntryId int6
 	}
 
 	// Read and merge blocks from local file, then upload to minio
-	newBlockIndexes, fileSizeAfterCompact, err := w.readLocalFileAndUploadToMinio(ctx, maxCompactedBlockSize)
+	newBlockIndexes, fileSizeAfterCompact, err := w.readLocalFileAndUploadToMinio(ctx, maxCompactedBlockSize, expectedLastEntryId)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read local file and upload to minio",
 			zap.String("segmentFilePath", w.segmentFilePath),
@@ -1492,20 +1421,12 @@ func (w *StagedFileWriter) Compact(ctx context.Context, expectedLastEntryId int6
 		return -1, fmt.Errorf("failed to read local file and upload to minio: %w", err)
 	}
 
-	if len(newBlockIndexes) == 0 {
-		// Unreachable today: the merge plan covers every local block, so it is empty only when
-		// blockIndexes is empty — handled (and guarded) above. If this ever fires, something
-		// upstream broke; the one thing this branch must NOT do is publish a zero-block footer
-		// with a non-negative LAC — footer.blk is the commit point that authorizes every
-		// replica to delete its local data.log. Fail loudly instead.
-		logger.Ctx(ctx).Warn("no blocks uploaded during compaction of a non-empty segment; refusing to publish an empty footer",
-			zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("lac", lac),
-			zap.Int("localBlocks", len(w.blockIndexes)))
-		return -1, fmt.Errorf("compaction produced zero merged blocks for a segment with %d local blocks (lac %d)", len(w.blockIndexes), lac)
+	if err := w.validateCompactedIndexesMatchExpected(newBlockIndexes, expectedLastEntryId); err != nil {
+		return -1, err
 	}
 
-	// Create footer with compacted flag and LAC, then upload
-	footerSize, err := w.uploadCompactedFooter(ctx, newBlockIndexes, fileSizeAfterCompact, lac)
+	// Create footer with compacted flag and the exact expected LAC, then upload.
+	footerSize, err := w.uploadCompactedFooter(ctx, newBlockIndexes, fileSizeAfterCompact, expectedLastEntryId)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to upload compacted footer",
 			zap.String("segmentFilePath", w.segmentFilePath),
@@ -1530,6 +1451,132 @@ func (w *StagedFileWriter) Compact(ctx context.Context, expectedLastEntryId int6
 	return totalSize, nil
 }
 
+func (w *StagedFileWriter) compactRemoteFooterIfPresent(ctx context.Context, expectedLastEntryId int64) (int64, bool, error) {
+	// The remote compacted footer is the shared commit point. It is idempotent
+	// success only when it exactly matches the caller-confirmed LAC.
+	existingFooter, footerObjSize, err := w.readRemoteFooter(ctx)
+	if err != nil {
+		return -1, true, err
+	}
+	if existingFooter == nil || !codec.IsCompacted(existingFooter.Flags) {
+		return 0, false, nil
+	}
+	if existingFooter.LAC != expectedLastEntryId {
+		logger.Ctx(ctx).Warn("remote compacted footer LAC does not match expected last entry id",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("remoteFooterLac", existingFooter.LAC),
+			zap.Int64("expectedLastEntryId", expectedLastEntryId))
+		return -1, true, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("remote compacted footer LAC %d != expected %d", existingFooter.LAC, expectedLastEntryId))
+	}
+	totalSize := int64(existingFooter.TotalSize) + footerObjSize
+	logger.Ctx(ctx).Info("segment is already compacted with expected LAC, skipping",
+		zap.String("segmentFilePath", w.segmentFilePath),
+		zap.Int64("totalSize", totalSize),
+		zap.Int64("expectedLastEntryId", expectedLastEntryId))
+	return totalSize, true, nil
+}
+
+func (w *StagedFileWriter) requireFinalizedForCompact(ctx context.Context) error {
+	if w.finalized.Load() {
+		return nil
+	}
+	logger.Ctx(ctx).Warn("segment must be finalized before compaction",
+		zap.String("segmentFilePath", w.segmentFilePath))
+	return fmt.Errorf("segment must be finalized before compaction")
+}
+
+func (w *StagedFileWriter) compactEmptyFinalizedSegment(ctx context.Context, expectedLastEntryId int64) (int64, error) {
+	// An empty sealed segment still gets footer.blk, but it is valid only for
+	// the explicit empty target: expected == local footer LAC == -1.
+	if expectedLastEntryId != -1 {
+		logger.Ctx(ctx).Warn("refusing to compact empty local segment with non-empty expected last entry id",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("expectedLastEntryId", expectedLastEntryId))
+		return -1, werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
+			fmt.Sprintf("empty local segment cannot satisfy expected %d", expectedLastEntryId))
+	}
+	if w.storageCli == nil {
+		return -1, fmt.Errorf("cannot compact empty segment without an object storage client")
+	}
+	if w.recoveredFooter == nil || w.recoveredFooter.LAC != -1 {
+		lac := int64(-1)
+		if w.recoveredFooter != nil {
+			lac = w.recoveredFooter.LAC
+		}
+		logger.Ctx(ctx).Warn("refusing to compact empty local segment whose footer LAC is not the empty target",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("footerLac", lac))
+		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("empty local segment footer LAC %d != expected -1", lac))
+	}
+	logger.Ctx(ctx).Info("no blocks to compact; uploading an empty compacted footer",
+		zap.String("segmentFilePath", w.segmentFilePath))
+	footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, -1)
+	if footerErr != nil {
+		logger.Ctx(ctx).Warn("failed to upload empty compacted footer",
+			zap.String("segmentFilePath", w.segmentFilePath), zap.Error(footerErr))
+		return -1, fmt.Errorf("failed to upload empty compacted footer: %w", footerErr)
+	}
+	return footerSize, nil
+}
+
+func (w *StagedFileWriter) validateLocalDataCoversExpected(ctx context.Context, expectedLastEntryId int64) error {
+	if expectedLastEntryId < 0 {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("non-empty compaction requires non-negative expected last entry id, got %d", expectedLastEntryId))
+	}
+	if w.recoveredFooter == nil {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg("segment finalized but footer is not recovered")
+	}
+	if w.recoveredFooter.LAC > expectedLastEntryId {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("local footer LAC %d > expected %d", w.recoveredFooter.LAC, expectedLastEntryId))
+	}
+	firstEntryID := w.firstEntryID.Load()
+	if firstEntryID != 0 {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("non-empty segment does not start from entry 0: firstEntryID=%d", firstEntryID))
+	}
+	localLast := w.lastEntryID.Load()
+	if localLast < expectedLastEntryId {
+		logger.Ctx(ctx).Warn("refusing to compact: local data is behind the expected last entry id",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("localLastEntryId", localLast),
+			zap.Int64("expectedLastEntryId", expectedLastEntryId))
+		return werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
+			fmt.Sprintf("local lastEntryId %d < expected %d", localLast, expectedLastEntryId))
+	}
+	if maxBlockLastEntryID(w.blockIndexes) < expectedLastEntryId {
+		return werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
+			fmt.Sprintf("local block indexes do not cover expected %d", expectedLastEntryId))
+	}
+	return nil
+}
+
+func (w *StagedFileWriter) validateCompactedIndexesMatchExpected(blockIndexes []*codec.IndexRecord, expectedLastEntryId int64) error {
+	if len(blockIndexes) == 0 {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("compaction produced no data blocks for expected %d", expectedLastEntryId))
+	}
+	maxLastEntryID := maxBlockLastEntryID(blockIndexes)
+	if maxLastEntryID != expectedLastEntryId {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("compacted data max last entry id %d != expected %d", maxLastEntryID, expectedLastEntryId))
+	}
+	return nil
+}
+
+func maxBlockLastEntryID(blockIndexes []*codec.IndexRecord) int64 {
+	maxLastEntryID := int64(-1)
+	for _, blockIndex := range blockIndexes {
+		if blockIndex.LastEntryID > maxLastEntryID {
+			maxLastEntryID = blockIndex.LastEntryID
+		}
+	}
+	return maxLastEntryID
+}
+
 // mergeBlockTask represents a task to merge multiple blocks into one
 type mergeBlockTask struct {
 	blocks      []*codec.IndexRecord // Original blocks to be merged
@@ -1550,13 +1597,13 @@ type mergedBlockUploadResult struct {
 	error      error
 }
 
-// readLocalFileAndUploadToMinio reads blocks from local file, merges them and uploads to minio
-func (w *StagedFileWriter) readLocalFileAndUploadToMinio(ctx context.Context, targetBlockSize int64) ([]*codec.IndexRecord, int64, error) {
+// readLocalFileAndUploadToMinio reads local blocks up to expectedLastEntryId, merges them and uploads to minio.
+func (w *StagedFileWriter) readLocalFileAndUploadToMinio(ctx context.Context, targetBlockSize int64, expectedLastEntryId int64) ([]*codec.IndexRecord, int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readLocalFileAndUploadToMinio")
 	defer sp.End()
 
 	// Plan merge tasks
-	mergeTasks := w.planMergeBlockTasks(targetBlockSize)
+	mergeTasks := w.planMergeBlockTasks(targetBlockSize, expectedLastEntryId)
 	if len(mergeTasks) == 0 {
 		return nil, 0, nil
 	}
@@ -1586,7 +1633,7 @@ func (w *StagedFileWriter) readLocalFileAndUploadToMinio(ctx context.Context, ta
 		mergedBlockID := int64(i)
 
 		future := uploadPool.Submit(func() (*mergedBlockUploadResult, error) {
-			return w.processMergeTask(ctx, taskCopy, mergedBlockID), nil
+			return w.processMergeTask(ctx, taskCopy, mergedBlockID, expectedLastEntryId), nil
 		})
 		futures = append(futures, future)
 	}
@@ -1616,7 +1663,7 @@ func (w *StagedFileWriter) readLocalFileAndUploadToMinio(ctx context.Context, ta
 }
 
 // planMergeBlockTasks plans how to group blocks for merging
-func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBlockTask {
+func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64, expectedLastEntryId int64) []*mergeBlockTask {
 	var tasks []*mergeBlockTask
 	var currentTask *mergeBlockTask
 	var currentSize int64 = 0
@@ -1628,6 +1675,9 @@ func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBl
 	}
 
 	for _, blockIndex := range w.blockIndexes {
+		if blockIndex.FirstEntryID > expectedLastEntryId {
+			break
+		}
 		// Estimate data size for this block
 		estimatedDataSize := int64(blockIndex.BlockSize)
 
@@ -1656,7 +1706,10 @@ func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBl
 		}
 
 		// Update entry ID for next block
-		currentEntryID = blockIndex.LastEntryID + 1
+		currentEntryID = min(blockIndex.LastEntryID, expectedLastEntryId) + 1
+		if blockIndex.LastEntryID >= expectedLastEntryId {
+			break
+		}
 	}
 
 	// Add the last task if it exists
@@ -1669,7 +1722,7 @@ func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBl
 }
 
 // processMergeTask processes a single merge task: read blocks, merge and upload
-func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBlockTask, mergedBlockID int64) *mergedBlockUploadResult {
+func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBlockTask, mergedBlockID int64, expectedLastEntryId int64) *mergedBlockUploadResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processMergeTask")
 	defer sp.End()
 	startTime := time.Now()
@@ -1706,7 +1759,7 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	// Collect block data and extract only DataRecords from each block
 	type extractedBlockData struct {
 		blockIndex  *codec.IndexRecord
-		dataRecords []byte // only DataRecords (BlockHeaderRecord stripped)
+		dataRecords []byte // only DataRecords (BlockHeaderRecord stripped), cropped to expectedLastEntryId
 	}
 	var allBlocks []extractedBlockData
 	firstEntryID := int64(-1)
@@ -1723,12 +1776,14 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 			}
 		}
 
-		// Extract only DataRecords, stripping BlockHeaderRecord and any HeaderRecord
-		dataRecords, extractErr := extractDataRecords(result.blockData)
+		dataRecords, blockLastEntryID, extractErr := w.extractCompactedDataRecords(result.blockIndex, result.blockData, expectedLastEntryId)
 		if extractErr != nil {
 			return &mergedBlockUploadResult{
 				error: fmt.Errorf("failed to extract data records from block %d: %w", result.blockIndex.BlockNumber, extractErr),
 			}
+		}
+		if len(dataRecords) == 0 {
+			continue
 		}
 
 		allBlocks = append(allBlocks, extractedBlockData{
@@ -1740,9 +1795,12 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		if firstEntryID == -1 || result.blockIndex.FirstEntryID < firstEntryID {
 			firstEntryID = result.blockIndex.FirstEntryID
 		}
-		if lastEntryID == -1 || result.blockIndex.LastEntryID > lastEntryID {
-			lastEntryID = result.blockIndex.LastEntryID
+		if lastEntryID == -1 || blockLastEntryID > lastEntryID {
+			lastEntryID = blockLastEntryID
 		}
+	}
+	if len(allBlocks) == 0 {
+		return &mergedBlockUploadResult{error: fmt.Errorf("merge task %d produced no data records up to expected %d", mergedBlockID, expectedLastEntryId)}
 	}
 
 	// Sort by block number to maintain order
@@ -1826,6 +1884,97 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	}
 }
 
+func (w *StagedFileWriter) extractCompactedDataRecords(blockIndex *codec.IndexRecord, blockData []byte, expectedLastEntryId int64) ([]byte, int64, error) {
+	if blockIndex.FirstEntryID > expectedLastEntryId {
+		return nil, -1, nil
+	}
+	blockHeader, dataRecords, err := parseLocalBlockForCompaction(blockIndex, blockData)
+	if err != nil {
+		return nil, -1, err
+	}
+
+	recordsToKeep := int(blockHeader.LastEntryID - blockHeader.FirstEntryID + 1)
+	requireEOF := true
+	lastKeptEntryID := blockHeader.LastEntryID
+	if blockHeader.LastEntryID > expectedLastEntryId {
+		recordsToKeep = int(expectedLastEntryId - blockHeader.FirstEntryID + 1)
+		requireEOF = false
+		lastKeptEntryID = expectedLastEntryId
+	}
+	cropped, kept, err := strictDataRecordPrefix(dataRecords, recordsToKeep, requireEOF)
+	if err != nil {
+		return nil, -1, err
+	}
+	if kept != recordsToKeep {
+		return nil, -1, fmt.Errorf("block %d data records kept %d entries, expected %d", blockIndex.BlockNumber, kept, recordsToKeep)
+	}
+	return cropped, lastKeptEntryID, nil
+}
+
+func parseLocalBlockForCompaction(blockIndex *codec.IndexRecord, blockData []byte) (*codec.BlockHeaderRecord, []byte, error) {
+	if uint32(len(blockData)) != blockIndex.BlockSize {
+		return nil, nil, fmt.Errorf("block %d size mismatch: index=%d data=%d", blockIndex.BlockNumber, blockIndex.BlockSize, len(blockData))
+	}
+
+	blockHeaderRecordSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+	if len(blockData) < blockHeaderRecordSize {
+		return nil, nil, fmt.Errorf("block %d too small for block header: %d", blockIndex.BlockNumber, len(blockData))
+	}
+	record, err := codec.DecodeRecord(blockData[:blockHeaderRecordSize])
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode block header: %w", err)
+	}
+	blockHeader, ok := record.(*codec.BlockHeaderRecord)
+	if !ok {
+		return nil, nil, fmt.Errorf("block %d first record is type %d, not block header", blockIndex.BlockNumber, record.Type())
+	}
+	if blockHeader.BlockNumber != blockIndex.BlockNumber {
+		return nil, nil, fmt.Errorf("block number mismatch: header=%d index=%d", blockHeader.BlockNumber, blockIndex.BlockNumber)
+	}
+	if blockHeader.FirstEntryID != blockIndex.FirstEntryID || blockHeader.LastEntryID != blockIndex.LastEntryID {
+		return nil, nil, fmt.Errorf("block %d entry range mismatch: header=[%d,%d] index=[%d,%d]",
+			blockIndex.BlockNumber, blockHeader.FirstEntryID, blockHeader.LastEntryID, blockIndex.FirstEntryID, blockIndex.LastEntryID)
+	}
+
+	dataRecords := blockData[blockHeaderRecordSize:]
+	if uint32(len(dataRecords)) != blockHeader.BlockLength {
+		return nil, nil, fmt.Errorf("block %d data length mismatch: header=%d data=%d", blockIndex.BlockNumber, blockHeader.BlockLength, len(dataRecords))
+	}
+	if err := codec.VerifyBlockDataIntegrity(blockHeader, dataRecords); err != nil {
+		return nil, nil, fmt.Errorf("verify block %d data integrity: %w", blockIndex.BlockNumber, err)
+	}
+	return blockHeader, dataRecords, nil
+}
+
+func strictDataRecordPrefix(dataRecords []byte, recordsToKeep int, requireEOF bool) ([]byte, int, error) {
+	if recordsToKeep < 0 {
+		return nil, 0, fmt.Errorf("negative records to keep: %d", recordsToKeep)
+	}
+	offset := 0
+	for kept := 0; kept < recordsToKeep; kept++ {
+		if offset+codec.RecordHeaderSize > len(dataRecords) {
+			return nil, kept, fmt.Errorf("truncated data record header at offset %d", offset)
+		}
+		payloadLength := int(binary.LittleEndian.Uint32(dataRecords[offset+5 : offset+9]))
+		totalRecordLength := codec.RecordHeaderSize + payloadLength
+		if offset+totalRecordLength > len(dataRecords) {
+			return nil, kept, fmt.Errorf("truncated data record payload at offset %d", offset)
+		}
+		record, err := codec.DecodeRecord(dataRecords[offset : offset+totalRecordLength])
+		if err != nil {
+			return nil, kept, fmt.Errorf("decode data record at offset %d: %w", offset, err)
+		}
+		if record.Type() != codec.DataRecordType {
+			return nil, kept, fmt.Errorf("record at offset %d is type %d, not data", offset, record.Type())
+		}
+		offset += totalRecordLength
+	}
+	if requireEOF && offset != len(dataRecords) {
+		return nil, recordsToKeep, fmt.Errorf("unexpected trailing bytes after %d data records: %d", recordsToKeep, len(dataRecords)-offset)
+	}
+	return dataRecords[:offset], recordsToKeep, nil
+}
+
 // readBlockDataFromLocalFile reads data for a specific block from the local file
 func (w *StagedFileWriter) readBlockDataFromLocalFile(ctx context.Context, blockIndex *codec.IndexRecord) *blockReadResult {
 	_, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readBlockDataFromLocalFile")
@@ -1858,22 +2007,17 @@ func (w *StagedFileWriter) readBlockDataFromLocalFile(ctx context.Context, block
 	}
 }
 
-// extractDataRecords extracts only DataRecords from block data by skipping
-// non-data record headers using the codec-level zero-copy extraction.
-func extractDataRecords(blockData []byte) ([]byte, error) {
-	return codec.ExtractDataRecordBytes(blockData)
-}
-
 // uploadCompactedFooter creates and uploads the footer for compacted segment
 func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndexes []*codec.IndexRecord, fileSizeAfterCompact int64, lac int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "uploadCompactedFooter")
 	defer sp.End()
 
-	// Create footer with compacted flag and LAC. An empty segment (no blocks) records zero
-	// entries; the entry-span arithmetic below would wrongly yield 1 for it.
+	// Create footer with compacted flag and LAC. The record count is derived from the
+	// compacted indexes, not the local writer tail, because compaction may intentionally
+	// crop unconfirmed local entries beyond expectedLastEntryId.
 	totalRecords := uint32(0)
 	if len(blockIndexes) > 0 {
-		totalRecords = uint32(w.lastEntryID.Load() - w.firstEntryID.Load() + 1)
+		totalRecords = uint32(maxBlockLastEntryID(blockIndexes) - blockIndexes[0].FirstEntryID + 1)
 	}
 	baseFlags := uint16(0)
 	if w.recoveredFooter != nil {

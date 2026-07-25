@@ -39,7 +39,7 @@ type LogstoreCallbacks struct {
 	GetSegment   func(logID, segmentID int64) (any, error)
 	ForceFlush   func(logID, segmentID int64) error
 	ForceFence   func(logID, segmentID int64, reason string) error
-	ForceCompact func(logID, segmentID int64) error
+	ForceCompact func(logID, segmentID, expectedLastEntryId int64) error
 }
 
 // OpsCallbacks holds callbacks for ops admin endpoints.

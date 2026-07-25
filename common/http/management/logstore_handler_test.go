@@ -101,6 +101,42 @@ func TestLogstoreFenceHandler_Success(t *testing.T) {
 	assert.Equal(t, "test fence", gotReason)
 }
 
+func TestLogstoreCompactHandler_Success(t *testing.T) {
+	var gotLogID, gotSegmentID, gotExpectedLastEntryID int64
+	handler := NewLogstoreCompactHandler(func(logID, segmentID, expectedLastEntryID int64) error {
+		gotLogID = logID
+		gotSegmentID = segmentID
+		gotExpectedLastEntryID = expectedLastEntryID
+		return nil
+	})
+
+	body := strings.NewReader(`{"log_id":42,"segment_id":7,"expected_last_entry_id":99}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/logstore/compact", body)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "compact completed")
+	assert.Equal(t, int64(42), gotLogID)
+	assert.Equal(t, int64(7), gotSegmentID)
+	assert.Equal(t, int64(99), gotExpectedLastEntryID)
+}
+
+func TestLogstoreCompactHandler_MissingExpectedLastEntryID(t *testing.T) {
+	handler := NewLogstoreCompactHandler(func(logID, segmentID, expectedLastEntryID int64) error {
+		t.Fatal("compact callback should not be called without expected_last_entry_id")
+		return nil
+	})
+
+	body := strings.NewReader(`{"log_id":42,"segment_id":7}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/logstore/compact", body)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "expected_last_entry_id required")
+}
+
 func TestLogstoreCompactHandler_MethodNotAllowed(t *testing.T) {
 	handler := NewLogstoreCompactHandler(nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin/logstore/compact", nil)

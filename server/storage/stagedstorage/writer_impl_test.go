@@ -741,37 +741,23 @@ func TestStagedFileWriter_Compact_RefusesPartialReplicaBehindExpected(t *testing
 	assert.True(t, werr.ErrSegmentCompactionDataBehind.Is(err), "expected ErrSegmentCompactionDataBehind, got %v", err)
 }
 
-// TestStagedFileWriter_Compact_MeetsExpectedPassesBehindCheck: when local data reaches the expected
-// LastEntryId the data-behind check passes. Compaction then continues into the downstream
-// merge/empty-footer paths (here it stops on the no-object-storage-client error) — the point is it
-// is NOT refused as data-behind.
-func TestStagedFileWriter_Compact_MeetsExpectedPassesBehindCheck(t *testing.T) {
+func TestStagedFileWriter_Compact_NonEmptyExpectedMinusOneRejected(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
 	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
 	require.NoError(t, err)
-	defer writer.Close(context.Background())
-	writer.finalized.Store(true)
-	writer.lastEntryID.Store(5)
 
-	_, err = writer.Compact(context.Background(), 5) // local(5) >= expected(5): behind-check passes
-	assert.Error(t, err)
-	assert.False(t, werr.ErrSegmentCompactionDataBehind.Is(err), "must not be refused as data-behind, got %v", err)
-}
-
-// TestStagedFileWriter_Compact_NoExpectationSkipsBehindCheck: expectedLastEntryId < 0 disables the
-// behind check even for an empty replica (manual/force compaction, genuinely-empty segments).
-func TestStagedFileWriter_Compact_NoExpectationSkipsBehindCheck(t *testing.T) {
-	dir := t.TempDir()
-	cfg := newTestConfig(t)
-	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	_, err = writer.WriteDataAsync(context.Background(), 0, []byte("data"), nil)
+	require.NoError(t, err)
+	require.NoError(t, writer.Sync(context.Background()))
+	time.Sleep(200 * time.Millisecond)
+	_, err = writer.Finalize(context.Background(), 0)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
-	writer.finalized.Store(true) // empty replica
 
 	_, err = writer.Compact(context.Background(), -1)
 	assert.Error(t, err)
-	assert.False(t, werr.ErrSegmentCompactionDataBehind.Is(err), "expected the check to be skipped, got %v", err)
+	assert.True(t, werr.ErrInvalidLACAlignment.Is(err), "expected ErrInvalidLACAlignment, got %v", err)
 }
 
 // --- getFooterBlockKey / getCompactedBlockKey ---
@@ -890,7 +876,7 @@ func TestStagedFileWriter_PlanMergeBlockTasks_Empty(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
-	tasks := writer.planMergeBlockTasks(2 * 1024 * 1024)
+	tasks := writer.planMergeBlockTasks(2*1024*1024, -1)
 	assert.Empty(t, tasks)
 }
 
@@ -906,7 +892,7 @@ func TestStagedFileWriter_PlanMergeBlockTasks_SingleBlock(t *testing.T) {
 	}
 	writer.firstEntryID.Store(0)
 
-	tasks := writer.planMergeBlockTasks(2 * 1024 * 1024)
+	tasks := writer.planMergeBlockTasks(2*1024*1024, 9)
 	assert.Len(t, tasks, 1)
 	assert.Len(t, tasks[0].blocks, 1)
 }
@@ -929,7 +915,7 @@ func TestStagedFileWriter_PlanMergeBlockTasks_MultipleMerged(t *testing.T) {
 	writer.firstEntryID.Store(0)
 
 	// Target block size is larger than all blocks combined
-	tasks := writer.planMergeBlockTasks(2 * 1024 * 1024)
+	tasks := writer.planMergeBlockTasks(2*1024*1024, 49)
 	assert.Len(t, tasks, 1)
 	assert.Len(t, tasks[0].blocks, 5)
 }
@@ -951,7 +937,7 @@ func TestStagedFileWriter_PlanMergeBlockTasks_Split(t *testing.T) {
 	writer.firstEntryID.Store(0)
 
 	// Target is 1000 bytes — first block (500) fits, then second (500+500=1000 >= target) triggers split
-	tasks := writer.planMergeBlockTasks(1000)
+	tasks := writer.planMergeBlockTasks(1000, 39)
 	assert.GreaterOrEqual(t, len(tasks), 2)
 }
 
@@ -1280,7 +1266,7 @@ func TestStagedFileWriter_Compact_FullFlow(t *testing.T) {
 		return true // accept any key
 	}), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	totalSize, err := writer.Compact(context.Background(), -1)
+	totalSize, err := writer.Compact(context.Background(), 9)
 	assert.NoError(t, err)
 	assert.Greater(t, totalSize, int64(0))
 	writer.Close(context.Background())
@@ -1345,7 +1331,7 @@ func TestStagedFileWriter_Compact_RealWrites_ProceedsWhenCaughtUp(t *testing.T) 
 			}
 			require.NoError(t, writer.Sync(context.Background()))
 			time.Sleep(200 * time.Millisecond)
-			_, err = writer.Finalize(context.Background(), 9)
+			_, err = writer.Finalize(context.Background(), expected)
 			require.NoError(t, err)
 
 			notFoundErr := fmt.Errorf("object not found")
@@ -1416,7 +1402,7 @@ func TestStagedFileWriter_Compact_MergedBlockFormat(t *testing.T) {
 		}).
 		Return(nil)
 
-	totalSize, err := writer.Compact(context.Background(), -1)
+	totalSize, err := writer.Compact(context.Background(), 4)
 	assert.NoError(t, err)
 	assert.Greater(t, totalSize, int64(0))
 
@@ -1513,7 +1499,7 @@ func TestStagedFileWriter_Compact_FlagsPreserved(t *testing.T) {
 		}).
 		Return(nil)
 
-	totalSize, err := writer.Compact(context.Background(), -1)
+	totalSize, err := writer.Compact(context.Background(), 2)
 	assert.NoError(t, err)
 	assert.Greater(t, totalSize, int64(0))
 
@@ -1609,7 +1595,7 @@ func TestStagedFileWriter_Compact_Idempotent(t *testing.T) {
 		Return(nil)
 
 	// First compact
-	size1, err := writer.Compact(context.Background(), -1)
+	size1, err := writer.Compact(context.Background(), 9)
 	assert.NoError(t, err)
 	assert.Greater(t, size1, int64(0))
 	require.NotEmpty(t, capturedFooterData, "footer should have been uploaded")
@@ -1628,12 +1614,144 @@ func TestStagedFileWriter_Compact_Idempotent(t *testing.T) {
 		Return(mockReader, nil).Once()
 
 	// Second compact — should return immediately with same size, no new PutObject calls
-	size2, err := writer.Compact(context.Background(), -1)
+	size2, err := writer.Compact(context.Background(), 9)
 	assert.NoError(t, err)
 	assert.Equal(t, size1, size2, "second Compact should return same size")
 	assert.Equal(t, firstCompactCalls, putCallCount, "second Compact should not trigger any PutObject calls")
 
 	writer.Close(context.Background())
+}
+
+func TestStagedFileWriter_Compact_RemoteCompactedFooterMustMatchExpected(t *testing.T) {
+	footerData, _ := compactedSingleBlockFixture(t) // compacted footer LAC=4
+	footerKey := "test-root/1/0/footer.blk"
+
+	for _, tc := range []struct {
+		name      string
+		expected  int64
+		wantError bool
+	}{
+		{name: "matches", expected: 4},
+		{name: "behind", expected: 5, wantError: true},
+		{name: "ahead", expected: 3, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := newTestConfig(t)
+			mockStorage := mocks_objectstorage.NewObjectStorage(t)
+			mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+				Return(int64(len(footerData)), true, nil).Once()
+			mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+				Return(&readerMockFileReader{data: footerData}, nil).Once()
+
+			writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+			require.NoError(t, err)
+			defer writer.Close(context.Background())
+
+			size, err := writer.Compact(context.Background(), tc.expected)
+			if tc.wantError {
+				assert.Error(t, err)
+				assert.True(t, werr.ErrInvalidLACAlignment.Is(err), "expected ErrInvalidLACAlignment, got %v", err)
+				assert.Equal(t, int64(-1), size)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Positive(t, size)
+		})
+	}
+}
+
+func TestStagedFileWriter_Compact_CropsLocalTailToExpected(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes = config.NewByteSize(10 * 1024 * 1024)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 1
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 1
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	for i := int64(0); i < 10; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte(fmt.Sprintf("data-%d", i)), nil)
+		require.NoError(t, err)
+	}
+	require.NoError(t, writer.Sync(context.Background()))
+	time.Sleep(200 * time.Millisecond)
+	_, err = writer.Finalize(context.Background(), 5)
+	require.NoError(t, err)
+	require.Len(t, writer.blockIndexes, 1, "expected should fall inside this original block")
+	require.Equal(t, int64(9), writer.blockIndexes[0].LastEntryID)
+
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
+	var capturedBlockData []byte
+	var capturedFooterData []byte
+	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, key string, body io.Reader, size int64, _ string, _ string) error {
+			data := make([]byte, size)
+			_, readErr := io.ReadFull(body, data)
+			require.NoError(t, readErr)
+			switch key {
+			case "test-root/1/0/m_0.blk":
+				capturedBlockData = data
+			case "test-root/1/0/footer.blk":
+				capturedFooterData = data
+			default:
+				t.Fatalf("unexpected compacted object key: %s", key)
+			}
+			return nil
+		})
+
+	totalSize, err := writer.Compact(context.Background(), 5)
+	require.NoError(t, err)
+	assert.Positive(t, totalSize)
+	require.NotEmpty(t, capturedBlockData)
+	require.NotEmpty(t, capturedFooterData)
+
+	blockRecords, decodeErr := codec.DecodeRecordList(capturedBlockData)
+	require.NoError(t, decodeErr)
+	var blockHeader *codec.BlockHeaderRecord
+	var dataPayloads [][]byte
+	for _, record := range blockRecords {
+		switch r := record.(type) {
+		case *codec.BlockHeaderRecord:
+			blockHeader = r
+		case *codec.DataRecord:
+			dataPayloads = append(dataPayloads, r.Payload)
+		}
+	}
+	require.NotNil(t, blockHeader)
+	assert.Equal(t, int64(0), blockHeader.FirstEntryID)
+	assert.Equal(t, int64(5), blockHeader.LastEntryID)
+	require.Len(t, dataPayloads, 6)
+	for i, payload := range dataPayloads {
+		assert.Equal(t, fmt.Sprintf("data-%d", i), string(payload))
+	}
+
+	footer, parseErr := codec.ParseFooterFromBytes(capturedFooterData)
+	require.NoError(t, parseErr)
+	assert.Equal(t, int64(5), footer.LAC)
+	assert.Equal(t, int32(1), footer.TotalBlocks)
+	assert.Equal(t, uint32(6), footer.TotalRecords)
+
+	footerRecords, decodeErr := codec.DecodeRecordList(capturedFooterData)
+	require.NoError(t, decodeErr)
+	var compactedIndex *codec.IndexRecord
+	for _, record := range footerRecords {
+		if idx, ok := record.(*codec.IndexRecord); ok {
+			compactedIndex = idx
+			break
+		}
+	}
+	require.NotNil(t, compactedIndex)
+	assert.Equal(t, int64(0), compactedIndex.FirstEntryID)
+	assert.Equal(t, int64(5), compactedIndex.LastEntryID)
+	assert.Equal(t, uint32(len(capturedBlockData)), compactedIndex.BlockSize)
 }
 
 // TestStagedFileWriter_Compact_CancelledContext verifies that Compact returns promptly
@@ -1672,7 +1790,7 @@ func TestStagedFileWriter_Compact_CancelledContext(t *testing.T) {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = writer.Compact(cancelCtx, -1)
+	_, err = writer.Compact(cancelCtx, 9)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
@@ -1873,7 +1991,7 @@ func TestCompact_UploadMergedBlockFails(t *testing.T) {
 	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(fmt.Errorf("upload failed"))
 
-	_, err = writer.Compact(context.Background(), -1)
+	_, err = writer.Compact(context.Background(), 4)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read local file and upload to minio")
 	writer.Close(context.Background())
@@ -2323,6 +2441,7 @@ func TestCompact_EmptyBlocks(t *testing.T) {
 	require.NoError(t, parseErr)
 	assert.Equal(t, int32(0), footer.TotalBlocks)
 	assert.Equal(t, uint32(0), footer.TotalRecords)
+	assert.Equal(t, int64(-1), footer.LAC)
 	assert.True(t, codec.IsCompacted(footer.Flags))
 }
 
@@ -2351,9 +2470,9 @@ func TestCompact_ZeroBlocksNonEmptyLAC_Refuses(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
-	result, err := writer.Compact(context.Background(), -1)
+	result, err := writer.Compact(context.Background(), 999)
 	assert.Error(t, err, "a data-less replica of a non-empty segment must refuse to compact")
-	assert.Contains(t, err.Error(), "refusing empty compaction")
+	assert.Contains(t, err.Error(), "empty local segment cannot satisfy expected 999")
 	assert.Equal(t, int64(-1), result)
 }
 
@@ -2401,7 +2520,7 @@ func TestCompactedWriter_TombstoneOpen_NoResurrection(t *testing.T) {
 	last, err := writer.Finalize(context.Background(), 4)
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), last)
-	size, err := writer.Compact(context.Background(), -1)
+	size, err := writer.Compact(context.Background(), 4)
 	require.NoError(t, err)
 	assert.Positive(t, size, "compact reports already-compacted via the remote footer")
 
@@ -2486,11 +2605,11 @@ func TestCompact_InvalidLAC(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
-	// Override LAC to -1 to trigger validation failure
-	writer.recoveredFooter.LAC = -1
-	_, err = writer.Compact(context.Background(), -1)
+	// Override local footer LAC above the caller-confirmed target to trigger validation failure.
+	writer.recoveredFooter.LAC = 100
+	_, err = writer.Compact(context.Background(), 2)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no valid LAC")
+	assert.Contains(t, err.Error(), "local footer LAC 100 > expected 2")
 }
 
 // === Compact - Upload Footer Fails ===
@@ -2533,7 +2652,7 @@ func TestCompact_UploadFooterFails(t *testing.T) {
 			return nil
 		})
 
-	_, err = writer.Compact(context.Background(), -1)
+	_, err = writer.Compact(context.Background(), 4)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "footer upload failed")
 }
