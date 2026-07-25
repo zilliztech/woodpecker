@@ -61,21 +61,23 @@ func newLogstoreFenceCommand() *cobra.Command {
 }
 
 func newLogstoreCompactCommand() *cobra.Command {
-	var logID, segID int64
+	var logID, segID, expectedLastEntryID int64
 	cmd := &cobra.Command{
 		Use:   "compact <node>",
-		Short: "Force compaction on a segment",
+		Short: "Force compaction on a segment at an exact confirmed entry ID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return logstorePost(cmd, args[0], "/admin/logstore/compact", map[string]any{
-				"log_id": logID, "segment_id": segID,
+				"log_id": logID, "segment_id": segID, "expected_last_entry_id": expectedLastEntryID,
 			}, "compact")
 		},
 	}
 	cmd.Flags().Int64Var(&logID, "log", 0, "Log ID (required)")
 	cmd.Flags().Int64Var(&segID, "seg", 0, "Segment ID (required)")
+	cmd.Flags().Int64Var(&expectedLastEntryID, "expected-last-entry-id", 0, "Exact quorum-confirmed last entry ID (-1 only for an empty segment, required)")
 	_ = cmd.MarkFlagRequired("log")
 	_ = cmd.MarkFlagRequired("seg")
+	_ = cmd.MarkFlagRequired("expected-last-entry-id")
 	return cmd
 }
 

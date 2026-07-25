@@ -596,7 +596,17 @@ func (s *Server) CompleteSegment(ctx context.Context, request *proto.CompleteSeg
 	return &proto.CompleteSegmentResponse{Status: werr.Success(), LastEntryId: lastId}, nil
 }
 
-func (s *Server) CompactSegment(ctx context.Context, request *proto.CompactSegmentRequest) (*proto.CompactSegmentResponse, error) {
+// CompactSegment is retained so a server-first upgrade fails closed for old clients.
+// The legacy request has no trustworthy quorum-confirmed compaction boundary.
+func (s *Server) CompactSegment(context.Context, *proto.CompactSegmentRequest) (*proto.CompactSegmentResponse, error) {
+	return &proto.CompactSegmentResponse{
+		Status: werr.Status(werr.ErrUnsupportedVersionError.WithCauseErrMsg(
+			"legacy CompactSegment RPC is disabled; upgrade the client to use CompactSegmentWithExpected",
+		)),
+	}, nil
+}
+
+func (s *Server) CompactSegmentWithExpected(ctx context.Context, request *proto.CompactSegmentWithExpectedRequest) (*proto.CompactSegmentResponse, error) {
 	meta, err := s.logStore.CompactSegment(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, request.ExpectedLastEntryId)
 	if err != nil {
 		return &proto.CompactSegmentResponse{Status: werr.Status(err)}, nil

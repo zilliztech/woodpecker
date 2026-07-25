@@ -439,7 +439,7 @@ type fakeLogStore struct {
 	getBatchFn        func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, fromEntryId, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	fenceFn           func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
 	completeFn        func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) (int64, error)
-	compactFn         func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	compactFn         func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error)
 	getLACFn          func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
 	getBlockCountFn   func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
 	updateLACFn       func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) error
@@ -482,8 +482,8 @@ func (f *fakeLogStore) CompleteSegment(ctx context.Context, bucketName, rootPath
 	return f.completeFn(ctx, bucketName, rootPath, logId, segmentId, lac)
 }
 
-func (f *fakeLogStore) CompactSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, _ int64) (*proto.SegmentMetadata, error) {
-	return f.compactFn(ctx, bucketName, rootPath, logId, segmentId)
+func (f *fakeLogStore) CompactSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
+	return f.compactFn(ctx, bucketName, rootPath, logId, segmentId, expectedLastEntryId)
 }
 
 func (f *fakeLogStore) GetSegmentLastAddConfirmed(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error) {
@@ -671,11 +671,12 @@ func TestServer_CompleteSegment_Error(t *testing.T) {
 	assert.NotEqual(t, int32(0), resp.Status.Code)
 }
 
-func TestServer_CompactSegment_Success(t *testing.T) {
-	expectedMeta := &proto.SegmentMetadata{SegNo: 0}
+func TestServer_CompactSegment_RejectsLegacyClientWithoutCompacting(t *testing.T) {
+	compactCalled := false
 	fake := &fakeLogStore{
-		compactFn: func(ctx context.Context, bn, rp string, logId, segId int64) (*proto.SegmentMetadata, error) {
-			return expectedMeta, nil
+		compactFn: func(ctx context.Context, bn, rp string, logId, segId, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
+			compactCalled = true
+			return nil, nil
 		},
 	}
 	s := createTestServerWithFakeLogStore(fake)
@@ -685,21 +686,45 @@ func TestServer_CompactSegment_Success(t *testing.T) {
 		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0,
 	})
 	assert.NoError(t, err)
+	assert.Equal(t, werr.ErrUnsupportedVersionError.Code(), resp.Status.Code)
+	assert.Contains(t, resp.Status.Reason, "upgrade the client")
+	assert.False(t, compactCalled)
+}
+
+func TestServer_CompactSegmentWithExpected_Success(t *testing.T) {
+	expectedMeta := &proto.SegmentMetadata{SegNo: 0}
+	fake := &fakeLogStore{
+		compactFn: func(ctx context.Context, bn, rp string, logId, segId, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
+			assert.Equal(t, "b", bn)
+			assert.Equal(t, "r", rp)
+			assert.Equal(t, int64(1), logId)
+			assert.Equal(t, int64(0), segId)
+			assert.Equal(t, int64(10), expectedLastEntryId)
+			return expectedMeta, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.CompactSegmentWithExpected(context.Background(), &proto.CompactSegmentWithExpectedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0, ExpectedLastEntryId: 10,
+	})
+	assert.NoError(t, err)
 	assert.Equal(t, int32(0), resp.Status.Code)
 	assert.Equal(t, expectedMeta, resp.Metadata)
 }
 
-func TestServer_CompactSegment_Error(t *testing.T) {
+func TestServer_CompactSegmentWithExpected_Error(t *testing.T) {
 	fake := &fakeLogStore{
-		compactFn: func(ctx context.Context, bn, rp string, logId, segId int64) (*proto.SegmentMetadata, error) {
+		compactFn: func(ctx context.Context, bn, rp string, logId, segId, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 			return nil, assert.AnError
 		},
 	}
 	s := createTestServerWithFakeLogStore(fake)
 	defer s.cancel()
 
-	resp, err := s.CompactSegment(context.Background(), &proto.CompactSegmentRequest{
-		BucketName: "b", RootPath: "r", LogId: 1,
+	resp, err := s.CompactSegmentWithExpected(context.Background(), &proto.CompactSegmentWithExpectedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, ExpectedLastEntryId: 10,
 	})
 	assert.NoError(t, err)
 	assert.NotEqual(t, int32(0), resp.Status.Code)

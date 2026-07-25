@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func logstoreTestServer(t *testing.T) *httptest.Server {
+func logstoreTestServer(t *testing.T, onCompact ...func(map[string]any)) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin/memberlist", func(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +51,14 @@ func logstoreTestServer(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "fence completed"})
 	})
 	mux.HandleFunc("/admin/logstore/compact", func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(onCompact) > 0 {
+			onCompact[0](payload)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "compact completed"})
 	})
@@ -129,9 +137,25 @@ func TestLogstoreFence_WithYes(t *testing.T) {
 }
 
 func TestLogstoreCompact(t *testing.T) {
-	srv := logstoreTestServer(t)
+	payloadCh := make(chan map[string]any, 1)
+	srv := logstoreTestServer(t, func(payload map[string]any) {
+		payloadCh <- payload
+	})
 	defer srv.Close()
-	out, err := runLogstoreCmd(t, srv, "logstore", "compact", "node-1", "--log", "42", "--seg", "7")
+	out, err := runLogstoreCmd(t, srv, "logstore", "compact", "node-1", "--log", "42", "--seg", "7", "--expected-last-entry-id", "99")
 	require.NoError(t, err)
 	assert.Contains(t, out, "compact completed")
+	payload := <-payloadCh
+	assert.Equal(t, float64(42), payload["log_id"])
+	assert.Equal(t, float64(7), payload["segment_id"])
+	assert.Equal(t, float64(99), payload["expected_last_entry_id"])
+}
+
+func TestLogstoreCompact_RequiresExpectedLastEntryID(t *testing.T) {
+	srv := logstoreTestServer(t)
+	defer srv.Close()
+
+	_, err := runLogstoreCmd(t, srv, "logstore", "compact", "node-1", "--log", "42", "--seg", "7")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required flag(s) \"expected-last-entry-id\" not set")
 }

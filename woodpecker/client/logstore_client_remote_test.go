@@ -92,6 +92,14 @@ func (m *mockProtoLogStoreClient) CompactSegment(ctx context.Context, in *proto.
 	return args.Get(0).(*proto.CompactSegmentResponse), args.Error(1)
 }
 
+func (m *mockProtoLogStoreClient) CompactSegmentWithExpected(ctx context.Context, in *proto.CompactSegmentWithExpectedRequest, opts ...grpc.CallOption) (*proto.CompactSegmentResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.CompactSegmentResponse), args.Error(1)
+}
+
 func (m *mockProtoLogStoreClient) NotifySegmentCompacted(ctx context.Context, in *proto.NotifySegmentCompactedRequest, opts ...grpc.CallOption) (*proto.NotifySegmentCompactedResponse, error) {
 	args := m.Called(ctx, in)
 	if args.Get(0) == nil {
@@ -513,31 +521,36 @@ func TestRemoteClient_SegmentCompact_Success(t *testing.T) {
 	ctx := context.Background()
 
 	expectedMeta := &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Sealed}
-	mockClient.On("CompactSegment", ctx, mock.AnythingOfType("*proto.CompactSegmentRequest")).
+	mockClient.On("CompactSegmentWithExpected", ctx, mock.MatchedBy(func(request *proto.CompactSegmentWithExpectedRequest) bool {
+		return request.BucketName == "bucket" && request.RootPath == "root" &&
+			request.LogId == 1 && request.SegmentId == 0 && request.ExpectedLastEntryId == 99
+	})).
 		Return(&proto.CompactSegmentResponse{Metadata: expectedMeta}, nil)
 
-	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, -1)
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, 99)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedMeta, meta)
 }
 
-func TestRemoteClient_SegmentCompact_GrpcError(t *testing.T) {
+func TestRemoteClient_SegmentCompact_OldServerUnimplementedDoesNotFallback(t *testing.T) {
 	client, mockClient := newRemoteClientWithMock(t)
 	ctx := context.Background()
 
-	mockClient.On("CompactSegment", ctx, mock.Anything).
-		Return(nil, fmt.Errorf("compact error"))
+	mockClient.On("CompactSegmentWithExpected", ctx, mock.Anything).
+		Return(nil, status.Error(codes.Unimplemented, "method CompactSegmentWithExpected not found"))
 
-	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, -1)
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, 99)
 	assert.Error(t, err)
+	assert.Equal(t, codes.Unimplemented, status.Code(err))
 	assert.Nil(t, meta)
+	mockClient.AssertNotCalled(t, "CompactSegment", mock.Anything, mock.Anything)
 }
 
 func TestRemoteClient_SegmentCompact_StatusError(t *testing.T) {
 	client, mockClient := newRemoteClientWithMock(t)
 	ctx := context.Background()
 
-	mockClient.On("CompactSegment", ctx, mock.Anything).
+	mockClient.On("CompactSegmentWithExpected", ctx, mock.Anything).
 		Return(&proto.CompactSegmentResponse{
 			Status: werr.Status(werr.ErrSegmentNotFound),
 		}, nil)
