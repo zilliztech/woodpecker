@@ -74,7 +74,7 @@ func newLogstoreCompactCommand() *cobra.Command {
 	}
 	cmd.Flags().Int64Var(&logID, "log", 0, "Log ID (required)")
 	cmd.Flags().Int64Var(&segID, "seg", 0, "Segment ID (required)")
-	cmd.Flags().Int64Var(&expectedLastEntryID, "expected-last-entry-id", 0, "Exact quorum-confirmed last entry ID (-1 only for an empty segment, required)")
+	cmd.Flags().Int64Var(&expectedLastEntryID, "expected-last-entry-id", 0, "Exact LastEntryId from coordinator metadata; an incorrect value can publish an invalid footer (-1 only for an empty segment, required)")
 	_ = cmd.MarkFlagRequired("log")
 	_ = cmd.MarkFlagRequired("seg")
 	_ = cmd.MarkFlagRequired("expected-last-entry-id")
