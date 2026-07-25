@@ -1230,10 +1230,9 @@ type CompactSegmentRequest struct {
 	RootPath   string                 `protobuf:"bytes,2,opt,name=root_path,json=rootPath,proto3" json:"root_path,omitempty"`
 	LogId      int64                  `protobuf:"varint,3,opt,name=log_id,json=logId,proto3" json:"log_id,omitempty"`
 	SegmentId  int64                  `protobuf:"varint,4,opt,name=segment_id,json=segmentId,proto3" json:"segment_id,omitempty"`
-	// The quorum-confirmed last entry id (LAC) that the compacting node must hold locally.
-	// A node whose local data is behind this value must refuse to compact instead of sealing
-	// a short segment (which would silently drop an already-acknowledged entry). -1 means "no
-	// expectation" (e.g. empty segment) and disables the check.
+	// The exact quorum-confirmed last entry id (LAC) the compacted segment must publish.
+	// A node whose local data cannot cover this value must refuse to compact instead of
+	// sealing a short segment. -1 is valid only for a genuinely empty segment.
 	ExpectedLastEntryId int64 `protobuf:"varint,5,opt,name=expected_last_entry_id,json=expectedLastEntryId,proto3" json:"expected_last_entry_id,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache

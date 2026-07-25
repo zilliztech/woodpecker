@@ -94,6 +94,7 @@ func NewLogstoreFenceHandler(fence func(logID, segmentID int64, reason string) e
 
 // NewLogstoreCompactHandler handles POST /admin/logstore/compact.
 // Body: {"log_id": 42, "segment_id": 7, "expected_last_entry_id": 99}
+// expected_last_entry_id is required; use -1 only for a genuinely empty segment.
 func NewLogstoreCompactHandler(compact func(logID, segmentID, expectedLastEntryId int64) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

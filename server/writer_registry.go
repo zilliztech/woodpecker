@@ -66,7 +66,8 @@ func (l *logStore) ForceFence(ctx context.Context, logID, segmentID int64, _ str
 	return err
 }
 
-// ForceCompact forces compaction on the specified writer.
+// ForceCompact forces compaction on the specified writer with an admin-supplied
+// expected last entry id.
 func (l *logStore) ForceCompact(ctx context.Context, logID, segmentID, expectedLastEntryId int64) error {
 	sp := l.findSegmentProcessor(logID, segmentID)
 	if sp == nil {

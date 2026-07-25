@@ -178,10 +178,9 @@ message CompactSegmentRequest {
   string root_path = 2;
   int64 log_id = 3;
   int64 segment_id = 4;
-  // The quorum-confirmed last entry id (LAC) that the compacting node must hold locally.
-  // A node whose local data is behind this value must refuse to compact instead of sealing
-  // a short segment (which would silently drop an already-acknowledged entry). -1 means "no
-  // expectation" (e.g. empty segment) and disables the check.
+  // The exact quorum-confirmed last entry id (LAC) the compacted segment must publish.
+  // A node whose local data cannot cover this value must refuse to compact instead of
+  // sealing a short segment. -1 is valid only for a genuinely empty segment.
   int64 expected_last_entry_id = 5;
 }
 
