@@ -1886,6 +1886,66 @@ func TestInternalLogWriter_RunAuditor_InvalidationCancelsInFlightCompact(t *test
 	assert.False(t, w.isWriterValid.Load())
 }
 
+func TestInternalLogWriter_CloseWaitsForAuditorToExit(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(nil)
+	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}},
+	}, nil)
+	mockLogHandle.On("CompleteAllActiveSegmentIfExists", mock.Anything).Return(nil).Once()
+	mockLogHandle.On("Close", mock.Anything).Return(nil).Once()
+
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockLogHandle.On("GetRecoverableSegmentHandle", mock.Anything, int64(1)).Return(mockSegHandle, nil)
+	compactStarted := make(chan struct{})
+	compactCanceled := make(chan struct{})
+	allowCompactReturn := make(chan struct{})
+	mockSegHandle.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		close(compactStarted)
+		<-ctx.Done()
+		close(compactCanceled)
+		<-allowCompactReturn
+		return ctx.Err()
+	}).Once()
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+	w.auditorMaxInterval = 1
+	w.startAuditor()
+
+	select {
+	case <-compactStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("auditor did not start compaction")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- w.Close(context.Background())
+	}()
+
+	select {
+	case <-compactCanceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer close did not cancel in-flight compaction")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("writer close returned before the auditor exited: %v", err)
+	default:
+	}
+
+	close(allowCompactReturn)
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer close did not finish after the auditor exited")
+	}
+}
+
 func TestLogWriter_RunAuditor_SessionExpirationCancelsInFlightCompact(t *testing.T) {
 	mockLogHandle := &testLogHandleMock{}
 	mockLogHandle.Test(t)
