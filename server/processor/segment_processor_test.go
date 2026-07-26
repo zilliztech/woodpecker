@@ -540,10 +540,10 @@ func TestSegmentProcessor_GetBlocksCount_NoWriter(t *testing.T) {
 func TestSegmentProcessor_Compact_Success(t *testing.T) {
 	sp := newTestProcessor(t)
 	mockWriter := mocks_storage.NewWriter(t)
-	mockWriter.EXPECT().Compact(mock.Anything).Return(int64(1024), nil)
+	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).Return(int64(1024), nil)
 	sp.currentSegmentWriter = mockWriter
 
-	meta, err := sp.Compact(context.Background())
+	meta, err := sp.Compact(context.Background(), -1)
 	assert.NoError(t, err)
 	assert.NotNil(t, meta)
 	assert.Equal(t, proto.SegmentState_Sealed, meta.State)
@@ -554,10 +554,10 @@ func TestSegmentProcessor_Compact_Success(t *testing.T) {
 func TestSegmentProcessor_Compact_MergeError(t *testing.T) {
 	sp := newTestProcessor(t)
 	mockWriter := mocks_storage.NewWriter(t)
-	mockWriter.EXPECT().Compact(mock.Anything).Return(int64(0), fmt.Errorf("compact failed"))
+	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).Return(int64(0), fmt.Errorf("compact failed"))
 	sp.currentSegmentWriter = mockWriter
 
-	meta, err := sp.Compact(context.Background())
+	meta, err := sp.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Nil(t, meta)
 }
@@ -570,7 +570,7 @@ func TestSegmentProcessor_Compact_Timeout(t *testing.T) {
 	impl := sp.(*segmentProcessor)
 
 	mockWriter := mocks_storage.NewWriter(t)
-	mockWriter.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) (int64, error) {
+	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ int64) (int64, error) {
 		// Block until the context is cancelled (should happen after 1s timeout)
 		<-ctx.Done()
 		return 0, ctx.Err()
@@ -578,7 +578,7 @@ func TestSegmentProcessor_Compact_Timeout(t *testing.T) {
 	impl.currentSegmentWriter = mockWriter
 
 	start := time.Now()
-	meta, err := impl.Compact(context.Background())
+	meta, err := impl.Compact(context.Background(), -1)
 	elapsed := time.Since(start)
 
 	assert.Nil(t, meta)
@@ -594,7 +594,7 @@ func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 	started := make(chan struct{})
 	proceed := make(chan struct{})
 	mockWriter := mocks_storage.NewWriter(t)
-	mockWriter.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) (int64, error) {
+	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ int64) (int64, error) {
 		close(started) // signal that first compact is running
 		<-proceed      // block until test releases
 		return int64(1024), nil
@@ -605,7 +605,7 @@ func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 	errCh := make(chan error, 1)
 	metaCh := make(chan *proto.SegmentMetadata, 1)
 	go func() {
-		meta, err := sp.Compact(context.Background())
+		meta, err := sp.Compact(context.Background(), -1)
 		metaCh <- meta
 		errCh <- err
 	}()
@@ -614,7 +614,7 @@ func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 	<-started
 
 	// Second Compact should be rejected immediately
-	meta2, err2 := sp.Compact(context.Background())
+	meta2, err2 := sp.Compact(context.Background(), -1)
 	assert.Nil(t, meta2)
 	assert.Error(t, err2)
 	assert.True(t, werr.ErrSegmentProcessorAlreadyCompacting.Is(err2))
@@ -629,13 +629,44 @@ func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 
 	// After first completes, a new Compact should succeed again
 	mockWriter2 := mocks_storage.NewWriter(t)
-	mockWriter2.EXPECT().Compact(mock.Anything).Return(int64(512), nil)
+	mockWriter2.EXPECT().Compact(mock.Anything, mock.Anything).Return(int64(512), nil)
 	sp.currentSegmentWriter = mockWriter2
 
-	meta3, err3 := sp.Compact(context.Background())
+	meta3, err3 := sp.Compact(context.Background(), -1)
 	assert.NoError(t, err3)
 	assert.NotNil(t, meta3)
 	assert.Equal(t, int64(512), meta3.Size)
+}
+
+// TestSegmentProcessor_Compact_ForwardsExpectedLastEntryId pins that the processor passes the
+// coordinator-confirmed LastEntryId straight through to the writer, which owns the behind/empty
+// replica completeness check (see the StagedFileWriter Compact tests).
+func TestSegmentProcessor_Compact_ForwardsExpectedLastEntryId(t *testing.T) {
+	sp := newTestProcessor(t)
+	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().Compact(mock.Anything, int64(7)).Return(int64(2048), nil)
+	sp.currentSegmentWriter = mockWriter
+
+	meta, err := sp.Compact(context.Background(), 7)
+	assert.NoError(t, err)
+	assert.NotNil(t, meta)
+	assert.Equal(t, proto.SegmentState_Sealed, meta.State)
+	assert.Equal(t, int64(2048), meta.Size)
+}
+
+// TestSegmentProcessor_Compact_PropagatesDataBehind confirms the writer's refuse-to-compact (a
+// behind/empty replica) surfaces to the caller unchanged, so compactSegmentQuorum moves on to
+// the next quorum node.
+func TestSegmentProcessor_Compact_PropagatesDataBehind(t *testing.T) {
+	sp := newTestProcessor(t)
+	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().Compact(mock.Anything, int64(1)).Return(int64(-1), werr.ErrSegmentCompactionDataBehind)
+	sp.currentSegmentWriter = mockWriter
+
+	meta, err := sp.Compact(context.Background(), 1)
+	assert.Error(t, err)
+	assert.Nil(t, meta)
+	assert.True(t, werr.ErrSegmentCompactionDataBehind.Is(err), "expected ErrSegmentCompactionDataBehind, got %v", err)
 }
 
 // === Clean Tests ===
@@ -814,7 +845,7 @@ func TestSegmentProcessor_Compact_WithLocalStorage(t *testing.T) {
 	sp := newLocalStorageProcessor(t)
 
 	// Local storage does not support compact, should return error
-	meta, err := sp.Compact(context.Background())
+	meta, err := sp.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Nil(t, meta)
 	assert.Contains(t, err.Error(), "not need to compact local file currently")
@@ -1024,7 +1055,7 @@ func TestSegmentProcessor_Compact_GetOrCreateWriterError(t *testing.T) {
 	mockStorage.EXPECT().GetObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("get object failed")).Maybe()
 
-	meta, err := sp.Compact(context.Background())
+	meta, err := sp.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Nil(t, meta)
 }

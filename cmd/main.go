@@ -253,8 +253,8 @@ func main() {
 			ForceFence: func(logID, segmentID int64, reason string) error {
 				return srv.GetWriterRegistry().ForceFence(context.Background(), logID, segmentID, reason)
 			},
-			ForceCompact: func(logID, segmentID int64) error {
-				return srv.GetWriterRegistry().ForceCompact(context.Background(), logID, segmentID)
+			ForceCompact: func(logID, segmentID, expectedLastEntryId int64) error {
+				return srv.GetWriterRegistry().ForceCompact(context.Background(), logID, segmentID, expectedLastEntryId)
 			},
 		},
 		Ops: commonhttp.OpsCallbacks{

@@ -28,6 +28,7 @@ const (
 	LogStore_FenceSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/FenceSegment"
 	LogStore_CompleteSegment_FullMethodName            = "/woodpecker.proto.logstore.LogStore/CompleteSegment"
 	LogStore_CompactSegment_FullMethodName             = "/woodpecker.proto.logstore.LogStore/CompactSegment"
+	LogStore_CompactSegmentWithExpected_FullMethodName = "/woodpecker.proto.logstore.LogStore/CompactSegmentWithExpected"
 	LogStore_NotifySegmentCompacted_FullMethodName     = "/woodpecker.proto.logstore.LogStore/NotifySegmentCompacted"
 	LogStore_GetSegmentLastAddConfirmed_FullMethodName = "/woodpecker.proto.logstore.LogStore/GetSegmentLastAddConfirmed"
 	LogStore_GetSegmentBlockCount_FullMethodName       = "/woodpecker.proto.logstore.LogStore/GetSegmentBlockCount"
@@ -59,7 +60,15 @@ type LogStoreClient interface {
 	// Segment state transitions
 	FenceSegment(ctx context.Context, in *FenceSegmentRequest, opts ...grpc.CallOption) (*FenceSegmentResponse, error)
 	CompleteSegment(ctx context.Context, in *CompleteSegmentRequest, opts ...grpc.CallOption) (*CompleteSegmentResponse, error)
+	// Deprecated: Do not use.
+	// CompactSegment is the legacy compaction RPC. Upgraded servers keep it only
+	// to fail old clients explicitly, because its request does not carry the
+	// quorum-confirmed compaction boundary. Clients must use
+	// CompactSegmentWithExpected instead.
 	CompactSegment(ctx context.Context, in *CompactSegmentRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error)
+	// CompactSegmentWithExpected compacts exactly through expected_last_entry_id.
+	// New clients must not fall back to CompactSegment when this RPC is unavailable.
+	CompactSegmentWithExpected(ctx context.Context, in *CompactSegmentWithExpectedRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error)
 	// NotifySegmentCompacted informs a node that a segment's data is durably compacted in
 	// object storage, authorizing it to mark (and later reclaim) its local copy.
 	NotifySegmentCompacted(ctx context.Context, in *NotifySegmentCompactedRequest, opts ...grpc.CallOption) (*NotifySegmentCompactedResponse, error)
@@ -154,10 +163,21 @@ func (c *logStoreClient) CompleteSegment(ctx context.Context, in *CompleteSegmen
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *logStoreClient) CompactSegment(ctx context.Context, in *CompactSegmentRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CompactSegmentResponse)
 	err := c.cc.Invoke(ctx, LogStore_CompactSegment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) CompactSegmentWithExpected(ctx context.Context, in *CompactSegmentWithExpectedRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompactSegmentResponse)
+	err := c.cc.Invoke(ctx, LogStore_CompactSegmentWithExpected_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +285,15 @@ type LogStoreServer interface {
 	// Segment state transitions
 	FenceSegment(context.Context, *FenceSegmentRequest) (*FenceSegmentResponse, error)
 	CompleteSegment(context.Context, *CompleteSegmentRequest) (*CompleteSegmentResponse, error)
+	// Deprecated: Do not use.
+	// CompactSegment is the legacy compaction RPC. Upgraded servers keep it only
+	// to fail old clients explicitly, because its request does not carry the
+	// quorum-confirmed compaction boundary. Clients must use
+	// CompactSegmentWithExpected instead.
 	CompactSegment(context.Context, *CompactSegmentRequest) (*CompactSegmentResponse, error)
+	// CompactSegmentWithExpected compacts exactly through expected_last_entry_id.
+	// New clients must not fall back to CompactSegment when this RPC is unavailable.
+	CompactSegmentWithExpected(context.Context, *CompactSegmentWithExpectedRequest) (*CompactSegmentResponse, error)
 	// NotifySegmentCompacted informs a node that a segment's data is durably compacted in
 	// object storage, authorizing it to mark (and later reclaim) its local copy.
 	NotifySegmentCompacted(context.Context, *NotifySegmentCompactedRequest) (*NotifySegmentCompactedResponse, error)
@@ -308,6 +336,9 @@ func (UnimplementedLogStoreServer) CompleteSegment(context.Context, *CompleteSeg
 }
 func (UnimplementedLogStoreServer) CompactSegment(context.Context, *CompactSegmentRequest) (*CompactSegmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CompactSegment not implemented")
+}
+func (UnimplementedLogStoreServer) CompactSegmentWithExpected(context.Context, *CompactSegmentWithExpectedRequest) (*CompactSegmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompactSegmentWithExpected not implemented")
 }
 func (UnimplementedLogStoreServer) NotifySegmentCompacted(context.Context, *NotifySegmentCompactedRequest) (*NotifySegmentCompactedResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NotifySegmentCompacted not implemented")
@@ -443,6 +474,24 @@ func _LogStore_CompactSegment_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(LogStoreServer).CompactSegment(ctx, req.(*CompactSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_CompactSegmentWithExpected_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompactSegmentWithExpectedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).CompactSegmentWithExpected(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_CompactSegmentWithExpected_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).CompactSegmentWithExpected(ctx, req.(*CompactSegmentWithExpectedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -613,6 +662,10 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CompactSegment",
 			Handler:    _LogStore_CompactSegment_Handler,
+		},
+		{
+			MethodName: "CompactSegmentWithExpected",
+			Handler:    _LogStore_CompactSegmentWithExpected_Handler,
 		},
 		{
 			MethodName: "NotifySegmentCompacted",

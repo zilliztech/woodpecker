@@ -2562,7 +2562,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 		require.NotNil(t, writer)
 
 		// Perform compaction
-		compactedSize, err := writer.Compact(ctx)
+		compactedSize, err := writer.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize, int64(0), "Compacted size should be positive")
 
@@ -2880,7 +2880,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 		require.NotNil(t, writer)
 
 		// Second compaction should return -1 (already compacted)
-		compactedSize, err := writer.Compact(ctx)
+		compactedSize, err := writer.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, sizeAfterCompacted, compactedSize, "Second compaction should return -1 (already compacted)")
 

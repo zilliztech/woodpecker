@@ -66,13 +66,17 @@ func (l *logStore) ForceFence(ctx context.Context, logID, segmentID int64, _ str
 	return err
 }
 
-// ForceCompact forces compaction on the specified writer.
-func (l *logStore) ForceCompact(ctx context.Context, logID, segmentID int64) error {
+// ForceCompact forces compaction on the specified writer with an admin-supplied
+// expected last entry id. The value is treated as authoritative and is not
+// cross-checked against coordinator metadata; callers must obtain the exact
+// confirmed LastEntryId before invoking this maintenance operation. Supplying
+// an incorrect value can publish an invalid compacted footer.
+func (l *logStore) ForceCompact(ctx context.Context, logID, segmentID, expectedLastEntryId int64) error {
 	sp := l.findSegmentProcessor(logID, segmentID)
 	if sp == nil {
 		return fmt.Errorf("segment %d:%d not found", logID, segmentID)
 	}
-	_, err := sp.Compact(ctx)
+	_, err := sp.Compact(ctx, expectedLastEntryId)
 	return err
 }
 

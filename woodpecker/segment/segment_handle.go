@@ -1482,7 +1482,7 @@ func (s *segmentHandleImpl) fenceSegmentOnNode(ctx context.Context, node string,
 
 // compactSegmentQuorum tries SegmentCompact on each quorum node sequentially
 // until one succeeds. Returns the result from the first successful node.
-func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo) (*proto.SegmentMetadata, error) {
+func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 	var lastError error
 
 	// Try each node sequentially until one succeeds
@@ -1507,8 +1507,9 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 			continue
 		}
 
-		// Try compaction on this node
-		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId)
+		// Try compaction on this node. The node refuses (returns ErrSegmentCompactionDataBehind)
+		// if its local data is behind expectedLastEntryId, so we fall through to the next node.
+		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, expectedLastEntryId)
 		if compactErr != nil {
 			logger.Ctx(ctx).Warn("Segment compaction failed on node, trying next",
 				zap.String("logName", s.logName),
@@ -1762,8 +1763,9 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		zap.Int("nodeCount", len(quorumInfo.Nodes)),
 		zap.Int64("lastEntryId", currentSegmentMeta.Metadata.LastEntryId))
 
-	// Try compaction on each node sequentially until one succeeds
-	compactSegMetaInfo, compactErr := s.compactSegmentQuorum(ctx, quorumInfo)
+	// Try compaction on each node sequentially until one succeeds. Pass the confirmed
+	// LastEntryId so a lagging node refuses instead of sealing a short segment.
+	compactSegMetaInfo, compactErr := s.compactSegmentQuorum(ctx, quorumInfo, currentSegmentMeta.Metadata.LastEntryId)
 	if compactErr != nil {
 		logger.Ctx(ctx).Warn("All nodes failed compaction operation",
 			zap.String("logName", s.logName),

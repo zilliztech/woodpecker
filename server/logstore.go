@@ -62,7 +62,7 @@ type LogStore interface {
 	GetBatchEntriesAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error)
-	CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error)
 	// NotifySegmentCompacted marks a segment's local data as durably compacted in object
 	// storage (writes a local data.compacted), authorizing later reclaim of its data.log.
 	NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error
@@ -605,7 +605,7 @@ func (l *logStore) GetSegmentBlockCount(ctx context.Context, bucketName string, 
 }
 
 // CompactSegment merge all files in a segment into bigger files
-func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 	if l.stopped.Load() {
 		return nil, werr.ErrLogStoreShutdown
 	}
@@ -628,7 +628,7 @@ func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPa
 		logger.Ctx(ctx).Warn("compact segment failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return nil, err
 	}
-	metadata, err := segmentProcessor.Compact(ctx)
+	metadata, err := segmentProcessor.Compact(ctx, expectedLastEntryId)
 	if err != nil {
 		status = "error"
 		logger.Ctx(ctx).Warn("compact segment failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))

@@ -854,7 +854,10 @@ func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Con
 	}
 }
 
-func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
+// Compact merges the segment's object-storage blocks into larger ones. In minio mode the
+// segment's data is a single authoritative copy in object storage (no per-replica local data),
+// so there is no "behind replica" to guard against and expectedLastEntryId is ignored.
+func (f *MinioFileWriter) Compact(ctx context.Context, _ int64) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Compact")
 	defer sp.End()
 	op := metrics.StartOp("file.compact", nil, nil, metrics.WithLogSegment(f.logId, f.segmentId))

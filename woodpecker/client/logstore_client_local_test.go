@@ -258,10 +258,10 @@ func TestLocalClient_SegmentCompact_Success(t *testing.T) {
 		State: proto.SegmentState_Sealed,
 	}
 
-	mockStore.EXPECT().CompactSegment(mock.Anything, "bucket", "root", int64(1), int64(0)).
+	mockStore.EXPECT().CompactSegment(mock.Anything, "bucket", "root", int64(1), int64(0), mock.Anything).
 		Return(expectedMeta, nil)
 
-	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0)
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, -1)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedMeta, meta)
 	assert.Equal(t, int64(0), meta.SegNo)
@@ -273,10 +273,10 @@ func TestLocalClient_SegmentCompact_Error(t *testing.T) {
 
 	expectedErr := fmt.Errorf("compact failed")
 
-	mockStore.EXPECT().CompactSegment(mock.Anything, "bucket", "root", int64(1), int64(0)).
+	mockStore.EXPECT().CompactSegment(mock.Anything, "bucket", "root", int64(1), int64(0), mock.Anything).
 		Return(nil, expectedErr)
 
-	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0)
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, -1)
 	assert.Error(t, err)
 	assert.Nil(t, meta)
 	assert.Equal(t, expectedErr, err)

@@ -93,11 +93,40 @@ func NewLogstoreFenceHandler(fence func(logID, segmentID int64, reason string) e
 }
 
 // NewLogstoreCompactHandler handles POST /admin/logstore/compact.
-// Body: {"log_id": 42, "segment_id": 7}
-func NewLogstoreCompactHandler(compact func(logID, segmentID int64) error) http.HandlerFunc {
-	return logstorePostHandler("compact", func(logID, segmentID int64, _ string) error {
-		return compact(logID, segmentID)
-	})
+// Body: {"log_id": 42, "segment_id": 7, "expected_last_entry_id": 99}
+// expected_last_entry_id is required; use -1 only for a genuinely empty segment.
+// This admin-supplied value is treated as authoritative and is not cross-checked
+// against coordinator metadata. An incorrect value can publish an invalid footer.
+func NewLogstoreCompactHandler(compact func(logID, segmentID, expectedLastEntryId int64) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			LogID               int64  `json:"log_id"`
+			SegmentID           int64  `json:"segment_id"`
+			ExpectedLastEntryID *int64 `json:"expected_last_entry_id,omitempty"`
+		}
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, `{"error":"invalid json body"}`, http.StatusBadRequest)
+				return
+			}
+		}
+		if body.ExpectedLastEntryID == nil {
+			http.Error(w, `{"error":"expected_last_entry_id required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := compact(body.LogID, body.SegmentID, *body.ExpectedLastEntryID); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "compact completed"})
+	}
 }
 
 func logstorePostHandler(op string, fn func(logID, segmentID int64, reason string) error) http.HandlerFunc {

@@ -344,7 +344,7 @@ func TestLocalFileWriter_Compact(t *testing.T) {
 	defer writer.Close(context.Background())
 
 	// Compact is not supported for local disk
-	_, err = writer.Compact(context.Background())
+	_, err = writer.Compact(context.Background(), -1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not need to compact local file currently")
 }

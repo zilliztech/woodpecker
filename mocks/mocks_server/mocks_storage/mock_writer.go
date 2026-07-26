@@ -71,9 +71,9 @@ func (_c *Writer_Close_Call) RunAndReturn(run func(context.Context) error) *Writ
 	return _c
 }
 
-// Compact provides a mock function with given fields: ctx
-func (_m *Writer) Compact(ctx context.Context) (int64, error) {
-	ret := _m.Called(ctx)
+// Compact provides a mock function with given fields: ctx, expectedLastEntryId
+func (_m *Writer) Compact(ctx context.Context, expectedLastEntryId int64) (int64, error) {
+	ret := _m.Called(ctx, expectedLastEntryId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Compact")
@@ -81,17 +81,17 @@ func (_m *Writer) Compact(ctx context.Context) (int64, error) {
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
-		return rf(ctx)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) (int64, error)); ok {
+		return rf(ctx, expectedLastEntryId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(ctx)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) int64); ok {
+		r0 = rf(ctx, expectedLastEntryId)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(ctx)
+	if rf, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = rf(ctx, expectedLastEntryId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -106,13 +106,14 @@ type Writer_Compact_Call struct {
 
 // Compact is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *Writer_Expecter) Compact(ctx interface{}) *Writer_Compact_Call {
-	return &Writer_Compact_Call{Call: _e.mock.On("Compact", ctx)}
+//   - expectedLastEntryId int64
+func (_e *Writer_Expecter) Compact(ctx interface{}, expectedLastEntryId interface{}) *Writer_Compact_Call {
+	return &Writer_Compact_Call{Call: _e.mock.On("Compact", ctx, expectedLastEntryId)}
 }
 
-func (_c *Writer_Compact_Call) Run(run func(ctx context.Context)) *Writer_Compact_Call {
+func (_c *Writer_Compact_Call) Run(run func(ctx context.Context, expectedLastEntryId int64)) *Writer_Compact_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -122,7 +123,7 @@ func (_c *Writer_Compact_Call) Return(_a0 int64, _a1 error) *Writer_Compact_Call
 	return _c
 }
 
-func (_c *Writer_Compact_Call) RunAndReturn(run func(context.Context) (int64, error)) *Writer_Compact_Call {
+func (_c *Writer_Compact_Call) RunAndReturn(run func(context.Context, int64) (int64, error)) *Writer_Compact_Call {
 	_c.Call.Return(run)
 	return _c
 }

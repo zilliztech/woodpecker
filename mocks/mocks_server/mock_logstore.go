@@ -233,9 +233,9 @@ func (_c *LogStore_CleanSegment_Call) RunAndReturn(run func(context.Context, str
 	return _c
 }
 
-// CompactSegment provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId
-func (_m *LogStore) CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId)
+// CompactSegment provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId, expectedLastEntryId
+func (_m *LogStore) CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId, expectedLastEntryId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CompactSegment")
@@ -243,19 +243,19 @@ func (_m *LogStore) CompactSegment(ctx context.Context, bucketName string, rootP
 
 	var r0 *proto.SegmentMetadata
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) (*proto.SegmentMetadata, error)); ok {
-		return rf(ctx, bucketName, rootPath, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, int64) (*proto.SegmentMetadata, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, segmentId, expectedLastEntryId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) *proto.SegmentMetadata); ok {
-		r0 = rf(ctx, bucketName, rootPath, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, int64) *proto.SegmentMetadata); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId, expectedLastEntryId)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*proto.SegmentMetadata)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64) error); ok {
-		r1 = rf(ctx, bucketName, rootPath, logId, segmentId)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64, int64) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, segmentId, expectedLastEntryId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -274,13 +274,14 @@ type LogStore_CompactSegment_Call struct {
 //   - rootPath string
 //   - logId int64
 //   - segmentId int64
-func (_e *LogStore_Expecter) CompactSegment(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}) *LogStore_CompactSegment_Call {
-	return &LogStore_CompactSegment_Call{Call: _e.mock.On("CompactSegment", ctx, bucketName, rootPath, logId, segmentId)}
+//   - expectedLastEntryId int64
+func (_e *LogStore_Expecter) CompactSegment(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}, expectedLastEntryId interface{}) *LogStore_CompactSegment_Call {
+	return &LogStore_CompactSegment_Call{Call: _e.mock.On("CompactSegment", ctx, bucketName, rootPath, logId, segmentId, expectedLastEntryId)}
 }
 
-func (_c *LogStore_CompactSegment_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64)) *LogStore_CompactSegment_Call {
+func (_c *LogStore_CompactSegment_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64)) *LogStore_CompactSegment_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64), args[5].(int64))
 	})
 	return _c
 }
@@ -290,7 +291,7 @@ func (_c *LogStore_CompactSegment_Call) Return(_a0 *proto.SegmentMetadata, _a1 e
 	return _c
 }
 
-func (_c *LogStore_CompactSegment_Call) RunAndReturn(run func(context.Context, string, string, int64, int64) (*proto.SegmentMetadata, error)) *LogStore_CompactSegment_Call {
+func (_c *LogStore_CompactSegment_Call) RunAndReturn(run func(context.Context, string, string, int64, int64, int64) (*proto.SegmentMetadata, error)) *LogStore_CompactSegment_Call {
 	_c.Call.Return(run)
 	return _c
 }

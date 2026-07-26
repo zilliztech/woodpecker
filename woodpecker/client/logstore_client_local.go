@@ -71,8 +71,8 @@ func (l *logStoreClientLocal) GetBlockCount(ctx context.Context, bucketName stri
 	return l.store.GetSegmentBlockCount(ctx, bucketName, rootPath, logId, segmentId)
 }
 
-func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	return l.store.CompactSegment(ctx, bucketName, rootPath, logId, segmentId)
+func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
+	return l.store.CompactSegment(ctx, bucketName, rootPath, logId, segmentId, expectedLastEntryId)
 }
 
 func (l *logStoreClientLocal) NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error {

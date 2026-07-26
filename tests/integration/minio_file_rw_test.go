@@ -1262,7 +1262,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		require.NotNil(t, writerForCompact)
 
 		// Perform compaction
-		compactedSize, err := writerForCompact.Compact(ctx)
+		compactedSize, err := writerForCompact.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize, int64(0), "Compacted size should be positive")
 		t.Logf("Compaction completed, compacted size: %d bytes", compactedSize)
@@ -1336,7 +1336,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		writerForCompact1, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId2, minioHdl, cfg, true)
 		require.NoError(t, err)
 
-		compactedSize1, err := writerForCompact1.Compact(ctx)
+		compactedSize1, err := writerForCompact1.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize1, int64(0))
 
@@ -1347,7 +1347,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		writerForCompact2, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId2, minioHdl, cfg, true)
 		require.NoError(t, err)
 
-		compactedSize2, err := writerForCompact2.Compact(ctx)
+		compactedSize2, err := writerForCompact2.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, compactedSize1, compactedSize2, "Idempotent compaction should return same size")
 
@@ -1420,7 +1420,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		require.NoError(t, err)
 
 		// Complete compaction first
-		compactedSize, err := writerForCompact.Compact(ctx)
+		compactedSize, err := writerForCompact.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize, int64(0))
 
@@ -1443,7 +1443,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		require.NoError(t, err)
 
 		// This should detect the compacted state and clean up residual files
-		recoverySize, err := writerForRecovery.Compact(ctx)
+		recoverySize, err := writerForRecovery.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, compactedSize, recoverySize, "Recovery compaction should return same size")
 
@@ -1540,7 +1540,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		writerForCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId4, minioHdl, cfg, true)
 		require.NoError(t, err)
 
-		compactedSize, err := writerForCompact.Compact(ctx)
+		compactedSize, err := writerForCompact.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize, int64(0))
 
@@ -1687,7 +1687,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			if compactSegment && finalizeSegment {
 				writerForCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 				require.NoError(t, err)
-				_, err = writerForCompact.Compact(ctx)
+				_, err = writerForCompact.Compact(ctx, -1)
 				require.NoError(t, err)
 				err = writerForCompact.Close(ctx)
 				require.NoError(t, err)
@@ -1798,7 +1798,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			require.NoError(t, err)
 			_, err = writerToCompact.Finalize(ctx, -1)
 			require.NoError(t, err)
-			_, err = writerToCompact.Compact(ctx)
+			_, err = writerToCompact.Compact(ctx, -1)
 			require.NoError(t, err)
 			err = writerToCompact.Close(ctx)
 			require.NoError(t, err)
@@ -1870,7 +1870,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			// Now compact the segment (Completed → Compacted)
 			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 			require.NoError(t, err)
-			_, err = writerToCompact.Compact(ctx)
+			_, err = writerToCompact.Compact(ctx, -1)
 			require.NoError(t, err)
 			err = writerToCompact.Close(ctx)
 			require.NoError(t, err)
@@ -1974,7 +1974,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			require.NoError(t, err)
 			_, err = writerToCompact.Finalize(ctx, -1)
 			require.NoError(t, err)
-			_, err = writerToCompact.Compact(ctx)
+			_, err = writerToCompact.Compact(ctx, -1)
 			require.NoError(t, err)
 			err = writerToCompact.Close(ctx)
 			require.NoError(t, err)
@@ -2045,7 +2045,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			// Now compact the segment (Completed -> Compacted)
 			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 			require.NoError(t, err)
-			_, err = writerToCompact.Compact(ctx)
+			_, err = writerToCompact.Compact(ctx, -1)
 			require.NoError(t, err)
 			err = writerToCompact.Close(ctx)
 			require.NoError(t, err)
