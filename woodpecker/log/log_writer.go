@@ -93,7 +93,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	go w.monitorSession()
 	w.startAuditor()
 	// Compacted-mark distribution runs on its own goroutine so a slow node can't stall the auditor.
-	go runNotifyDistributor(w.logHandle, w.notifyManager, cfg.Woodpecker.Storage.IsStorageService(), w.notifySegsCh, w.maintenanceCtx.Done())
+	w.startNotifyDistributor(cfg.Woodpecker.Storage.IsStorageService())
 	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(sessionLock.GetSession().Lease())))
 	return w
 }
@@ -118,7 +118,7 @@ type logWriterImpl struct {
 	onWriterInvalidated func(ctx context.Context, reason string)
 	maintenanceCtx      context.Context
 	maintenanceCancel   context.CancelFunc
-	auditorWG           sync.WaitGroup
+	maintenanceWG       sync.WaitGroup
 
 	// Mutex to ensure only one truncation cleanup task is running at a time
 	cleanupMutex      sync.Mutex
@@ -127,10 +127,18 @@ type logWriterImpl struct {
 }
 
 func (l *logWriterImpl) startAuditor() {
-	l.auditorWG.Add(1)
+	l.maintenanceWG.Add(1)
 	go func() {
-		defer l.auditorWG.Done()
+		defer l.maintenanceWG.Done()
 		l.runAuditor()
+	}()
+}
+
+func (l *logWriterImpl) startNotifyDistributor(serviceMode bool) {
+	l.maintenanceWG.Add(1)
+	go func() {
+		defer l.maintenanceWG.Done()
+		runNotifyDistributor(l.maintenanceCtx, l.logHandle, l.notifyManager, serviceMode, l.notifySegsCh)
 	}()
 }
 
@@ -380,6 +388,10 @@ func (l *logWriterImpl) runAuditor() {
 			// the Truncated ones to clean up.
 			// Share the freshly loaded snapshot with the notify distributor so it does not
 			// issue a second identical etcd range scan per cycle.
+			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
+			// In-process reap sync: a Truncated segment must never be notified again, even if the
+			// distributor is mid-round on a stale snapshot that still shows it Sealed.
+			markTruncatedSegmentsReaped(l.notifyManager, truncatedSegmentExists)
 			publishSegmentsSnapshot(l.notifySegsCh, segmentMetaList)
 
 			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
@@ -387,10 +399,6 @@ func (l *logWriterImpl) runAuditor() {
 				sp.End()
 				return
 			}
-			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
-			// In-process reap sync: a Truncated segment must never be notified again, even if the
-			// distributor is mid-round on a stale snapshot that still shows it Sealed.
-			markTruncatedSegmentsReaped(l.notifyManager, truncatedSegmentExists)
 
 			// Periodic orphan sweep (pass 1 = startup recovery, then every Nth cycle): reclaims
 			// cleanup-domain records whose segment metadata is already gone, covering the
@@ -686,7 +694,7 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 
 		l.writerClose <- struct{}{}
 		close(l.writerClose)
-		l.auditorWG.Wait()
+		l.maintenanceWG.Wait()
 		status := "success"
 		closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
 		if closeErr != nil {

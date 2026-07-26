@@ -82,6 +82,53 @@ func (c *countingNotifyManager) sweepBoundsSnapshot() []int64 {
 	return append([]int64(nil), c.sweepBounds...)
 }
 
+func (c *countingNotifyManager) reapedSegments() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]int64(nil), c.reaped...)
+}
+
+type blockingNotifyManager struct {
+	mu        sync.Mutex
+	called    []int64
+	started   chan struct{}
+	canceled  chan struct{}
+	release   chan struct{}
+	startOne  sync.Once
+	cancelOne sync.Once
+}
+
+func newBlockingNotifyManager() *blockingNotifyManager {
+	return &blockingNotifyManager{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (b *blockingNotifyManager) EnsureSegmentNotified(ctx context.Context, _ string, _ int64, segmentId int64) (bool, error) {
+	b.mu.Lock()
+	b.called = append(b.called, segmentId)
+	b.mu.Unlock()
+	b.startOne.Do(func() { close(b.started) })
+	<-ctx.Done()
+	b.cancelOne.Do(func() { close(b.canceled) })
+	<-b.release
+	return true, ctx.Err()
+}
+
+func (b *blockingNotifyManager) CleanupOrphanedStatuses(context.Context, int64, int64) error {
+	return nil
+}
+
+func (b *blockingNotifyManager) MarkSegmentReaped(int64) {}
+
+func (b *blockingNotifyManager) calledSegments() []int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]int64(nil), b.called...)
+}
+
 // recordingCleanupManager records the orphan-sweep bounds it was invoked with.
 type recordingCleanupManager struct {
 	sweepBounds []int64
@@ -233,7 +280,7 @@ func TestRunNotifyDistributor_NonServiceReturnsImmediately(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		runNotifyDistributor(lh, nm, false /*serviceMode*/, make(chan map[int64]*meta.SegmentMeta, 1), make(chan struct{}))
+		runNotifyDistributor(context.Background(), lh, nm, false /*serviceMode*/, make(chan map[int64]*meta.SegmentMeta, 1))
 		close(done)
 	}()
 	select {
@@ -254,10 +301,10 @@ func TestRunNotifyDistributor_ConsumesSnapshotsThenStops(t *testing.T) {
 	nm := &countingNotifyManager{advanced: true}
 
 	segsCh := make(chan map[int64]*meta.SegmentMeta, 1)
-	closeCh := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runNotifyDistributor(lh, nm, true /*serviceMode*/, segsCh, closeCh)
+		runNotifyDistributor(ctx, lh, nm, true /*serviceMode*/, segsCh)
 		close(done)
 	}()
 
@@ -269,13 +316,75 @@ func TestRunNotifyDistributor_ConsumesSnapshotsThenStops(t *testing.T) {
 		return len(nm.calledSegments()) > 0
 	}, 3*time.Second, 10*time.Millisecond, "the distributor consumed the published snapshot")
 
-	close(closeCh)
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("runNotifyDistributor should stop after closeCh fires")
+		t.Fatal("runNotifyDistributor should stop after its lifecycle context is canceled")
 	}
 	assert.Contains(t, nm.calledSegments(), int64(1))
+}
+
+func TestRunNotifyDistributor_CanceledContextSkipsBufferedSnapshot(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+	nm := &countingNotifyManager{advanced: true}
+	segsCh := make(chan map[int64]*meta.SegmentMeta, 1)
+	segsCh <- map[int64]*meta.SegmentMeta{1: segMeta(1, proto.SegmentState_Sealed)}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		runNotifyDistributor(ctx, lh, nm, true, segsCh)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled distributor did not stop with a buffered snapshot")
+	}
+	assert.Empty(t, nm.calledSegments(), "a buffered snapshot must not start after cancellation")
+}
+
+func TestRunNotifyDistributor_CancellationStopsInFlightPass(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+	nm := newBlockingNotifyManager()
+	segsCh := make(chan map[int64]*meta.SegmentMeta, 1)
+	segsCh <- map[int64]*meta.SegmentMeta{
+		1: segMeta(1, proto.SegmentState_Sealed),
+		2: segMeta(2, proto.SegmentState_Sealed),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runNotifyDistributor(ctx, lh, nm, true, segsCh)
+		close(done)
+	}()
+
+	select {
+	case <-nm.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("distributor did not start the first segment")
+	}
+	cancel()
+	select {
+	case <-nm.canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight notify did not observe lifecycle cancellation")
+	}
+	close(nm.release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("distributor did not exit after the canceled pass returned")
+	}
+	assert.Len(t, nm.calledSegments(), 1, "cancellation must stop the pass before another segment")
 }
 
 // TestPublishSegmentsSnapshot_ReplacesStale verifies the non-blocking publish: an unconsumed

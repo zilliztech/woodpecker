@@ -98,6 +98,9 @@ func distributeCompactedMarks(ctx context.Context, logHandle LogHandle, notifyMa
 	}
 	driven := 0
 	for _, seg := range segs {
+		if ctx.Err() != nil {
+			break
+		}
 		if seg.Metadata.State != proto.SegmentState_Sealed {
 			continue
 		}
@@ -105,6 +108,9 @@ func distributeCompactedMarks(ctx context.Context, logHandle LogHandle, notifyMa
 			break
 		}
 		advanced, err := notifyManager.EnsureSegmentNotified(ctx, logHandle.GetName(), logHandle.GetId(), seg.Metadata.SegNo)
+		if ctx.Err() != nil {
+			break
+		}
 		if err != nil {
 			logger.Ctx(ctx).Warn("auditor compacted-mark notify failed; will retry next cycle", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(err))
 		}
@@ -126,7 +132,7 @@ func distributeCompactedMarks(ctx context.Context, logHandle LogHandle, notifyMa
 // identical GetSegments per cycle would double the per-log metadata load for nothing. When
 // the distributor is still busy with the previous snapshot, newer ones are dropped by the
 // publisher — natural backpressure; the next published snapshot is always fresher anyway.
-func runNotifyDistributor(logHandle LogHandle, notifyManager segment.SegmentCompactedNotifyManager, serviceMode bool, segsCh <-chan map[int64]*meta.SegmentMeta, closeCh <-chan struct{}) {
+func runNotifyDistributor(ctx context.Context, logHandle LogHandle, notifyManager segment.SegmentCompactedNotifyManager, serviceMode bool, segsCh <-chan map[int64]*meta.SegmentMeta) {
 	if !serviceMode {
 		return
 	}
@@ -136,14 +142,19 @@ func runNotifyDistributor(logHandle LogHandle, notifyManager segment.SegmentComp
 	for {
 		select {
 		case segs := <-segsCh:
-			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("notify_distributor_%d", logHandle.GetId()))
-			driven := distributeCompactedMarks(ctx, logHandle, notifyManager, segs, true)
+			// Cancellation and a buffered snapshot may become ready together. Re-check here so
+			// the snapshot cannot win the select race and start another pass after ownership loss.
+			if ctx.Err() != nil {
+				return
+			}
+			passCtx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, fmt.Sprintf("notify_distributor_%d", logHandle.GetId()))
+			driven := distributeCompactedMarks(passCtx, logHandle, notifyManager, segs, true)
 			if driven > 0 {
-				logger.Ctx(ctx).Debug("compacted-mark distributor cycle completed",
+				logger.Ctx(passCtx).Debug("compacted-mark distributor cycle completed",
 					zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int("driven", driven))
 			}
 			sp.End()
-		case <-closeCh:
+		case <-ctx.Done():
 			logger.Ctx(context.Background()).Info("compacted-mark distributor stopped",
 				zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
 			return

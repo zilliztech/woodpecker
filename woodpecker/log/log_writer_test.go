@@ -85,6 +85,7 @@ func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segm
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
 		notifyManager:      &stubNotifyManager{},
+		notifySegsCh:       make(chan map[int64]*meta.SegmentMeta, 1),
 		maintenanceCtx:     maintenanceCtx,
 		maintenanceCancel:  maintenanceCancel,
 	}
@@ -650,6 +651,7 @@ func createTestSessionWriter(t *testing.T, logHandle LogHandle, cleanupMgr segme
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
 		notifyManager:      &stubNotifyManager{},
+		notifySegsCh:       make(chan map[int64]*meta.SegmentMeta, 1),
 		sessionLock:        sessionLock,
 		maintenanceCtx:     maintenanceCtx,
 		maintenanceCancel:  maintenanceCancel,
@@ -1845,6 +1847,7 @@ func TestInternalLogWriter_RunAuditor_InvalidationCancelsInFlightCompact(t *test
 	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(nil)
 	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
 		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}},
+		2: {Metadata: &proto.SegmentMetadata{SegNo: 2, State: proto.SegmentState_Truncated}},
 	}, nil)
 
 	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
@@ -1859,6 +1862,8 @@ func TestInternalLogWriter_RunAuditor_InvalidationCancelsInFlightCompact(t *test
 	}).Once()
 
 	w := createTestInternalWriter(t, mockLogHandle, nil)
+	notifyMgr := &countingNotifyManager{}
+	w.notifyManager = notifyMgr
 	w.auditorMaxInterval = 1
 	auditorDone := make(chan struct{})
 	go func() {
@@ -1871,6 +1876,7 @@ func TestInternalLogWriter_RunAuditor_InvalidationCancelsInFlightCompact(t *test
 	case <-time.After(3 * time.Second):
 		t.Fatal("auditor did not start compaction")
 	}
+	assert.Contains(t, notifyMgr.reapedSegments(), int64(2), "truncated segments must be reaped before compaction can be canceled")
 	w.onWriterInvalidated(context.Background(), "writer taken over")
 
 	select {
@@ -1943,6 +1949,53 @@ func TestInternalLogWriter_CloseWaitsForAuditorToExit(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("writer close did not finish after the auditor exited")
+	}
+}
+
+func TestInternalLogWriter_CloseWaitsForNotifyDistributorToExit(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockLogHandle.On("CompleteAllActiveSegmentIfExists", mock.Anything).Return(nil).Once()
+	mockLogHandle.On("Close", mock.Anything).Return(nil).Once()
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+	notifyMgr := newBlockingNotifyManager()
+	w.notifyManager = notifyMgr
+	w.startNotifyDistributor(true)
+	publishSegmentsSnapshot(w.notifySegsCh, map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Sealed}},
+	})
+
+	select {
+	case <-notifyMgr.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("notify distributor did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- w.Close(context.Background())
+	}()
+
+	select {
+	case <-notifyMgr.canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer close did not cancel the notify distributor")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("writer close returned before the notify distributor exited: %v", err)
+	default:
+	}
+
+	close(notifyMgr.release)
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer close did not finish after the notify distributor exited")
 	}
 }
 
