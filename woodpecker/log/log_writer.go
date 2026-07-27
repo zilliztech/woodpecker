@@ -58,6 +58,7 @@ type LogWriter interface {
 func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, sessionLock *meta.SessionLock) LogWriter {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "NewLogWriter")
 	defer sp.End()
+	maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
 	w := &logWriterImpl{
 		logIdStr:           strconv.FormatInt(logHandle.GetId(), 10),
 		logHandle:          logHandle,
@@ -69,9 +70,12 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		notifyManager:      segment.NewSegmentCompactedNotifyManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
 		notifySegsCh:       make(chan map[int64]*meta.SegmentMeta, 1),
 		sessionLock:        sessionLock,
+		maintenanceCtx:     maintenanceCtx,
+		maintenanceCancel:  maintenanceCancel,
 	}
 	// Set trigger expired
 	onWriterInvalidated := func(ctx context.Context, reason string) {
+		w.stopMaintenance()
 		// Mark the sessionLock as invalid so next AcquireLogWriterLock will create a new one
 		if sessionLock != nil {
 			sessionLock.MarkInvalid()
@@ -87,9 +91,9 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 
 	// Monitor keepAlive channel
 	go w.monitorSession()
-	go w.runAuditor()
+	w.startAuditor()
 	// Compacted-mark distribution runs on its own goroutine so a slow node can't stall the auditor.
-	go runNotifyDistributor(w.logHandle, w.notifyManager, cfg.Woodpecker.Storage.IsStorageService(), w.notifySegsCh, w.writerClose)
+	w.startNotifyDistributor(cfg.Woodpecker.Storage.IsStorageService())
 	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(sessionLock.GetSession().Lease())))
 	return w
 }
@@ -112,11 +116,36 @@ type logWriterImpl struct {
 	// Session related fields
 	sessionLock         *meta.SessionLock
 	onWriterInvalidated func(ctx context.Context, reason string)
+	maintenanceCtx      context.Context
+	maintenanceCancel   context.CancelFunc
+	maintenanceWG       sync.WaitGroup
 
 	// Mutex to ensure only one truncation cleanup task is running at a time
 	cleanupMutex      sync.Mutex
 	cleanupInProgress bool
 	closeOnce         sync.Once
+}
+
+func (l *logWriterImpl) startAuditor() {
+	l.maintenanceWG.Add(1)
+	go func() {
+		defer l.maintenanceWG.Done()
+		l.runAuditor()
+	}()
+}
+
+func (l *logWriterImpl) startNotifyDistributor(serviceMode bool) {
+	l.maintenanceWG.Add(1)
+	go func() {
+		defer l.maintenanceWG.Done()
+		runNotifyDistributor(l.maintenanceCtx, l.logHandle, l.notifyManager, serviceMode, l.notifySegsCh)
+	}()
+}
+
+func (l *logWriterImpl) stopMaintenance() {
+	if l.maintenanceCancel != nil {
+		l.maintenanceCancel()
+	}
 }
 
 func (l *logWriterImpl) monitorSession() {
@@ -134,12 +163,14 @@ func (l *logWriterImpl) monitorSession() {
 			// Channel is closed, session is invalid
 			// Mark sessionLock as invalid so next AcquireLogWriterLock will create a new one
 			l.sessionLock.MarkInvalid()
+			l.stopMaintenance()
 			logger.Ctx(context.Background()).Warn("Writer lock session has expired",
 				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())))
 			return
 		case <-l.writerClose:
 			// Mark sessionLock as invalid when writer closes
 			l.sessionLock.MarkInvalid()
+			l.stopMaintenance()
 			logger.Ctx(context.Background()).Debug("Monitor session end due to writer close",
 				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())))
 			return
@@ -155,6 +186,7 @@ func (l *logWriterImpl) monitorSession() {
 				if consecutiveFailures >= maxConsecutiveFailures {
 					// Too many consecutive failures, mark session as invalid
 					l.sessionLock.MarkInvalid()
+					l.stopMaintenance()
 					logger.Ctx(context.Background()).Warn("Writer lock session marked as invalid due to persistent etcd connectivity issues", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())), zap.Int("consecutiveFailures", consecutiveFailures), zap.Error(err))
 					return
 				}
@@ -164,6 +196,7 @@ func (l *logWriterImpl) monitorSession() {
 				if !isAlive {
 					// Lease is expired
 					l.sessionLock.MarkInvalid()
+					l.stopMaintenance()
 					logger.Ctx(context.Background()).Warn("Writer lock session lease has expired", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())), zap.Bool("alive", isAlive))
 					return
 				}
@@ -317,8 +350,12 @@ func (l *logWriterImpl) runAuditor() {
 	for {
 		select {
 		case <-ticker.C:
+			if l.maintenanceCtx.Err() != nil || l.sessionLock == nil || !l.sessionLock.IsValid() {
+				l.stopMaintenance()
+				return
+			}
 			auditCycle++
-			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
+			ctx, sp := logger.NewIntentCtxWithParent(l.maintenanceCtx, WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 
 			logger.Ctx(ctx).Debug("Starting auditor cycle",
@@ -351,13 +388,17 @@ func (l *logWriterImpl) runAuditor() {
 			// the Truncated ones to clean up.
 			// Share the freshly loaded snapshot with the notify distributor so it does not
 			// issue a second identical etcd range scan per cycle.
-			publishSegmentsSnapshot(l.notifySegsCh, segmentMetaList)
-
-			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
 			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
 			// In-process reap sync: a Truncated segment must never be notified again, even if the
 			// distributor is mid-round on a stale snapshot that still shows it Sealed.
 			markTruncatedSegmentsReaped(l.notifyManager, truncatedSegmentExists)
+			publishSegmentsSnapshot(l.notifySegsCh, segmentMetaList)
+
+			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList)
+			if ctx.Err() != nil {
+				sp.End()
+				return
+			}
 
 			// Periodic orphan sweep (pass 1 = startup recovery, then every Nth cycle): reclaims
 			// cleanup-domain records whose segment metadata is already gone, covering the
@@ -396,6 +437,11 @@ func (l *logWriterImpl) runAuditor() {
 			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "auditor_run", "success").Observe(float64(auditDuration.Milliseconds()))
 		case <-l.writerClose:
 			logger.Ctx(context.TODO()).Info("Log auditor stopped",
+				zap.String("logName", l.logHandle.GetName()),
+				zap.Int64("logId", l.logHandle.GetId()))
+			return
+		case <-l.maintenanceCtx.Done():
+			logger.Ctx(context.TODO()).Info("Log auditor stopped after writer invalidation",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()))
 			return
@@ -644,9 +690,11 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 		// Mark session invalid immediately to reject concurrent writes,
 		// rather than relying on monitorSession goroutine to do it asynchronously.
 		l.sessionLock.MarkInvalid()
+		l.stopMaintenance()
 
 		l.writerClose <- struct{}{}
 		close(l.writerClose)
+		l.maintenanceWG.Wait()
 		status := "success"
 		closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
 		if closeErr != nil {
