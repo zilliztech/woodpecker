@@ -18,10 +18,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -42,6 +42,11 @@ import (
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 const finalizerName = "woodpecker.zilliz.io/finalizer"
+
+type nodeDecommissionProgress struct {
+	State           string `json:"state"`
+	SafeToTerminate bool   `json:"safe_to_terminate"`
+}
 
 // reconcileDelete handles CR deletion: decommission all pods, then remove finalizer.
 func (r *WoodpeckerClusterReconciler) reconcileDelete(ctx context.Context, cluster *woodpeckerv1alpha1.WoodpeckerCluster) (ctrl.Result, error) {
@@ -122,19 +127,29 @@ func (r *WoodpeckerClusterReconciler) decommissionPod(ctx context.Context, pod *
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 
-	// Check progress
+	// Reclaim only after the persisted decommissioned state is visible. This
+	// avoids racing PVC cleanup ahead of the terminal lifecycle transition.
 	progressResp, err := httpClient.Get(baseURL + "/admin/node/decommission/progress")
 	if err != nil {
 		return false, fmt.Errorf("checking decommission progress on %s: %w", pod.Name, err)
 	}
 	defer func() { _ = progressResp.Body.Close() }()
-	body, _ := io.ReadAll(progressResp.Body)
+	if progressResp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, progressResp.Body)
+		return false, nil
+	}
 
-	// The response contains "safe_to_terminate":true when ready
-	safe := progressResp.StatusCode == http.StatusOK &&
-		strings.Contains(string(body), "\"safe_to_terminate\":true")
+	var progress nodeDecommissionProgress
+	if err := json.NewDecoder(progressResp.Body).Decode(&progress); err != nil {
+		return false, fmt.Errorf("decoding decommission progress on %s: %w", pod.Name, err)
+	}
+	safe := progress.State == "decommissioned" && progress.SafeToTerminate
 
-	logger.Info("Decommission progress", "pod", pod.Name, "safeToTerminate", safe)
+	logger.Info("Decommission progress",
+		"pod", pod.Name,
+		"state", progress.State,
+		"safeToTerminate", progress.SafeToTerminate,
+		"readyToReclaim", safe)
 	return safe, nil
 }
 

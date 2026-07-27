@@ -15,6 +15,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -108,6 +109,55 @@ var _ = Describe("cleanupOrphanedPVCs", func() {
 })
 
 var _ = Describe("checkScaleDown", func() {
+	const ns = "default"
+
+	newScaleCluster := func(name string, desired int32) *woodpeckerv1alpha1.WoodpeckerCluster {
+		return &woodpeckerv1alpha1.WoodpeckerCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
+				Replicas:    ptr.To(desired),
+				Image:       "img",
+				ServicePort: 18080, GossipPort: 17946, MetricsPort: 9091,
+				StorageSize: resource.MustParse("1Gi"),
+			},
+		}
+	}
+
+	newScaleStatefulSet := func(cluster *woodpeckerv1alpha1.WoodpeckerCluster, current int32) *appsv1.StatefulSet {
+		labels := map[string]string{"app": cluster.Name}
+		return &appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: serverName(cluster), Namespace: cluster.Namespace},
+			Spec: appsv1.StatefulSetSpec{
+				Replicas:    ptr.To(current),
+				ServiceName: cluster.Name + "-server-headless",
+				Selector:    &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "server", Image: "img"}},
+					},
+				},
+			},
+		}
+	}
+
+	newScalePVC := func(cluster *woodpeckerv1alpha1.WoodpeckerCluster, ordinal int32) *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      scaleDownTargetPVCName(cluster, ordinal),
+				Namespace: cluster.Namespace,
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: resource.MustParse("100Mi"),
+					},
+				},
+			},
+		}
+	}
+
 	It("returns scaleDownNotNeeded when STS does not exist", func() {
 		ctx := context.Background()
 		cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
@@ -123,6 +173,67 @@ var _ = Describe("checkScaleDown", func() {
 		result, _, err := r.checkScaleDown(ctx, cluster)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal(scaleDownNotNeeded))
+	})
+
+	It("waits when the target pod is gone but its PVC remains", func() {
+		ctx := context.Background()
+		cluster := newScaleCluster("scale-missing-pod", 2)
+		sts := newScaleStatefulSet(cluster, 3)
+		pvc := newScalePVC(cluster, 2)
+		Expect(k8sClient.Create(ctx, sts)).To(Succeed())
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+		defer func() {
+			_ = k8sClient.Delete(ctx, pvc)
+			_ = k8sClient.Delete(ctx, sts)
+		}()
+
+		r := &WoodpeckerClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		result, current, err := r.checkScaleDown(ctx, cluster)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(current).To(Equal(int32(3)))
+		Expect(result).To(Equal(scaleDownWaiting))
+	})
+
+	It("waits when the target pod is not running but its PVC remains", func() {
+		ctx := context.Background()
+		cluster := newScaleCluster("scale-pending-pod", 2)
+		sts := newScaleStatefulSet(cluster, 3)
+		pvc := newScalePVC(cluster, 2)
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cluster.Name + "-server-2",
+				Namespace: cluster.Namespace,
+			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "server", Image: "img"}}},
+		}
+		Expect(k8sClient.Create(ctx, sts)).To(Succeed())
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		defer func() {
+			_ = k8sClient.Delete(ctx, pod)
+			_ = k8sClient.Delete(ctx, pvc)
+			_ = k8sClient.Delete(ctx, sts)
+		}()
+
+		r := &WoodpeckerClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		result, current, err := r.checkScaleDown(ctx, cluster)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(current).To(Equal(int32(3)))
+		Expect(result).To(Equal(scaleDownWaiting))
+	})
+
+	It("allows scale-down when the target pod and PVC are both gone", func() {
+		ctx := context.Background()
+		cluster := newScaleCluster("scale-gone-clean", 2)
+		sts := newScaleStatefulSet(cluster, 3)
+		Expect(k8sClient.Create(ctx, sts)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, sts) }()
+
+		r := &WoodpeckerClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		result, current, err := r.checkScaleDown(ctx, cluster)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(current).To(Equal(int32(3)))
+		Expect(result).To(Equal(scaleDownReady))
 	})
 })
 

@@ -107,6 +107,24 @@ func TestDecommissionPod_NotSafe(t *testing.T) {
 	assert.False(t, safe)
 }
 
+func TestDecommissionPod_RequiresDecommissionedState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/progress") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"state":"decommissioning","safe_to_terminate":true}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	setupTestHTTPClient(t, srv)
+
+	r := &WoodpeckerClusterReconciler{}
+	safe, err := r.decommissionPod(context.Background(), newRunningPod("1.2.3.4"), 9091)
+	require.NoError(t, err)
+	assert.False(t, safe)
+}
+
 func TestDecommissionPod_ProgressNon200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/progress") {
