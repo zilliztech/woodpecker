@@ -39,6 +39,12 @@ func TestBuildLogNs(t *testing.T) {
 	})
 }
 
+func TestBuildLogLabels(t *testing.T) {
+	logNs, logIdStr := BuildLogLabels("mybucket", "myroot", 42)
+	assert.Equal(t, "mybucket/myroot", logNs)
+	assert.Equal(t, "42", logIdStr)
+}
+
 func TestNodeID_Default(t *testing.T) {
 	// NodeID should default to "embed" when NODE_NAME env is not set
 	// or be set to the env value. Just verify it's non-empty.

@@ -1493,6 +1493,7 @@ func (s *segmentHandleImpl) fenceSegmentOnNode(ctx context.Context, node string,
 func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 	var lastError error
 	nodeFailures := make([]string, 0, len(quorumInfo.Nodes))
+	failureReasons := make([]string, 0, len(quorumInfo.Nodes))
 	logIdStr := strconv.FormatInt(s.logId, 10)
 
 	// Try each node sequentially until one succeeds
@@ -1508,8 +1509,8 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
 		if err != nil {
 			reason := classifyCompactionFailureReason(err)
-			metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(s.logNs, logIdStr, reason).Inc()
 			nodeFailures = append(nodeFailures, fmt.Sprintf("%s:%s", node, reason))
+			failureReasons = append(failureReasons, reason)
 			logger.Ctx(ctx).Warn("Failed to get logstore client for compaction",
 				zap.String("logName", s.logName),
 				zap.Int64("logId", s.logId),
@@ -1525,8 +1526,8 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, expectedLastEntryId)
 		if compactErr != nil {
 			reason := classifyCompactionFailureReason(compactErr)
-			metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(s.logNs, logIdStr, reason).Inc()
 			nodeFailures = append(nodeFailures, fmt.Sprintf("%s:%s", node, reason))
+			failureReasons = append(failureReasons, reason)
 			logger.Ctx(ctx).Warn("Segment compaction failed on node, trying next",
 				zap.String("logName", s.logName),
 				zap.Int64("logId", s.logId),
@@ -1554,11 +1555,14 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 	}
 
 	// All nodes failed
+	failureReason := summarizeCompactionFailureReasons(failureReasons)
+	metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(s.logNs, logIdStr, failureReason).Inc()
 	logger.Ctx(ctx).Warn("Compaction failed on all quorum nodes",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("expectedLastEntryId", expectedLastEntryId),
+		zap.String("failureReason", failureReason),
 		zap.Int("totalNodes", len(quorumInfo.Nodes)),
 		zap.Strings("nodeFailures", nodeFailures))
 
@@ -1568,19 +1572,48 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 	return nil, werr.ErrSegmentHandleCompactionFailed.WithCauseErrMsg("all quorum nodes failed compaction")
 }
 
+const (
+	compactionFailureReasonNone                = "none"
+	compactionFailureReasonDataBehind          = "data_behind"
+	compactionFailureReasonInvalidLACAlignment = "invalid_lac_alignment"
+	compactionFailureReasonTransient           = "transient"
+	compactionFailureReasonOther               = "other"
+	compactionFailureReasonMixed               = "mixed"
+)
+
 func classifyCompactionFailureReason(err error) string {
 	switch {
 	case err == nil:
-		return "none"
+		return compactionFailureReasonNone
 	case errors.Is(err, werr.ErrSegmentCompactionDataBehind):
-		return "data_behind"
+		return compactionFailureReasonDataBehind
 	case errors.Is(err, werr.ErrInvalidLACAlignment):
-		return "invalid_lac_alignment"
+		return compactionFailureReasonInvalidLACAlignment
 	case werr.IsTransportError(err), werr.IsRetryableErr(err), errors.Is(err, context.DeadlineExceeded):
-		return "transient"
+		return compactionFailureReasonTransient
 	default:
-		return "other"
+		return compactionFailureReasonOther
 	}
+}
+
+func summarizeCompactionFailureReasons(reasons []string) string {
+	var first string
+	for _, reason := range reasons {
+		if reason == "" || reason == compactionFailureReasonNone {
+			continue
+		}
+		if first == "" {
+			first = reason
+			continue
+		}
+		if reason != first {
+			return compactionFailureReasonMixed
+		}
+	}
+	if first == "" {
+		return compactionFailureReasonOther
+	}
+	return first
 }
 
 // notifySegmentCompactedTimeout bounds each per-node NotifySegmentCompacted RPC so a node

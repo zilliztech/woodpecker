@@ -3098,8 +3098,8 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_bytes_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (log_id, source)",
-              "legendFormat": "logID={{log_id}} source={{source}}",
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_bytes_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
+              "legendFormat": "node={{node_id}} logID={{log_id}} source={{source}}",
               "refId": "A"
             }
           ],
@@ -3149,13 +3149,13 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_files_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (log_id, source)",
-              "legendFormat": "reclaimed logID={{log_id}} source={{source}}",
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_files_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
+              "legendFormat": "reclaimed node={{node_id}} logID={{log_id}} source={{source}}",
               "refId": "A"
             },
             {
-              "expr": "sum(rate(woodpecker_server_compacted_cleanup_marks_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (log_id, source)",
-              "legendFormat": "marks logID={{log_id}} source={{source}}",
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_marks_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
+              "legendFormat": "marks node={{node_id}} logID={{log_id}} source={{source}}",
               "refId": "B"
             }
           ],
@@ -3205,8 +3205,8 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_compacted_cleanup_footer_failures_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (log_id, reason)",
-              "legendFormat": "logID={{log_id}} reason={{reason}}",
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_footer_failures_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, reason)",
+              "legendFormat": "node={{node_id}} logID={{log_id}} reason={{reason}}",
               "refId": "A"
             }
           ],

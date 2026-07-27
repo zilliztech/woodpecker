@@ -284,8 +284,7 @@ func (t *compactedFileCleanupTask) seedStoredGauges(segDir, bucket, rootPath str
 	if err != nil || !info.ModTime().Before(t.startTime) {
 		return
 	}
-	logNs := bucket + "/" + rootPath
-	logIdStr := strconv.FormatInt(logId, 10)
+	logNs, logIdStr := compactedCleanupLabels(bucket, rootPath, logId)
 	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr).Add(float64(info.Size()))
 	metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr).Inc()
 }
@@ -363,7 +362,8 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 		// Reconcile: a compacted-but-unmarked segment. Backfill the durable tombstone before the
 		// drop so a reader can always tell "compacted -> serve from object storage" apart from
 		// "no data here".
-		if markErr := writeCompactedMark(ctx, s.segDir); markErr != nil {
+		markCreated, markErr := writeCompactedMarkCreated(ctx, s.segDir)
+		if markErr != nil {
 			// Backoff like the footer-HEAD failure above (a fresh enqueue would reset the
 			// schedule): a read-only or full staged volume fails this deterministically, and
 			// retrying every tick would keep hammering an already unhealthy filesystem with a
@@ -373,9 +373,11 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 			t.requeueAfterFailure(s)
 			return
 		}
-		metrics.WpCompactedCleanupMarksTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, source).Inc()
-		logger.Ctx(ctx).Info("compacted-file-cleanup: reconcile wrote compacted mark for unmarked-but-compacted segment",
-			zap.String("segDir", s.segDir), zap.String("source", source), zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
+		if markCreated {
+			metrics.WpCompactedCleanupMarksTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, source).Inc()
+			logger.Ctx(ctx).Info("compacted-file-cleanup: reconcile wrote compacted mark for unmarked-but-compacted segment",
+				zap.String("segDir", s.segDir), zap.String("source", source), zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
+		}
 	}
 	if dropErr := t.dropSegmentLocalData(ctx, s.segDir, s.bucket, s.rootPath, s.logId, s.segId, source); dropErr != nil {
 		t.requeueAfterFailure(s)
@@ -461,7 +463,7 @@ func compactedCleanupSource(s pendingSeg) string {
 }
 
 func compactedCleanupLabels(bucket, rootPath string, logId int64) (string, string) {
-	return bucket + "/" + rootPath, strconv.FormatInt(logId, 10)
+	return metrics.BuildLogLabels(bucket, rootPath, logId)
 }
 
 // compactedFooterExists checks whether the compacted footer object for (logId, segId)

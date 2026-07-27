@@ -18,6 +18,7 @@ package metrics
 
 import (
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -42,6 +43,11 @@ var NodeID = func() string {
 // BuildLogNs returns the metrics log_ns string from bucket name and root path.
 func BuildLogNs(bucketName, rootPath string) string {
 	return bucketName + "/" + rootPath
+}
+
+// BuildLogLabels returns the common metrics labels for a log.
+func BuildLogLabels(bucketName, rootPath string, logID int64) (logNs, logIDStr string) {
+	return BuildLogNs(bucketName, rootPath), strconv.FormatInt(logID, 10)
 }
 
 // Server metrics are initialized at package level so they are always safe to use.

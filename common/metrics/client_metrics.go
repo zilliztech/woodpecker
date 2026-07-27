@@ -199,7 +199,7 @@ var (
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "segment_compaction_failures_total",
-		Help:      "Total number of segment compaction failures split by stable reason",
+		Help:      "Total number of failed segment compaction operations split by stable reason",
 	}, []string{"log_ns", "log_id", "reason"})
 
 	// Active (writable) segment -> quorum node membership. One series per node of

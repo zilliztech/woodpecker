@@ -129,6 +129,8 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	logNs := metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath)
+	logIdStr := strconv.FormatInt(logId, 10)
 	l := &logHandleImpl{
 		Name:                name,
 		Id:                  logId,
@@ -139,7 +141,7 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 		lastRolloverTimeMs:  -1,
 		rollingPolicy:       defaultRollingPolicy,
 		cfg:                 cfg,
-		logNs:               metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		logNs:               logNs,
 		ctx:                 ctx,
 		cancel:              cancel,
 		cleanupDone:         make(chan struct{}),
@@ -147,9 +149,46 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 		objectStorageClient: objectStorageClient,
 	}
 	l.LastSegmentId.Store(lastSegmentNo)
+	seedSegmentFrontierMetrics(logNs, logIdStr, segments)
 
 	l.startBackgroundCleanup()
 	return l
+}
+
+type frontierCandidate struct {
+	segmentID int64
+	entryID   int64
+	ok        bool
+}
+
+func (f *frontierCandidate) observe(segmentID, entryID int64) {
+	if !f.ok || segmentID > f.segmentID || (segmentID == f.segmentID && entryID > f.entryID) {
+		f.segmentID = segmentID
+		f.entryID = entryID
+		f.ok = true
+	}
+}
+
+func seedSegmentFrontierMetrics(logNs, logIdStr string, segments map[int64]*meta.SegmentMeta) {
+	var writeFrontier frontierCandidate
+	var compactionFrontier frontierCandidate
+	for _, segmentMeta := range segments {
+		if segmentMeta == nil || segmentMeta.Metadata == nil {
+			continue
+		}
+		md := segmentMeta.Metadata
+		writeFrontier.observe(md.SegNo, md.LastEntryId)
+		switch md.State {
+		case proto.SegmentState_Sealed, proto.SegmentState_Truncated:
+			compactionFrontier.observe(md.SegNo, md.LastEntryId)
+		}
+	}
+	if writeFrontier.ok {
+		metrics.SetWriteFrontier(logNs, logIdStr, writeFrontier.segmentID, writeFrontier.entryID)
+	}
+	if compactionFrontier.ok {
+		metrics.SetCompactionFrontier(logNs, logIdStr, compactionFrontier.segmentID, compactionFrontier.entryID)
+	}
 }
 
 func (l *logHandleImpl) GetLastRecordId(ctx context.Context) (*LogMessageId, error) {

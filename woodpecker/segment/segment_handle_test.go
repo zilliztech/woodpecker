@@ -25,12 +25,14 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -5456,12 +5458,15 @@ func TestCompactSegmentQuorum_AllNodesBehindFails(t *testing.T) {
 	}
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
+	failuresBefore := testutil.ToFloat64(metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(impl.logNs, "1", compactionFailureReasonDataBehind))
 
 	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
 	result, err := impl.compactSegmentQuorum(context.Background(), quorum, expectedLAC)
 	assert.Nil(t, result)
 	assert.Error(t, err)
 	assert.True(t, werr.ErrSegmentCompactionDataBehind.Is(err), "surfaced error should be data-behind, got %v", err)
+	assert.Equal(t, failuresBefore+1,
+		testutil.ToFloat64(metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(impl.logNs, "1", compactionFailureReasonDataBehind)))
 }
 
 func TestCompactSegmentQuorum_SecondNodeSucceeds(t *testing.T) {
@@ -5491,11 +5496,14 @@ func TestCompactSegmentQuorum_SecondNodeSucceeds(t *testing.T) {
 	}
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
+	failuresBefore := testutil.ToFloat64(metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(impl.logNs, "1", compactionFailureReasonOther))
 
 	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
 	result, err := impl.compactSegmentQuorum(context.Background(), quorum, int64(-1))
 	assert.NoError(t, err)
 	assert.Equal(t, expectedMeta, result)
+	assert.Equal(t, failuresBefore,
+		testutil.ToFloat64(metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(impl.logNs, "1", compactionFailureReasonOther)))
 }
 
 // TestCompactSegmentQuorum_SkipsLaggingNode is the end-to-end guard for the silent data-loss

@@ -230,8 +230,13 @@ func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName 
 		logger.Ctx(ctx).Warn("open log failed", zap.String("logName", logName), zap.Error(err))
 		return nil, err
 	}
-	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc, objectStorageClient)
-	metrics.WpLogNameIdMapping.WithLabelValues(metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath), logName).Set(float64(logMeta.Metadata.GetLogId()))
+	logID := logMeta.Metadata.GetLogId()
+	logNs, logIdStr := metrics.BuildLogLabels(cfg.Minio.BucketName, cfg.Minio.RootPath, logID)
+	if logMeta.Metadata.GetTruncatedSegmentId() >= 0 {
+		metrics.SetTruncationFrontier(logNs, logIdStr, logMeta.Metadata.GetTruncatedSegmentId(), logMeta.Metadata.GetTruncatedEntryId())
+	}
+	newLogHandle := log.NewLogHandle(logName, logID, segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc, objectStorageClient)
+	metrics.WpLogNameIdMapping.WithLabelValues(logNs, logName).Set(float64(logID))
 	return newLogHandle, nil
 }
 
