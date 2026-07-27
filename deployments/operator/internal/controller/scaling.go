@@ -76,12 +76,33 @@ func (r *WoodpeckerClusterReconciler) checkScaleDown(ctx context.Context, cluste
 		err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: cluster.Namespace}, pod)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				continue // pod already gone
+				pvcExists, err := r.scaleDownTargetPVCExists(ctx, cluster, ordinal)
+				if err != nil {
+					return scaleDownWaiting, current, err
+				}
+				if pvcExists {
+					logger.Info("Target pod is gone but PVC remains; waiting instead of reclaiming without decommission proof",
+						"pod", podName,
+						"pvc", scaleDownTargetPVCName(cluster, ordinal))
+					allSafe = false
+				}
+				continue
 			}
 			return scaleDownWaiting, current, err
 		}
 
 		if pod.Status.Phase != corev1.PodRunning {
+			pvcExists, err := r.scaleDownTargetPVCExists(ctx, cluster, ordinal)
+			if err != nil {
+				return scaleDownWaiting, current, err
+			}
+			if pvcExists {
+				logger.Info("Target pod is not running but PVC remains; waiting instead of reclaiming without decommission proof",
+					"pod", podName,
+					"phase", pod.Status.Phase,
+					"pvc", scaleDownTargetPVCName(cluster, ordinal))
+				allSafe = false
+			}
 			continue
 		}
 
@@ -110,12 +131,28 @@ func requeueDelay() time.Duration {
 	return 10 * time.Second
 }
 
+func scaleDownTargetPVCName(cluster *woodpeckerv1alpha1.WoodpeckerCluster, ordinal int32) string {
+	return fmt.Sprintf("data-%s-server-%d", cluster.Name, ordinal)
+}
+
+func (r *WoodpeckerClusterReconciler) scaleDownTargetPVCExists(ctx context.Context, cluster *woodpeckerv1alpha1.WoodpeckerCluster, ordinal int32) (bool, error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Name: scaleDownTargetPVCName(cluster, ordinal), Namespace: cluster.Namespace}, pvc)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // cleanupOrphanedPVCs deletes PVCs left behind after scale-down.
 func (r *WoodpeckerClusterReconciler) cleanupOrphanedPVCs(ctx context.Context, cluster *woodpeckerv1alpha1.WoodpeckerCluster, oldReplicas, newReplicas int32) error {
 	logger := log.FromContext(ctx)
 
 	for ordinal := oldReplicas - 1; ordinal >= newReplicas; ordinal-- {
-		pvcName := fmt.Sprintf("data-%s-server-%d", cluster.Name, ordinal)
+		pvcName := scaleDownTargetPVCName(cluster, ordinal)
 		pvc := &corev1.PersistentVolumeClaim{}
 		err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: cluster.Namespace}, pvc)
 		if err != nil {
