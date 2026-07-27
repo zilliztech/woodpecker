@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	etcdutil "github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -158,6 +160,45 @@ func TestOpenLogUnsafe_Success(t *testing.T) {
 	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, handle)
+}
+
+func TestOpenLogUnsafe_SeedsTruncationFrontier(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	ctx := context.Background()
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentRollingPolicy: config.SegmentRollingPolicyConfig{
+					MaxSize:     config.ByteSize(100000000),
+					MaxInterval: config.NewDurationSecondsFromInt(800),
+					MaxBlocks:   1000,
+				},
+			},
+		},
+		Minio: config.MinioConfig{
+			BucketName: "truncation-frontier-bucket",
+			RootPath:   "truncation-frontier-root",
+		},
+	}
+
+	const logID = int64(91002)
+	logMeta := &meta.LogMeta{
+		Metadata: &proto.LogMeta{LogId: logID, TruncatedSegmentId: 7, TruncatedEntryId: 88},
+		Revision: 1,
+	}
+	mockMeta.EXPECT().OpenLog(mock.Anything, "test-log").Return(logMeta, map[int64]*meta.SegmentMeta{}, nil).Once()
+
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	t.Cleanup(func() {
+		_ = handle.Close(ctx)
+	})
+
+	logNs, logIdStr := metrics.BuildLogLabels(cfg.Minio.BucketName, cfg.Minio.RootPath, logID)
+	assert.Equal(t, float64(7), testutil.ToFloat64(metrics.WpClientTruncationFrontierSegment.WithLabelValues(logNs, logIdStr)))
+	assert.Equal(t, float64(88), testutil.ToFloat64(metrics.WpClientTruncationFrontierEntry.WithLabelValues(logNs, logIdStr)))
 }
 
 func TestOpenLogUnsafe_Error(t *testing.T) {

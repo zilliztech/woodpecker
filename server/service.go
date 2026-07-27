@@ -36,6 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/funcutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	wpNet "github.com/zilliztech/woodpecker/common/net"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/topology"
@@ -252,6 +253,7 @@ func (s *Server) start() error {
 	if err := s.logStore.Start(); err != nil {
 		return err
 	}
+	s.updateDecommissionMetrics()
 	logger.Ctx(s.ctx).Info("log store started", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
 
 	// If the node was decommissioning before restart, re-apply write rejection and resume monitoring
@@ -807,6 +809,7 @@ func (s *Server) CancelDecommission() error {
 	}
 	// Resume accepting new writes
 	s.logStore.AllowNewWrites()
+	s.updateDecommissionMetrics()
 	// Broadcast active status via gossip so other nodes stop filtering this node out
 	s.serverNodeMu.RLock()
 	node := s.serverNode
@@ -837,6 +840,7 @@ func (s *Server) Decommission() error {
 	}
 	// Stop accepting new writes but allow reads and segment completions
 	s.logStore.RejectNewWrites()
+	s.updateDecommissionMetrics()
 	// Broadcast decommission state via gossip so other nodes filter this node from quorum
 	s.serverNodeMu.RLock()
 	node := s.serverNode
@@ -869,7 +873,14 @@ func (s *Server) GetWriterRegistry() storage.WriterRegistry {
 func (s *Server) GetDecommissionProgress() DecommissionProgress {
 	remaining := s.logStore.GetActiveProcessorCount()
 	hasData := s.logStore.HasLocalSegmentData()
+	metrics.SetNodeDecommissionProgress(metrics.NodeID, string(s.lifecycle.GetState()), remaining, hasData)
 	return s.lifecycle.GetProgress(remaining, hasData)
+}
+
+func (s *Server) updateDecommissionMetrics() {
+	remaining := s.logStore.GetActiveProcessorCount()
+	hasData := s.logStore.HasLocalSegmentData()
+	metrics.SetNodeDecommissionProgress(metrics.NodeID, string(s.lifecycle.GetState()), remaining, hasData)
 }
 
 // decommissionCheckInterval is how often the decommission monitor re-checks
@@ -922,6 +933,7 @@ func (s *Server) decommissionMonitorLoop(checkInterval time.Duration) {
 				return
 			}
 			hasData := s.logStore.HasLocalSegmentData()
+			metrics.SetNodeDecommissionProgress(metrics.NodeID, string(s.lifecycle.GetState()), s.logStore.GetActiveProcessorCount(), hasData)
 			logger.Ctx(s.ctx).Info("decommission monitor check",
 				zap.String("nodeID", s.serverConfig.NodeID),
 				zap.Int("remainingProcessors", s.logStore.GetActiveProcessorCount()),
@@ -940,6 +952,7 @@ func (s *Server) decommissionMonitorLoop(checkInterval time.Duration) {
 						zap.Error(err))
 					continue
 				}
+				metrics.SetNodeDecommissionProgress(metrics.NodeID, string(s.lifecycle.GetState()), s.logStore.GetActiveProcessorCount(), hasData)
 				logger.Ctx(s.ctx).Info("node decommission complete — no local segment data remaining",
 					zap.String("nodeID", s.serverConfig.NodeID))
 				return

@@ -19,6 +19,7 @@ package segment
 import (
 	"container/list"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -130,6 +131,12 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
 	if canWrite {
 		segmentHandle.canWriteState.Store(true)
+		metrics.SetWriteFrontier(
+			segmentHandle.logNs,
+			strconv.FormatInt(segmentHandle.logId, 10),
+			segmentHandle.segmentId,
+			segmentMeta.Metadata.LastEntryId,
+		)
 		metrics.SetActiveSegmentNodes(
 			segmentHandle.logNs,
 			strconv.FormatInt(segmentHandle.logId, 10),
@@ -370,6 +377,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 	// sync lac for this round
 	if newLac >= 0 {
 		s.syncLAC(ctx, newLac)
+		metrics.SetWriteFrontier(s.logNs, strconv.FormatInt(s.logId, 10), s.segmentId, newLac)
 	}
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
@@ -1484,6 +1492,9 @@ func (s *segmentHandleImpl) fenceSegmentOnNode(ctx context.Context, node string,
 // until one succeeds. Returns the result from the first successful node.
 func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 	var lastError error
+	nodeFailures := make([]string, 0, len(quorumInfo.Nodes))
+	failureReasons := make([]string, 0, len(quorumInfo.Nodes))
+	logIdStr := strconv.FormatInt(s.logId, 10)
 
 	// Try each node sequentially until one succeeds
 	for i, node := range quorumInfo.Nodes {
@@ -1497,6 +1508,9 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 
 		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
 		if err != nil {
+			reason := classifyCompactionFailureReason(err)
+			nodeFailures = append(nodeFailures, fmt.Sprintf("%s:%s", node, reason))
+			failureReasons = append(failureReasons, reason)
 			logger.Ctx(ctx).Warn("Failed to get logstore client for compaction",
 				zap.String("logName", s.logName),
 				zap.Int64("logId", s.logId),
@@ -1511,6 +1525,9 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 		// if its local data is behind expectedLastEntryId, so we fall through to the next node.
 		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, expectedLastEntryId)
 		if compactErr != nil {
+			reason := classifyCompactionFailureReason(compactErr)
+			nodeFailures = append(nodeFailures, fmt.Sprintf("%s:%s", node, reason))
+			failureReasons = append(failureReasons, reason)
 			logger.Ctx(ctx).Warn("Segment compaction failed on node, trying next",
 				zap.String("logName", s.logName),
 				zap.Int64("logId", s.logId),
@@ -1538,16 +1555,65 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 	}
 
 	// All nodes failed
+	failureReason := summarizeCompactionFailureReasons(failureReasons)
+	metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(s.logNs, logIdStr, failureReason).Inc()
 	logger.Ctx(ctx).Warn("Compaction failed on all quorum nodes",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
-		zap.Int("totalNodes", len(quorumInfo.Nodes)))
+		zap.Int64("expectedLastEntryId", expectedLastEntryId),
+		zap.String("failureReason", failureReason),
+		zap.Int("totalNodes", len(quorumInfo.Nodes)),
+		zap.Strings("nodeFailures", nodeFailures))
 
 	if lastError != nil {
 		return nil, lastError
 	}
 	return nil, werr.ErrSegmentHandleCompactionFailed.WithCauseErrMsg("all quorum nodes failed compaction")
+}
+
+const (
+	compactionFailureReasonNone                = "none"
+	compactionFailureReasonDataBehind          = "data_behind"
+	compactionFailureReasonInvalidLACAlignment = "invalid_lac_alignment"
+	compactionFailureReasonTransient           = "transient"
+	compactionFailureReasonOther               = "other"
+	compactionFailureReasonMixed               = "mixed"
+)
+
+func classifyCompactionFailureReason(err error) string {
+	switch {
+	case err == nil:
+		return compactionFailureReasonNone
+	case errors.Is(err, werr.ErrSegmentCompactionDataBehind):
+		return compactionFailureReasonDataBehind
+	case errors.Is(err, werr.ErrInvalidLACAlignment):
+		return compactionFailureReasonInvalidLACAlignment
+	case werr.IsTransportError(err), werr.IsRetryableErr(err), errors.Is(err, context.DeadlineExceeded):
+		return compactionFailureReasonTransient
+	default:
+		return compactionFailureReasonOther
+	}
+}
+
+func summarizeCompactionFailureReasons(reasons []string) string {
+	var first string
+	for _, reason := range reasons {
+		if reason == "" || reason == compactionFailureReasonNone {
+			continue
+		}
+		if first == "" {
+			first = reason
+			continue
+		}
+		if reason != first {
+			return compactionFailureReasonMixed
+		}
+	}
+	if first == "" {
+		return compactionFailureReasonOther
+	}
+	return first
 }
 
 // notifySegmentCompactedTimeout bounds each per-node NotifySegmentCompacted RPC so a node
@@ -1669,6 +1735,9 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 			zap.Int64("previousLastAddConfirmed", s.lastAddConfirmed.Load()),
 			zap.Int64("newLastAddConfirmed", lastEntryId))
 		s.lastAddConfirmed.Store(lastEntryId)
+	}
+	if lastEntryId >= 0 {
+		metrics.SetWriteFrontier(s.logNs, logIdStr, s.segmentId, lastEntryId)
 	}
 	// Use the actual lastEntryId returned from FenceSegment, even in error cases
 	// because these "errors" indicate the segment was already fenced, not a failure
@@ -1802,6 +1871,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(updateMetaErr))
 	} else {
+		metrics.SetCompactionFrontier(s.logNs, logIdStr, s.segmentId, compactSegMetaInfo.LastEntryId)
 		logger.Ctx(ctx).Info("Successfully updated segment metadata after compaction",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),

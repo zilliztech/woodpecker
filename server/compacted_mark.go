@@ -51,34 +51,42 @@ func hasCompactedMark(segmentDir string) bool {
 // existence is meaningful, so there is no content to write — the create + a single parent-dir
 // fsync replaces the old temp-write + rename + double-fsync.
 func writeCompactedMark(ctx context.Context, segmentDir string) error {
+	_, err := writeCompactedMarkCreated(ctx, segmentDir)
+	return err
+}
+
+func writeCompactedMarkCreated(ctx context.Context, segmentDir string) (bool, error) {
 	p := compactedMarkPath(segmentDir)
 	if _, err := os.Stat(p); err == nil {
-		return nil // already marked
+		return false, nil // already marked
 	} else if !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
 	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
-		return err
+		return false, err
 	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	if err := f.Close(); err != nil {
-		return err
+		return false, err
 	}
 	// Fsync the parent dir so the new directory entry survives a crash.
 	dir, err := os.Open(segmentDir)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := dir.Sync(); err != nil {
 		dir.Close()
-		return err
+		return false, err
 	}
 	if err := dir.Close(); err != nil {
-		return err
+		return false, err
 	}
 	logger.Ctx(ctx).Info("compacted mark created", zap.String("path", p))
-	return nil
+	return true, nil
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,12 +18,44 @@ func TestCompactedMark_WriteHas_Idempotent(t *testing.T) {
 	require.NoError(t, os.MkdirAll(seg, 0o755))
 
 	assert.False(t, hasCompactedMark(seg))
-	require.NoError(t, writeCompactedMark(context.Background(), seg))
+	created, err := writeCompactedMarkCreated(context.Background(), seg)
+	require.NoError(t, err)
+	assert.True(t, created)
 	assert.True(t, hasCompactedMark(seg))
 	// idempotent write
-	require.NoError(t, writeCompactedMark(context.Background(), seg))
+	created, err = writeCompactedMarkCreated(context.Background(), seg)
+	require.NoError(t, err)
+	assert.False(t, created)
 	assert.True(t, hasCompactedMark(seg))
 	assert.FileExists(t, filepath.Join(seg, compactedMarkFileName))
+}
+
+func TestCompactedMark_WriteCreatedConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	seg := filepath.Join(dir, "1", "2")
+
+	var createdCount atomic.Int32
+	errCh := make(chan error, 16)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			created, err := writeCompactedMarkCreated(context.Background(), seg)
+			if created {
+				createdCount.Add(1)
+			}
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, int32(1), createdCount.Load())
+	assert.True(t, hasCompactedMark(seg))
 }
 
 // TestCompactedMark_WriteStatError covers writeCompactedMark's non-IsNotExist stat error

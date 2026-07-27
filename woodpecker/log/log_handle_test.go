@@ -23,12 +23,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/client/v3/concurrency"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
@@ -70,6 +72,32 @@ func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProv
 	})
 
 	return logHandle, mockMeta
+}
+
+func TestNewLogHandle_SeedsSegmentFrontierMetrics(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	cfg.Minio.BucketName = "frontier-seed-bucket"
+	cfg.Minio.RootPath = "frontier-seed-root"
+	const logID = int64(91001)
+	segments := map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: 10}},
+		2: {Metadata: &proto.SegmentMetadata{SegNo: 2, State: proto.SegmentState_Sealed, LastEntryId: 20}},
+		3: {Metadata: &proto.SegmentMetadata{SegNo: 3, State: proto.SegmentState_Truncated, LastEntryId: 30}},
+		4: {Metadata: &proto.SegmentMetadata{SegNo: 4, State: proto.SegmentState_Active, LastEntryId: 4}},
+	}
+
+	logHandle := NewLogHandle("frontier-seed-log", logID, segments, mocks_meta.NewMetadataProvider(t), nil, cfg, nil, nil).(*logHandleImpl)
+	t.Cleanup(func() {
+		logHandle.stopBackgroundCleanup()
+		logHandle.cancel()
+	})
+
+	logNs, logIdStr := metrics.BuildLogLabels(cfg.Minio.BucketName, cfg.Minio.RootPath, logID)
+	assert.Equal(t, float64(4), testutil.ToFloat64(metrics.WpClientWriteFrontierSegment.WithLabelValues(logNs, logIdStr)))
+	assert.Equal(t, float64(4), testutil.ToFloat64(metrics.WpClientWriteFrontierEntry.WithLabelValues(logNs, logIdStr)))
+	assert.Equal(t, float64(3), testutil.ToFloat64(metrics.WpClientCompactionFrontierSegment.WithLabelValues(logNs, logIdStr)))
+	assert.Equal(t, float64(30), testutil.ToFloat64(metrics.WpClientCompactionFrontierEntry.WithLabelValues(logNs, logIdStr)))
 }
 
 func TestOpenLogReader_ReaderResourceLeak(t *testing.T) {

@@ -18,6 +18,7 @@ package metrics
 
 import (
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -42,6 +43,11 @@ var NodeID = func() string {
 // BuildLogNs returns the metrics log_ns string from bucket name and root path.
 func BuildLogNs(bucketName, rootPath string) string {
 	return bucketName + "/" + rootPath
+}
+
+// BuildLogLabels returns the common metrics labels for a log.
+func BuildLogLabels(bucketName, rootPath string, logID int64) (logNs, logIDStr string) {
+	return BuildLogNs(bucketName, rootPath), strconv.FormatInt(logID, 10)
 }
 
 // Server metrics are initialized at package level so they are always safe to use.
@@ -255,6 +261,54 @@ var (
 		Name:      "file_stored_count",
 		Help:      "Current number of local segment files",
 	}, []string{"node_id", "log_ns", "log_id"})
+	WpCompactedCleanupFooterFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compacted_cleanup_footer_failures_total",
+		Help:      "Total number of compacted-file cleanup footer confirmation failures split by stable reason",
+	}, []string{"node_id", "log_ns", "log_id", "reason"})
+	WpCompactedCleanupMarksTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compacted_cleanup_marks_total",
+		Help:      "Total number of compacted marks created by source",
+	}, []string{"node_id", "log_ns", "log_id", "source"})
+	WpCompactedCleanupReclaimedFilesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compacted_cleanup_reclaimed_files_total",
+		Help:      "Total number of local data.log files reclaimed after durable compaction",
+	}, []string{"node_id", "log_ns", "log_id", "source"})
+	WpCompactedCleanupReclaimedBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compacted_cleanup_reclaimed_bytes_total",
+		Help:      "Total bytes reclaimed from local data.log files after durable compaction",
+	}, []string{"node_id", "log_ns", "log_id", "source"})
+	WpNodeLifecycleState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "node_lifecycle_state",
+		Help:      "Node lifecycle state as a one-hot gauge: 1 for the current state, 0 for other known states",
+	}, []string{"node_id", "state"})
+	WpNodeDecommissionRemainingProcessors = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "node_decommission_remaining_processors",
+		Help:      "Active segment processors remaining while draining a node",
+	}, []string{"node_id"})
+	WpNodeDecommissionHasLocalData = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "node_decommission_has_local_data",
+		Help:      "Whether local segment data remains on the node: 1=true, 0=false",
+	}, []string{"node_id"})
+	WpNodeDecommissionSafeToTerminate = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "node_decommission_safe_to_terminate",
+		Help:      "Whether the node is safe to terminate according to the decommission drain gate: 1=true, 0=false",
+	}, []string{"node_id"})
 
 	WpSyncSchedulerScheduled = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
@@ -334,6 +388,14 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpObjectStorageStoredObjects)
 		registerer.MustRegister(WpFileStoredBytes)
 		registerer.MustRegister(WpFileStoredCount)
+		registerer.MustRegister(WpCompactedCleanupFooterFailuresTotal)
+		registerer.MustRegister(WpCompactedCleanupMarksTotal)
+		registerer.MustRegister(WpCompactedCleanupReclaimedFilesTotal)
+		registerer.MustRegister(WpCompactedCleanupReclaimedBytesTotal)
+		registerer.MustRegister(WpNodeLifecycleState)
+		registerer.MustRegister(WpNodeDecommissionRemainingProcessors)
+		registerer.MustRegister(WpNodeDecommissionHasLocalData)
+		registerer.MustRegister(WpNodeDecommissionSafeToTerminate)
 		registerer.MustRegister(WpSyncSchedulerScheduled)
 		registerer.MustRegister(WpSyncSchedulerRunning)
 		registerer.MustRegister(WpSyncSchedulerWaiting)
@@ -341,4 +403,21 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		// Quorum selection skew (load-aware node selection, issue #114)
 		registerer.MustRegister(WpQuorumSelectionSkew)
 	})
+}
+
+func SetNodeDecommissionProgress(nodeID, state string, remainingProcessors int, hasLocalData bool) {
+	for _, known := range []string{"active", "decommissioning", "decommissioned"} {
+		WpNodeLifecycleState.WithLabelValues(nodeID, known).Set(0)
+	}
+	WpNodeLifecycleState.WithLabelValues(nodeID, state).Set(1)
+	WpNodeDecommissionRemainingProcessors.WithLabelValues(nodeID).Set(float64(remainingProcessors))
+	WpNodeDecommissionHasLocalData.WithLabelValues(nodeID).Set(boolGauge(hasLocalData))
+	WpNodeDecommissionSafeToTerminate.WithLabelValues(nodeID).Set(boolGauge(!hasLocalData))
+}
+
+func boolGauge(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
 }
