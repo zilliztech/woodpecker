@@ -39,7 +39,7 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
-func TestCompactedCleanup_MultiNodeReclaimAllowsDecommission(t *testing.T) {
+func TestStagedStorageService_CompactedCleanup_MultiNodeReclaimAllowsDecommission(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := compactedCleanupE2EConfig(t)
 
@@ -98,7 +98,7 @@ func TestCompactedCleanup_MultiNodeReclaimAllowsDecommission(t *testing.T) {
 	})
 }
 
-func TestCompactedCleanup_ReconcileReclaimsUnnotifiedSegmentAfterRestart(t *testing.T) {
+func TestStagedStorageService_CompactedCleanup_ReconcileReclaimsUnnotifiedSegmentAfterRestart(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := compactedCleanupE2EConfig(t)
 
