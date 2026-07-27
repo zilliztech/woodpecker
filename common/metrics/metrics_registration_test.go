@@ -86,6 +86,50 @@ func TestRegisterServerMetricsWithRegisterer(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestRegisterCompactedCleanupAndFrontierMetrics(t *testing.T) {
+	t.Run("client", func(t *testing.T) {
+		WpClientRegisterOnce = sync.Once{}
+		registry := prometheus.NewRegistry()
+		RegisterClientMetricsWithRegisterer(registry)
+
+		SetWriteFrontier("bucket/root", "1", 10, 99)
+		SetCompactionFrontier("bucket/root", "1", 9, 88)
+		SetTruncationFrontier("bucket/root", "1", 3, 7)
+		WpSegmentCompactionFailuresTotal.WithLabelValues("bucket/root", "1", "data_behind").Inc()
+
+		names := gatheredMetricNames(t, registry)
+		assert.True(t, names["woodpecker_client_write_frontier_segment"])
+		assert.True(t, names["woodpecker_client_write_frontier_entry"])
+		assert.True(t, names["woodpecker_client_compaction_frontier_segment"])
+		assert.True(t, names["woodpecker_client_compaction_frontier_entry"])
+		assert.True(t, names["woodpecker_client_truncation_frontier_segment"])
+		assert.True(t, names["woodpecker_client_truncation_frontier_entry"])
+		assert.True(t, names["woodpecker_client_segment_compaction_failures_total"])
+	})
+
+	t.Run("server", func(t *testing.T) {
+		WpServerRegisterOnce = sync.Once{}
+		registry := prometheus.NewRegistry()
+		RegisterServerMetricsWithRegisterer(registry)
+
+		WpCompactedCleanupFooterFailuresTotal.WithLabelValues("node-1", "bucket/root", "1", "transient").Inc()
+		WpCompactedCleanupMarksTotal.WithLabelValues("node-1", "bucket/root", "1", "push").Inc()
+		WpCompactedCleanupReclaimedFilesTotal.WithLabelValues("node-1", "bucket/root", "1", "pull").Inc()
+		WpCompactedCleanupReclaimedBytesTotal.WithLabelValues("node-1", "bucket/root", "1", "pull").Add(128)
+		SetNodeDecommissionProgress("node-1", "decommissioning", 2, true)
+
+		names := gatheredMetricNames(t, registry)
+		assert.True(t, names["woodpecker_server_compacted_cleanup_footer_failures_total"])
+		assert.True(t, names["woodpecker_server_compacted_cleanup_marks_total"])
+		assert.True(t, names["woodpecker_server_compacted_cleanup_reclaimed_files_total"])
+		assert.True(t, names["woodpecker_server_compacted_cleanup_reclaimed_bytes_total"])
+		assert.True(t, names["woodpecker_server_node_lifecycle_state"])
+		assert.True(t, names["woodpecker_server_node_decommission_remaining_processors"])
+		assert.True(t, names["woodpecker_server_node_decommission_has_local_data"])
+		assert.True(t, names["woodpecker_server_node_decommission_safe_to_terminate"])
+	})
+}
+
 func TestRegisterClientMetrics_OnlyOnce(t *testing.T) {
 	// Reset for clean test
 	WpClientRegisterOnce = sync.Once{}
@@ -112,6 +156,18 @@ func TestRegisterServerMetrics_OnlyOnce(t *testing.T) {
 	assert.NotPanics(t, func() {
 		RegisterServerMetricsWithRegisterer(registry2)
 	})
+}
+
+func gatheredMetricNames(t *testing.T, registry *prometheus.Registry) map[string]bool {
+	t.Helper()
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	for _, mf := range metricFamilies {
+		names[mf.GetName()] = true
+	}
+	return names
 }
 
 func TestUpdateSegmentState(t *testing.T) {
@@ -165,6 +221,27 @@ func TestUpdateSegmentState_MultipleTransitions(t *testing.T) {
 	sealedMetric := &dto.Metric{}
 	WpClientSegmentState.WithLabelValues(logNs, logId, "Sealed").Write(sealedMetric)
 	assert.Equal(t, float64(1), sealedMetric.GetGauge().GetValue())
+}
+
+func TestSetFrontierMonotonic(t *testing.T) {
+	logNs := "frontier-test"
+	logId := "100"
+
+	SetCompactionFrontier(logNs, logId, 10, 5)
+	SetCompactionFrontier(logNs, logId, 9, 99)
+
+	segmentMetric := &dto.Metric{}
+	WpClientCompactionFrontierSegment.WithLabelValues(logNs, logId).Write(segmentMetric)
+	assert.Equal(t, float64(10), segmentMetric.GetGauge().GetValue())
+
+	entryMetric := &dto.Metric{}
+	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Write(entryMetric)
+	assert.Equal(t, float64(5), entryMetric.GetGauge().GetValue())
+
+	SetCompactionFrontier(logNs, logId, 10, 6)
+	entryMetric = &dto.Metric{}
+	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Write(entryMetric)
+	assert.Equal(t, float64(6), entryMetric.GetGauge().GetValue())
 }
 
 // TestMetrics_UseLogNsLabel guards the rename of the application namespace

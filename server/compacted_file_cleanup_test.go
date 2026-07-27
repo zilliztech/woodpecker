@@ -121,6 +121,8 @@ func TestCompactedFileCleanup_MarkedButFooterAbsent_NeverDeletesData(t *testing.
 	mockStorage.EXPECT().
 		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "11").
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
+	logNs, logIdStr := bucket+"/"+rp, "11"
+	failuresBefore := testutil.ToFloat64(metrics.WpCompactedCleanupFooterFailuresTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupFooterFailureMissingFooter))
 
 	task := newCompactedFileCleanupTask(store)
 	require.NoError(t, task.runOnce(ctx, true)) // reconcile walk enqueues the marked segment, then drains
@@ -128,6 +130,8 @@ func TestCompactedFileCleanup_MarkedButFooterAbsent_NeverDeletesData(t *testing.
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.NoError(t, statErr, "data.log must NOT be deleted without a confirmed footer")
 	assert.True(t, hasCompactedMark(segDir), "the mark is KEPT (removed only by the truncate/delete GC), not cleared here")
+	assert.Equal(t, failuresBefore+1,
+		testutil.ToFloat64(metrics.WpCompactedCleanupFooterFailuresTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupFooterFailureMissingFooter)))
 }
 
 // TestCompactedFileCleanup_UnmarkedAndFooterPresent_ReconcileWritesMark verifies the reconcile
@@ -147,6 +151,9 @@ func TestCompactedFileCleanup_UnmarkedAndFooterPresent_ReconcileWritesMark(t *te
 	mockStorage.EXPECT().
 		StatObject(ctx, bucket, footerKeyFor(rp, logId, segId), bucket+"/"+rp, "12").
 		Return(int64(64), false, nil)
+	logNs, logIdStr := bucket+"/"+rp, "12"
+	marksBefore := testutil.ToFloat64(metrics.WpCompactedCleanupMarksTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupSourcePull))
+	reclaimedBefore := testutil.ToFloat64(metrics.WpCompactedCleanupReclaimedFilesTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupSourcePull))
 
 	task := newCompactedFileCleanupTask(store)
 	require.NoError(t, task.runOnce(ctx, true)) // reconcile pass
@@ -154,6 +161,10 @@ func TestCompactedFileCleanup_UnmarkedAndFooterPresent_ReconcileWritesMark(t *te
 	assert.True(t, hasCompactedMark(segDir), "reconcile should have written the compacted mark (tombstone kept)")
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.True(t, os.IsNotExist(statErr), "reconcile marks AND drops the data.log in the same drain")
+	assert.Equal(t, marksBefore+1,
+		testutil.ToFloat64(metrics.WpCompactedCleanupMarksTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupSourcePull)))
+	assert.Equal(t, reclaimedBefore+1,
+		testutil.ToFloat64(metrics.WpCompactedCleanupReclaimedFilesTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupSourcePull)))
 }
 
 // TestCompactedFileCleanup_UnmarkedAndFooterAbsent_NothingChanges verifies row 4:
@@ -790,12 +801,15 @@ func TestCompactedFileCleanup_PushConfirmedEntry_SkipsDuplicateHead(t *testing.T
 	require.NoError(t, writeCompactedMark(ctx, segDir))
 
 	task := newCompactedFileCleanupTask(store)
+	reclaimedBefore := testutil.ToFloat64(metrics.WpCompactedCleanupReclaimedFilesTotal.WithLabelValues(metrics.NodeID, bucket+"/"+rp, "31", compactedCleanupSourcePush))
 	task.enqueueFooterConfirmed(segDir, bucket, rp, logId, segId)
 	require.NoError(t, task.runOnce(ctx, false))
 
 	_, statErr := os.Stat(filepath.Join(segDir, "data.log"))
 	assert.True(t, os.IsNotExist(statErr), "the confirmed entry must be dropped without a duplicate HEAD")
 	assert.True(t, hasCompactedMark(segDir))
+	assert.Equal(t, reclaimedBefore+1,
+		testutil.ToFloat64(metrics.WpCompactedCleanupReclaimedFilesTotal.WithLabelValues(metrics.NodeID, bucket+"/"+rp, "31", compactedCleanupSourcePush)))
 }
 
 // TestCompactedFileCleanup_DrainCappedPerTick pins the per-tick budget: with more due
@@ -861,7 +875,7 @@ func TestCompactedFileCleanup_AlreadyRemovedFile_DoesNotTouchGauges(t *testing.T
 	countBefore := testutil.ToFloat64(metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr))
 
 	task := newCompactedFileCleanupTask(store)
-	task.dropSegmentLocalData(ctx, segDir, bucket, rp, logId, segId)
+	task.dropSegmentLocalData(ctx, segDir, bucket, rp, logId, segId, compactedCleanupSourcePull)
 
 	assert.Equal(t, bytesBefore,
 		testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr)),

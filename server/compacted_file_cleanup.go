@@ -50,6 +50,14 @@ const reconcileEveryNPasses = 60
 // next 5s tick. (The client-side analog is maxCompactedNotifyPerCycle.)
 const maxDrainPerTick = 256
 
+const (
+	compactedCleanupSourcePush = "push"
+	compactedCleanupSourcePull = "pull"
+
+	compactedCleanupFooterFailureTransient     = "transient"
+	compactedCleanupFooterFailureMissingFooter = "missing_footer"
+)
+
 // pendingSeg identifies a segment whose local data.log should be dropped once its compacted
 // footer is confirmed present in object storage. It carries just enough to run the footer HEAD
 // and the drop; the marked state is re-read from disk when the segment is processed.
@@ -327,13 +335,16 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 	if _, err := os.Stat(filepath.Join(s.segDir, "data.log")); os.IsNotExist(err) {
 		return // data.log already gone (dropped earlier, or removed by the truncate GC): nothing to do
 	}
+	source := compactedCleanupSource(s)
+	logNs, logIdStr := compactedCleanupLabels(s.bucket, s.rootPath, s.logId)
 	footer := s.footerConfirmed // push path: the notify handler HEADed the footer in this process moments ago
 	if !footer {
 		var statErr error
 		footer, statErr = compactedFooterExists(ctx, t.store.storageClient, s.bucket, s.rootPath, s.logId, s.segId)
 		if statErr != nil {
+			metrics.WpCompactedCleanupFooterFailuresTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupFooterFailureTransient).Inc()
 			logger.Ctx(ctx).Warn("compacted-file-cleanup: failed to stat footer; will retry with backoff",
-				zap.String("segDir", s.segDir), zap.Int("attempts", s.attempts+1), zap.Error(statErr))
+				zap.String("segDir", s.segDir), zap.String("source", source), zap.Int("attempts", s.attempts+1), zap.Error(statErr))
 			t.requeueAfterFailure(s) // transient: retried with exponential backoff, capped at the reconcile cadence
 			return
 		}
@@ -341,8 +352,9 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 	marked := hasCompactedMark(s.segDir)
 	if !footer {
 		if marked {
+			metrics.WpCompactedCleanupFooterFailuresTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupFooterFailureMissingFooter).Inc()
 			logger.Ctx(ctx).Warn("compacted-file-cleanup: marked segment has no compacted footer in object storage; leaving data.log AND mark for the truncate/delete GC (unexpected state)",
-				zap.String("segDir", s.segDir), zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
+				zap.String("segDir", s.segDir), zap.String("source", source), zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
 		}
 		// unmarked && !footer: not compacted yet; leave alone.
 		return
@@ -357,14 +369,15 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 			// retrying every tick would keep hammering an already unhealthy filesystem with a
 			// footer HEAD plus mark I/O per segment.
 			logger.Ctx(ctx).Warn("compacted-file-cleanup: reconcile failed to write compacted mark; will retry with backoff",
-				zap.String("segDir", s.segDir), zap.Error(markErr))
+				zap.String("segDir", s.segDir), zap.String("source", source), zap.Error(markErr))
 			t.requeueAfterFailure(s)
 			return
 		}
+		metrics.WpCompactedCleanupMarksTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, source).Inc()
 		logger.Ctx(ctx).Info("compacted-file-cleanup: reconcile wrote compacted mark for unmarked-but-compacted segment",
-			zap.String("segDir", s.segDir), zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
+			zap.String("segDir", s.segDir), zap.String("source", source), zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
 	}
-	if dropErr := t.dropSegmentLocalData(ctx, s.segDir, s.bucket, s.rootPath, s.logId, s.segId); dropErr != nil {
+	if dropErr := t.dropSegmentLocalData(ctx, s.segDir, s.bucket, s.rootPath, s.logId, s.segId, source); dropErr != nil {
 		t.requeueAfterFailure(s)
 	}
 }
@@ -375,7 +388,7 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 // "compacted -> serve from object storage" from "no data here" without an object-storage
 // HEAD. The tombstone is removed only when the segment is fully truncated/deleted (the
 // truncate/delete GC path removes the mark and the directory).
-func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, segDir, bucket, rootPath string, logId, segId int64) error {
+func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, segDir, bucket, rootPath string, logId, segId int64, source string) error {
 	dataLogPath := filepath.Join(segDir, "data.log")
 	// Size the file before removal so we can keep the local-storage gauges accurate. This
 	// push+pull path bypasses deleteLocalFiles' accounting, so without this the "current local
@@ -412,12 +425,13 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 		// validated at the NotifySegmentCompacted boundary (push) and derived
 		// path.Join-canonicalized from disk (pull reconcile), so both agree and this
 		// decrement hits the writer's exact series.
-		logNs := bucket + "/" + rootPath
-		logIdStr := strconv.FormatInt(logId, 10)
+		logNs, logIdStr := compactedCleanupLabels(bucket, rootPath, logId)
 		if sizeKnown {
 			metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, logIdStr).Sub(float64(dataLogSize))
+			metrics.WpCompactedCleanupReclaimedBytesTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, source).Add(float64(dataLogSize))
 		}
 		metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, logNs, logIdStr).Dec()
+		metrics.WpCompactedCleanupReclaimedFilesTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, source).Inc()
 	}
 
 	if evictErr := t.store.EvictSegmentReader(ctx, bucket, rootPath, logId, segId); evictErr != nil {
@@ -429,8 +443,25 @@ func (t *compactedFileCleanupTask) dropSegmentLocalData(ctx context.Context, seg
 	// place, so a reader that opens this segment after the data.log is gone can serve it
 	// from object storage without an object-storage HEAD.
 	logger.Ctx(ctx).Info("compacted-file-cleanup: removed local data.log for durably compacted segment (mark kept as tombstone)",
-		zap.String("segDir", segDir), zap.Int64("logId", logId), zap.Int64("segId", segId))
+		zap.String("segDir", segDir),
+		zap.String("source", source),
+		zap.Bool("removed", rmErr == nil),
+		zap.Bool("reclaimedBytesKnown", sizeKnown),
+		zap.Int64("reclaimedBytes", dataLogSize),
+		zap.Int64("logId", logId),
+		zap.Int64("segId", segId))
 	return nil
+}
+
+func compactedCleanupSource(s pendingSeg) string {
+	if s.footerConfirmed {
+		return compactedCleanupSourcePush
+	}
+	return compactedCleanupSourcePull
+}
+
+func compactedCleanupLabels(bucket, rootPath string, logId int64) (string, string) {
+	return bucket + "/" + rootPath, strconv.FormatInt(logId, 10)
 }
 
 // compactedFooterExists checks whether the compacted footer object for (logId, segId)

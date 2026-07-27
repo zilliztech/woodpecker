@@ -811,6 +811,7 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 		zap.Int64("truncatedSegmentId", recordId.SegmentId),
 		zap.Int64("truncatedEntryId", recordId.EntryId))
 
+	metrics.SetTruncationFrontier(l.logNs, logIdStr, recordId.SegmentId, recordId.EntryId)
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(l.logNs, logIdStr, "truncate", "success").Inc()
 	metrics.WpLogHandleOperationLatency.WithLabelValues(l.logNs, logIdStr, "truncate", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
@@ -837,6 +838,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 		metrics.WpLogHandleOperationLatency.WithLabelValues(l.logNs, logIdStr, "check_segment_truncated", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil
 	}
+	metrics.SetTruncationFrontier(l.logNs, logIdStr, logMeta.Metadata.TruncatedSegmentId, logMeta.Metadata.TruncatedEntryId)
 
 	// 3. Mark segments as truncated in metadata
 	// Get all segments that are before the truncation point

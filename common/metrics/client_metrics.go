@@ -27,6 +27,10 @@ import (
 // without registration they silently collect data that goes nowhere.
 var (
 	WpClientRegisterOnce sync.Once
+	frontierMu           sync.Mutex
+	writeFrontiers       = make(map[string]progressFrontier)
+	compactionFrontiers  = make(map[string]progressFrontier)
+	truncationFrontiers  = make(map[string]progressFrontier)
 
 	// Log name-id mapping
 	// WARNING: In large-scale deployments with many logs, the "log_name" label
@@ -46,6 +50,42 @@ var (
 		Name:      "segment_state",
 		Help:      "Number of segments in each state per log",
 	}, []string{"log_ns", "log_id", "state"})
+	WpClientWriteFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "write_frontier_segment",
+		Help:      "Highest segment id acknowledged for writes per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientWriteFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "write_frontier_entry",
+		Help:      "Highest entry id acknowledged in the write frontier segment per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientCompactionFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "compaction_frontier_segment",
+		Help:      "Highest segment id successfully sealed by compaction per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientCompactionFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "compaction_frontier_entry",
+		Help:      "Highest entry id in the highest segment successfully sealed by compaction per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientTruncationFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "truncation_frontier_segment",
+		Help:      "Current truncated segment id per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientTruncationFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "truncation_frontier_entry",
+		Help:      "Current truncated entry id per log",
+	}, []string{"log_ns", "log_id"})
 
 	// client append data to log
 	WpClientAppendRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -155,6 +195,12 @@ var (
 		Name:      "segment_handle_pending_append_ops",
 		Help:      "Number of pending append operations in segment handles",
 	}, []string{"log_ns", "log_id"})
+	WpSegmentCompactionFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_compaction_failures_total",
+		Help:      "Total number of segment compaction failures split by stable reason",
+	}, []string{"log_ns", "log_id", "reason"})
 
 	// Active (writable) segment -> quorum node membership. One series per node of
 	// the current active segment; value is always 1. Series are deleted when the
@@ -198,6 +244,12 @@ var (
 	}, []string{"log_ns", "operation", "status"})
 )
 
+type progressFrontier struct {
+	segmentID   int64
+	entryID     int64
+	initialized bool
+}
+
 // RegisterClientMetricsWithRegisterer registers all client-side metrics with the given registerer.
 // Without calling this, metrics still work but are not scraped by any registry.
 func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
@@ -206,6 +258,12 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpLogNameIdMapping)
 		// segment state tracking
 		registerer.MustRegister(WpClientSegmentState)
+		registerer.MustRegister(WpClientWriteFrontierSegment)
+		registerer.MustRegister(WpClientWriteFrontierEntry)
+		registerer.MustRegister(WpClientCompactionFrontierSegment)
+		registerer.MustRegister(WpClientCompactionFrontierEntry)
+		registerer.MustRegister(WpClientTruncationFrontierSegment)
+		registerer.MustRegister(WpClientTruncationFrontierEntry)
 
 		// Client append metrics
 		registerer.MustRegister(WpClientAppendRequestsTotal)
@@ -228,6 +286,7 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSegmentHandleOperationsTotal)
 		registerer.MustRegister(WpSegmentHandleOperationLatency)
 		registerer.MustRegister(WpSegmentHandlePendingAppendOps)
+		registerer.MustRegister(WpSegmentCompactionFailuresTotal)
 		// Active segment node membership
 		registerer.MustRegister(WpActiveSegmentNode)
 		// Direct read metrics
@@ -244,6 +303,32 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 func UpdateSegmentState(logNs, logId, oldState, newState string) {
 	WpClientSegmentState.WithLabelValues(logNs, logId, oldState).Dec()
 	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Inc()
+}
+
+func SetWriteFrontier(logNs, logId string, segmentId, entryId int64) {
+	setMonotonicFrontier(writeFrontiers, WpClientWriteFrontierSegment, WpClientWriteFrontierEntry, logNs, logId, segmentId, entryId)
+}
+
+func SetCompactionFrontier(logNs, logId string, segmentId, entryId int64) {
+	setMonotonicFrontier(compactionFrontiers, WpClientCompactionFrontierSegment, WpClientCompactionFrontierEntry, logNs, logId, segmentId, entryId)
+}
+
+func SetTruncationFrontier(logNs, logId string, segmentId, entryId int64) {
+	setMonotonicFrontier(truncationFrontiers, WpClientTruncationFrontierSegment, WpClientTruncationFrontierEntry, logNs, logId, segmentId, entryId)
+}
+
+func setMonotonicFrontier(frontiers map[string]progressFrontier, segmentGauge, entryGauge *prometheus.GaugeVec, logNs, logId string, segmentId, entryId int64) {
+	key := logNs + "\x00" + logId
+	frontierMu.Lock()
+	current := frontiers[key]
+	if current.initialized && (segmentId < current.segmentID || (segmentId == current.segmentID && entryId < current.entryID)) {
+		frontierMu.Unlock()
+		return
+	}
+	frontiers[key] = progressFrontier{segmentID: segmentId, entryID: entryId, initialized: true}
+	segmentGauge.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	entryGauge.WithLabelValues(logNs, logId).Set(float64(entryId))
+	frontierMu.Unlock()
 }
 
 // SetActiveSegmentNodes marks each node of an active (writable) segment's quorum

@@ -5540,6 +5540,46 @@ func TestCompactSegmentQuorum_SkipsLaggingNode(t *testing.T) {
 	assert.Equal(t, expectedLAC, result.LastEntryId)
 }
 
+func TestClassifyCompactionFailureReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "data behind",
+			err:  werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg("behind"),
+			want: "data_behind",
+		},
+		{
+			name: "invalid lac alignment",
+			err:  werr.ErrInvalidLACAlignment.WithCauseErrMsg("bad lac"),
+			want: "invalid_lac_alignment",
+		},
+		{
+			name: "retryable",
+			err:  werr.ErrMinioOperationErr.WithCauseErrMsg("timeout"),
+			want: "transient",
+		},
+		{
+			name: "deadline",
+			err:  context.DeadlineExceeded,
+			want: "transient",
+		},
+		{
+			name: "other",
+			err:  errors.New("plain failure"),
+			want: "other",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, classifyCompactionFailureReason(tt.err))
+		})
+	}
+}
+
 // === doCloseWritingAndUpdateMetaIfNecessaryUnsafe tests ===
 
 func TestDoCloseWriting_NotWritable(t *testing.T) {

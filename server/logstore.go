@@ -671,20 +671,41 @@ func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootP
 	// end-to-end: a notify arriving after the truncate GC removed the segment's objects finds
 	// no footer and cannot resurrect the reaped directory.
 	if l.storageClient == nil {
+		logNs := bucketName + "/" + rootPath
+		logIdStr := strconv.FormatInt(logId, 10)
+		metrics.WpCompactedCleanupFooterFailuresTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, "no_storage_client").Inc()
 		return werr.ErrInternalError.WithCauseErrMsg("no object storage client; cannot verify compacted footer")
 	}
 	footerOk, footerErr := compactedFooterExists(ctx, l.storageClient, bucketName, rootPath, logId, segmentId)
 	if footerErr != nil {
+		logNs := bucketName + "/" + rootPath
+		logIdStr := strconv.FormatInt(logId, 10)
+		metrics.WpCompactedCleanupFooterFailuresTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupFooterFailureTransient).Inc()
 		return footerErr
 	}
 	if !footerOk {
+		logNs := bucketName + "/" + rootPath
+		logIdStr := strconv.FormatInt(logId, 10)
+		metrics.WpCompactedCleanupFooterFailuresTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupFooterFailureMissingFooter).Inc()
 		logger.Ctx(ctx).Warn("NotifySegmentCompacted: compacted footer not found; refusing to write mark",
 			zap.String("bucket", bucketName), zap.String("rootPath", rootPath),
 			zap.Int64("logId", logId), zap.Int64("segId", segmentId))
 		return werr.ErrSegmentNotFound.WithCauseErrMsg("compacted footer not found in object storage; segment is not durably compacted")
 	}
+	markedBefore := hasCompactedMark(dir)
 	if err := writeCompactedMark(ctx, dir); err != nil {
 		return err
+	}
+	if !markedBefore {
+		logNs := bucketName + "/" + rootPath
+		logIdStr := strconv.FormatInt(logId, 10)
+		metrics.WpCompactedCleanupMarksTotal.WithLabelValues(metrics.NodeID, logNs, logIdStr, compactedCleanupSourcePush).Inc()
+		logger.Ctx(ctx).Info("NotifySegmentCompacted: compacted mark written",
+			zap.String("bucket", bucketName),
+			zap.String("rootPath", rootPath),
+			zap.String("source", compactedCleanupSourcePush),
+			zap.Int64("logId", logId),
+			zap.Int64("segId", segmentId))
 	}
 	// Feed the event-driven drop queue so the local data.log is reclaimed on the next
 	// maintenance tick, without waiting for the low-frequency reconcile walk.

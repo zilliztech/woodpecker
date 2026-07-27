@@ -3044,6 +3044,290 @@
       ],
       "title": "Cost",
       "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 105,
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 9
+          },
+          "id": 106,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_bytes_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (log_id, source)",
+              "legendFormat": "logID={{log_id}} source={{source}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Compacted Cleanup Reclaimed Bytes Rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 9
+          },
+          "id": 107,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_files_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (log_id, source)",
+              "legendFormat": "reclaimed logID={{log_id}} source={{source}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_marks_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (log_id, source)",
+              "legendFormat": "marks logID={{log_id}} source={{source}}",
+              "refId": "B"
+            }
+          ],
+          "title": "Compacted Cleanup Files & Marks Rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 9
+          },
+          "id": 108,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_footer_failures_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (log_id, reason)",
+              "legendFormat": "logID={{log_id}} reason={{reason}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Compacted Cleanup Footer Failure Rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 17
+          },
+          "id": 109,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "woodpecker_server_node_lifecycle_state{job=~\"$server_job\"}",
+              "legendFormat": "node={{node_id}} state={{state}}",
+              "refId": "A"
+            },
+            {
+              "expr": "woodpecker_server_node_decommission_has_local_data{job=~\"$server_job\"}",
+              "legendFormat": "node={{node_id}} has_local_data",
+              "refId": "B"
+            },
+            {
+              "expr": "woodpecker_server_node_decommission_safe_to_terminate{job=~\"$server_job\"}",
+              "legendFormat": "node={{node_id}} safe_to_terminate",
+              "refId": "C"
+            }
+          ],
+          "title": "Node Decommission Progress",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 17
+          },
+          "id": 110,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "woodpecker_server_node_decommission_remaining_processors{job=~\"$server_job\"}",
+              "legendFormat": "node={{node_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Node Decommission Remaining Processors",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Compacted Cleanup & Decommission",
+      "type": "row"
     }
   ],
   "refresh": "5s",
