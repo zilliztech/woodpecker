@@ -1161,6 +1161,10 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "finalize", status).Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "finalize", status).Observe(float64(time.Since(startTime).Milliseconds()))
 	}()
+	if lac < -1 {
+		return w.lastEntryID.Load(), werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("invalid finalize LAC %d: must be >= -1", lac))
+	}
 
 	w.finalizeMu.Lock()
 	defer w.finalizeMu.Unlock()
