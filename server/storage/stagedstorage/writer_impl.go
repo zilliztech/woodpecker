@@ -1166,8 +1166,20 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 	defer w.finalizeMu.Unlock()
 
 	if w.finalized.Load() {
-		// if already finalized, return fast
-		logger.Ctx(ctx).Info("run: received finalize signal, but it already finalized,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", w)))
+		// A finalized replica may intentionally be behind lac, but the durable
+		// global target recorded in its footer must match an idempotent retry.
+		if w.recoveredFooter == nil || w.recoveredFooter.LAC != lac {
+			existingLAC := int64(-1)
+			if w.recoveredFooter != nil {
+				existingLAC = w.recoveredFooter.LAC
+			}
+			return w.lastEntryID.Load(), werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+				fmt.Sprintf("finalized footer LAC %d != requested LAC %d", existingLAC, lac))
+		}
+		logger.Ctx(ctx).Info("run: received idempotent finalize signal for existing target, skip",
+			zap.String("SegmentImplInst", fmt.Sprintf("%p", w)),
+			zap.Int64("localLastEntryId", w.lastEntryID.Load()),
+			zap.Int64("lac", lac))
 		return w.lastEntryID.Load(), nil
 	}
 

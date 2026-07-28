@@ -26,7 +26,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/retry"
-	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 // completionManager owns the segment completion lifecycle.
@@ -97,36 +97,59 @@ func (cm *completionManager) run(ctx context.Context) {
 
 func (cm *completionManager) executeWithRetry(ctx context.Context) error {
 	s := cm.segment
-	var lastFlushedEntryId int64 = -1
+	var quorumInfo *proto.QuorumInfo
+	var targetLAC int64 = -1
 
-	// Phase 1 (no lock): fence + complete quorum RPCs with retry
-	retryErr := retry.Do(ctx, func() error {
+	// Phase 1 (no lock): establish one authoritative target LAC. Fence may be
+	// retried, but once it succeeds the target is frozen for all Complete retries.
+	prepareErr := retry.Do(ctx, func() error {
 		var err error
-		lastFlushedEntryId, err = s.doComplete(ctx)
+		quorumInfo, targetLAC, err = s.prepareComplete(ctx)
 		return err
 	}, retry.Attempts(3), retry.Sleep(500*time.Millisecond), retry.MaxSleepTime(5*time.Second))
-
-	if retryErr != nil {
-		logger.Ctx(ctx).Warn("segment complete failed after retries",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.Error(retryErr))
-		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d complete failed after retries", s.segmentId))
+	if prepareErr != nil {
+		return cm.failAndCloseWithoutMeta(ctx, targetLAC, prepareErr)
 	}
 
-	// Phase 2 (with lock): CAS, fast-fail ops, stop executor, update metadata
+	// Phase 2 (no lock): retry only the Complete fanout against the fixed target.
+	completeErr := retry.Do(ctx, func() error {
+		return s.completePrepared(ctx, quorumInfo, targetLAC)
+	}, retry.Attempts(3), retry.Sleep(500*time.Millisecond), retry.MaxSleepTime(5*time.Second))
+	if completeErr != nil {
+		return cm.failAndCloseWithoutMeta(ctx, targetLAC, completeErr)
+	}
+
+	// Phase 3 (with lock): CAS, fast-fail ops, stop executor, update metadata.
+	// Reaching this point proves Aq finalized replicas locally cover targetLAC.
 	s.Lock()
 	defer s.Unlock()
-	closeErr := s.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx, lastFlushedEntryId)
+	closeErr := s.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx, targetLAC)
 	if closeErr != nil {
 		logger.Ctx(ctx).Warn("segment close writing failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId),
-			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
+			zap.Int64("lastFlushedEntryId", targetLAC),
 			zap.Error(closeErr))
 	}
 
-	return werr.Combine(retryErr, closeErr)
+	return closeErr
+}
+
+func (cm *completionManager) failAndCloseWithoutMeta(ctx context.Context, targetLAC int64, completionErr error) error {
+	s := cm.segment
+	logger.Ctx(ctx).Warn("segment complete failed after retries",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segId", s.segmentId),
+		zap.Int64("targetLAC", targetLAC),
+		zap.Error(completionErr))
+	s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d complete failed after retries", s.segmentId))
+
+	// Stop this local writer so it cannot accept more appends, but do not publish
+	// Completed metadata: the required Aq qualified replicas were not established.
+	s.Lock()
+	s.doCloseWritingWithoutMetaUnsafe(ctx, targetLAC)
+	s.Unlock()
+	return completionErr
 }

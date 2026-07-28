@@ -5126,6 +5126,78 @@ func TestCompleteSegmentQuorum_InsufficientResponses(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestCompleteSegmentQuorum_CountsOnlyReplicasCoveringTargetLAC(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient3 := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	const targetLAC = int64(5)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(mockClient3, nil)
+	mockClient1.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).Return(targetLAC, nil)
+	mockClient2.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).Return(targetLAC+1, nil)
+	// Partial finalization is successful locally, but this replica must not count toward Aq.
+	mockClient3.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).Return(targetLAC-1, nil)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+	quorum := &proto.QuorumInfo{Id: 1, Aq: 2, Es: 3, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
+
+	err := impl.completeSegmentQuorum(context.Background(), quorum, targetLAC)
+	assert.NoError(t, err)
+	assert.Equal(t, targetLAC, impl.lastAddConfirmed.Load())
+}
+
+func TestCompleteSegmentQuorum_AllFinalizeButInsufficientCoverageFails(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient3 := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	const targetLAC = int64(5)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(mockClient3, nil)
+	mockClient1.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).Return(targetLAC, nil)
+	mockClient2.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).Return(targetLAC-1, nil)
+	mockClient3.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).Return(targetLAC-2, nil)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+	quorum := &proto.QuorumInfo{Id: 1, Aq: 2, Es: 3, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
+
+	err := impl.completeSegmentQuorum(context.Background(), quorum, targetLAC)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrAppendOpQuorumFailed.Is(err), "expected quorum failure, got %v", err)
+	assert.Equal(t, int64(-1), impl.lastAddConfirmed.Load())
+}
+
 func TestCompleteSegmentQuorum_ContextCancel(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -5395,6 +5467,37 @@ func TestDoComplete_FenceError(t *testing.T) {
 
 	_, err := impl.doComplete(context.Background())
 	assert.Error(t, err)
+}
+
+func TestPrepareComplete_DoesNotLowerKnownConfirmedLAC(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(4), nil)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+	impl.lastAddConfirmed.Store(5)
+
+	_, targetLAC, err := impl.prepareComplete(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(5), targetLAC)
 }
 
 // === compactSegmentQuorum tests ===

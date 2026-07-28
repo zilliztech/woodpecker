@@ -889,28 +889,9 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
 	defer sp.End()
 	s.updateAccessTime()
-	if !s.canWriteState.CompareAndSwap(true, false) {
+	if !s.stopWritingUnsafe(ctx, lastFlushedEntryId) {
 		return nil
 	}
-	// Segment is leaving the writable state -- drop its active-segment node series
-	// so the metric only ever reflects the current active segment of each log.
-	metrics.ClearActiveSegmentNodes(
-		s.logNs,
-		strconv.FormatInt(s.logId, 10),
-		strconv.FormatInt(s.segmentId, 10),
-		s.quorumInfo.GetNodes(),
-	)
-
-	start := time.Now()
-	logIdStr := strconv.FormatInt(s.logId, 10)
-	// fast fail all pending append operations
-	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
-
-	// shutdown segment executor
-	s.executor.Stop(ctx)
-
-	// stop the background LAC syncer (idempotent)
-	s.lacSyncStopOnce.Do(func() { close(s.lacSyncStop) })
 
 	// update metadata as completed
 	currentSegmentMeta := s.segmentMetaCache.Load()
@@ -924,6 +905,8 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		return nil
 	}
 
+	start := time.Now()
+	logIdStr := strconv.FormatInt(s.logId, 10)
 	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()
 	newSegmentMetadata.State = proto.SegmentState_Completed
 	newSegmentMetadata.Size = s.commitedSize.Load() // Update with approximate segment file size, only use for metrics
@@ -955,6 +938,42 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
+}
+
+// doCloseWritingWithoutMetaUnsafe stops the local writable handle after completion
+// fails, but deliberately leaves coordinator metadata Active. Publishing Completed is
+// only valid after Aq replicas have finalized and locally cover the fixed target LAC.
+func (s *segmentHandleImpl) doCloseWritingWithoutMetaUnsafe(ctx context.Context, lastFlushedEntryId int64) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "CloseWithoutMeta")
+	defer sp.End()
+	s.updateAccessTime()
+	s.stopWritingUnsafe(ctx, lastFlushedEntryId)
+}
+
+// stopWritingUnsafe performs the local, metadata-independent half of closing a
+// writable segment. The caller must hold s.Lock().
+func (s *segmentHandleImpl) stopWritingUnsafe(ctx context.Context, lastFlushedEntryId int64) bool {
+	if !s.canWriteState.CompareAndSwap(true, false) {
+		return false
+	}
+	// Segment is leaving the writable state -- drop its active-segment node series
+	// so the metric only ever reflects the current active segment of each log.
+	metrics.ClearActiveSegmentNodes(
+		s.logNs,
+		strconv.FormatInt(s.logId, 10),
+		strconv.FormatInt(s.segmentId, 10),
+		s.quorumInfo.GetNodes(),
+	)
+
+	// fast fail all pending append operations
+	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
+
+	// shutdown segment executor
+	s.executor.Stop(ctx)
+
+	// stop the background LAC syncer (idempotent)
+	s.lacSyncStopOnce.Do(func() { close(s.lacSyncStop) })
+	return true
 }
 
 func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEntryId int64, err error) {
@@ -1074,6 +1093,17 @@ func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {
 // doComplete runs Phase 1 of segment completion (fence + complete quorum RPCs)
 // without holding the segment lock. These are idempotent network calls.
 func (s *segmentHandleImpl) doComplete(ctx context.Context) (int64, error) {
+	quorumInfo, lastAddConfirmed, err := s.prepareComplete(ctx)
+	if err != nil {
+		return -1, err
+	}
+	return lastAddConfirmed, s.completePrepared(ctx, quorumInfo, lastAddConfirmed)
+}
+
+// prepareComplete fences the quorum and fixes the authoritative target LAC for
+// one completion lifecycle. Callers that retry Complete RPCs must reuse the
+// returned target rather than fencing again and changing the target mid-flight.
+func (s *segmentHandleImpl) prepareComplete(ctx context.Context) (*proto.QuorumInfo, int64, error) {
 	// Get quorum information for complete operation
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -1082,7 +1112,7 @@ func (s *segmentHandleImpl) doComplete(ctx context.Context) (int64, error) {
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(err))
-		return -1, err
+		return nil, -1, err
 	}
 
 	// fence before complete
@@ -1093,23 +1123,44 @@ func (s *segmentHandleImpl) doComplete(ctx context.Context) (int64, error) {
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(fencedErr))
-		return -1, fencedErr
+		return nil, -1, fencedErr
 	}
+	lastAddConfirmed = s.preserveKnownCompletionLAC(ctx, lastAddConfirmed)
+	return quorumInfo, lastAddConfirmed, nil
+}
 
+func (s *segmentHandleImpl) preserveKnownCompletionLAC(ctx context.Context, fenceLAC int64) int64 {
+	knownConfirmed := s.lastAddConfirmed.Load()
+	if knownConfirmed <= fenceLAC {
+		return fenceLAC
+	}
+	logger.Ctx(ctx).Warn("Fence result is behind the locally confirmed LAC; preserving the confirmed completion target",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("fenceLAC", fenceLAC),
+		zap.Int64("knownConfirmedLAC", knownConfirmed))
+	return knownConfirmed
+}
+
+func (s *segmentHandleImpl) completePrepared(ctx context.Context, quorumInfo *proto.QuorumInfo, lastAddConfirmed int64) error {
 	logger.Ctx(ctx).Info("Starting quorum complete segment operation",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("quorumId", quorumInfo.Id),
 		zap.Int("nodeCount", len(quorumInfo.Nodes)),
-		zap.Int32("ackQuorum", quorumInfo.Aq))
+		zap.Int32("ackQuorum", quorumInfo.Aq),
+		zap.Int64("targetLAC", lastAddConfirmed))
 
 	// Send CompleteSegment requests to all quorum nodes in parallel
-	return lastAddConfirmed, s.completeSegmentQuorum(ctx, quorumInfo, lastAddConfirmed)
+	return s.completeSegmentQuorum(ctx, quorumInfo, lastAddConfirmed)
 }
 
-// completeSegmentQuorum sends CompleteSegment requests to all quorum nodes
-// and calculates the Log All Committed (LAC) based on majority consensus
+// completeSegmentQuorum sends CompleteSegment requests to all quorum nodes and
+// counts only finalized replicas whose returned local tail covers lac. A behind
+// replica may still finalize successfully for read failover, but cannot count
+// toward the Aq proof required before publishing Completed metadata.
 func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, lac int64) error {
 	nodeCount := len(quorumInfo.Nodes)
 	ackQuorum := int(quorumInfo.Aq)
@@ -1123,7 +1174,8 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	}
 
 	// Collect results from nodes
-	var successResults []int64
+	var finalizedResults []int64
+	var qualifiedResults []int64
 	var lastError error
 
 	for i := 0; i < nodeCount; i++ {
@@ -1138,13 +1190,25 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 					zap.Error(result.err))
 				lastError = result.err
 			} else {
-				successResults = append(successResults, result.lastEntryId)
+				finalizedResults = append(finalizedResults, result.lastEntryId)
 				logger.Ctx(ctx).Info("Successfully completed segment on node",
 					zap.String("logName", s.logName),
 					zap.Int64("logId", s.logId),
 					zap.Int64("segmentId", s.segmentId),
 					zap.String("node", result.node),
-					zap.Int64("lastEntryId", result.lastEntryId))
+					zap.Int64("lastEntryId", result.lastEntryId),
+					zap.Int64("targetLAC", lac))
+				if result.lastEntryId >= lac {
+					qualifiedResults = append(qualifiedResults, result.lastEntryId)
+				} else {
+					logger.Ctx(ctx).Warn("Replica finalized but does not cover target LAC; excluding it from completion quorum",
+						zap.String("logName", s.logName),
+						zap.Int64("logId", s.logId),
+						zap.Int64("segmentId", s.segmentId),
+						zap.String("node", result.node),
+						zap.Int64("localLastEntryId", result.lastEntryId),
+						zap.Int64("targetLAC", lac))
+				}
 			}
 		case <-ctx.Done():
 			return ctx.Err()
@@ -1152,17 +1216,17 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	}
 
 	// Check if we have enough successful responses for ack quorum
-	if len(successResults) < ackQuorum {
-		logger.Ctx(ctx).Warn("Insufficient successful responses for quorum complete",
+	if len(qualifiedResults) < ackQuorum {
+		logger.Ctx(ctx).Warn("Insufficient qualified responses for quorum complete",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
-			zap.Int("successCount", len(successResults)),
+			zap.Int("finalizedCount", len(finalizedResults)),
+			zap.Int("qualifiedCount", len(qualifiedResults)),
 			zap.Int("requiredAckQuorum", ackQuorum))
-		if lastError != nil {
-			return lastError
-		}
-		return werr.ErrAppendOpQuorumFailed.WithCauseErrMsg("insufficient successful complete responses")
+		return werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
+			fmt.Sprintf("insufficient qualified complete responses: qualified=%d finalized=%d required=%d lastError=%v",
+				len(qualifiedResults), len(finalizedResults), ackQuorum, lastError))
 	}
 
 	logger.Ctx(ctx).Info("Quorum complete responses collected",
@@ -1170,9 +1234,11 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("lac", lac),
-		zap.Int("successCount", len(successResults)),
+		zap.Int("finalizedCount", len(finalizedResults)),
+		zap.Int("qualifiedCount", len(qualifiedResults)),
 		zap.Int("ackQuorum", ackQuorum),
-		zap.Int64s("allResults", successResults))
+		zap.Int64s("allFinalizedResults", finalizedResults),
+		zap.Int64s("qualifiedResults", qualifiedResults))
 	s.lastAddConfirmed.Store(lac)
 	return nil
 }
@@ -1678,6 +1744,7 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 			zap.Error(fencedErr))
 		return -1, fencedErr
 	}
+	lastEntryId = s.preserveKnownCompletionLAC(ctx, lastEntryId)
 
 	completeErr := s.completeSegmentQuorum(ctx, quorumInfo, lastEntryId)
 	if completeErr != nil {

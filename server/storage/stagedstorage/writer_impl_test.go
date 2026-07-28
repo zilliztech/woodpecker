@@ -38,6 +38,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
+	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
@@ -638,6 +639,62 @@ func TestStagedFileWriter_Finalize_Idempotent(t *testing.T) {
 	assert.Equal(t, lastId1, lastId2)
 
 	writer.Close(context.Background())
+}
+
+func TestStagedFileWriter_Finalize_AlreadyFinalizedDifferentLACFails(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+
+	for i := int64(0); i < 3; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte("test data"), nil)
+		require.NoError(t, err)
+	}
+
+	lastID, err := writer.Finalize(context.Background(), 2)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), lastID)
+
+	lastID, err = writer.Finalize(context.Background(), 1)
+	assert.Equal(t, int64(2), lastID)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrInvalidLACAlignment.Is(err), "expected LAC mismatch, got %v", err)
+	assert.Equal(t, int64(2), writer.recoveredFooter.LAC)
+
+	writer.Close(context.Background())
+}
+
+func TestStagedFileWriter_Finalize_PartialReplicaKeepsGlobalLACForReadFailover(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+
+	for i := int64(0); i < 2; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte("test data"), nil)
+		require.NoError(t, err)
+	}
+
+	// The replica only covers [0,1], but it can still be frozen with the global
+	// target LAC=2. The coordinator must not count its returned local tail toward Aq.
+	lastID, err := writer.Finalize(context.Background(), 2)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), lastID)
+	assert.Equal(t, int64(2), writer.recoveredFooter.LAC)
+	require.NoError(t, writer.Close(context.Background()))
+
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer reader.Close(context.Background())
+
+	result, err := reader.ReadNextBatchAdv(context.Background(), storage.ReaderOpt{
+		StartEntryID:    2,
+		MaxBatchEntries: 1,
+	}, nil)
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrEntryNotFound.Is(err), "missing suffix should fail over to another replica, got %v", err)
 }
 
 func TestStagedFileWriter_Finalize_EmptyWriter(t *testing.T) {

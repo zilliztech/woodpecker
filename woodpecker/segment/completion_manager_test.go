@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/meta"
@@ -83,6 +84,8 @@ func TestCompletionManager_TriggerAndWait(t *testing.T) {
 	// Verify segment is no longer writable
 	writable, _ := seg.IsWritable(context.Background())
 	assert.False(t, writable)
+	assert.Equal(t, proto.SegmentState_Completed, seg.segmentMetaCache.Load().Metadata.State)
+	assert.Equal(t, int64(5), seg.segmentMetaCache.Load().Metadata.LastEntryId)
 }
 
 // TestCompletionManager_RetryOnFailureThenSucceed tests that completion retries on transient failure
@@ -111,6 +114,24 @@ func TestCompletionManager_RetryOnFailureThenSucceed(t *testing.T) {
 	assert.False(t, writable)
 }
 
+func TestCompletionManager_CompleteRetryKeepsFixedTargetLAC(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	const targetLAC = int64(5)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Return(targetLAC, nil).Once()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
+		Return(int64(-1), assert.AnError).Once()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
+		Return(targetLAC, nil).Once()
+
+	seg.completionMgr.TriggerCompletion()
+	err := seg.completionMgr.WaitForCompletion()
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentState_Completed, seg.segmentMetaCache.Load().Metadata.State)
+	assert.Equal(t, targetLAC, seg.segmentMetaCache.Load().Metadata.LastEntryId)
+}
+
 // TestCompletionManager_AllRetriesExhausted tests that when all retries fail,
 // WaitForCompletion returns an error and writer invalidation is triggered.
 func TestCompletionManager_AllRetriesExhausted(t *testing.T) {
@@ -131,6 +152,37 @@ func TestCompletionManager_AllRetriesExhausted(t *testing.T) {
 	assert.True(t, invalidated, "Writer should be invalidated after retry exhaustion")
 
 	// Segment should still transition to non-writable (close writing runs regardless)
+	writable, _ := seg.IsWritable(context.Background())
+	assert.False(t, writable)
+}
+
+// TestCompletionManager_CompleteRetriesExhaustedDoesNotPublishCompleted covers
+// the case where fence establishes a target LAC but every Complete pass has too
+// few replicas whose returned local tail covers that target. The local writer is
+// stopped, while metadata must remain Active for recovery rather than advertising
+// an uncompacted Completed segment.
+func TestCompletionManager_CompleteRetriesExhaustedDoesNotPublishCompleted(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	const targetLAC = int64(5)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Return(targetLAC, nil).Once()
+	// Aq=1 in this fixture, but the only replica is a successfully finalized
+	// partial replica and therefore does not qualify.
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
+		Return(targetLAC-1, nil).Times(3)
+
+	invalidated := false
+	seg.SetWriterInvalidationNotifier(context.Background(), func(ctx context.Context, reason string) {
+		invalidated = true
+	})
+
+	seg.completionMgr.TriggerCompletion()
+	err := seg.completionMgr.WaitForCompletion()
+	require.Error(t, err)
+	assert.True(t, invalidated)
+	assert.Equal(t, proto.SegmentState_Active, seg.segmentMetaCache.Load().Metadata.State)
+	assert.Equal(t, int64(-1), seg.segmentMetaCache.Load().Metadata.LastEntryId)
 	writable, _ := seg.IsWritable(context.Background())
 	assert.False(t, writable)
 }
