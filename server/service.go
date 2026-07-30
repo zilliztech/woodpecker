@@ -1024,6 +1024,8 @@ func (s *Server) waitAndStartCurrentNode(ctx context.Context) error {
 
 		resolvedIP := wpNet.ResolveAdvertiseAddr(s.serverConfig.AdvertiseAddr)
 		if resolvedIP != nil {
+			// Pin the resolved IP so memberlist does not perform a second DNS lookup.
+			s.serverConfig.AdvertiseAddr = resolvedIP.String()
 			break
 		}
 
