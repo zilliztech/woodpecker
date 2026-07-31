@@ -1425,42 +1425,44 @@ func (s *segmentHandleImpl) completeSegmentOnNode(ctx context.Context, node stri
 	}
 }
 
-// calculateLAC calculates the Log All Committed (LAC) based on the quorum responses.
-// LAC is the highest entry ID that is guaranteed to be committed on a majority of nodes.
-// For example: if nodes return [4, 6, 7] and ackQuorum is 2, then LAC is 6
-// because entries 1-6 are committed on at least 2 nodes (majority).
-func (s *segmentHandleImpl) calculateLAC(results []int64, ackQuorum int) int64 {
-	// Filter out negative values (e.g. -1 returned by nodes with no data).
-	// Only non-negative entry IDs represent real committed data.
-	validResults := make([]int64, 0, len(results))
-	for _, r := range results {
-		if r >= 0 {
-			validResults = append(validResults, r)
-		}
-	}
-	if len(validResults) == 0 {
-		return -1
+// resolveFenceLAC picks the completion target from the fence responses: the highest
+// entry ID that at least ackQuorum responding replicas hold. Sorted ascending, that is
+// the ackQuorum-th largest element, so exactly ackQuorum replicas cover it and no
+// larger value does.
+//
+// Every element is a successful fence response -- failed nodes take the result.err
+// branch and never reach here -- so a -1 is an honest "I hold nothing" vote against
+// every entry ID >= 0 and must be counted. Dropping it would shrink the sample while
+// ackQuorum stays fixed, and the resulting target could exceed what any ack quorum
+// covers; completion would then retry forever, because a behind replica has no way to
+// catch up to an entry it never received.
+//
+// Fewer than ackQuorum responses means no value can be shown to have quorum coverage,
+// which is a failure to prove rather than a reason to pick a smaller element.
+func (s *segmentHandleImpl) resolveFenceLAC(results []int64, ackQuorum int) (int64, error) {
+	if len(results) < ackQuorum {
+		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
+			fmt.Sprintf("insufficient successful fence responses: got %d, need %d", len(results), ackQuorum))
 	}
 
-	// Sort in ascending order
-	sort.Slice(validResults, func(i, j int) bool {
-		return validResults[i] < validResults[j]
+	// Sort a copy in ascending order, leaving the caller's slice untouched.
+	sorted := make([]int64, len(results))
+	copy(sorted, results)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
 	})
 
-	// LAC is the (len - ackQuorum)th element, ensuring at least ackQuorum nodes
-	// have committed up to this entry.
-	lacIndex := len(validResults) - ackQuorum
-	if lacIndex < 0 {
-		lacIndex = 0
-	}
-	return validResults[lacIndex]
+	return sorted[len(sorted)-ackQuorum], nil
 }
 
 // fenceSegmentQuorum sends FenceSegment requests to all quorum nodes
 // and calculates the Log All Committed (LAC) based on majority consensus
 func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo) (int64, error) {
-	nodeCount := len(quorumInfo.Nodes)                         // always es=len(nodes)
-	ensembleCoverage := int(quorumInfo.Es - quorumInfo.Aq + 1) // currently always es=3=wq,aq=2, so ec=es-aq+1=2=aq
+	nodeCount := len(quorumInfo.Nodes) // always es=len(nodes)
+	// Requiring aq responses subsumes the ensemble-coverage bound ec=es-aq+1: aq >= ec
+	// always holds, so the fence still intersects every possible ack quorum. For the
+	// reachable ensemble sizes (3 and 5) the two are equal, so the threshold is unchanged.
+	ackQuorum := int(quorumInfo.Aq)
 
 	// Channel to collect results from all nodes
 	resultChan := make(chan nodeFenceResult, nodeCount)
@@ -1499,22 +1501,21 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 		}
 	}
 
-	// Check if we have enough successful responses for ack quorum
-	if len(successResults) < ensembleCoverage {
+	// Resolve the completion target from the successful responses. This also enforces
+	// that enough nodes responded to prove quorum coverage in the first place.
+	lac, resolveErr := s.resolveFenceLAC(successResults, ackQuorum)
+	if resolveErr != nil {
 		logger.Ctx(ctx).Warn("Insufficient successful responses for quorum fence",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Int("successCount", len(successResults)),
-			zap.Int("requiredEC", ensembleCoverage))
+			zap.Int("requiredAckQuorum", ackQuorum))
 		if lastError != nil {
 			return -1, lastError
 		}
-		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg("insufficient successful fence responses")
+		return -1, resolveErr
 	}
-
-	// Calculate LAC (Log All Committed) from successful results
-	lac := s.calculateLAC(successResults, ensembleCoverage)
 
 	logger.Ctx(ctx).Info("Calculated LAC from quorum fence responses",
 		zap.String("logName", s.logName),
@@ -1522,7 +1523,7 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("lac", lac),
 		zap.Int("successCount", len(successResults)),
-		zap.Int("ensembleCoverage", ensembleCoverage),
+		zap.Int("ackQuorum", ackQuorum),
 		zap.Int64s("allResults", successResults))
 
 	return lac, nil

@@ -3150,7 +3150,7 @@ func TestSegmentHandle_HandleAppendRequestFailure_RetrySubmitFailed(t *testing.T
 	workerBlocked.Done()
 }
 
-func TestCalculateLAC(t *testing.T) {
+func TestResolveFenceLAC(t *testing.T) {
 	s := &segmentHandleImpl{}
 
 	tests := []struct {
@@ -3158,6 +3158,7 @@ func TestCalculateLAC(t *testing.T) {
 		results   []int64
 		ackQuorum int
 		expected  int64
+		wantErr   bool
 	}{
 		{
 			name:      "normal 3 nodes",
@@ -3172,16 +3173,20 @@ func TestCalculateLAC(t *testing.T) {
 			expected:  5,
 		},
 		{
-			name:      "one node empty returns -1",
+			// Entry 0 lives on a single replica, so it was never acked and cannot
+			// become the completion target: only that one replica could ever cover it.
+			name:      "one node empty holds the target back",
 			results:   []int64{0, -1},
 			ackQuorum: 2,
-			expected:  0,
+			expected:  -1,
 		},
 		{
-			name:      "bug scenario: fence with [0, -1] ackQuorum=2",
-			results:   []int64{0, -1},
+			// The production wedge: fence saw [0,-1,-1] and returned 0, which only one
+			// of three replicas could finalize at, so completion never reached quorum.
+			name:      "regression: fence with [0, -1, -1] ackQuorum=2",
+			results:   []int64{0, -1, -1},
 			ackQuorum: 2,
-			expected:  0,
+			expected:  -1,
 		},
 		{
 			name:      "two valid one empty",
@@ -3193,7 +3198,7 @@ func TestCalculateLAC(t *testing.T) {
 			name:      "multiple entries with one empty node",
 			results:   []int64{2, -1},
 			ackQuorum: 2,
-			expected:  2,
+			expected:  -1,
 		},
 		{
 			name:      "all nodes empty",
@@ -3208,10 +3213,10 @@ func TestCalculateLAC(t *testing.T) {
 			expected:  -1,
 		},
 		{
-			name:      "empty results",
+			name:      "empty results cannot prove coverage",
 			results:   []int64{},
 			ackQuorum: 2,
-			expected:  -1,
+			wantErr:   true,
 		},
 		{
 			name:      "single valid node",
@@ -3220,10 +3225,12 @@ func TestCalculateLAC(t *testing.T) {
 			expected:  0,
 		},
 		{
-			name:      "ackQuorum exceeds valid count uses index 0",
+			// Fewer responses than the ack quorum proves nothing; the old clamp
+			// returned 3 here, a target only one replica could ever cover.
+			name:      "fewer responses than ackQuorum cannot prove coverage",
 			results:   []int64{3},
 			ackQuorum: 2,
-			expected:  3,
+			wantErr:   true,
 		},
 		{
 			name:      "three valid nodes ackQuorum=2",
@@ -3251,12 +3258,70 @@ func TestCalculateLAC(t *testing.T) {
 			original := make([]int64, len(tt.results))
 			copy(original, tt.results)
 
-			got := s.calculateLAC(tt.results, tt.ackQuorum)
-			assert.Equal(t, tt.expected, got)
+			got, err := s.resolveFenceLAC(tt.results, tt.ackQuorum)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Equal(t, int64(-1), got)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, got)
+			}
 
 			// verify input slice is not mutated
 			assert.Equal(t, original, tt.results, "input slice should not be mutated")
 		})
+	}
+}
+
+// TestResolveFenceLACCoverageInvariant exhaustively checks the property the completion
+// path depends on: the returned target must be covered by at least ackQuorum responding
+// replicas, and must be the largest value with that coverage. A target above the bound
+// can never be met -- a behind replica has no way to catch up to an entry it never
+// received -- so completion would retry forever and wedge the log.
+func TestResolveFenceLACCoverageInvariant(t *testing.T) {
+	s := &segmentHandleImpl{}
+	values := []int64{-1, 0, 1, 3}
+
+	coveredBy := func(results []int64, v int64) int {
+		n := 0
+		for _, r := range results {
+			if r >= v {
+				n++
+			}
+		}
+		return n
+	}
+
+	var walk func(prefix []int64, depth int)
+	walk = func(prefix []int64, depth int) {
+		if depth == 0 {
+			for ackQuorum := 1; ackQuorum <= len(prefix); ackQuorum++ {
+				lac, err := s.resolveFenceLAC(prefix, ackQuorum)
+				if !assert.NoError(t, err, "results=%v ackQuorum=%d", prefix, ackQuorum) {
+					continue
+				}
+
+				assert.GreaterOrEqual(t, coveredBy(prefix, lac), ackQuorum,
+					"results=%v ackQuorum=%d: lac=%d is covered by too few replicas", prefix, ackQuorum, lac)
+
+				// No larger candidate may reach the same coverage, i.e. lac is maximal
+				// and the fence is not truncating acked data.
+				for _, cand := range prefix {
+					if cand > lac {
+						assert.Less(t, coveredBy(prefix, cand), ackQuorum,
+							"results=%v ackQuorum=%d: lac=%d but %d also has quorum coverage", prefix, ackQuorum, lac, cand)
+					}
+				}
+			}
+			return
+		}
+		for _, v := range values {
+			walk(append(prefix, v), depth-1)
+		}
+	}
+
+	for n := 1; n <= 4; n++ {
+		walk(make([]int64, 0, n), n)
 	}
 }
 
