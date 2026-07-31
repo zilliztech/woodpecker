@@ -5746,6 +5746,41 @@ func TestFenceSegmentQuorum_InsufficientResponses(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestFenceSegmentQuorum_FewerNodesThanAckQuorum covers the case where every node
+// answers successfully yet the responses still cannot prove ack-quorum coverage, so
+// there is no node error to surface. Fence must refuse rather than hand completion a
+// target only a minority of replicas holds.
+func TestFenceSegmentQuorum_FewerNodesThanAckQuorum(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(5), nil)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+
+	// One node cannot establish coverage for an ack quorum of two.
+	quorum := &proto.QuorumInfo{Id: 1, Es: 1, Aq: 2, Wq: 1, Nodes: []string{"node1"}}
+	lastEntryId, err := impl.fenceSegmentQuorum(context.Background(), quorum)
+	assert.Error(t, err)
+	assert.Equal(t, int64(-1), lastEntryId)
+	assert.Contains(t, err.Error(), "insufficient successful fence responses")
+}
+
 // === syncLACToQuorumAsync tests ===
 
 func TestSyncLACToQuorumAsync_GetQuorumInfoError(t *testing.T) {
