@@ -52,8 +52,11 @@ func TestEarliestAck(t *testing.T) {
 // silently misses entries and the I1 assertion can never be satisfied.
 func TestEarliestAckIsAtOrBeforeEveryRecord(t *testing.T) {
 	recs := []AckRecord{
-		{SegmentId: 12, EntryId: 4}, {SegmentId: 9, EntryId: 7},
-		{SegmentId: 12, EntryId: 0}, {SegmentId: 30, EntryId: 1}, {SegmentId: 9, EntryId: 9},
+		{SegmentId: 12, EntryId: 4},
+		{SegmentId: 9, EntryId: 7},
+		{SegmentId: 12, EntryId: 0},
+		{SegmentId: 30, EntryId: 1},
+		{SegmentId: 9, EntryId: 9},
 	}
 	seg, ent := earliestAck(recs)
 	for _, r := range recs {
