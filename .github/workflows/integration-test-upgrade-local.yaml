@@ -42,17 +42,34 @@ jobs:
 
       - name: Start dependencies (etcd + MinIO)
         run: |
+          # Pull before `up` so a registry hiccup can be retried on its own: a Docker Hub
+          # timeout used to fail the job before a single test ran (#256). Bounded — three
+          # attempts with backoff, then give up. Never retry indefinitely.
+          for attempt in 1 2 3; do
+            if docker compose -f .github/docker-compose-ci.yaml pull; then break; fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::docker compose pull failed after 3 attempts"
+              exit 1
+            fi
+            echo "pull attempt $attempt failed; retrying in $((attempt * 10))s"
+            sleep $((attempt * 10))
+          done
           docker compose -f .github/docker-compose-ci.yaml up -d
-          echo "Waiting for etcd..."
-          until docker inspect --format='{{.State.Health.Status}}' ci-etcd 2>/dev/null | grep -q healthy; do
-            sleep 2
+          # Bounded health waits too. An unbounded `until` loop here would burn the whole
+          # job timeout and surface as a cancelled job rather than a clear error.
+          for svc in ci-etcd ci-minio; do
+            echo "Waiting for $svc..."
+            for i in $(seq 60); do
+              if [ "$(docker inspect --format='{{.State.Health.Status}}' "$svc" 2>/dev/null)" = healthy ]; then break; fi
+              if [ "$i" = 60 ]; then
+                echo "::error::$svc did not become healthy within 120s"
+                docker logs "$svc" 2>&1 | tail -50
+                exit 1
+              fi
+              sleep 2
+            done
+            echo "$svc is ready"
           done
-          echo "etcd is ready"
-          echo "Waiting for MinIO..."
-          until docker inspect --format='{{.State.Health.Status}}' ci-minio 2>/dev/null | grep -q healthy; do
-            sleep 2
-          done
-          echo "MinIO is ready"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
