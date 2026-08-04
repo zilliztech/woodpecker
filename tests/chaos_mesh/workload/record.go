@@ -17,6 +17,20 @@ type AckRecord struct {
 	Seq         int64  `json:"seq"`
 }
 
+// earliestAck returns the lowest (SegmentId, EntryId) in recs — the point a verify reader
+// must start from to still see every ack in recs. Callers pass one phase's records, so this
+// keeps read-back proportional to that phase instead of to the whole reused log (#259).
+// recs must be non-empty.
+func earliestAck(recs []AckRecord) (segmentId, entryId int64) {
+	segmentId, entryId = recs[0].SegmentId, recs[0].EntryId
+	for _, r := range recs[1:] {
+		if r.SegmentId < segmentId || (r.SegmentId == segmentId && r.EntryId < entryId) {
+			segmentId, entryId = r.SegmentId, r.EntryId
+		}
+	}
+	return segmentId, entryId
+}
+
 type recorder struct {
 	mu sync.Mutex
 	f  *os.File

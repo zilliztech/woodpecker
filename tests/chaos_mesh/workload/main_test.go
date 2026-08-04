@@ -164,14 +164,21 @@ func runVerifyPhase(ctx context.Context, t *testing.T, cli woodpecker.Client) {
 		sort.Slice(want, func(i, j int) bool { return want[i].Seq < want[j].Seq })
 		h, err := cli.OpenLog(ctx, name)
 		require.NoError(t, err)
-		earliest := log.EarliestLogMessageID()
-		r, err := h.OpenLogReader(ctx, &earliest, "verify-"+name)
-		require.NoError(t, err)
 
 		ackedHash := map[[2]int64]string{}
 		for _, w := range want {
 			ackedHash[[2]int64{w.SegmentId, w.EntryId}] = w.PayloadHash
 		}
+
+		// Start at this phase's earliest ack, not at the head of the log. The logs are reused
+		// across every scenario while the record file is truncated at each warmup, so reading
+		// from EarliestLogMessageID() made scenario k re-read everything scenarios 1..k-1 wrote
+		// just to reach its own records — verify grew 47s -> 556s across five scenarios and the
+		// suite could not finish inside timeout-minutes (#259). The start point is inclusive.
+		fromSeg, fromEntry := earliestAck(want)
+		from := log.LogMessageId{SegmentId: fromSeg, EntryId: fromEntry}
+		r, err := h.OpenLogReader(ctx, &from, "verify-"+name)
+		require.NoError(t, err)
 
 		seen := map[[2]int64]bool{}
 		var lastSeg, lastEntry int64 = -1, -1
@@ -199,6 +206,7 @@ func runVerifyPhase(ctx context.Context, t *testing.T, cli woodpecker.Client) {
 		require.Equal(t, len(ackedHash), len(seen),
 			"I1 VIOLATION: %d acked entries missing in %s", len(ackedHash)-len(seen), name)
 		_ = r.Close(ctx)
-		t.Logf("VERIFY %s: %d acked entries durable, ordered, hash-matched", name, len(seen))
+		t.Logf("VERIFY %s: %d acked entries durable, ordered, hash-matched (from seg=%d entry=%d)",
+			name, len(seen), from.SegmentId, from.EntryId)
 	}
 }
