@@ -448,6 +448,9 @@ type fakeLogStore struct {
 	evictInstanceFn   func(ctx context.Context, bucketName, rootPath string) error
 	notifyCompactedFn func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) error
 	evictReaderFn     func(ctx context.Context, bucketName, rootPath string, logId int64, segId int64) error
+
+	retired        bool // set by MarkRetired
+	writesRejected bool // set by RejectNewWrites, cleared by AllowNewWrites
 }
 
 func (f *fakeLogStore) Start() error       { return nil }
@@ -510,8 +513,9 @@ func (f *fakeLogStore) NotifySegmentCompacted(ctx context.Context, bucketName, r
 }
 
 func (f *fakeLogStore) GetActiveProcessorCount() int { return 0 }
-func (f *fakeLogStore) RejectNewWrites()             {}
-func (f *fakeLogStore) AllowNewWrites()              {}
+func (f *fakeLogStore) RejectNewWrites()             { f.writesRejected = true }
+func (f *fakeLogStore) AllowNewWrites()              { f.writesRejected = false }
+func (f *fakeLogStore) MarkRetired()                 { f.retired = true }
 func (f *fakeLogStore) HasLocalSegmentData() bool    { return false }
 func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64) error {
 	if f.evictLogFn != nil {

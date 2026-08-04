@@ -73,6 +73,7 @@ type LogStore interface {
 	GetActiveProcessorCount() int
 	RejectNewWrites()
 	AllowNewWrites()
+	MarkRetired()
 	HasLocalSegmentData() bool
 	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error
 	EvictInstance(ctx context.Context, bucketName string, rootPath string) error
@@ -110,8 +111,11 @@ type logStore struct {
 	maintenance      *NodeMaintenanceManager
 	compactedCleanup *compactedFileCleanupTask // event queue fed by NotifySegmentCompacted; drop path for compacted data.log
 	stopped          atomic.Bool
-	rejectWrites     atomic.Bool  // separate from stopped: only blocks new writes during decommission, not reads
-	diskRejectBps    atomic.Int32 // rejection probability in basis points (0..10000), set by diskWatermarkTask; gates new appends only
+	rejectWrites     atomic.Bool // separate from stopped: only blocks new writes during decommission, not reads
+	retired          atomic.Bool // set on reaching the terminal decommissioned state; additionally refuses
+	// segment-lifecycle participation (fence/complete/compact/LAC). One-way latch:
+	// decommissioned is terminal, CancelDecommission refuses it.
+	diskRejectBps atomic.Int32 // rejection probability in basis points (0..10000), set by diskWatermarkTask; gates new appends only
 }
 
 // admitAppend returns false when the disk-watermark policy rejects this append.
@@ -483,6 +487,9 @@ func (l *logStore) CompleteSegment(ctx context.Context, bucketName string, rootP
 	if l.stopped.Load() {
 		return -1, werr.ErrLogStoreShutdown
 	}
+	if l.retired.Load() {
+		return -1, werr.ErrLogStoreRetired
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompleteSegment")
 	defer sp.End()
 	logIdStr := strconv.FormatInt(logId, 10)
@@ -508,6 +515,9 @@ func (l *logStore) CompleteSegment(ctx context.Context, bucketName string, rootP
 func (l *logStore) FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
 	if l.stopped.Load() {
 		return -1, werr.ErrLogStoreShutdown
+	}
+	if l.retired.Load() {
+		return -1, werr.ErrLogStoreRetired
 	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "FenceSegment")
 	defer sp.End()
@@ -608,6 +618,9 @@ func (l *logStore) GetSegmentBlockCount(ctx context.Context, bucketName string, 
 func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 	if l.stopped.Load() {
 		return nil, werr.ErrLogStoreShutdown
+	}
+	if l.retired.Load() {
+		return nil, werr.ErrLogStoreRetired
 	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompactSegment")
 	defer sp.End()
@@ -743,6 +756,9 @@ func (l *logStore) UpdateLastAddConfirmed(ctx context.Context, bucketName string
 	if l.stopped.Load() {
 		return werr.ErrLogStoreShutdown
 	}
+	if l.retired.Load() {
+		return werr.ErrLogStoreRetired
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "UpdateLastAddConfirmed")
 	defer sp.End()
 	logIdStr := strconv.FormatInt(logId, 10)
@@ -791,6 +807,31 @@ func (l *logStore) RejectNewWrites() {
 func (l *logStore) AllowNewWrites() {
 	if l.rejectWrites.Swap(false) {
 		logger.Ctx(context.Background()).Info("log store accepting new writes again (decommission cancelled)",
+			zap.String("nodeID", metrics.NodeID))
+	}
+}
+
+// MarkRetired refuses segment-lifecycle participation on top of RejectNewWrites, for a node
+// that has reached the terminal decommissioned state.
+//
+// During decommissioning fence/complete/compact must stay open — that is how the node's own
+// segments get closed, uploaded and cleaned so it can drain at all. Once drained there is
+// nothing left to close, and continuing to serve them is actively harmful: a peer whose gossip
+// view is still stale can place a brand-new segment on this node, and fence/complete then
+// materialise a staged file for a segment it holds no data for. HasLocalSegmentData sees that
+// file, has_local_data flips back to true and safe_to_terminate to false — permanently, because
+// the decommission monitor has already exited and never re-checks (#257).
+//
+// Gossip is eventually consistent, so peers can always be told stale information; the node's
+// own view of its state is the only thing that cannot be. Hence the gate lives here.
+//
+// Cleanup (CleanSegment / EvictLog / EvictInstance / NotifySegmentCompacted) and reads stay
+// open: they remove data or create nothing, and blocking them would strand whatever the node
+// still holds.
+func (l *logStore) MarkRetired() {
+	l.rejectWrites.Store(true)
+	if !l.retired.Swap(true) {
+		logger.Ctx(context.Background()).Info("log store now retired, refusing segment lifecycle operations (decommissioned)",
 			zap.String("nodeID", metrics.NodeID))
 	}
 }

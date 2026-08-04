@@ -98,6 +98,10 @@ var (
 	ErrMarkDeleteFailed        = newWoodpeckerError("failed to durably mark log/instance deleted", 2006, true)
 	ErrLogStoreDiskPressure    = newWoodpeckerError("logstore local disk above hard watermark, write backpressure active", 2007, true)
 	ErrLogStoreInvalidRootPath = newWoodpeckerError("invalid rootPath", 2008, false)
+	// ErrLogStoreRetired is returned by a decommissioned node for segment-lifecycle operations.
+	// Non-retryable on purpose: the node is terminally retired, so the caller should drop it from
+	// the quorum and re-discover rather than back off and retry against it.
+	ErrLogStoreRetired = newWoodpeckerError("logstore is retired (node decommissioned)", 2009, false)
 
 	// segment_processor errors (2100-2199)
 	ErrSegmentProcessorNotFound          = newWoodpeckerError("segment processor not found", 2100, false)

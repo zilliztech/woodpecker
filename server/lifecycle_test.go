@@ -165,6 +165,23 @@ func TestNodeLifecycleManager_Persistence_DecommissionedSurvivesRestart(t *testi
 	m2, err := NewNodeLifecycleManagerWithPersistence(dir)
 	require.NoError(t, err)
 	assert.Equal(t, NodeStateDecommissioned, m2.GetState())
+	// The restart path keys off these two predicates to decide what to re-enforce, and they
+	// must not be conflated: only the terminal state also refuses segment lifecycle ops.
+	assert.False(t, m2.IsDecommissioning(), "decommissioned is not decommissioning")
+	assert.True(t, m2.IsDecommissioned())
+}
+
+func TestNodeLifecycleManager_IsDecommissionedOnlyInTerminalState(t *testing.T) {
+	m := NewNodeLifecycleManager()
+	assert.False(t, m.IsDecommissioned(), "active")
+
+	m.StartDecommission()
+	assert.True(t, m.IsDecommissioning())
+	assert.False(t, m.IsDecommissioned(), "draining is not yet retired")
+
+	require.NoError(t, m.MarkDecommissioned())
+	assert.False(t, m.IsDecommissioning())
+	assert.True(t, m.IsDecommissioned())
 }
 
 func TestNodeLifecycleManager_Persistence_ClearState(t *testing.T) {
