@@ -934,6 +934,38 @@ func (_c *LogStore_HasLocalSegmentData_Call) RunAndReturn(run func() bool) *LogS
 	return _c
 }
 
+// MarkRetired provides a mock function with no fields
+func (_m *LogStore) MarkRetired() {
+	_m.Called()
+}
+
+// LogStore_MarkRetired_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkRetired'
+type LogStore_MarkRetired_Call struct {
+	*mock.Call
+}
+
+// MarkRetired is a helper method to define mock.On call
+func (_e *LogStore_Expecter) MarkRetired() *LogStore_MarkRetired_Call {
+	return &LogStore_MarkRetired_Call{Call: _e.mock.On("MarkRetired")}
+}
+
+func (_c *LogStore_MarkRetired_Call) Run(run func()) *LogStore_MarkRetired_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *LogStore_MarkRetired_Call) Return() *LogStore_MarkRetired_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *LogStore_MarkRetired_Call) RunAndReturn(run func()) *LogStore_MarkRetired_Call {
+	_c.Run(run)
+	return _c
+}
+
 // NotifySegmentCompacted provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId
 func (_m *LogStore) NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error {
 	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId)

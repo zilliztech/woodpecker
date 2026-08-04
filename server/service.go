@@ -256,39 +256,44 @@ func (s *Server) start() error {
 	s.updateDecommissionMetrics()
 	logger.Ctx(s.ctx).Info("log store started", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
 
-	// If the node was decommissioning before restart, re-apply write rejection and resume monitoring
-	if s.lifecycle.IsDecommissioning() {
-		s.logStore.RejectNewWrites()
-		s.startDecommissionMonitor()
-		// Broadcast decommission state once gossip is ready
-		go func() {
-			for {
-				s.serverNodeMu.RLock()
-				node := s.serverNode
-				s.serverNodeMu.RUnlock()
-				if node != nil {
-					currentMeta := node.GetMeta()
-					updatedTags := make(map[string]string)
-					for k, v := range currentMeta.Tags {
-						updatedTags[k] = v
-					}
-					updatedTags["status"] = "decommissioning"
-					node.UpdateMeta(map[string]interface{}{
-						"tags": updatedTags,
-					})
-					break
-				}
-				select {
-				case <-s.ctx.Done():
-					return
-				case <-time.After(500 * time.Millisecond):
-				}
-			}
-		}()
-		logger.Ctx(s.ctx).Info("node was decommissioning before restart, rejecting new writes and resuming monitor",
-			zap.String("nodeID", s.serverConfig.NodeID))
-	}
+	s.restoreLifecycleEnforcement()
 	return nil
+}
+
+// restoreLifecycleEnforcement re-applies the persisted lifecycle state after a restart.
+//
+// Both non-active states refuse writes; only the terminal one also refuses segment-lifecycle
+// operations, and it has nothing left to monitor. This previously keyed off IsDecommissioning()
+// alone — which matches only the draining state — so a node persisted as decommissioned came
+// back indistinguishable from an active one: accepting appends and advertising no status tag at
+// all (#257).
+func (s *Server) restoreLifecycleEnforcement() {
+	state := s.lifecycle.GetState()
+	if state == NodeStateActive {
+		return
+	}
+	s.logStore.RejectNewWrites()
+	if state == NodeStateDecommissioned {
+		s.logStore.MarkRetired()
+	} else {
+		s.startDecommissionMonitor()
+	}
+	// Gossip is not up yet at this point; keep trying until the tag is published.
+	go func() {
+		for {
+			if s.broadcastNodeStatus(string(state)) {
+				return
+			}
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}()
+	logger.Ctx(s.ctx).Info("restored node lifecycle enforcement after restart",
+		zap.String("nodeID", s.serverConfig.NodeID),
+		zap.String("state", string(state)))
 }
 
 func (s *Server) Stop() error {
@@ -810,23 +815,12 @@ func (s *Server) CancelDecommission() error {
 	// Resume accepting new writes
 	s.logStore.AllowNewWrites()
 	s.updateDecommissionMetrics()
-	// Broadcast active status via gossip so other nodes stop filtering this node out
-	s.serverNodeMu.RLock()
-	node := s.serverNode
-	s.serverNodeMu.RUnlock()
-	if node != nil {
-		currentMeta := node.GetMeta()
-		updatedTags := make(map[string]string)
-		for k, v := range currentMeta.Tags {
-			updatedTags[k] = v
-		}
-		updatedTags["status"] = "active"
-		node.UpdateMeta(map[string]interface{}{
-			"tags": updatedTags,
-		})
-		logger.Ctx(s.ctx).Info("broadcast node status via gossip",
-			zap.String("nodeID", s.serverConfig.NodeID),
-			zap.String("status", "active"))
+	// Broadcast active status via gossip so other nodes stop filtering this node out.
+	// Best-effort: if gossip is not up yet this is skipped, and the node stays excluded from
+	// quorum selection until something else republishes. Callers get the boolean to act on.
+	if !s.broadcastNodeStatus(string(NodeStateActive)) {
+		logger.Ctx(s.ctx).Warn("cancel decommission: gossip not ready, active status not advertised yet",
+			zap.String("nodeID", s.serverConfig.NodeID))
 	}
 	return nil
 }
@@ -842,26 +836,40 @@ func (s *Server) Decommission() error {
 	s.logStore.RejectNewWrites()
 	s.updateDecommissionMetrics()
 	// Broadcast decommission state via gossip so other nodes filter this node from quorum
-	s.serverNodeMu.RLock()
-	node := s.serverNode
-	s.serverNodeMu.RUnlock()
-	if node != nil {
-		currentMeta := node.GetMeta()
-		updatedTags := make(map[string]string)
-		for k, v := range currentMeta.Tags {
-			updatedTags[k] = v
-		}
-		updatedTags["status"] = "decommissioning"
-		node.UpdateMeta(map[string]interface{}{
-			"tags": updatedTags,
-		})
-		logger.Ctx(s.ctx).Info("broadcast node status via gossip",
-			zap.String("nodeID", s.serverConfig.NodeID),
-			zap.String("status", "decommissioning"))
-	}
+	s.broadcastNodeStatus(string(NodeStateDecommissioning))
 	// Start background monitor to auto-mark decommissioned when drained
 	s.startDecommissionMonitor()
 	return nil
+}
+
+// broadcastNodeStatus publishes the node's lifecycle status as a gossip tag so peers exclude it
+// from quorum selection (ServiceDiscovery.excludeDecommissioning). Reports false when gossip is
+// not up yet, so callers on the restart path can retry.
+//
+// Note this is best-effort and eventually consistent: in the run that motivated #257 four peers
+// applied the tag within a second while a fifth took seven, and the client happened to ask that
+// straggler for a quorum. Exclusion shortens the window; it cannot close it. The authoritative
+// enforcement is node-side (RejectNewWrites / MarkRetired).
+func (s *Server) broadcastNodeStatus(status string) bool {
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node == nil {
+		return false
+	}
+	currentMeta := node.GetMeta()
+	updatedTags := make(map[string]string, len(currentMeta.Tags)+1)
+	for k, v := range currentMeta.Tags {
+		updatedTags[k] = v
+	}
+	updatedTags["status"] = status
+	node.UpdateMeta(map[string]interface{}{
+		"tags": updatedTags,
+	})
+	logger.Ctx(s.ctx).Info("broadcast node status via gossip",
+		zap.String("nodeID", s.serverConfig.NodeID),
+		zap.String("status", status))
+	return true
 }
 
 // GetWriterRegistry returns the logStore as a WriterRegistry for admin inspection.
@@ -952,6 +960,12 @@ func (s *Server) decommissionMonitorLoop(checkInterval time.Duration) {
 						zap.Error(err))
 					continue
 				}
+				// Drained: stop participating in segment lifecycle too. The monitor exits here
+				// and never re-checks, so a fence/complete arriving afterwards (from a peer whose
+				// gossip view is still stale) would re-materialise a staged file and flip
+				// has_local_data back to true for good (#257).
+				s.logStore.MarkRetired()
+				s.broadcastNodeStatus(string(NodeStateDecommissioned))
 				metrics.SetNodeDecommissionProgress(metrics.NodeID, string(s.lifecycle.GetState()), s.logStore.GetActiveProcessorCount(), hasData)
 				logger.Ctx(s.ctx).Info("node decommission complete — no local segment data remaining",
 					zap.String("nodeID", s.serverConfig.NodeID))

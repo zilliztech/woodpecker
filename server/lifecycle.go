@@ -101,6 +101,15 @@ func (m *NodeLifecycleManager) IsDecommissioning() bool {
 	return m.state == NodeStateDecommissioning
 }
 
+// IsDecommissioned returns true if the node is in the terminal decommissioned state.
+// Distinct from IsDecommissioning: the two states enforce different things (writes are
+// refused in both, segment-lifecycle operations only once decommissioned).
+func (m *NodeLifecycleManager) IsDecommissioned() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.state == NodeStateDecommissioned
+}
+
 // StartDecommission transitions the node from active to decommissioning.
 // Idempotent if already decommissioning. Returns error if already decommissioned.
 func (m *NodeLifecycleManager) StartDecommission() error {
