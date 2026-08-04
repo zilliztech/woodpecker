@@ -804,7 +804,15 @@ func (l *logStore) RejectNewWrites() {
 
 // AllowNewWrites clears the write-rejection flag set by RejectNewWrites,
 // restoring normal write acceptance after a cancelled decommission.
+//
+// No-op once retired: MarkRetired establishes retired => rejectWrites, and clearing the flag
+// here would break that invariant and let a retired node admit appends again. Unreachable in
+// production today (CancelDecommission refuses the terminal state, ClearState has no production
+// caller) — the latch enforces it rather than relying on every caller to.
 func (l *logStore) AllowNewWrites() {
+	if l.retired.Load() {
+		return
+	}
 	if l.rejectWrites.Swap(false) {
 		logger.Ctx(context.Background()).Info("log store accepting new writes again (decommission cancelled)",
 			zap.String("nodeID", metrics.NodeID))

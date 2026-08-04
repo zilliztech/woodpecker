@@ -815,23 +815,12 @@ func (s *Server) CancelDecommission() error {
 	// Resume accepting new writes
 	s.logStore.AllowNewWrites()
 	s.updateDecommissionMetrics()
-	// Broadcast active status via gossip so other nodes stop filtering this node out
-	s.serverNodeMu.RLock()
-	node := s.serverNode
-	s.serverNodeMu.RUnlock()
-	if node != nil {
-		currentMeta := node.GetMeta()
-		updatedTags := make(map[string]string)
-		for k, v := range currentMeta.Tags {
-			updatedTags[k] = v
-		}
-		updatedTags["status"] = "active"
-		node.UpdateMeta(map[string]interface{}{
-			"tags": updatedTags,
-		})
-		logger.Ctx(s.ctx).Info("broadcast node status via gossip",
-			zap.String("nodeID", s.serverConfig.NodeID),
-			zap.String("status", "active"))
+	// Broadcast active status via gossip so other nodes stop filtering this node out.
+	// Best-effort: if gossip is not up yet this is skipped, and the node stays excluded from
+	// quorum selection until something else republishes. Callers get the boolean to act on.
+	if !s.broadcastNodeStatus(string(NodeStateActive)) {
+		logger.Ctx(s.ctx).Warn("cancel decommission: gossip not ready, active status not advertised yet",
+			zap.String("nodeID", s.serverConfig.NodeID))
 	}
 	return nil
 }

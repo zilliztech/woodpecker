@@ -132,8 +132,12 @@ func TestLogStore_Decommissioning_StillServesSegmentLifecycleOps(t *testing.T) {
 }
 
 // Retirement is a one-way latch: decommissioned is terminal and CancelDecommission refuses it,
-// so AllowNewWrites (the cancel path) must not resurrect a retired node.
+// so AllowNewWrites (the cancel path) must not resurrect a retired node. Both halves of the
+// invariant are checked — segment ops stay refused *and* writes stay refused. The write half is
+// the one that was actually breakable: AllowNewWrites used to clear rejectWrites unconditionally,
+// so a retired store would admit AddEntry again and could materialise a fresh data.log.
 func TestLogStore_Retired_NotClearedByAllowNewWrites(t *testing.T) {
+	ctx := context.Background()
 	store := createTestLogStore()
 	store.stopped.Store(false)
 	store.MarkRetired()
@@ -141,8 +145,13 @@ func TestLogStore_Retired_NotClearedByAllowNewWrites(t *testing.T) {
 	store.AllowNewWrites()
 
 	assert.True(t, store.retired.Load(), "retirement must survive AllowNewWrites")
-	_, err := store.FenceSegment(context.Background(), testBucketName, testRootPath, testLogId, 29)
-	require.ErrorIs(t, err, werr.ErrLogStoreRetired)
+	assert.True(t, store.rejectWrites.Load(), "retired => rejectWrites must survive AllowNewWrites")
+
+	_, addErr := store.AddEntry(ctx, testBucketName, testRootPath, testLogId, nil, nil)
+	require.ErrorIs(t, addErr, werr.ErrLogStoreShutdown, "a retired store must not admit appends again")
+
+	_, fenceErr := store.FenceSegment(ctx, testBucketName, testRootPath, testLogId, 29)
+	require.ErrorIs(t, fenceErr, werr.ErrLogStoreRetired)
 }
 
 // ErrLogStoreRetired must be non-retryable: retrying against a terminally retired node can never
