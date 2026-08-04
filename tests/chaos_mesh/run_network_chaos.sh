@@ -120,9 +120,26 @@ run_phase() {  # $1 = phase ; $2 = optional extra workload flags (e.g. "-window 
     -config-file /tmp/test-config.yaml -phase "$1" -record-file "$RECORD_FILE" ${2:-}
 }
 
-restart_sum() {  # I6: total server container restarts (host-side; client pod is itself under chaos)
-  kubectl get pod -l app.kubernetes.io/instance=${CR_NAME},app.kubernetes.io/component=server \
-    -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"+"}{end}0' | bc
+# I6: total server container restarts (host-side; client pod is itself under chaos).
+# Prints the sum on stdout; returns non-zero (and reports the raw kubectl output) when the
+# counts can't be read, so callers can tell "no restarts" apart from "couldn't measure".
+#
+# This used to pipe a '0+0+0'-style expression into bc. bc rejected its input, restart_sum
+# printed nothing, and `[ "" -eq "$rc0" ]` then failed as a bash error — which the caller
+# read as a restart violation. Nightly was red 60/60 on a fault that never happened (#255).
+restart_sum() {
+  local raw
+  raw=$(kubectl get pod -l app.kubernetes.io/instance=${CR_NAME},app.kubernetes.io/component=server \
+          -o jsonpath='{range .items[*]}{.status.containerStatuses[*].restartCount}{"\n"}{end}') \
+    || { warn "restart_sum: kubectl failed" >&2; return 1; }
+  # One line per pod. Demand exactly $REPLICAS lines, each holding only integers, so a
+  # missing pod or an unreadable status surfaces instead of silently undercounting.
+  awk -v want="$REPLICAS" '
+    { if (NF == 0) { bad = 1; next }
+      for (i = 1; i <= NF; i++) { if ($i ~ /^[0-9]+$/) s += $i; else bad = 1 }
+      n++ }
+    END { if (bad || n != want) exit 1; print s + 0 }' <<<"$raw" \
+    || { warn "restart_sum: unreadable counts for $REPLICAS pods, raw kubectl output: [$raw]" >&2; return 1; }
 }
 
 collect_artifacts() {  # mirror integration-test-chaos.yaml log collection
@@ -134,11 +151,12 @@ collect_artifacts() {  # mirror integration-test-chaos.yaml log collection
   kubectl logs etcd  >"$out/etcd.log"  2>&1 || true
   kubectl logs minio >"$out/minio.log" 2>&1 || true
   kubectl cp "$CLIENT_POD:$RECORD_FILE" "$out/acked.jsonl" 2>/dev/null || true
-  echo "restarts: $(restart_sum)" >"$out/restartcounts.txt"
+  echo "restarts: $(restart_sum || echo unreadable)" >"$out/restartcounts.txt"
 }
 
 run_steady() {  # $1 = manifest basename
-  local m="$SCRIPT_DIR/manifests/$1.yaml" rc0; rc0=$(restart_sum)
+  local m="$SCRIPT_DIR/manifests/$1.yaml" rc0
+  rc0=$(restart_sum) || { warn "SCENARIO $1 SKIPPED: no baseline restart count"; return 1; }
   run_phase warmup || { collect_artifacts "$1"; return 1; }
   kubectl apply -f "$m" || { collect_artifacts "$1"; return 1; }
   kubectl wait --for=condition=AllInjected "networkchaos/$1" -n "$NAMESPACE" --timeout=60s \
@@ -147,18 +165,21 @@ run_steady() {  # $1 = manifest basename
   kubectl delete -f "$m" --ignore-not-found
   run_phase recovery || { collect_artifacts "$1"; return 1; }
   run_phase verify   || { collect_artifacts "$1"; return 1; }
-  [ "$(restart_sum)" -eq "$rc0" ] || { collect_artifacts "$1"; fail "I6 VIOLATION: server restarted during $1"; }
+  local rc1; rc1=$(restart_sum) || { collect_artifacts "$1"; return 1; }
+  [ "$rc1" -eq "$rc0" ] || { collect_artifacts "$1"; warn "I6 VIOLATION: server restarted during $1 ($rc0 -> $rc1)"; return 1; }
   log "SCENARIO $1 PASSED"
 }
 
 run_blip() {  # $1 = manifest basename (N3/N5)
-  local m="$SCRIPT_DIR/manifests/$1.yaml" rc0; rc0=$(restart_sum)
+  local m="$SCRIPT_DIR/manifests/$1.yaml" rc0
+  rc0=$(restart_sum) || { warn "SCENARIO $1 SKIPPED: no baseline restart count"; return 1; }
   run_phase warmup || { collect_artifacts "$1"; return 1; }
   ( run_phase under-chaos "-window 60" ) & local wl=$!
   for _ in $(seq 1 6); do kubectl apply -f "$m" || warn "blip apply failed for $1"; sleep 5; kubectl delete -f "$m" --ignore-not-found; sleep 5; done
   wait "$wl" || { collect_artifacts "$1"; return 1; }
   run_phase recovery && run_phase verify || { collect_artifacts "$1"; return 1; }
-  [ "$(restart_sum)" -eq "$rc0" ] || { collect_artifacts "$1"; fail "I6 VIOLATION: server restarted during $1"; }
+  local rc1; rc1=$(restart_sum) || { collect_artifacts "$1"; return 1; }
+  [ "$rc1" -eq "$rc0" ] || { collect_artifacts "$1"; warn "I6 VIOLATION: server restarted during $1 ($rc0 -> $rc1)"; return 1; }
   log "SCENARIO $1 PASSED"
 }
 
