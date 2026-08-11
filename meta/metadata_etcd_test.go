@@ -102,6 +102,9 @@ func TestAll(t *testing.T) {
 	t.Run("test update reader temp info", testUpdateReaderTempInfo)
 	t.Run("test get all reader temp info for log", testGetAllReaderTempInfoForLog)
 	t.Run("test delete reader temp info", testDeleteReaderTempInfo)
+	t.Run("test reader temp info outlives lease ttl while idle", testReaderTempInfoOutlivesLeaseTTLWhileIdle)
+	t.Run("test update reader temp info self heals after lease loss", testUpdateReaderTempInfoSelfHealsAfterLeaseLoss)
+	t.Run("test update after delete does not resurrect reader temp info", testUpdateAfterDeleteDoesNotResurrectReaderTempInfo)
 	t.Run("test create segment cleanup status", testCreateSegmentCleanupStatus)
 	t.Run("test update segment cleanup status", testUpdateSegmentCleanupStatus)
 	t.Run("test list segment cleanup status", testListSegmentCleanupStatus)
@@ -147,7 +150,7 @@ func TestAll(t *testing.T) {
 	t.Run("test corrupted protobuf data", testCorruptedProtobufData)
 	t.Run("test create log edge cases", testCreateLogEdgeCases)
 	t.Run("test acquire lock edge cases", testAcquireLockEdgeCases)
-	t.Run("test update reader temp info without lease", testUpdateReaderTempInfoWithoutLease)
+	t.Run("test update reader temp info without in-process session", testUpdateReaderTempInfoWithoutSession)
 	t.Run("test close with nil lock entry", testCloseWithNilLockEntry)
 	t.Run("test open log with corrupted segment data", testOpenLogWithCorruptedSegmentData)
 	t.Run("test delete log metadata force true", testDeleteLogMetadata_ForceTrue)
@@ -2350,8 +2353,9 @@ func testAcquireLockEdgeCases(t *testing.T) {
 	_ = provider.Close()
 }
 
-// testUpdateReaderTempInfoWithoutLease covers the no-lease update branch
-func testUpdateReaderTempInfoWithoutLease(t *testing.T) {
+// testUpdateReaderTempInfoWithoutSession verifies updates are rejected for a
+// reader that has no in-process session (a key written by someone else)
+func testUpdateReaderTempInfoWithoutSession(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
 	require.NoError(t, err)
 	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
@@ -2392,15 +2396,18 @@ func testUpdateReaderTempInfoWithoutLease(t *testing.T) {
 	require.Equal(t, 1, len(resp.Kvs))
 	assert.Equal(t, int64(0), resp.Kvs[0].Lease, "Key should have no lease")
 
-	// Update reader - should hit the no-lease (else) branch
+	// Update must refuse to write for a reader this process never opened:
+	// blindly adopting a foreign key would resurrect metadata after close and
+	// pin the cleanup low-watermark forever.
 	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName, 5, 100)
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "reader temp info not found")
 
-	// Verify update worked
-	updatedReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)
+	// The foreign key is left untouched
+	unchangedReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)
 	assert.NoError(t, err)
-	assert.Equal(t, int64(5), updatedReader.RecentReadSegmentId)
-	assert.Equal(t, int64(100), updatedReader.RecentReadEntryId)
+	assert.Equal(t, int64(0), unchangedReader.RecentReadSegmentId)
+	assert.Equal(t, int64(0), unchangedReader.RecentReadEntryId)
 }
 
 // testCloseWithNilLockEntry covers Close with nil and empty lock entries in the map
