@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.opentelemetry.io/otel"
@@ -1118,7 +1119,12 @@ var readerTempInfoSessionTTLSeconds = 60
 // update without a read-modify-write of the stored value.
 type readerTempSession struct {
 	sync.Mutex
-	session       *concurrency.Session
+	session *concurrency.Session
+	// closed is set (under the mutex) when the entry is retired from
+	// readerTempSessions; an update that already loaded the entry must not
+	// write with it anymore — it would resurrect a deleted key on a session
+	// that nothing tracks or closes.
+	closed        bool
 	openTimestamp uint64
 	openSegmentId int64
 	openEntryId   int64
@@ -1126,6 +1132,31 @@ type readerTempSession struct {
 
 func readerTempSessionKey(logId int64, readerName string) string {
 	return fmt.Sprintf("%d/%s", logId, readerName)
+}
+
+// newReaderTempSession grants a lease within the caller's deadline and wraps
+// it in a session whose keepalive runs on the etcd client's own context.
+// Handing the request context to concurrency.NewSession directly would be
+// wrong on both ends: without it the Grant blocks on the client lifetime
+// context while etcd is unreachable, and with it the keepalive would die as
+// soon as the request context does, quietly expiring the key after one TTL —
+// the exact defect this session exists to fix.
+func (e *metadataProviderEtcd) newReaderTempSession(ctx context.Context) (*concurrency.Session, error) {
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	lease, err := e.client.Grant(ctx1, int64(readerTempInfoSessionTTLSeconds))
+	if err != nil {
+		return nil, err
+	}
+	session, err := concurrency.NewSession(e.client, concurrency.WithLease(lease.ID), concurrency.WithTTL(readerTempInfoSessionTTLSeconds))
+	if err != nil {
+		// Best effort: don't leave the fresh lease lingering for a full TTL
+		revokeCtx, revokeCancel := e.getContextWithTimeout(context.Background())
+		_, _ = e.client.Revoke(revokeCtx, lease.ID)
+		revokeCancel()
+		return nil, err
+	}
+	return session, nil
 }
 
 func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, fromSegmentId int64, fromEntryId int64) error {
@@ -1158,7 +1189,7 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 	}
 
 	// Create a session whose keepalive protects the key for the reader lifetime
-	session, err := concurrency.NewSession(e.client, concurrency.WithTTL(readerTempInfoSessionTTLSeconds))
+	session, err := e.newReaderTempSession(ctx)
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -1187,11 +1218,16 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 		openEntryId:   fromEntryId,
 	}
 	if prev, loaded := e.readerTempSessions.Swap(readerTempSessionKey(logId, readerName), entry); loaded {
-		// A reader reopened with the same name; drop the session of the stale entry
-		if closeErr := prev.(*readerTempSession).session.Close(); closeErr != nil {
+		// A reader reopened with the same name; retire the stale entry so an
+		// in-flight update cannot write with it, then drop its session
+		prevEntry := prev.(*readerTempSession)
+		prevEntry.Lock()
+		prevEntry.closed = true
+		if closeErr := prevEntry.session.Close(); closeErr != nil {
 			logger.Ctx(ctx).Warn("close stale reader temp info session failed",
 				zap.String("readerName", readerName), zap.Int64("logId", logId), zap.Error(closeErr))
 		}
+		prevEntry.Unlock()
 	}
 
 	logger.Ctx(ctx).Debug("Created reader temporary information with session lease",
@@ -1291,8 +1327,6 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateReaderTempInfo")
 	defer sp.End()
 	startTime := time.Now()
-	// Create the key path for the reader temporary information
-	readerKey := e.keyBuilder.BuildLogReaderTempInfoKey(logId, readerName)
 
 	// Updates are gated on the in-process session entry, not on the key still
 	// existing in etcd: a reader this process owns may recreate its temp info
@@ -1305,9 +1339,30 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 		logger.Ctx(ctx).Warn("reader temp info not found", zap.Int64("logId", logId), zap.String("readerName", readerName))
 		return werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("reader temp info not found for logId:%d readerName:%s", logId, readerName))
 	}
-	entry := v.(*readerTempSession)
+	return e.updateOwnedReaderTempInfo(ctx, startTime, v.(*readerTempSession), logId, readerName, recentReadSegmentId, recentReadEntryId)
+}
+
+// updateOwnedReaderTempInfo is the body of UpdateReaderTempInfo after the
+// session entry lookup, split out so tests can drive the lookup-then-close
+// interleaving deterministically.
+func (e *metadataProviderEtcd) updateOwnedReaderTempInfo(ctx context.Context, startTime time.Time, entry *readerTempSession, logId int64, readerName string, recentReadSegmentId int64, recentReadEntryId int64) error {
+	// Create the key path for the reader temporary information
+	readerKey := e.keyBuilder.BuildLogReaderTempInfoKey(logId, readerName)
+
 	entry.Lock()
 	defer entry.Unlock()
+
+	// Re-validate under the lock: DeleteReaderTempInfo or a same-name reopen
+	// may have retired this entry between the map lookup and here; writing
+	// with a retired entry would resurrect the deleted key on a session that
+	// nothing tracks or closes anymore.
+	cur, stillOwned := e.readerTempSessions.Load(readerTempSessionKey(logId, readerName))
+	if entry.closed || !stillOwned || cur.(*readerTempSession) != entry {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_reader_temp_info", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("reader temp info not found", zap.Int64("logId", logId), zap.String("readerName", readerName))
+		return werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("reader temp info not found for logId:%d readerName:%s", logId, readerName))
+	}
 
 	// Rebuild the full reader info from the cached open position; the write is
 	// an unconditional upsert so a key lost with an expired lease self-heals.
@@ -1340,7 +1395,7 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if session == nil {
-			newSession, sessionErr := concurrency.NewSession(e.client, concurrency.WithTTL(readerTempInfoSessionTTLSeconds))
+			newSession, sessionErr := e.newReaderTempSession(ctx)
 			if sessionErr != nil {
 				metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_reader_temp_info", "error").Inc()
 				metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -1361,9 +1416,23 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 		if lastErr == nil {
 			break
 		}
-		// The lease may have died between the Done check and the Put; drop the
-		// session and retry once with a fresh one.
-		logger.Ctx(ctx).Warn("put reader temp info failed, retrying with a fresh session",
+		// Rotate the session only when the lease itself is gone (revoked or
+		// expired between the Done check and the Put). Closing a session
+		// revokes its lease and etcd deletes every key attached to it, so
+		// rotating on an unrelated failure (caller cancelled, etcd slow)
+		// would delete the live reader's own temp info.
+		leaseGone := rpctypes.Error(lastErr) == rpctypes.ErrLeaseNotFound
+		if !leaseGone {
+			select {
+			case <-session.Done():
+				leaseGone = true
+			default:
+			}
+		}
+		if !leaseGone {
+			break
+		}
+		logger.Ctx(ctx).Warn("reader temp info lease lost, retrying with a fresh session",
 			zap.Int64("logId", logId), zap.String("readerName", readerName), zap.Error(lastErr))
 		if closeErr := session.Close(); closeErr != nil {
 			logger.Ctx(ctx).Debug("close dead reader temp info session failed",
@@ -1402,6 +1471,7 @@ func (e *metadataProviderEtcd) DeleteReaderTempInfo(ctx context.Context, logId i
 	if v, loaded := e.readerTempSessions.LoadAndDelete(readerTempSessionKey(logId, readerName)); loaded {
 		entry := v.(*readerTempSession)
 		entry.Lock()
+		entry.closed = true
 		if closeErr := entry.session.Close(); closeErr != nil {
 			logger.Ctx(ctx).Warn("close reader temp info session failed",
 				zap.String("readerName", readerName), zap.Int64("logId", logId), zap.Error(closeErr))
@@ -1499,6 +1569,7 @@ func (e *metadataProviderEtcd) Close() error {
 	e.readerTempSessions.Range(func(key, value interface{}) bool {
 		entry := value.(*readerTempSession)
 		entry.Lock()
+		entry.closed = true
 		if closeErr := entry.session.Close(); closeErr != nil {
 			logger.Ctx(context.Background()).Warn("Failed to close reader temp info session during close",
 				zap.String("readerKey", key.(string)),

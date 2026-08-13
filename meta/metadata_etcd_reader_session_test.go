@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
 )
 
@@ -73,8 +74,11 @@ func setupReaderSessionTest(t *testing.T, logName string, readerName string, fro
 // info alive well past the lease TTL. This is exactly the reader the cleanup
 // protection exists for.
 func testReaderTempInfoOutlivesLeaseTTLWhileIdle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping multi-TTL idle wait in short mode")
+	}
 	restoreTTL := readerTempInfoSessionTTLSeconds
-	readerTempInfoSessionTTLSeconds = 3
+	readerTempInfoSessionTTLSeconds = 5
 	defer func() { readerTempInfoSessionTTLSeconds = restoreTTL }()
 
 	env := setupReaderSessionTest(t, "reader_session_idle_test_"+time.Now().Format("20060102150405"), "idle-reader", 1, 10)
@@ -151,4 +155,84 @@ func testUpdateAfterDeleteDoesNotResurrectReaderTempInfo(t *testing.T) {
 	resp, err := env.etcdCli.Get(context.Background(), env.readerKey)
 	require.NoError(t, err)
 	assert.Equal(t, 0, len(resp.Kvs), "closed reader temp info must stay deleted")
+}
+
+// A Put that fails for a reason unrelated to the lease (caller cancelled, etcd
+// slow) must not rotate the session: closing a session revokes its lease, and
+// etcd then deletes every key attached to it — including the live reader's own
+// temp info.
+func testUpdatePutFailureDoesNotRevokeReaderTempInfoLease(t *testing.T) {
+	env := setupReaderSessionTest(t, "reader_session_putfail_test_"+time.Now().Format("20060102150405"), "putfail-reader", 4, 40)
+	defer env.provider.Close()
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := env.provider.UpdateReaderTempInfo(cancelledCtx, env.logId, env.readerName, 5, 50)
+	require.Error(t, err, "update with a dead caller context must fail")
+
+	resp, err := env.etcdCli.Get(context.Background(), env.readerKey)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(resp.Kvs), "an unrelated Put failure must not delete the reader temp info")
+	require.NotEqual(t, int64(0), resp.Kvs[0].Lease)
+	ttlResp, err := env.etcdCli.TimeToLive(context.Background(), clientv3.LeaseID(resp.Kvs[0].Lease))
+	require.NoError(t, err)
+	assert.Greater(t, ttlResp.TTL, int64(0), "the healthy lease must not be revoked")
+
+	// The reader keeps working once the caller context is healthy again.
+	require.NoError(t, env.provider.UpdateReaderTempInfo(context.Background(), env.logId, env.readerName, 6, 60))
+}
+
+// An update that loaded the session entry right before DeleteReaderTempInfo
+// ran to completion (the window between the map lookup and the entry lock)
+// must not resurrect the deleted key: the recreated session would no longer be
+// tracked by the map, its keepalive would outlive the reader, and the zombie
+// key would pin the truncated-segment cleanup low-watermark forever.
+func testUpdateRacingWithCloseDoesNotResurrectReaderTempInfo(t *testing.T) {
+	env := setupReaderSessionTest(t, "reader_session_race_test_"+time.Now().Format("20060102150405"), "racing-reader", 5, 50)
+	defer env.provider.Close()
+
+	impl, ok := env.provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+	v, loaded := impl.readerTempSessions.Load(readerTempSessionKey(env.logId, env.readerName))
+	require.True(t, loaded)
+	entry := v.(*readerTempSession)
+
+	require.NoError(t, env.provider.DeleteReaderTempInfo(context.Background(), env.logId, env.readerName))
+
+	err := impl.updateOwnedReaderTempInfo(context.Background(), time.Now(), entry, env.logId, env.readerName, 6, 66)
+	require.Error(t, err, "an update racing with close must not resurrect the key")
+	assert.Contains(t, err.Error(), "reader temp info not found")
+
+	resp, err := env.etcdCli.Get(context.Background(), env.readerKey)
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(resp.Kvs), "closed reader temp info must stay deleted")
+}
+
+// CreateReaderTempInfo must fail within the caller's deadline when etcd is
+// unreachable instead of blocking on the etcd client's own lifetime context.
+func testCreateReaderTempInfoHonorsCallerDeadlineWhenEtcdUnreachable(t *testing.T) {
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{"127.0.0.1:1"},
+		DialTimeout: time.Second,
+	})
+	require.NoError(t, err)
+	defer cli.Close()
+
+	cfg := testMetaCfg(t)
+	cfg.Etcd.RequestTimeout = config.DurationMilliseconds{Duration: config.NewDuration(time.Second, time.Millisecond)}
+	provider := NewMetadataProvider(context.Background(), cli, cfg)
+	defer provider.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- provider.CreateReaderTempInfo(ctx, "unreachable-reader", 1, 0, 0)
+	}()
+	select {
+	case createErr := <-done:
+		require.Error(t, createErr, "create must fail when etcd is unreachable")
+	case <-time.After(15 * time.Second):
+		t.Fatal("CreateReaderTempInfo ignored the caller's deadline while etcd is unreachable")
+	}
 }
