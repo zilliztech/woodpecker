@@ -129,14 +129,42 @@ func (l *logStore) admitAppend() bool {
 	return rand.Int32N(diskRejectBpsMax) >= bps
 }
 
+// syncWorkerCountEnv overrides the sync-scheduler worker pool size.
+//
+// The default is runtime.NumCPU()*2, which is wrong twice over: NumCPU reports
+// the host's core count rather than this container's CPU limit, and the pool's
+// work is fsync-bound rather than CPU-bound, so sizing it by cores leaves the
+// pool saturated while CPU sits half idle. This env knob exists to measure that
+// effect; a real config option should replace it.
+const syncWorkerCountEnv = "WP_SYNC_WORKER_COUNT"
+
+func resolveSyncWorkerCount(ctx context.Context) int {
+	fallback := runtime.NumCPU() * 2
+	raw := strings.TrimSpace(os.Getenv(syncWorkerCountEnv))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		logger.Ctx(ctx).Warn("invalid sync worker count override, falling back to default",
+			zap.String("env", syncWorkerCountEnv),
+			zap.String("value", raw),
+			zap.Int("fallback", fallback),
+			zap.Error(err))
+		return fallback
+	}
+	return n
+}
+
 func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient storageclient.ObjectStorage) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
+	syncWorkers := resolveSyncWorkerCount(ctx)
 	logStore := &logStore{
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
 		storageClient:     storageClient,
-		syncScheduler:     stagedstorage.NewSyncScheduler(runtime.NumCPU() * 2),
+		syncScheduler:     stagedstorage.NewSyncScheduler(syncWorkers),
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
 		deletingLogs:      make(map[string]struct{}),
 		deletingInstances: make(map[string]struct{}),
@@ -158,7 +186,10 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 	}
 
 	logger.Ctx(ctx).Info("LogStore created successfully",
-		zap.String("address", logStore.address))
+		zap.String("address", logStore.address),
+		zap.Int("syncWorkerCount", syncWorkers),
+		zap.Int("numCPU", runtime.NumCPU()),
+		zap.Int("gomaxprocs", runtime.GOMAXPROCS(0)))
 
 	return logStore
 }
