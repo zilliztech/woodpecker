@@ -402,6 +402,8 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSyncSchedulerCapacity)
 		// Quorum selection skew (load-aware node selection, issue #114)
 		registerer.MustRegister(WpQuorumSelectionSkew)
+		// Temporary write-path diagnostics
+		registerProbeMetrics(registerer)
 	})
 }
 

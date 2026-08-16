@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/zilliztech/woodpecker/common/metrics"
 )
 
 type syncJob func(context.Context)
@@ -149,8 +151,15 @@ func (s *SyncScheduler) tryEnqueueJob(job syncJob) bool {
 	if s == nil || job == nil || s.closed.Load() {
 		return false
 	}
+	// Diagnostic: stamp enqueue time so the worker can report queue wait,
+	// isolating scheduler queueing from lock/write/fsync time downstream.
+	enqueuedAt := time.Now()
+	timed := func(ctx context.Context) {
+		metrics.WpProbeQueueWait.WithLabelValues(metrics.NodeID).Observe(float64(time.Since(enqueuedAt).Microseconds()) / 1000.0)
+		job(ctx)
+	}
 	select {
-	case s.jobCh <- job:
+	case s.jobCh <- timed:
 		return true
 	case <-s.ctx.Done():
 		return false

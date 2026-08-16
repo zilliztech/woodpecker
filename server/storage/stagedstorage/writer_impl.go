@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,6 +125,7 @@ type StagedFileWriter struct {
 	allUploadingTaskDone         atomic.Bool
 	flushTasksQueueProcessing    atomic.Bool // Ensures only one shared worker is consuming this writer's flushTasksQueue.
 	flushMu                      sync.Mutex  // the mutex ensures sequential writing for each flush batch
+	probeBlocksWritten           atomic.Int64 // diagnostic: blocks flushed, drives WP_FSYNC_MODE=every:N
 
 	// Close management
 	fileClose  chan struct{} // Close signal
@@ -624,6 +626,52 @@ func (w *StagedFileWriter) enqueueScheduledSyncJob() {
 	job(context.Background())
 }
 
+// fsyncMode is a DIAGNOSTIC override for the flush path, selected by
+// WP_FSYNC_MODE. It exists to size the cost of fsync, not to be shipped:
+//
+//	always  (default) — fsync every flushed block, i.e. current behaviour
+//	none              — skip fsync entirely; measures the ceiling if fsync were free.
+//	                    NOT DURABLE. A crash loses unsynced blocks.
+//	every:N           — fsync once per N flushed blocks per writer; approximates
+//	                    group commit. Loses at most N-1 blocks per writer on crash.
+//
+// Anything unrecognised falls back to "always".
+var (
+	fsyncModeOnce  sync.Once
+	fsyncSkipEvery int64 // 0 = always fsync; -1 = never; N>0 = fsync every Nth block
+)
+
+func resolveFsyncMode(ctx context.Context) int64 {
+	fsyncModeOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("WP_FSYNC_MODE"))
+		switch {
+		case raw == "" || raw == "always":
+			fsyncSkipEvery = 0
+		case raw == "none":
+			fsyncSkipEvery = -1
+			logger.Ctx(ctx).Warn("WP_FSYNC_MODE=none: fsync DISABLED, data is NOT durable — diagnostic runs only")
+		case strings.HasPrefix(raw, "every:"):
+			n, err := strconv.ParseInt(strings.TrimPrefix(raw, "every:"), 10, 64)
+			if err != nil || n <= 1 {
+				logger.Ctx(ctx).Warn("invalid WP_FSYNC_MODE, using always", zap.String("value", raw))
+				fsyncSkipEvery = 0
+			} else {
+				fsyncSkipEvery = n
+				logger.Ctx(ctx).Warn("WP_FSYNC_MODE group-commit enabled — reduced durability",
+					zap.Int64("fsyncEveryNBlocks", n))
+			}
+		default:
+			logger.Ctx(ctx).Warn("unknown WP_FSYNC_MODE, using always", zap.String("value", raw))
+			fsyncSkipEvery = 0
+		}
+	})
+	return fsyncSkipEvery
+}
+
+// probeFsyncInflight tracks concurrent fsyncs so filesystem-journal
+// serialisation shows up as inflight climbing while device queue depth stays flat.
+var probeFsyncInflight atomic.Int64
+
 func (w *StagedFileWriter) getSyncCheckInterval() time.Duration {
 	delay := time.Duration(w.maxIntervalMs) * time.Millisecond
 	if delay <= 0 {
@@ -669,7 +717,9 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		}
 	}()
 
+	lockStart := time.Now()
 	w.flushMu.Lock()
+	metrics.WpProbeFlushLockWait.WithLabelValues(metrics.NodeID).Observe(float64(time.Since(lockStart).Microseconds()) / 1000.0)
 	defer w.flushMu.Unlock()
 
 	if w.finalized.Load() {
@@ -751,7 +801,11 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int("blockDataSize", len(blockDataBuffer)))
 
 	// Write the pre-serialized data records
+	metrics.WpProbeFlushBlockBytes.WithLabelValues(metrics.NodeID).Observe(float64(len(blockDataBuffer)))
+	metrics.WpProbeFlushEntries.WithLabelValues(metrics.NodeID).Observe(float64(len(task.entries)))
+	writeStart := time.Now()
 	n, err := w.file.Write(blockDataBuffer)
+	metrics.WpProbeWriteLatency.WithLabelValues(metrics.NodeID).Observe(float64(time.Since(writeStart).Microseconds()) / 1000.0)
 	if err != nil {
 		logger.Ctx(ctx).Warn("write block data error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Error(err))
 		w.storageWritable.Store(false)
@@ -776,11 +830,24 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int64("totalWrittenBytes", w.writtenBytes))
 
 	// Sync to disk
-	if err := w.file.Sync(); err != nil {
-		logger.Ctx(ctx).Warn("sync file error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
-		w.storageWritable.Store(false)
-		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
-		return
+	skipEvery := resolveFsyncMode(ctx)
+	blocksSoFar := w.probeBlocksWritten.Add(1)
+	doFsync := skipEvery == 0 || (skipEvery > 0 && blocksSoFar%skipEvery == 0)
+	if doFsync {
+		inflight := probeFsyncInflight.Add(1)
+		metrics.WpProbeFsyncInflight.WithLabelValues(metrics.NodeID).Set(float64(inflight))
+		syncStart := time.Now()
+		err := w.file.Sync()
+		metrics.WpProbeFsyncLatency.WithLabelValues(metrics.NodeID).Observe(float64(time.Since(syncStart).Microseconds()) / 1000.0)
+		metrics.WpProbeFsyncInflight.WithLabelValues(metrics.NodeID).Set(float64(probeFsyncInflight.Add(-1)))
+		if err != nil {
+			logger.Ctx(ctx).Warn("sync file error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+			w.storageWritable.Store(false)
+			w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
+			return
+		}
+	} else {
+		metrics.WpProbeFsyncSkipped.WithLabelValues(metrics.NodeID).Inc()
 	}
 
 	logger.Ctx(ctx).Debug("file synced to disk successfully",
