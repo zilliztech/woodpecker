@@ -106,7 +106,8 @@ func TestAll(t *testing.T) {
 	t.Run("test update reader temp info self heals after lease loss", testUpdateReaderTempInfoSelfHealsAfterLeaseLoss)
 	t.Run("test update after delete does not resurrect reader temp info", testUpdateAfterDeleteDoesNotResurrectReaderTempInfo)
 	t.Run("test update put failure does not revoke reader temp info lease", testUpdatePutFailureDoesNotRevokeReaderTempInfoLease)
-	t.Run("test update racing with close does not resurrect reader temp info", testUpdateRacingWithCloseDoesNotResurrectReaderTempInfo)
+	t.Run("test update after provider close does not resurrect reader temp info", testUpdateAfterProviderCloseDoesNotResurrectReaderTempInfo)
+	t.Run("test reader temp info rejects foreign session", testReaderTempInfoRejectsForeignSession)
 	t.Run("test create reader temp info honors caller deadline when etcd unreachable", testCreateReaderTempInfoHonorsCallerDeadlineWhenEtcdUnreachable)
 	t.Run("test create segment cleanup status", testCreateSegmentCleanupStatus)
 	t.Run("test update segment cleanup status", testUpdateSegmentCleanupStatus)
@@ -835,8 +836,9 @@ func testCreateReaderTempInfo(t *testing.T) {
 	entryId := int64(42)
 
 	// Create the reader temp info - this will use the session's lease
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
+	readerSession, err := provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
 	assert.NoError(t, err)
+	assert.NotNil(t, readerSession)
 
 	// Verify the reader temp info was created
 	readerKey := legacyKeyBuilder().BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
@@ -903,7 +905,7 @@ func testGetReaderTempInfo(t *testing.T) {
 	entryId := int64(42)
 
 	// Create the reader temp info
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
+	_, err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
 	assert.NoError(t, err)
 
 	// Get the reader temp info
@@ -955,9 +957,10 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	initialSegmentId := int64(3)
 	initialEntryId := int64(42)
 
-	// Create the reader temp info
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, initialSegmentId, initialEntryId)
+	// Create the reader temp info; the returned session is what the reader owns
+	readerSession, err := provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, initialSegmentId, initialEntryId)
 	assert.NoError(t, err)
+	assert.NotNil(t, readerSession)
 
 	// Get the reader temp info
 	initialReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)
@@ -971,7 +974,7 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	updatedEntryId := int64(10)
 
 	// Update reader temp info
-	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName, updatedSegmentId, updatedEntryId)
+	err = provider.UpdateReaderTempInfo(context.Background(), readerSession, updatedSegmentId, updatedEntryId)
 	assert.NoError(t, err)
 
 	// Get the updated reader temp info
@@ -988,15 +991,9 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	assert.Equal(t, initialSegmentId, updatedReader.OpenSegmentId)
 	assert.Equal(t, initialEntryId, updatedReader.OpenEntryId)
 
-	// Test updating non-existent reader
-	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.Metadata.LogId, "non-existent-reader", 1, 1)
+	// Test updating without a session of this provider
+	err = provider.UpdateReaderTempInfo(context.Background(), nil, 1, 1)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "reader temp info not found")
-
-	// Test updating with different logId
-	err = provider.UpdateReaderTempInfo(context.Background(), 999, readerName, 1, 1)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "reader temp info not found")
 
 	// Verify lease persistence (reader temporary info should still exist with a TTL)
 	readerKey := legacyKeyBuilder().BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
@@ -1041,9 +1038,10 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	segmentIds := []int64{1, 2, 3}
 	entryIds := []int64{10, 20, 30}
 
+	readerSessions := make([]ReaderTempInfoSession, readerCount)
 	for i := 0; i < readerCount; i++ {
 		readerNames[i] = fmt.Sprintf("test-reader-%d-%s", i, time.Now().Format("20060102150405"))
-		err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
+		readerSessions[i], err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
 		assert.NoError(t, err)
 	}
 
@@ -1053,7 +1051,7 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	assert.Equal(t, readerCount, len(readers))
 
 	// Test 1: Delete a specific reader
-	err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerNames[1])
+	err = provider.DeleteReaderTempInfo(context.Background(), readerSessions[1])
 	assert.NoError(t, err)
 
 	// Verify reader was deleted
@@ -1066,13 +1064,13 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "reader temp info not found")
 
-	// Test 2: Delete non-existent reader - should not error
-	err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, "non-existent-reader")
+	// Test 2: Deleting an already retired session is idempotent
+	err = provider.DeleteReaderTempInfo(context.Background(), readerSessions[1])
 	assert.NoError(t, err)
 
-	// Test 3: Delete with incorrect logId - should not error but won't delete anything
-	err = provider.DeleteReaderTempInfo(context.Background(), 999, readerNames[0])
-	assert.NoError(t, err)
+	// Test 3: Delete without a session of this provider - refused, deletes nothing
+	err = provider.DeleteReaderTempInfo(context.Background(), nil)
+	assert.Error(t, err)
 
 	// Verify remaining reader still exists
 	readers, err = provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
@@ -1082,7 +1080,7 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	// Delete last readers
 	for i := 0; i < readerCount; i++ {
 		if i != 1 { // Skip the one we already deleted
-			err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerNames[i])
+			err = provider.DeleteReaderTempInfo(context.Background(), readerSessions[i])
 			assert.NoError(t, err)
 		}
 	}
@@ -1125,9 +1123,10 @@ func testGetAllReaderTempInfoForLog(t *testing.T) {
 	segmentIds := []int64{1, 2, 3}
 	entryIds := []int64{10, 20, 30}
 
+	readerSessions := make([]ReaderTempInfoSession, readerCount)
 	for i := 0; i < readerCount; i++ {
 		readerNames[i] = fmt.Sprintf("test-reader-%d-%s", i, time.Now().Format("20060102150405"))
-		err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
+		readerSessions[i], err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
 		assert.NoError(t, err)
 	}
 
@@ -2153,19 +2152,17 @@ func testCancelledContextEtcdErrors(t *testing.T) {
 	_, _ = provider.GetQuorumInfo(cancelledCtx, 1)
 
 	// CreateReaderTempInfo - grant fails (mutating)
-	err = provider.CreateReaderTempInfo(cancelledCtx, "reader1", 1, 0, 0)
+	_, err = provider.CreateReaderTempInfo(cancelledCtx, "reader1", 1, 0, 0)
 	assert.Error(t, err)
 
 	// GetReaderTempInfo / GetAllReaderTempInfoForLog (read)
 	_, _ = provider.GetReaderTempInfo(cancelledCtx, 1, "reader1")
 	_, _ = provider.GetAllReaderTempInfoForLog(cancelledCtx, 1)
 
-	// UpdateReaderTempInfo (mutating)
-	err = provider.UpdateReaderTempInfo(cancelledCtx, 1, "reader1", 0, 0)
+	// UpdateReaderTempInfo / DeleteReaderTempInfo without a session (mutating)
+	err = provider.UpdateReaderTempInfo(cancelledCtx, nil, 0, 0)
 	assert.Error(t, err)
-
-	// DeleteReaderTempInfo (mutating)
-	err = provider.DeleteReaderTempInfo(cancelledCtx, 1, "reader1")
+	err = provider.DeleteReaderTempInfo(cancelledCtx, nil)
 	assert.Error(t, err)
 
 	// CreateSegmentCleanupStatus - marshal succeeds, txn fails (mutating)
@@ -2259,8 +2256,9 @@ func testCorruptedProtobufData(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(readers))
 
-	// UpdateReaderTempInfo unmarshal error (reading existing corrupted data)
-	err = provider.UpdateReaderTempInfo(context.Background(), 1, "corrupted-reader", 0, 0)
+	// UpdateReaderTempInfo does not read the stored value at all, so corrupted
+	// data cannot break it; without a session of this provider it is refused
+	err = provider.UpdateReaderTempInfo(context.Background(), nil, 0, 0)
 	assert.Error(t, err)
 
 	// GetSegmentCleanupStatus unmarshal error
@@ -2402,9 +2400,8 @@ func testUpdateReaderTempInfoWithoutSession(t *testing.T) {
 	// Update must refuse to write for a reader this process never opened:
 	// blindly adopting a foreign key would resurrect metadata after close and
 	// pin the cleanup low-watermark forever.
-	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName, 5, 100)
+	err = provider.UpdateReaderTempInfo(context.Background(), foreignReaderTempInfoSession{logId: logMeta.Metadata.LogId, readerName: readerName}, 5, 100)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "reader temp info not found")
 
 	// The foreign key is left untouched
 	unchangedReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)

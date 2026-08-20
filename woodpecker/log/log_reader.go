@@ -28,6 +28,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
@@ -62,6 +63,10 @@ type logBatchReaderImpl struct {
 	from       *LogMessageId
 	readerName string
 	logNs      string
+	// readerTempSession keeps this reader's temp info alive in metadata for as
+	// long as the reader lives, independently of read progress, and is what
+	// authorizes it to update that info. It is retired on Close.
+	readerTempSession meta.ReaderTempInfoSession
 
 	pendingReadSegmentId int64
 	pendingReadEntryId   int64
@@ -71,7 +76,7 @@ type logBatchReaderImpl struct {
 	lastRead             int64
 }
 
-func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string, cfg *config.Configuration) (LogReader, error) {
+func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string, readerTempSession meta.ReaderTempInfoSession, cfg *config.Configuration) (LogReader, error) {
 	return &logBatchReaderImpl{
 		logName:              logHandle.GetName(),
 		logId:                logHandle.GetId(),
@@ -82,6 +87,7 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		pendingReadSegmentId: from.SegmentId,
 		pendingReadEntryId:   from.EntryId,
 		readerName:           readerName,
+		readerTempSession:    readerTempSession,
 		logNs:                metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		batch:                nil,
 		next:                 0,
@@ -155,9 +161,9 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			return nil, werr.ErrLogReaderReadFailed.WithCauseErr(err)
 		}
 
-		if segId > l.pendingReadSegmentId || l.lastRead+UpdateReaderInfoIntervalMs < time.Now().UnixMilli() {
-			// update reader info
-			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.logId, l.readerName, segId, entryId)
+		if l.readerTempSession != nil && (segId > l.pendingReadSegmentId || l.lastRead+UpdateReaderInfoIntervalMs < time.Now().UnixMilli()) {
+			// update reader info with the session this reader owns
+			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.readerTempSession, segId, entryId)
 			if updateReaderErr != nil {
 				logger.Ctx(ctx).Warn("update reader info failed", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("nextReadSegmentId", segId), zap.Error(updateReaderErr))
 			}
@@ -242,7 +248,13 @@ func (l *logBatchReaderImpl) Close(ctx context.Context) error {
 	defer sp.End()
 	start := time.Now()
 
-	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.logHandle.GetId(), l.readerName)
+	if l.readerTempSession == nil {
+		// Nothing was registered for this reader, so there is nothing to retire
+		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
+		return nil
+	}
+
+	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.readerTempSession)
 	status := "success"
 	if err != nil {
 		logger.Ctx(ctx).Warn("delete reader info failed",

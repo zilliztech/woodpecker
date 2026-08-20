@@ -348,21 +348,33 @@ func (_c *MetadataProvider_CreateLog_Call) RunAndReturn(run func(context.Context
 }
 
 // CreateReaderTempInfo provides a mock function with given fields: ctx, readerName, logId, segmentId, entryId
-func (_m *MetadataProvider) CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, segmentId int64, entryId int64) error {
+func (_m *MetadataProvider) CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, segmentId int64, entryId int64) (meta.ReaderTempInfoSession, error) {
 	ret := _m.Called(ctx, readerName, logId, segmentId, entryId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateReaderTempInfo")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, int64, int64, int64) error); ok {
+	var r0 meta.ReaderTempInfoSession
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, int64, int64, int64) (meta.ReaderTempInfoSession, error)); ok {
+		return rf(ctx, readerName, logId, segmentId, entryId)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, int64, int64, int64) meta.ReaderTempInfoSession); ok {
 		r0 = rf(ctx, readerName, logId, segmentId, entryId)
 	} else {
-		r0 = ret.Error(0)
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(meta.ReaderTempInfoSession)
+		}
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context, string, int64, int64, int64) error); ok {
+		r1 = rf(ctx, readerName, logId, segmentId, entryId)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // MetadataProvider_CreateReaderTempInfo_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateReaderTempInfo'
@@ -387,12 +399,12 @@ func (_c *MetadataProvider_CreateReaderTempInfo_Call) Run(run func(ctx context.C
 	return _c
 }
 
-func (_c *MetadataProvider_CreateReaderTempInfo_Call) Return(_a0 error) *MetadataProvider_CreateReaderTempInfo_Call {
-	_c.Call.Return(_a0)
+func (_c *MetadataProvider_CreateReaderTempInfo_Call) Return(_a0 meta.ReaderTempInfoSession, _a1 error) *MetadataProvider_CreateReaderTempInfo_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *MetadataProvider_CreateReaderTempInfo_Call) RunAndReturn(run func(context.Context, string, int64, int64, int64) error) *MetadataProvider_CreateReaderTempInfo_Call {
+func (_c *MetadataProvider_CreateReaderTempInfo_Call) RunAndReturn(run func(context.Context, string, int64, int64, int64) (meta.ReaderTempInfoSession, error)) *MetadataProvider_CreateReaderTempInfo_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -549,17 +561,17 @@ func (_c *MetadataProvider_DeleteLogMetadata_Call) RunAndReturn(run func(context
 	return _c
 }
 
-// DeleteReaderTempInfo provides a mock function with given fields: ctx, logId, readerName
-func (_m *MetadataProvider) DeleteReaderTempInfo(ctx context.Context, logId int64, readerName string) error {
-	ret := _m.Called(ctx, logId, readerName)
+// DeleteReaderTempInfo provides a mock function with given fields: ctx, session
+func (_m *MetadataProvider) DeleteReaderTempInfo(ctx context.Context, session meta.ReaderTempInfoSession) error {
+	ret := _m.Called(ctx, session)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DeleteReaderTempInfo")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, string) error); ok {
-		r0 = rf(ctx, logId, readerName)
+	if rf, ok := ret.Get(0).(func(context.Context, meta.ReaderTempInfoSession) error); ok {
+		r0 = rf(ctx, session)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -574,15 +586,14 @@ type MetadataProvider_DeleteReaderTempInfo_Call struct {
 
 // DeleteReaderTempInfo is a helper method to define mock.On call
 //   - ctx context.Context
-//   - logId int64
-//   - readerName string
-func (_e *MetadataProvider_Expecter) DeleteReaderTempInfo(ctx interface{}, logId interface{}, readerName interface{}) *MetadataProvider_DeleteReaderTempInfo_Call {
-	return &MetadataProvider_DeleteReaderTempInfo_Call{Call: _e.mock.On("DeleteReaderTempInfo", ctx, logId, readerName)}
+//   - session meta.ReaderTempInfoSession
+func (_e *MetadataProvider_Expecter) DeleteReaderTempInfo(ctx interface{}, session interface{}) *MetadataProvider_DeleteReaderTempInfo_Call {
+	return &MetadataProvider_DeleteReaderTempInfo_Call{Call: _e.mock.On("DeleteReaderTempInfo", ctx, session)}
 }
 
-func (_c *MetadataProvider_DeleteReaderTempInfo_Call) Run(run func(ctx context.Context, logId int64, readerName string)) *MetadataProvider_DeleteReaderTempInfo_Call {
+func (_c *MetadataProvider_DeleteReaderTempInfo_Call) Run(run func(ctx context.Context, session meta.ReaderTempInfoSession)) *MetadataProvider_DeleteReaderTempInfo_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(string))
+		run(args[0].(context.Context), args[1].(meta.ReaderTempInfoSession))
 	})
 	return _c
 }
@@ -592,7 +603,7 @@ func (_c *MetadataProvider_DeleteReaderTempInfo_Call) Return(_a0 error) *Metadat
 	return _c
 }
 
-func (_c *MetadataProvider_DeleteReaderTempInfo_Call) RunAndReturn(run func(context.Context, int64, string) error) *MetadataProvider_DeleteReaderTempInfo_Call {
+func (_c *MetadataProvider_DeleteReaderTempInfo_Call) RunAndReturn(run func(context.Context, meta.ReaderTempInfoSession) error) *MetadataProvider_DeleteReaderTempInfo_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1983,17 +1994,17 @@ func (_c *MetadataProvider_UpdateLogMeta_Call) RunAndReturn(run func(context.Con
 	return _c
 }
 
-// UpdateReaderTempInfo provides a mock function with given fields: ctx, logId, readerName, recentReadSegmentId, recentReadEntryId
-func (_m *MetadataProvider) UpdateReaderTempInfo(ctx context.Context, logId int64, readerName string, recentReadSegmentId int64, recentReadEntryId int64) error {
-	ret := _m.Called(ctx, logId, readerName, recentReadSegmentId, recentReadEntryId)
+// UpdateReaderTempInfo provides a mock function with given fields: ctx, session, recentReadSegmentId, recentReadEntryId
+func (_m *MetadataProvider) UpdateReaderTempInfo(ctx context.Context, session meta.ReaderTempInfoSession, recentReadSegmentId int64, recentReadEntryId int64) error {
+	ret := _m.Called(ctx, session, recentReadSegmentId, recentReadEntryId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateReaderTempInfo")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, string, int64, int64) error); ok {
-		r0 = rf(ctx, logId, readerName, recentReadSegmentId, recentReadEntryId)
+	if rf, ok := ret.Get(0).(func(context.Context, meta.ReaderTempInfoSession, int64, int64) error); ok {
+		r0 = rf(ctx, session, recentReadSegmentId, recentReadEntryId)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2008,17 +2019,16 @@ type MetadataProvider_UpdateReaderTempInfo_Call struct {
 
 // UpdateReaderTempInfo is a helper method to define mock.On call
 //   - ctx context.Context
-//   - logId int64
-//   - readerName string
+//   - session meta.ReaderTempInfoSession
 //   - recentReadSegmentId int64
 //   - recentReadEntryId int64
-func (_e *MetadataProvider_Expecter) UpdateReaderTempInfo(ctx interface{}, logId interface{}, readerName interface{}, recentReadSegmentId interface{}, recentReadEntryId interface{}) *MetadataProvider_UpdateReaderTempInfo_Call {
-	return &MetadataProvider_UpdateReaderTempInfo_Call{Call: _e.mock.On("UpdateReaderTempInfo", ctx, logId, readerName, recentReadSegmentId, recentReadEntryId)}
+func (_e *MetadataProvider_Expecter) UpdateReaderTempInfo(ctx interface{}, session interface{}, recentReadSegmentId interface{}, recentReadEntryId interface{}) *MetadataProvider_UpdateReaderTempInfo_Call {
+	return &MetadataProvider_UpdateReaderTempInfo_Call{Call: _e.mock.On("UpdateReaderTempInfo", ctx, session, recentReadSegmentId, recentReadEntryId)}
 }
 
-func (_c *MetadataProvider_UpdateReaderTempInfo_Call) Run(run func(ctx context.Context, logId int64, readerName string, recentReadSegmentId int64, recentReadEntryId int64)) *MetadataProvider_UpdateReaderTempInfo_Call {
+func (_c *MetadataProvider_UpdateReaderTempInfo_Call) Run(run func(ctx context.Context, session meta.ReaderTempInfoSession, recentReadSegmentId int64, recentReadEntryId int64)) *MetadataProvider_UpdateReaderTempInfo_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(string), args[3].(int64), args[4].(int64))
+		run(args[0].(context.Context), args[1].(meta.ReaderTempInfoSession), args[2].(int64), args[3].(int64))
 	})
 	return _c
 }
@@ -2028,7 +2038,7 @@ func (_c *MetadataProvider_UpdateReaderTempInfo_Call) Return(_a0 error) *Metadat
 	return _c
 }
 
-func (_c *MetadataProvider_UpdateReaderTempInfo_Call) RunAndReturn(run func(context.Context, int64, string, int64, int64) error) *MetadataProvider_UpdateReaderTempInfo_Call {
+func (_c *MetadataProvider_UpdateReaderTempInfo_Call) RunAndReturn(run func(context.Context, meta.ReaderTempInfoSession, int64, int64) error) *MetadataProvider_UpdateReaderTempInfo_Call {
 	_c.Call.Return(run)
 	return _c
 }

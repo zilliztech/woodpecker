@@ -43,6 +43,8 @@ type readerSessionTestEnv struct {
 	logId      int64
 	readerName string
 	readerKey  string
+	// session is what an open reader holds as a field for its whole lifetime
+	session ReaderTempInfoSession
 }
 
 func setupReaderSessionTest(t *testing.T, logName string, readerName string, fromSegmentId int64, fromEntryId int64) *readerSessionTestEnv {
@@ -59,7 +61,12 @@ func setupReaderSessionTest(t *testing.T, logName string, readerName string, fro
 	require.NoError(t, err)
 	logId := logMeta.Metadata.LogId
 
-	require.NoError(t, provider.CreateReaderTempInfo(context.Background(), readerName, logId, fromSegmentId, fromEntryId))
+	session, err := provider.CreateReaderTempInfo(context.Background(), readerName, logId, fromSegmentId, fromEntryId)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Equal(t, logId, session.LogId())
+	require.Equal(t, readerName, session.ReaderName())
+	require.True(t, session.IsActive())
 
 	return &readerSessionTestEnv{
 		etcdCli:    etcdCli,
@@ -67,6 +74,7 @@ func setupReaderSessionTest(t *testing.T, logName string, readerName string, fro
 		logId:      logId,
 		readerName: readerName,
 		readerKey:  legacyKeyBuilder().BuildLogReaderTempInfoKey(logId, readerName),
+		session:    session,
 	}
 }
 
@@ -120,7 +128,7 @@ func testUpdateReaderTempInfoSelfHealsAfterLeaseLoss(t *testing.T) {
 	require.Equal(t, 0, len(gone.Kvs), "key should vanish with the revoked lease")
 
 	// The reader is still open; its next progress update must self-heal.
-	err = env.provider.UpdateReaderTempInfo(context.Background(), env.logId, env.readerName, 7, 77)
+	err = env.provider.UpdateReaderTempInfo(context.Background(), env.session, 7, 77)
 	require.NoError(t, err, "update must recreate reader temp info lost with its lease")
 
 	info, err := env.provider.GetReaderTempInfo(context.Background(), env.logId, env.readerName)
@@ -146,9 +154,9 @@ func testUpdateAfterDeleteDoesNotResurrectReaderTempInfo(t *testing.T) {
 	env := setupReaderSessionTest(t, "reader_session_close_test_"+time.Now().Format("20060102150405"), "closed-reader", 3, 30)
 	defer env.provider.Close()
 
-	require.NoError(t, env.provider.DeleteReaderTempInfo(context.Background(), env.logId, env.readerName))
+	require.NoError(t, env.provider.DeleteReaderTempInfo(context.Background(), env.session))
 
-	err := env.provider.UpdateReaderTempInfo(context.Background(), env.logId, env.readerName, 5, 50)
+	err := env.provider.UpdateReaderTempInfo(context.Background(), env.session, 5, 50)
 	require.Error(t, err, "update after close must not recreate the temp info")
 	assert.Contains(t, err.Error(), "reader temp info not found")
 
@@ -167,7 +175,7 @@ func testUpdatePutFailureDoesNotRevokeReaderTempInfoLease(t *testing.T) {
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := env.provider.UpdateReaderTempInfo(cancelledCtx, env.logId, env.readerName, 5, 50)
+	err := env.provider.UpdateReaderTempInfo(cancelledCtx, env.session, 5, 50)
 	require.Error(t, err, "update with a dead caller context must fail")
 
 	resp, err := env.etcdCli.Get(context.Background(), env.readerKey)
@@ -179,34 +187,64 @@ func testUpdatePutFailureDoesNotRevokeReaderTempInfoLease(t *testing.T) {
 	assert.Greater(t, ttlResp.TTL, int64(0), "the healthy lease must not be revoked")
 
 	// The reader keeps working once the caller context is healthy again.
-	require.NoError(t, env.provider.UpdateReaderTempInfo(context.Background(), env.logId, env.readerName, 6, 60))
+	require.NoError(t, env.provider.UpdateReaderTempInfo(context.Background(), env.session, 6, 60))
 }
 
-// An update that loaded the session entry right before DeleteReaderTempInfo
-// ran to completion (the window between the map lookup and the entry lock)
-// must not resurrect the deleted key: the recreated session would no longer be
-// tracked by the map, its keepalive would outlive the reader, and the zombie
-// key would pin the truncated-segment cleanup low-watermark forever.
-func testUpdateRacingWithCloseDoesNotResurrectReaderTempInfo(t *testing.T) {
-	env := setupReaderSessionTest(t, "reader_session_race_test_"+time.Now().Format("20060102150405"), "racing-reader", 5, 50)
-	defer env.provider.Close()
+// A reader still holding its session after the provider closed must not
+// resurrect its temp info either: provider Close() stops every keepalive, and
+// a recreated one would be tracked by nothing and outlive the process's
+// metadata layer, pinning the truncated-segment cleanup low-watermark forever.
+func testUpdateAfterProviderCloseDoesNotResurrectReaderTempInfo(t *testing.T) {
+	env := setupReaderSessionTest(t, "reader_session_provclose_test_"+time.Now().Format("20060102150405"), "orphan-reader", 5, 50)
 
-	impl, ok := env.provider.(*metadataProviderEtcd)
-	require.True(t, ok)
-	v, loaded := impl.readerTempSessions.Load(readerTempSessionKey(env.logId, env.readerName))
-	require.True(t, loaded)
-	entry := v.(*readerTempSession)
+	require.NoError(t, env.provider.Close())
+	assert.False(t, env.session.IsActive(), "provider close must retire the reader session")
 
-	require.NoError(t, env.provider.DeleteReaderTempInfo(context.Background(), env.logId, env.readerName))
-
-	err := impl.updateOwnedReaderTempInfo(context.Background(), time.Now(), entry, env.logId, env.readerName, 6, 66)
-	require.Error(t, err, "an update racing with close must not resurrect the key")
+	err := env.provider.UpdateReaderTempInfo(context.Background(), env.session, 6, 66)
+	require.Error(t, err, "an update after provider close must not resurrect the key")
 	assert.Contains(t, err.Error(), "reader temp info not found")
 
 	resp, err := env.etcdCli.Get(context.Background(), env.readerKey)
 	require.NoError(t, err)
-	assert.Equal(t, 0, len(resp.Kvs), "closed reader temp info must stay deleted")
+	assert.Equal(t, 0, len(resp.Kvs), "the retired reader temp info must stay deleted")
+
+	// A reader closing after the provider did is a no-op, not an error
+	require.NoError(t, env.provider.DeleteReaderTempInfo(context.Background(), env.session))
 }
+
+// A session this provider never handed out carries no ownership proof and must
+// be refused rather than adopted: adopting one would let any caller write (and
+// keep alive) reader temp info for a reader that is gone.
+func testReaderTempInfoRejectsForeignSession(t *testing.T) {
+	env := setupReaderSessionTest(t, "reader_session_foreign_test_"+time.Now().Format("20060102150405"), "foreign-reader", 6, 60)
+	defer env.provider.Close()
+
+	err := env.provider.UpdateReaderTempInfo(context.Background(), nil, 7, 70)
+	require.Error(t, err, "update with a nil session must be refused")
+	err = env.provider.DeleteReaderTempInfo(context.Background(), nil)
+	require.Error(t, err, "delete with a nil session must be refused")
+
+	err = env.provider.UpdateReaderTempInfo(context.Background(), foreignReaderTempInfoSession{logId: env.logId, readerName: env.readerName}, 7, 70)
+	require.Error(t, err, "update with a foreign session type must be refused")
+
+	// The real reader is untouched by any of it
+	info, err := env.provider.GetReaderTempInfo(context.Background(), env.logId, env.readerName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(6), info.RecentReadSegmentId)
+	assert.True(t, env.session.IsActive())
+}
+
+// foreignReaderTempInfoSession implements the interface without coming from
+// this provider, standing in for a session handed out by another provider (or
+// another process). Even when it names a real reader it carries no ownership.
+type foreignReaderTempInfoSession struct {
+	logId      int64
+	readerName string
+}
+
+func (s foreignReaderTempInfoSession) LogId() int64       { return s.logId }
+func (s foreignReaderTempInfoSession) ReaderName() string { return s.readerName }
+func (foreignReaderTempInfoSession) IsActive() bool       { return true }
 
 // CreateReaderTempInfo must fail within the caller's deadline when etcd is
 // unreachable instead of blocking on the etcd client's own lifetime context.
@@ -227,7 +265,8 @@ func testCreateReaderTempInfoHonorsCallerDeadlineWhenEtcdUnreachable(t *testing.
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- provider.CreateReaderTempInfo(ctx, "unreachable-reader", 1, 0, 0)
+		_, createErr := provider.CreateReaderTempInfo(ctx, "unreachable-reader", 1, 0, 0)
+		done <- createErr
 	}()
 	select {
 	case createErr := <-done:

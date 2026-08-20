@@ -342,7 +342,7 @@ func TestLogReader_ReadNext_FreshBatchRead(t *testing.T) {
 		},
 	}).Maybe()
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, int64(1), "test-reader", int64(0), int64(0)).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, int64(0), int64(0)).Return(nil).Maybe()
 
 	// ReadBatchAdv returns a batch with one entry
 	mockSegHandle.EXPECT().ReadBatchAdv(mock.Anything, int64(0), int64(DefaultBatchEntriesLimit), mock.Anything).Return(
@@ -402,7 +402,7 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 		},
 	}).Maybe()
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	// First ReadBatchAdv returns EOF
 	mockSegHandle0.EXPECT().ReadBatchAdv(mock.Anything, int64(5), int64(DefaultBatchEntriesLimit), mock.Anything).Return(
 		nil, werr.ErrFileReaderEndOfFile,
@@ -1157,7 +1157,7 @@ func TestNewLogBatchReader(t *testing.T) {
 	mockLogHandle.On("GetId").Return(int64(1))
 
 	from := &LogMessageId{SegmentId: 0, EntryId: 0}
-	reader, err := NewLogBatchReader(context.Background(), mockLogHandle, mockSegHandle, from, "test-reader", cfg)
+	reader, err := NewLogBatchReader(context.Background(), mockLogHandle, mockSegHandle, from, "test-reader", &fakeReaderTempSession{logId: 1, readerName: "test-reader"}, cfg)
 	require.NoError(t, err)
 	assert.NotNil(t, reader)
 	assert.Equal(t, "test-reader", reader.GetName())
@@ -1170,17 +1170,18 @@ func TestLogReader_Close(t *testing.T) {
 		mockMetadata := mocks_meta.NewMetadataProvider(t)
 
 		reader := &logBatchReaderImpl{
-			logName:    "test-log",
-			logId:      1,
-			logIdStr:   "1",
-			logHandle:  mockLogHandle,
-			readerName: "test-reader",
-			logNs:      "",
+			logName:           "test-log",
+			logId:             1,
+			logIdStr:          "1",
+			logHandle:         mockLogHandle,
+			readerName:        "test-reader",
+			logNs:             "",
+			readerTempSession: &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		}
 
 		mockLogHandle.On("GetMetadataProvider").Return(mockMetadata)
 		mockLogHandle.On("GetId").Return(int64(1))
-		mockMetadata.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), "test-reader").Return(nil)
+		mockMetadata.EXPECT().DeleteReaderTempInfo(mock.Anything, mock.Anything).Return(nil)
 
 		err := reader.Close(context.Background())
 		assert.NoError(t, err)
@@ -1192,17 +1193,18 @@ func TestLogReader_Close(t *testing.T) {
 		mockMetadata := mocks_meta.NewMetadataProvider(t)
 
 		reader := &logBatchReaderImpl{
-			logName:    "test-log",
-			logId:      1,
-			logIdStr:   "1",
-			logHandle:  mockLogHandle,
-			readerName: "test-reader",
-			logNs:      "",
+			logName:           "test-log",
+			logId:             1,
+			logIdStr:          "1",
+			logHandle:         mockLogHandle,
+			readerName:        "test-reader",
+			logNs:             "",
+			readerTempSession: &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		}
 
 		mockLogHandle.On("GetMetadataProvider").Return(mockMetadata)
 		mockLogHandle.On("GetId").Return(int64(1))
-		mockMetadata.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), "test-reader").Return(werr.ErrInternalError)
+		mockMetadata.EXPECT().DeleteReaderTempInfo(mock.Anything, mock.Anything).Return(werr.ErrInternalError)
 
 		err := reader.Close(context.Background())
 		assert.Error(t, err)
@@ -1239,7 +1241,7 @@ func TestLogReader_ReadNext_EntryNotFound_ContextCancelled(t *testing.T) {
 		},
 	}).Maybe()
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// ReadBatchAdv returns ErrEntryNotFound
 	mockSegHandle.EXPECT().ReadBatchAdv(mock.Anything, int64(0), int64(DefaultBatchEntriesLimit), mock.Anything).Return(
@@ -1286,7 +1288,7 @@ func TestLogReader_ReadNext_OtherReadError(t *testing.T) {
 		},
 	}).Maybe()
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// ReadBatchAdv returns a generic error
 	mockSegHandle.EXPECT().ReadBatchAdv(mock.Anything, int64(0), int64(DefaultBatchEntriesLimit), mock.Anything).Return(
@@ -1343,3 +1345,14 @@ func TestLogReader_ReadNext_MultipleBatchEntries(t *testing.T) {
 	assert.Equal(t, []byte("msg2"), msg2.Payload)
 	assert.Equal(t, int64(1), msg2.Id.EntryId)
 }
+
+// fakeReaderTempSession stands in for the reader temp info session a metadata
+// provider hands to an open reader and the reader holds for its lifetime.
+type fakeReaderTempSession struct {
+	logId      int64
+	readerName string
+}
+
+func (s *fakeReaderTempSession) LogId() int64       { return s.logId }
+func (s *fakeReaderTempSession) ReaderName() string { return s.readerName }
+func (s *fakeReaderTempSession) IsActive() bool     { return true }
