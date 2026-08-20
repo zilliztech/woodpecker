@@ -36,19 +36,31 @@ resources before running:
 MK_CPUS=6 MK_MEMORY=8192 ./run_monitor_tests.sh
 ```
 
-## Label Scheme: `namespace` / `log_ns`
+## Label Scheme: `namespace` / `woodpecker_id` / `log_ns`
 
-Woodpecker metrics carry two key labels:
+Woodpecker metrics carry three key labels:
 
 | Label | Value | Source |
 |-------|-------|--------|
 | `namespace` | Kubernetes namespace (e.g. `woodpecker`) | injected by kube-prometheus-stack from the PodMonitor namespace |
+| `woodpecker_id` | Woodpecker cluster instance (e.g. `my-woodpecker`) | relabeled by the PodMonitors from the pod's `app.kubernetes.io/instance` label, with the `wp-` prefix stripped |
 | `log_ns` | Woodpecker logical log namespace (e.g. `my-log`) | emitted by the server/client as a metric label |
+
+`woodpecker_id` exists because a namespace may host several woodpecker
+clusters (a pooled deployment runs one StatefulSet per instance, named
+`wp-<id>`). prometheus-operator derives `job` from the PodMonitor, so every
+instance in the pool shares one `job` value and only the instance label can
+tell them apart. Its `All` option is `.*` rather than the generated value
+list, so targets scraped without the relabel — where the label is absent —
+still match.
 
 Dashboards derive everything else from these: the `namespace` dropdown is
 discovered via `go_info`, and the hidden `server_job` variable resolves the
 PodMonitor-assigned `job` label within the selected namespace (also via
 `go_info`), so no job name or cluster name is hardcoded.
+
+The docker monitor suite stamps the same `woodpecker_id` value statically in
+`tests/docker/monitor/prometheus.yml`, so one dashboard layout serves both.
 
 ### Breaking-change note for production dashboards
 
@@ -78,5 +90,16 @@ The test checks:
 3. **ServerMetrics** — core server metrics are present and non-zero.
 4. **ClientMetrics** — core client metrics are present and non-zero.
 5. **LabelScheme** — every `woodpecker_server_logstore_active_logs` series
-   carries `namespace=woodpecker`, a non-empty `log_ns`, and no
-   `exported_namespace` (which would indicate a relabeling conflict).
+   carries `namespace=woodpecker`, `woodpecker_id=$CR_NAME`, a non-empty
+   `log_ns`, and no `exported_namespace` (which would indicate a relabeling
+   conflict).
+
+`dashboards_test.go` runs without a cluster: it validates the dashboard
+templates and checks that `manifests/dashboard-configmaps.yaml` still matches
+them, since `run_monitor_tests.sh` applies the ConfigMaps and a stale manifest
+would silently deploy an outdated dashboard. Regenerate it after editing a
+template:
+
+```bash
+go test ./tests/k8s/monitor -run TestK8sDashboardConfigMaps_InSync -update
+```

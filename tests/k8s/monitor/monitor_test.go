@@ -18,12 +18,14 @@ package monitor
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
-// TestK8sMonitor_Metrics verifies scrape targets and the namespace/log_ns
-// label scheme against a Prometheus reachable at $WP_K8S_PROM_URL (a kubectl
+// TestK8sMonitor_Metrics verifies scrape targets and the
+// namespace/woodpecker_id/log_ns label scheme against a Prometheus reachable
+// at $WP_K8S_PROM_URL (a kubectl
 // port-forward set up by run_monitor_tests.sh). Skipped when unset so the package
 // stays `go test ./...`-safe without a live cluster.
 func TestK8sMonitor_Metrics(t *testing.T) {
@@ -70,9 +72,19 @@ func TestK8sMonitor_Metrics(t *testing.T) {
 		if len(series) == 0 {
 			t.Fatal("no logstore_active_logs series")
 		}
+		// The PodMonitor relabels app.kubernetes.io/instance (the helm release
+		// name, wp-<id> in production) into woodpecker_id.
+		wantID := os.Getenv("CR_NAME")
+		if wantID == "" {
+			wantID = "my-woodpecker"
+		}
+		wantID = strings.TrimPrefix(wantID, "wp-")
 		for _, m := range series {
 			if m["namespace"] != "woodpecker" {
 				t.Errorf("namespace=%q, want k8s namespace woodpecker", m["namespace"])
+			}
+			if m["woodpecker_id"] != wantID {
+				t.Errorf("woodpecker_id=%q, want %q", m["woodpecker_id"], wantID)
 			}
 			if m["log_ns"] == "" {
 				t.Errorf("missing log_ns label: %v", m)

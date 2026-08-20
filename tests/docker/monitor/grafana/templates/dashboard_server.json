@@ -54,12 +54,12 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_logstore_active_logs{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (node_id)",
+              "expr": "sum(woodpecker_server_logstore_active_logs{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} logs",
               "refId": "A"
             },
             {
-              "expr": "sum(woodpecker_server_logstore_active_segments{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (node_id)",
+              "expr": "sum(woodpecker_server_logstore_active_segments{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} segments",
               "refId": "B"
             }
@@ -110,7 +110,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_logstore_instances_total{log_ns=~\"$log_ns\"}) by (node_id)",
+              "expr": "sum(woodpecker_server_logstore_instances_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}}",
               "refId": "A"
             }
@@ -161,7 +161,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_logstore_operations_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (operation, status)",
+              "expr": "sum(rate(woodpecker_server_logstore_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (operation, status)",
               "legendFormat": "op={{operation}} status={{status}}",
               "refId": "A"
             }
@@ -212,12 +212,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_logstore_operation_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (operation, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_logstore_operation_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (operation, le))",
               "legendFormat": "op={{operation}} P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_logstore_operation_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (operation, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_logstore_operation_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (operation, le))",
               "legendFormat": "op={{operation}} P99",
               "refId": "B"
             }
@@ -268,7 +268,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_logstore_active_segment_processors{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
+              "expr": "sum(woodpecker_server_logstore_active_segment_processors{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -333,12 +333,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_buffer_wait_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_buffer_wait_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
               "legendFormat": "{{node_id}} Buffer P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_buffer_wait_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_buffer_wait_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
               "legendFormat": "{{node_id}} Buffer P99",
               "refId": "B"
             }
@@ -389,7 +389,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_file_operations_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, status)",
+              "expr": "sum(rate(woodpecker_server_file_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, status)",
               "legendFormat": "{{node_id}} op={{operation}} status={{status}}",
               "refId": "A"
             }
@@ -440,12 +440,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_operation_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_operation_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
               "legendFormat": "{{node_id}} op={{operation}} P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_operation_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_operation_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
               "legendFormat": "{{node_id}} op={{operation}} P99",
               "refId": "B"
             }
@@ -496,12 +496,12 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_file_writer{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (node_id, log_id)",
+              "expr": "sum(woodpecker_server_file_writer{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (node_id, log_id)",
               "legendFormat": "{{node_id}} logID={{log_id}} writer",
               "refId": "A"
             },
             {
-              "expr": "sum(woodpecker_server_file_reader{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (node_id, log_id)",
+              "expr": "sum(woodpecker_server_file_reader{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (node_id, log_id)",
               "legendFormat": "{{node_id}} logID={{log_id}} reader",
               "refId": "B"
             }
@@ -552,12 +552,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_flush_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_flush_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
               "legendFormat": "{{node_id}} Flush P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_flush_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_flush_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
               "legendFormat": "{{node_id}} Flush P99",
               "refId": "B"
             }
@@ -608,12 +608,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_read_batch_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_read_batch_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
               "legendFormat": "{{node_id}} ReadBatch P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_read_batch_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_read_batch_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
               "legendFormat": "{{node_id}} ReadBatch P99",
               "refId": "B"
             }
@@ -664,12 +664,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_compaction_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_compaction_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
               "legendFormat": "{{node_id}} Compact P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_compaction_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_compaction_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
               "legendFormat": "{{node_id}} Compact P99",
               "refId": "B"
             }
@@ -720,12 +720,12 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_flush_bytes_written{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id)",
+              "expr": "sum(rate(woodpecker_server_flush_bytes_written{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id)",
               "legendFormat": "{{node_id}} flush",
               "refId": "A"
             },
             {
-              "expr": "sum(rate(woodpecker_server_compact_bytes_written{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id)",
+              "expr": "sum(rate(woodpecker_server_compact_bytes_written{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id)",
               "legendFormat": "{{node_id}} compact",
               "refId": "B"
             }
@@ -790,7 +790,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_object_storage_operations_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, status)",
+              "expr": "sum(rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, status)",
               "legendFormat": "{{node_id}} op={{operation}} status={{status}}",
               "refId": "A"
             }
@@ -841,12 +841,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_object_storage_operation_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_object_storage_operation_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
               "legendFormat": "{{node_id}} op={{operation}} P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_object_storage_operation_latency_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_object_storage_operation_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
               "legendFormat": "{{node_id}} op={{operation}} P99",
               "refId": "B"
             }
@@ -897,12 +897,12 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_object_storage_request_bytes_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_object_storage_request_bytes_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
               "legendFormat": "{{node_id}} op={{operation}} P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_object_storage_request_bytes_bucket{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_object_storage_request_bytes_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
               "legendFormat": "{{node_id}} op={{operation}} P99",
               "refId": "B"
             }
@@ -953,7 +953,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_object_storage_bytes_transferred{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation)",
+              "expr": "sum(rate(woodpecker_server_object_storage_bytes_transferred{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, operation)",
               "legendFormat": "{{node_id}} op={{operation}}",
               "refId": "A"
             }
@@ -1018,7 +1018,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_system_cpu_usage) by (node_id)",
+              "expr": "sum(woodpecker_server_system_cpu_usage{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}}",
               "refId": "A"
             }
@@ -1069,12 +1069,12 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_system_memory_used_bytes) by (node_id)",
+              "expr": "sum(woodpecker_server_system_memory_used_bytes{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} used",
               "refId": "A"
             },
             {
-              "expr": "sum(woodpecker_server_system_memory_usage_ratio) by (node_id)",
+              "expr": "sum(woodpecker_server_system_memory_usage_ratio{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} ratio",
               "refId": "B"
             }
@@ -1125,12 +1125,12 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_system_disk_used_bytes) by (node_id)",
+              "expr": "sum(woodpecker_server_system_disk_used_bytes{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} used",
               "refId": "A"
             },
             {
-              "expr": "sum(woodpecker_server_system_disk_total_bytes) by (node_id)",
+              "expr": "sum(woodpecker_server_system_disk_total_bytes{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} total",
               "refId": "B"
             }
@@ -1181,7 +1181,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_system_io_wait) by (node_id)",
+              "expr": "sum(woodpecker_server_system_io_wait{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}}",
               "refId": "A"
             }
@@ -1232,7 +1232,7 @@
           },
           "targets": [
             {
-              "expr": "process_open_fds{job=~\"$server_job\"}",
+              "expr": "process_open_fds{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} open",
               "refId": "A"
             }
@@ -1283,12 +1283,12 @@
           },
           "targets": [
             {
-              "expr": "rate(process_network_receive_bytes_total{job=~\"$server_job\"}[1m])",
+              "expr": "rate(process_network_receive_bytes_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[1m])",
               "legendFormat": "{{pod}} {{instance}} rx",
               "refId": "A"
             },
             {
-              "expr": "rate(process_network_transmit_bytes_total{job=~\"$server_job\"}[1m])",
+              "expr": "rate(process_network_transmit_bytes_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[1m])",
               "legendFormat": "{{pod}} {{instance}} tx",
               "refId": "B"
             }
@@ -1339,7 +1339,7 @@
           },
           "targets": [
             {
-              "expr": "process_open_fds{job=~\"$server_job\"} / process_max_fds{job=~\"$server_job\"}",
+              "expr": "process_open_fds{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"} / process_max_fds{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -1390,7 +1390,7 @@
           },
           "targets": [
             {
-              "expr": "time() - process_start_time_seconds{job=~\"$server_job\"}",
+              "expr": "time() - process_start_time_seconds{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -1441,7 +1441,7 @@
           },
           "targets": [
             {
-              "expr": "process_virtual_memory_bytes{job=~\"$server_job\"}",
+              "expr": "process_virtual_memory_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -1528,7 +1528,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_logstore_disk_usage_ratio) by (node_id, path)",
+              "expr": "sum(woodpecker_server_logstore_disk_usage_ratio{woodpecker_id=~\"$woodpecker_id\"}) by (node_id, path)",
               "legendFormat": "nodeID={{node_id}} path={{path}}",
               "refId": "A"
             }
@@ -1579,7 +1579,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_logstore_disk_free_bytes) by (node_id, path)",
+              "expr": "sum(woodpecker_server_logstore_disk_free_bytes{woodpecker_id=~\"$woodpecker_id\"}) by (node_id, path)",
               "legendFormat": "nodeID={{node_id}} path={{path}}",
               "refId": "A"
             }
@@ -1633,7 +1633,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_logstore_write_backpressure_state) by (node_id)",
+              "expr": "sum(woodpecker_server_logstore_write_backpressure_state{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} (0=normal 1=warn 2=blocked)",
               "refId": "A"
             }
@@ -1686,7 +1686,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_logstore_write_reject_probability) by (node_id)",
+              "expr": "sum(woodpecker_server_logstore_write_reject_probability{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}}",
               "refId": "A"
             }
@@ -1737,7 +1737,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_logstore_write_rejected_total[1m])) by (node_id, reason)",
+              "expr": "sum(rate(woodpecker_server_logstore_write_rejected_total{woodpecker_id=~\"$woodpecker_id\"}[1m])) by (node_id, reason)",
               "legendFormat": "nodeID={{node_id}} reason={{reason}}",
               "refId": "A"
             }
@@ -1802,7 +1802,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(process_cpu_seconds_total{job=~\"$server_job\"}[1m])) by (pod, instance)",
+              "expr": "sum(rate(process_cpu_seconds_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[1m])) by (pod, instance)",
               "legendFormat": "{{pod}} {{instance}} cpu",
               "refId": "A"
             }
@@ -1853,7 +1853,7 @@
           },
           "targets": [
             {
-              "expr": "sum(process_resident_memory_bytes{job=~\"$server_job\"}) by (pod, instance)",
+              "expr": "sum(process_resident_memory_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}) by (pod, instance)",
               "legendFormat": "{{pod}} {{instance}} memory",
               "refId": "A"
             }
@@ -1904,7 +1904,7 @@
           },
           "targets": [
             {
-              "expr": "sum(go_goroutines{job=~\"$server_job\"}) by (pod, instance)",
+              "expr": "sum(go_goroutines{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}) by (pod, instance)",
               "legendFormat": "{{pod}} {{instance}} goroutines",
               "refId": "A"
             }
@@ -1955,7 +1955,7 @@
           },
           "targets": [
             {
-              "expr": "rate(process_cpu_seconds_total{job=~\"$server_job\"}[1m])",
+              "expr": "rate(process_cpu_seconds_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[1m])",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -2006,7 +2006,7 @@
           },
           "targets": [
             {
-              "expr": "process_resident_memory_bytes{job=~\"$server_job\"}",
+              "expr": "process_resident_memory_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -2057,7 +2057,7 @@
           },
           "targets": [
             {
-              "expr": "go_goroutines{job=~\"$server_job\"}",
+              "expr": "go_goroutines{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -2108,7 +2108,7 @@
           },
           "targets": [
             {
-              "expr": "go_memstats_alloc_bytes{job=~\"$server_job\"}",
+              "expr": "go_memstats_alloc_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -2159,17 +2159,17 @@
           },
           "targets": [
             {
-              "expr": "go_memstats_heap_inuse_bytes{job=~\"$server_job\"}",
+              "expr": "go_memstats_heap_inuse_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} in-use",
               "refId": "A"
             },
             {
-              "expr": "go_memstats_heap_idle_bytes{job=~\"$server_job\"}",
+              "expr": "go_memstats_heap_idle_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} idle",
               "refId": "B"
             },
             {
-              "expr": "go_memstats_heap_released_bytes{job=~\"$server_job\"}",
+              "expr": "go_memstats_heap_released_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} released",
               "refId": "C"
             }
@@ -2220,7 +2220,7 @@
           },
           "targets": [
             {
-              "expr": "go_memstats_heap_objects{job=~\"$server_job\"}",
+              "expr": "go_memstats_heap_objects{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -2271,7 +2271,7 @@
           },
           "targets": [
             {
-              "expr": "go_gc_duration_seconds{job=~\"$server_job\", quantile=\"1\"}",
+              "expr": "go_gc_duration_seconds{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\", quantile=\"1\"}",
               "legendFormat": "{{pod}} {{instance}} max",
               "refId": "A"
             }
@@ -2322,7 +2322,7 @@
           },
           "targets": [
             {
-              "expr": "go_memstats_gc_cpu_fraction{job=~\"$server_job\"}",
+              "expr": "go_memstats_gc_cpu_fraction{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -2373,12 +2373,12 @@
           },
           "targets": [
             {
-              "expr": "rate(go_memstats_mallocs_total{job=~\"$server_job\"}[2m])",
+              "expr": "rate(go_memstats_mallocs_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[2m])",
               "legendFormat": "{{pod}} {{instance}} mallocs",
               "refId": "A"
             },
             {
-              "expr": "rate(go_memstats_frees_total{job=~\"$server_job\"}[2m])",
+              "expr": "rate(go_memstats_frees_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[2m])",
               "legendFormat": "{{pod}} {{instance}} frees",
               "refId": "B"
             }
@@ -2429,7 +2429,7 @@
           },
           "targets": [
             {
-              "expr": "rate(go_memstats_alloc_bytes_total{job=~\"$server_job\"}[5m])",
+              "expr": "rate(go_memstats_alloc_bytes_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[5m])",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -2480,12 +2480,12 @@
           },
           "targets": [
             {
-              "expr": "go_sched_gomaxprocs_threads{job=~\"$server_job\"}",
+              "expr": "go_sched_gomaxprocs_threads{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} GOMAXPROCS",
               "refId": "A"
             },
             {
-              "expr": "go_threads{job=~\"$server_job\"}",
+              "expr": "go_threads{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} threads",
               "refId": "B"
             }
@@ -2536,7 +2536,7 @@
           },
           "targets": [
             {
-              "expr": "rate(go_gc_duration_seconds_count{job=~\"$server_job\"}[5m])",
+              "expr": "rate(go_gc_duration_seconds_count{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[5m])",
               "legendFormat": "{{pod}} {{instance}} GC/s",
               "refId": "A"
             }
@@ -2587,12 +2587,12 @@
           },
           "targets": [
             {
-              "expr": "go_memstats_sys_bytes{job=~\"$server_job\"}",
+              "expr": "go_memstats_sys_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} sys",
               "refId": "A"
             },
             {
-              "expr": "go_memstats_stack_inuse_bytes{job=~\"$server_job\"}",
+              "expr": "go_memstats_stack_inuse_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} stack",
               "refId": "B"
             }
@@ -2643,12 +2643,12 @@
           },
           "targets": [
             {
-              "expr": "go_memstats_next_gc_bytes{job=~\"$server_job\"}",
+              "expr": "go_memstats_next_gc_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} next GC",
               "refId": "A"
             },
             {
-              "expr": "go_gc_gomemlimit_bytes{job=~\"$server_job\"}",
+              "expr": "go_gc_gomemlimit_bytes{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}} memory limit",
               "refId": "B"
             }
@@ -2713,7 +2713,7 @@
           },
           "targets": [
             {
-              "expr": "woodpecker_server_op_registry_pool_usage{job=~\"$server_job\"}",
+              "expr": "woodpecker_server_op_registry_pool_usage{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "{{pod}} {{instance}}",
               "refId": "A"
             }
@@ -2764,7 +2764,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_op_registry_evicted_total{job=~\"$server_job\"}[1m])) by (signal)",
+              "expr": "sum(rate(woodpecker_server_op_registry_evicted_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[1m])) by (signal)",
               "legendFormat": "{{signal}}",
               "refId": "A"
             }
@@ -2815,7 +2815,7 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_op_registry_evicted_age_seconds_bucket{job=~\"$server_job\"}[5m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_op_registry_evicted_age_seconds_bucket{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[5m])) by (le))",
               "legendFormat": "P99",
               "refId": "A"
             }
@@ -2880,7 +2880,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_file_stored_bytes{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
+              "expr": "sum(woodpecker_server_file_stored_bytes{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -2931,7 +2931,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_object_storage_stored_bytes{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
+              "expr": "sum(woodpecker_server_object_storage_stored_bytes{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -2982,7 +2982,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_file_stored_count{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
+              "expr": "sum(woodpecker_server_file_stored_count{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -3033,7 +3033,7 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_object_storage_stored_objects{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
+              "expr": "sum(woodpecker_server_object_storage_stored_objects{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) by (log_id)",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -3098,7 +3098,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_bytes_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_bytes_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
               "legendFormat": "node={{node_id}} logID={{log_id}} source={{source}}",
               "refId": "A"
             }
@@ -3149,12 +3149,12 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_files_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_reclaimed_files_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
               "legendFormat": "reclaimed node={{node_id}} logID={{log_id}} source={{source}}",
               "refId": "A"
             },
             {
-              "expr": "sum(rate(woodpecker_server_compacted_cleanup_marks_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_marks_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, source)",
               "legendFormat": "marks node={{node_id}} logID={{log_id}} source={{source}}",
               "refId": "B"
             }
@@ -3205,7 +3205,7 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_compacted_cleanup_footer_failures_total{log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, reason)",
+              "expr": "sum(rate(woodpecker_server_compacted_cleanup_footer_failures_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1m])) by (node_id, log_id, reason)",
               "legendFormat": "node={{node_id}} logID={{log_id}} reason={{reason}}",
               "refId": "A"
             }
@@ -3256,17 +3256,17 @@
           },
           "targets": [
             {
-              "expr": "woodpecker_server_node_lifecycle_state{job=~\"$server_job\"}",
+              "expr": "woodpecker_server_node_lifecycle_state{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "node={{node_id}} state={{state}}",
               "refId": "A"
             },
             {
-              "expr": "woodpecker_server_node_decommission_has_local_data{job=~\"$server_job\"}",
+              "expr": "woodpecker_server_node_decommission_has_local_data{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "node={{node_id}} has_local_data",
               "refId": "B"
             },
             {
-              "expr": "woodpecker_server_node_decommission_safe_to_terminate{job=~\"$server_job\"}",
+              "expr": "woodpecker_server_node_decommission_safe_to_terminate{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "node={{node_id}} safe_to_terminate",
               "refId": "C"
             }
@@ -3317,7 +3317,7 @@
           },
           "targets": [
             {
-              "expr": "woodpecker_server_node_decommission_remaining_processors{job=~\"$server_job\"}",
+              "expr": "woodpecker_server_node_decommission_remaining_processors{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}",
               "legendFormat": "node={{node_id}}",
               "refId": "A"
             }
@@ -3350,8 +3350,25 @@
         },
         "includeAll": true,
         "multi": true,
+        "name": "woodpecker_id",
+        "query": "label_values(woodpecker_server_logstore_instances_total, woodpecker_id)",
+        "refresh": 2,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "__DATASOURCE_UID__"
+        },
+        "includeAll": true,
+        "multi": true,
         "name": "log_ns",
-        "query": "query_result(max by (log_ns) (woodpecker_server_logstore_active_logs{log_ns=~\".+\"}))",
+        "query": "query_result(max by (log_ns) (woodpecker_server_logstore_active_logs{woodpecker_id=~\"$woodpecker_id\", log_ns=~\".+\"}))",
         "refresh": 2,
         "regex": "/log_ns=\"([^\"]+)\"/",
         "type": "query"
@@ -3369,7 +3386,7 @@
         "includeAll": true,
         "multi": true,
         "name": "log_id",
-        "query": "query_result(max by (log_id) (woodpecker_server_logstore_active_segments{log_ns=~\"$log_ns\", log_id=~\".+\"}))",
+        "query": "query_result(max by (log_id) (woodpecker_server_logstore_active_segments{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\".+\"}))",
         "refresh": 2,
         "regex": "/log_id=\"([^\"]+)\"/",
         "type": "query"
@@ -3388,7 +3405,7 @@
         "includeAll": true,
         "multi": true,
         "name": "server_job",
-        "query": "label_values(woodpecker_server_logstore_instances_total, job)",
+        "query": "label_values(woodpecker_server_logstore_instances_total{woodpecker_id=~\"$woodpecker_id\"}, job)",
         "refresh": 2,
         "type": "query"
       }
