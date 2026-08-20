@@ -66,7 +66,7 @@ func TestAppendOp_Retry_RebuildsResultChannelForRemoteClient(t *testing.T) {
 		Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"},
 	}
 	op := NewAppendOp("bucket", "root", 1, 2, 10, []byte("v"),
-		func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo)
+		func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
 
 	// Simulate the batch path having installed a LocalResultChannel in the slot.
 	op.resultChannels = make([]channel.ResultChannel, 1)
@@ -111,7 +111,7 @@ func newApplyNodeAckOp(t *testing.T, quorumInfo *proto.QuorumInfo) (*AppendOp, *
 	t.Helper()
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("v"),
-		func(int64, int64, error) {}, nil, mockHandle, quorumInfo)
+		func(int64, int64, error) {}, nil, mockHandle, quorumInfo, nil)
 	return op, mockHandle
 }
 
@@ -200,7 +200,7 @@ func TestAppendOp_RetryChannelRebuild_RacesWithFastFail(t *testing.T) {
 		quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
 
 		op := NewAppendOp("bucket", "root", 1, 2, 10, []byte("v"),
-			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo)
+			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
 		// As installed by a prior batched send: a LocalResultChannel in the slot,
 		// which the retry against a remote client must rebuild (type mismatch).
 		op.resultChannels = make([]channel.ResultChannel, 1)
@@ -251,7 +251,7 @@ func TestNewAppendOp(t *testing.T) {
 		Nodes: []string{"node1"},
 	}
 
-	op := NewAppendOp("a-bucket", "files", logId, segmentId, entryId, value, callback, clientPool, handle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", logId, segmentId, entryId, value, callback, clientPool, handle, quorumInfo, nil)
 
 	assert.NotNil(t, op)
 	assert.Equal(t, logId, op.logId)
@@ -301,7 +301,7 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 		close(done)
 	}).Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -342,7 +342,7 @@ func TestAppendOp_Execute_GetClientError(t *testing.T) {
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, expectedErr)
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, mock.Anything, mock.Anything).Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 
 	op.Execute()
 	// Wait for async handleAppendRequestFailure to be processed
@@ -361,7 +361,7 @@ func TestAppendOp_receivedAckCallback_Success(t *testing.T) {
 		Nodes: []string{"node1"},
 	}
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, quorumInfo, nil)
 
 	// Create a channel and send success signal
 	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
@@ -385,7 +385,7 @@ func TestAppendOp_receivedAckCallback_SyncError(t *testing.T) {
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
 	expectedErr := errors.New("sync error")
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, mock.Anything, mock.Anything).Return()
 
@@ -398,7 +398,7 @@ func TestAppendOp_receivedAckCallback_SyncError(t *testing.T) {
 
 func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Create a channel and send failure signal
 	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
@@ -417,7 +417,7 @@ func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
 
 func TestAppendOp_receivedAckCallback_ChannelClosed(t *testing.T) {
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Create a channel and close it
 	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
@@ -432,7 +432,7 @@ func TestAppendOp_receivedAckCallback_ChannelClosed(t *testing.T) {
 }
 
 func TestAppendOp_FastFail(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Add some result channels
 	rc1 := channel.NewLocalResultChannel("1/2/3-1")
@@ -464,7 +464,7 @@ func TestAppendOp_FastFail(t *testing.T) {
 }
 
 func TestAppendOp_FastFail_Idempotent(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	rc := channel.NewLocalResultChannel("1/2/3")
 	op.resultChannels = []channel.ResultChannel{rc}
@@ -485,7 +485,7 @@ func TestAppendOp_FastFail_Idempotent(t *testing.T) {
 }
 
 func TestAppendOp_FastSuccess(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Add some result channels
 	rc1 := channel.NewLocalResultChannel("1/2/3-1")
@@ -517,7 +517,7 @@ func TestAppendOp_FastSuccess(t *testing.T) {
 }
 
 func TestAppendOp_FastSuccess_Idempotent(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	rc := channel.NewLocalResultChannel("1/2/3")
 	op.resultChannels = []channel.ResultChannel{rc}
@@ -538,7 +538,7 @@ func TestAppendOp_FastSuccess_Idempotent(t *testing.T) {
 }
 
 func TestAppendOp_FastFail_WithClosedChannel(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Add a closed channel
 	rc := channel.NewLocalResultChannel("1/2/3")
@@ -555,7 +555,7 @@ func TestAppendOp_FastFail_WithClosedChannel(t *testing.T) {
 }
 
 func TestAppendOp_FastSuccess_WithClosedChannel(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Add a closed channel
 	rc := channel.NewLocalResultChannel("1/2/3")
@@ -572,7 +572,7 @@ func TestAppendOp_FastSuccess_WithClosedChannel(t *testing.T) {
 }
 
 func TestAppendOp_ConcurrentFastCalls(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	rc := channel.NewLocalResultChannel("1/2/3")
 	op.resultChannels = []channel.ResultChannel{rc}
@@ -674,7 +674,7 @@ func TestAppendOp_Execute_RetryIdempotency(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution
@@ -729,7 +729,7 @@ func TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution with 2 nodes
@@ -771,7 +771,7 @@ func TestAppendOp_sendWriteRequest_ChannelReuse(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// Initialize result channels slice
@@ -813,7 +813,7 @@ func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// Manually set up result channels with one nil channel (simulating partial failure).
@@ -856,7 +856,7 @@ func TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution
@@ -929,7 +929,7 @@ func TestAppendOp_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 		callback(2, entryId, nil)
 	}).Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -1019,7 +1019,7 @@ func TestAppendOp_QuorumWrite_Case2_TwoSuccessOneFail(t *testing.T) {
 	// Expect HandleAppendRequestFailure for the failing node
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, 2, "node3").Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -1111,7 +1111,7 @@ func TestAppendOp_QuorumWrite_Case3_SingleNodeSuccess(t *testing.T) {
 		callback(2, entryId, nil)
 	}).Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -1176,7 +1176,7 @@ func TestAppendOp_QuorumWrite_Case4_SingleNodeFailure(t *testing.T) {
 	// Expect HandleAppendRequestFailure for the failing node
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, 0, "node1").Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -1304,7 +1304,7 @@ func testSimpleQuorum(t *testing.T, nodeCount, ackQuorum, successCount int, expe
 		}).Return()
 	}
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -1377,7 +1377,7 @@ func TestAppendOp_Execute_ParallelFanout(t *testing.T) {
 		}).
 		Return(int64(3), nil)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 
 	start := time.Now()
 	op.Execute()

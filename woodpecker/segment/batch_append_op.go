@@ -170,6 +170,7 @@ func (b *BatchAppendOp) sendBatchToNode(ctx context.Context, entries []*proto.Lo
 func (b *BatchAppendOp) failNode(ctx context.Context, nodeIdx int, serverAddr string, err error) {
 	for _, op := range b.ops {
 		op.channelErrors[nodeIdx] = err
+		op.recordReplicaResult(nodeIdx, "error")
 		go op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, nodeIdx, serverAddr)
 	}
 }

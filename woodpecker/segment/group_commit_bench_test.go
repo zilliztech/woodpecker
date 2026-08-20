@@ -92,7 +92,7 @@ func benchGroupCommit(b *testing.B, maxBatchEntries int, rtt time.Duration) {
 	ops := make([]*AppendOp, b.N)
 	for i := range ops {
 		ops[i] = NewAppendOp("bk", "fp", 1, 2, int64(i), []byte("v"),
-			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo)
+			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
 	}
 	exec := NewBatchingSequentialExecutor(b.N+1, maxBatchEntries, 0)
 	wg.Add(b.N)

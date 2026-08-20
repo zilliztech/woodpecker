@@ -123,6 +123,25 @@ tests/monitor/
 | `woodpecker_client_segment_handle_pending_append_ops` | Gauge | log_id | Pending append operations | Write backpressure observation |
 | `woodpecker_client_writer_bytes_written` | Counter | log_id | Writer bytes written | Per-writer throughput |
 
+### Client Replica Placement Module
+
+`az_scope` is where the peer replica sits relative to the client: `local`,
+`cross_az`, `cross_region`, or `unknown` when either side's placement is not
+configured. The client learns its own placement from the `REGION` /
+`AVAILABILITY_ZONE` environment variables and each replica's from the quorum
+metadata — **without them every sample is `unknown`, and the read path's
+local-replica preference is inert as well.** The replica endpoint is
+deliberately not a label: it would multiply by `log_id`.
+
+| Metric Name | Type | Labels | Description | Key Design Metric |
+|---|---|---|---|---|
+| `woodpecker_client_replica_append_total` | Counter | log_id, az_scope, status | Per-replica append outcomes | Which replicas a write actually reached |
+| `woodpecker_client_replica_append_bytes_total` | Counter | log_id, az_scope | Bytes acknowledged per replica | Cross-AZ write traffic |
+| `woodpecker_client_quorum_read_total` | Counter | log_id, az_scope, status | Quorum read outcomes (a caught-up tail reader's "no entry yet" is not counted) | Which replica serves reads |
+| `woodpecker_client_quorum_read_bytes_total` | Counter | log_id, az_scope | Bytes read from quorum replicas | Cross-AZ read traffic |
+| `woodpecker_client_read_failover_total` | Counter | log_id, from_scope, to_scope | Reads served by a different scope than the preferred one | Local-replica preference effectiveness |
+| `woodpecker_client_active_segment_node` | Gauge | log_id, segment_id, node, az | Quorum membership of the current writable segment | AZ spread of the write quorum |
+
 ### Client Etcd Meta Module
 
 | Metric Name | Type | Labels | Description | Key Design Metric |

@@ -31,7 +31,11 @@ func TestActiveSegmentNodes_SetAndClear(t *testing.T) {
 	reg.MustRegister(WpActiveSegmentNode)
 
 	ns, logId, segId := "bucket/root", "42", "7"
-	nodes := []string{"10.0.0.1:8000", "10.0.0.2:8000", "10.0.0.3:8000"}
+	nodes := []ActiveSegmentNode{
+		{Node: "10.0.0.1:8000", AZ: "us-west-2a"},
+		{Node: "10.0.0.2:8000", AZ: "us-west-2b"},
+		{Node: "10.0.0.3:8000", AZ: ""}, // placement unknown for this replica
+	}
 
 	SetActiveSegmentNodes(ns, logId, segId, nodes)
 
@@ -39,12 +43,34 @@ func TestActiveSegmentNodes_SetAndClear(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(nodes), count, "one series per node after set")
 	for _, n := range nodes {
-		v := testutil.ToFloat64(WpActiveSegmentNode.WithLabelValues(ns, logId, segId, n))
+		v := testutil.ToFloat64(WpActiveSegmentNode.WithLabelValues(ns, logId, segId, n.Node, n.AZ))
 		assert.Equal(t, float64(1), v)
 	}
 
-	ClearActiveSegmentNodes(ns, logId, segId, nodes)
+	ClearActiveSegmentNodes(ns, logId, segId)
 	count, err = testutil.GatherAndCount(reg, "woodpecker_client_active_segment_node")
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count, "series removed after clear")
+}
+
+// A quorum whose placement changed since it was published must still be
+// removed in full: the clear matches on the segment, not on the exact labels.
+func TestActiveSegmentNodes_ClearAfterPlacementChange(t *testing.T) {
+	WpActiveSegmentNode.Reset()
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(WpActiveSegmentNode)
+
+	ns, logId, segId := "bucket/root", "42", "7"
+	SetActiveSegmentNodes(ns, logId, segId, []ActiveSegmentNode{{Node: "10.0.0.1:8000", AZ: "us-west-2a"}})
+	SetActiveSegmentNodes(ns, logId, segId, []ActiveSegmentNode{{Node: "10.0.0.1:8000", AZ: "us-west-2c"}})
+
+	count, err := testutil.GatherAndCount(reg, "woodpecker_client_active_segment_node")
+	assert.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	ClearActiveSegmentNodes(ns, logId, segId)
+	count, err = testutil.GatherAndCount(reg, "woodpecker_client_active_segment_node")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count, "all series for the segment removed")
 }

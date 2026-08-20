@@ -50,6 +50,7 @@ func TestNewAppendRequestRetryOp(t *testing.T) {
 		mockClientPool,
 		mockSegHandle,
 		quorumInfo,
+		nil,
 	)
 
 	retryOp := NewAppendRequestRetryOp(ctx, 0, innerOp)
@@ -81,6 +82,7 @@ func TestAppendRequestRetryOp_Identifier(t *testing.T) {
 		mockClientPool,
 		mockSegHandle,
 		quorumInfo,
+		nil,
 	)
 
 	retryOp := NewAppendRequestRetryOp(ctx, 0, innerOp)
@@ -113,6 +115,7 @@ func TestAppendRequestRetryOp_IdentifierDelegatesToInnerOp(t *testing.T) {
 		mockClientPool,
 		mockSegHandle,
 		quorumInfo,
+		nil,
 	)
 
 	retryOp := NewAppendRequestRetryOp(ctx, 0, innerOp)
@@ -144,6 +147,7 @@ func TestAppendRequestRetryOp_ImplementsOperationInterface(t *testing.T) {
 		mockClientPool,
 		mockSegHandle,
 		quorumInfo,
+		nil,
 	)
 
 	var op Operation = NewAppendRequestRetryOp(ctx, 0, innerOp)
@@ -174,6 +178,7 @@ func TestAppendRequestRetryOp_DifferentServerIndices(t *testing.T) {
 		mockClientPool,
 		mockSegHandle,
 		quorumInfo,
+		nil,
 	)
 
 	// Create retry ops for different server indices
