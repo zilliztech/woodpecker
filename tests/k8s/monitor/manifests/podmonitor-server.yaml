@@ -19,3 +19,13 @@ spec:
       path: /metrics
       interval: 15s
       honorLabels: true
+      relabelings:
+        # Instance identity: a namespace may host several woodpecker clusters,
+        # and prometheus-operator derives `job` from this PodMonitor, so `job`
+        # is the same for all of them. The helm release name is the only
+        # per-cluster discriminator; production names it wp-<id>.
+        - action: replace
+          sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+          regex: (?:wp-)?(.+)
+          replacement: $1
+          targetLabel: woodpecker_id
