@@ -397,11 +397,6 @@ type NodeSelectionPolicyConfig struct {
 	LoadTTL            DurationSeconds `yaml:"loadTTL"`            // load older than this is treated as unknown; default 30s
 	MemSoftThreshold   float64         `yaml:"memSoftThreshold"`   // memory ratio above which memory escalates load; default 0.85
 	EWMAAlpha          float64         `yaml:"ewmaAlpha"`          // EWMA weight on newest sample; default 0.5
-	// LoadBroadcastThreshold is the absolute load delta that makes a node announce
-	// its load cluster-wide via a gossip alive broadcast (issue #271). Without it,
-	// load only travels on push/pull's pairwise user state and most peers never see
-	// a fresh reading. 0 disables broadcasting (pre-#271 behaviour). Default 0.15.
-	LoadBroadcastThreshold float64 `yaml:"loadBroadcastThreshold"`
 }
 
 // DiskWatermarkPolicyConfig controls local-WAL-disk watermark warning and write
@@ -844,12 +839,6 @@ func (c *Configuration) validateLogstoreConfig() error {
 		if p.EWMAAlpha <= 0 || p.EWMAAlpha > 1 {
 			return fmt.Errorf("nodeSelectionPolicy.ewmaAlpha must be in (0,1], got %v", p.EWMAAlpha)
 		}
-		// A threshold of 1 can never be crossed (load is in [0,1]), which would
-		// silently reduce broadcasting to the periodic refresh only; above 1 it is
-		// meaningless. Use 0 to turn broadcasting off deliberately.
-		if p.LoadBroadcastThreshold < 0 || p.LoadBroadcastThreshold >= 1 {
-			return fmt.Errorf("nodeSelectionPolicy.loadBroadcastThreshold must be in [0,1), got %v", p.LoadBroadcastThreshold)
-		}
 	}
 
 	dw := logstore.DiskWatermarkPolicy
@@ -979,12 +968,11 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				ReconcileMinDataLogAge:       DurationSeconds{Duration: Duration{duration: 30 * time.Minute}},
 			},
 			NodeSelectionPolicy: NodeSelectionPolicyConfig{
-				LoadAwareEnabled:       true,
-				LoadReportInterval:     DurationSeconds{Duration: Duration{duration: 10 * time.Second}},
-				LoadTTL:                DurationSeconds{Duration: Duration{duration: 30 * time.Second}},
-				MemSoftThreshold:       0.85,
-				EWMAAlpha:              0.5,
-				LoadBroadcastThreshold: 0.15,
+				LoadAwareEnabled:   true,
+				LoadReportInterval: DurationSeconds{Duration: Duration{duration: 10 * time.Second}},
+				LoadTTL:            DurationSeconds{Duration: Duration{duration: 30 * time.Second}},
+				MemSoftThreshold:   0.85,
+				EWMAAlpha:          0.5,
 			},
 			DiskWatermarkPolicy: DiskWatermarkPolicyConfig{
 				Enabled:            true,

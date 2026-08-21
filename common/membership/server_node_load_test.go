@@ -84,93 +84,8 @@ func TestStartLoadReporter_RunsAndStopsCleanly(t *testing.T) {
 
 // === Load broadcast (issue #271) ===
 
-// shouldBroadcastLoad is the gate that decides whether a reporter tick is worth a
-// cluster-wide announce. Table-driven because the interesting part is which of the
-// three trigger conditions fires, and that they do not fire when they shouldn't.
-func TestShouldBroadcastLoad(t *testing.T) {
-	base := time.Unix(1_000_000, 0)
-	cases := []struct {
-		name      string
-		threshold float64
-		refresh   time.Duration
-		published bool // has this node announced before?
-		lastLoad  float64
-		lastAt    time.Time
-		load      float64
-		now       time.Time
-		want      bool
-	}{
-		{
-			name: "disabled: threshold 0 never announces even on a huge jump",
-			// 0 is the documented opt-out; it must beat every other trigger.
-			threshold: 0, refresh: 15 * time.Second,
-			published: true, lastLoad: 0.1, lastAt: base,
-			load: 0.99, now: base.Add(time.Hour), want: false,
-		},
-		{
-			name:      "first report always announces (startup meta still carries load 0)",
-			threshold: 0.15, refresh: 15 * time.Second,
-			published: false,
-			load:      0.02, now: base, want: true,
-		},
-		{
-			name:      "delta at the threshold announces",
-			threshold: 0.15, refresh: time.Hour,
-			published: true, lastLoad: 0.30, lastAt: base,
-			load: 0.45, now: base.Add(time.Second), want: true,
-		},
-		{
-			name:      "delta below the threshold stays quiet",
-			threshold: 0.15, refresh: time.Hour,
-			published: true, lastLoad: 0.30, lastAt: base,
-			load: 0.44, now: base.Add(time.Second), want: false,
-		},
-		{
-			name: "a drop in load announces too, not just a rise",
-			// The idle direction matters as much as the busy one: a node that
-			// freed up must become selectable again promptly.
-			threshold: 0.15, refresh: time.Hour,
-			published: true, lastLoad: 0.80, lastAt: base,
-			load: 0.60, now: base.Add(time.Second), want: true,
-		},
-		{
-			name: "steady load re-announces once the refresh window elapses",
-			// Without this a stable node goes silent and every peer expires it.
-			threshold: 0.15, refresh: 15 * time.Second,
-			published: true, lastLoad: 0.30, lastAt: base,
-			load: 0.30, now: base.Add(15 * time.Second), want: true,
-		},
-		{
-			name:      "steady load stays quiet inside the refresh window",
-			threshold: 0.15, refresh: 15 * time.Second,
-			published: true, lastLoad: 0.30, lastAt: base,
-			load: 0.30, now: base.Add(14 * time.Second), want: false,
-		},
-		{
-			name:      "refresh disabled leaves the threshold as the only trigger",
-			threshold: 0.15, refresh: 0,
-			published: true, lastLoad: 0.30, lastAt: base,
-			load: 0.30, now: base.Add(time.Hour), want: false,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			n := &ServerNode{
-				loadBroadcastThreshold: tc.threshold,
-				loadBroadcastRefresh:   tc.refresh,
-				loadBroadcasted:        tc.published,
-				lastBroadcastLoad:      tc.lastLoad,
-				lastBroadcastAt:        tc.lastAt,
-			}
-			if got := n.shouldBroadcastLoad(tc.load, tc.now); got != tc.want {
-				t.Fatalf("shouldBroadcastLoad(%v) = %v, want %v", tc.load, got, tc.want)
-			}
-		})
-	}
-}
-
 // loadInMemberlistMeta reads the load this node currently publishes in memberlist's
-// own node table — the payload that rides an alive broadcast to every peer. Before
+// own node table — the payload that rides an alive message to every peer. Before
 // #271 this stayed frozen at the startup value forever.
 func loadInMemberlistMeta(t *testing.T, n *ServerNode) float64 {
 	t.Helper()
@@ -188,7 +103,7 @@ func loadInMemberlistMeta(t *testing.T, n *ServerNode) float64 {
 	return 0
 }
 
-func newLoadTestNode(t *testing.T, id string, port int, threshold float64) *ServerNode {
+func newLoadTestNode(t *testing.T, id string, port int) *ServerNode {
 	t.Helper()
 	n, err := NewServerNode(&ServerConfig{
 		NodeID: id, ClusterName: "c", Region: "r", ResourceGroup: "rg", AZ: "az",
@@ -199,11 +114,10 @@ func newLoadTestNode(t *testing.T, id string, port int, threshold float64) *Serv
 		// way: the test installs its own sampler and drives reportLoadOnce by hand,
 		// so the assertions are not racing a tick or comparing against whatever load
 		// the machine running the test happens to have.
-		LoadReportInterval:     0,
-		LoadTTL:                30 * time.Second,
-		MemSoftThreshold:       0.85,
-		EWMAAlpha:              0.5,
-		LoadBroadcastThreshold: threshold,
+		LoadReportInterval: 0,
+		LoadTTL:            30 * time.Second,
+		MemSoftThreshold:   0.85,
+		EWMAAlpha:          0.5,
 	})
 	if err != nil {
 		t.Fatalf("create node %s: %v", id, err)
@@ -213,62 +127,46 @@ func newLoadTestNode(t *testing.T, id string, port int, threshold float64) *Serv
 }
 
 // The regression test for #271: a reporter tick must put the fresh load into the
-// meta that memberlist broadcasts, not only into this node's own memory.
+// meta memberlist broadcasts, not only into this node's own memory. Every tick
+// announces, so loadReportInterval is the propagation cadence.
 func TestReportLoadOnce_PublishesLoadIntoBroadcastMeta(t *testing.T) {
-	n := newLoadTestNode(t, "bcast-1", 27810, 0.15)
+	n := newLoadTestNode(t, "bcast-1", 27810)
 	if got := loadInMemberlistMeta(t, n); got != 0 {
 		t.Fatalf("startup meta should carry load 0, got %v", got)
 	}
 
 	n.sampler = fakeSampler{v: 0.40}
 	n.reportLoadOnce()
-
 	if got := loadInMemberlistMeta(t, n); got != 0.40 {
 		t.Fatalf("broadcast meta should carry the reported load 0.40, got %v "+
 			"(load is not reaching the gossip broadcast path — issue #271)", got)
 	}
-}
 
-// The threshold has to actually suppress announces, otherwise every 10s tick would
-// bump the incarnation — the churn the pre-#271 code was avoiding.
-func TestReportLoadOnce_SmallDeltaDoesNotRebroadcast(t *testing.T) {
-	n := newLoadTestNode(t, "bcast-2", 27812, 0.15)
-
-	n.sampler = fakeSampler{v: 0.40}
-	n.reportLoadOnce() // first report always announces
-
-	n.sampler = fakeSampler{v: 0.42} // delta 0.02, well under the threshold
+	// Every subsequent tick re-announces, including a small move: there is no
+	// change threshold to cross, which is what keeps loadTTL a simple multiple of
+	// loadReportInterval rather than a value that has to allow for silent periods.
+	n.sampler = fakeSampler{v: 0.42}
 	n.reportLoadOnce()
-
-	if got := loadInMemberlistMeta(t, n); got != 0.40 {
-		t.Fatalf("a sub-threshold move must not re-announce; broadcast meta = %v, want the previous 0.40", got)
-	}
-	// ...while the node's own discovery copy still tracks the latest value, so its
-	// own selections are not stale.
-	if got := n.delegate.SnapshotMeta().GetLoadFactor(); got != 0.42 {
-		t.Fatalf("local meta should always hold the newest sample, got %v", got)
+	if got := loadInMemberlistMeta(t, n); got != 0.42 {
+		t.Fatalf("each tick should re-announce the current load; got %v, want 0.42", got)
 	}
 }
 
-func TestReportLoadOnce_ThresholdZeroDisablesBroadcast(t *testing.T) {
-	n := newLoadTestNode(t, "bcast-3", 27814, 0)
-
-	n.sampler = fakeSampler{v: 0.90}
-	n.reportLoadOnce()
-
+// A node with no sampler must not announce — reportLoadOnce has nothing to say,
+// and bumping the incarnation anyway would be pure churn.
+func TestReportLoadOnce_NoSamplerDoesNotBroadcast(t *testing.T) {
+	n := newLoadTestNode(t, "bcast-2", 27812)
+	n.reportLoadOnce() // sampler is nil: LoadReportInterval 0 means none was built
 	if got := loadInMemberlistMeta(t, n); got != 0 {
-		t.Fatalf("threshold 0 opts out of broadcasting, broadcast meta = %v, want 0", got)
-	}
-	if got := n.delegate.SnapshotMeta().GetLoadFactor(); got != 0.90 {
-		t.Fatalf("opting out of broadcast must not stop local publishing, got %v", got)
+		t.Fatalf("a node with no sampler should not announce, broadcast meta = %v", got)
 	}
 }
 
 // End-to-end: the announce has to land in a *peer's* discovery, which is what
 // quorum selection reads. Covers the EventDelegate.NotifyUpdate wiring.
 func TestLoadBroadcast_ReachesPeerDiscovery(t *testing.T) {
-	a := newLoadTestNode(t, "peer-a", 27816, 0.15)
-	b := newLoadTestNode(t, "peer-b", 27818, 0.15)
+	a := newLoadTestNode(t, "peer-a", 27816)
+	b := newLoadTestNode(t, "peer-b", 27818)
 	if err := b.Join([]string{fmt.Sprintf("127.0.0.1:%d", 27816)}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -279,8 +177,8 @@ func TestLoadBroadcast_ReachesPeerDiscovery(t *testing.T) {
 	a.sampler = fakeSampler{v: 0.88}
 	a.reportLoadOnce()
 
-	// The broadcast is gossiped, so allow a short settle; without it this is the
-	// pairwise push/pull path, which needs tens of seconds (issue #271).
+	// The announce is gossiped, so allow a short settle; without it this would be
+	// the pairwise push/pull path, which needs tens of seconds (issue #271).
 	waitFor(t, 5*time.Second, func() bool {
 		b.discovery.mu.RLock()
 		defer b.discovery.mu.RUnlock()
