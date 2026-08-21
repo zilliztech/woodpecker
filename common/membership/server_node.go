@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -48,7 +49,20 @@ type ServerNode struct {
 	loadCancel context.CancelFunc
 	loadWG     sync.WaitGroup
 	sampler    LoadSampler
+
+	// Load broadcast state (issue #271). Owned exclusively by the load-reporter
+	// goroutine started in startLoadReporter, so it needs no lock.
+	loadBroadcastThreshold float64       // absolute load delta that forces an announce; <=0 disables broadcasting
+	loadBroadcastRefresh   time.Duration // re-announce an unchanged load after this long; <=0 disables the refresh
+	lastBroadcastLoad      float64
+	lastBroadcastAt        time.Time
+	loadBroadcasted        bool
 }
+
+// loadBroadcastTimeout bounds how long a load announce may block the reporter
+// goroutine. It also bounds how long Shutdown waits on that goroutine, so it is
+// deliberately short: a missed announce is re-sent by the refresh timer.
+const loadBroadcastTimeout = 2 * time.Second
 
 // ServerConfig Server configuration
 type ServerConfig struct {
@@ -77,6 +91,11 @@ type ServerConfig struct {
 	LoadTTL            time.Duration // load older than this is treated as unknown by selectors
 	MemSoftThreshold   float64       // memory ratio above which memory escalates load; default 0.85
 	EWMAAlpha          float64       // EWMA weight on newest sample; default 0.5
+	// LoadBroadcastThreshold is the absolute load delta that makes this node
+	// announce its load to the whole cluster via a gossip alive broadcast
+	// (issue #271). <=0 disables broadcasting and falls back to the old
+	// pairwise push/pull-only propagation. Default 0.15.
+	LoadBroadcastThreshold float64
 }
 
 func NewServerNode(config *ServerConfig) (*ServerNode, error) {
@@ -155,9 +174,24 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		loadCtx:      loadCtx,
 		loadCancel:   loadCancel,
 	}
-	if config.LoadAwareEnabled && config.LoadReportInterval > 0 {
-		node.sampler = NewSystemLoadSampler(config.MemSoftThreshold, config.EWMAAlpha)
-		node.startLoadReporter(config.LoadReportInterval)
+	if config.LoadAwareEnabled {
+		node.loadBroadcastThreshold = config.LoadBroadcastThreshold
+		// Re-announce at half the TTL so a peer's copy is refreshed well before it
+		// expires, even when the load never crosses the threshold. Clamped to at
+		// least one report interval: a refresh cannot fire more often than the
+		// reporter ticks anyway, and this keeps a tiny loadTTL from meaning
+		// "announce on literally every tick".
+		if config.LoadTTL > 0 {
+			refresh := config.LoadTTL / 2
+			if refresh < config.LoadReportInterval {
+				refresh = config.LoadReportInterval
+			}
+			node.loadBroadcastRefresh = refresh
+		}
+		if config.LoadReportInterval > 0 {
+			node.sampler = NewSystemLoadSampler(config.MemSoftThreshold, config.EWMAAlpha)
+			node.startLoadReporter(config.LoadReportInterval)
+		}
 	}
 	return node, nil
 }
@@ -234,24 +268,92 @@ func (n *ServerNode) reportLoadOnce() {
 	if n.sampler == nil {
 		return
 	}
-	// Stamp the fresh load onto our own meta only. We deliberately do NOT call
-	// memberlist.UpdateNode here: load is a best-effort hint, not worth churning
-	// memberlist node state / bumping incarnations on our own cadence (which also
-	// raced with status readers). memberlist already gossips this meta on its own
-	// push/pull cadence via LocalState, and peers ingest it in MergeRemoteState.
-	n.publishLoad()
-	// Keep our own discovery copy current for local selections. Store a snapshot,
-	// not the live meta pointer, so the reporter's writes don't race with selectors.
+	// Stamp the fresh load onto our own meta, then keep our own discovery copy
+	// current for local selections. Store a snapshot, not the live meta pointer,
+	// so the reporter's writes don't race with selectors.
+	load := n.publishLoad()
 	snap := n.delegate.SnapshotMeta()
 	n.discovery.UpdateServer(snap.GetNodeId(), snap)
+
+	// Announce to the rest of the cluster when the load actually moved (issue #271).
+	//
+	// Writing the meta above is purely local. The only propagation path it feeds is
+	// push/pull's user state (LocalState/MergeRemoteState), which carries just this
+	// node's own meta to ONE randomly chosen peer per PushPullInterval — a pairwise
+	// channel, not a gossip one. The expected wait for a specific peer therefore
+	// grows with cluster size (~PushPullInterval*(N-1)/2) while loadTTL stays fixed,
+	// so beyond a handful of nodes most peers never hold a fresh reading and score
+	// this node at the neutral `unknownLoad` placeholder instead.
+	//
+	// An alive broadcast reaches the whole cluster in well under a second and lands
+	// in each peer's discovery via EventDelegate.NotifyUpdate. We still gate it on a
+	// threshold so a steady node does not bump its incarnation on every tick, which
+	// is what the previous code was avoiding.
+	now := time.Now()
+	if n.shouldBroadcastLoad(load, now) {
+		n.broadcastLoad(load, now)
+	}
 }
 
 // publishLoad samples load and writes it into the gossip meta (no I/O).
-func (n *ServerNode) publishLoad() {
+// Returns the sampled value so callers need not re-read the meta.
+func (n *ServerNode) publishLoad() float64 {
 	if n.sampler == nil {
+		return 0
+	}
+	load := n.sampler.Sample()
+	n.delegate.SetLoadFactor(load)
+	return load
+}
+
+// shouldBroadcastLoad decides whether this reporter tick warrants a cluster-wide
+// announce. Pure apart from the reporter-owned state, so it is unit-testable.
+//
+// Three cases announce: broadcasting is enabled and we have never announced (the
+// startup meta still carries load 0); the load moved by at least the threshold;
+// or the last announce is old enough that peers' copies are about to expire.
+// That last case matters — without it a node whose load is steady would go
+// silent and fall back to "unknown" on every peer once loadTTL elapsed.
+func (n *ServerNode) shouldBroadcastLoad(load float64, now time.Time) bool {
+	if n.loadBroadcastThreshold <= 0 {
+		return false
+	}
+	if !n.loadBroadcasted {
+		return true
+	}
+	if math.Abs(load-n.lastBroadcastLoad) >= n.loadBroadcastThreshold {
+		return true
+	}
+	if n.loadBroadcastRefresh <= 0 {
+		return false
+	}
+	return !now.Before(n.lastBroadcastAt.Add(n.loadBroadcastRefresh))
+}
+
+// broadcastLoad pushes the current meta out as a gossip alive message.
+func (n *ServerNode) broadcastLoad(load float64, now time.Time) {
+	if n.memberlist == nil {
 		return
 	}
-	n.delegate.SetLoadFactor(n.sampler.Sample())
+	// Don't start a blocking announce we are about to abandon; Shutdown waits on
+	// this goroutine.
+	if n.loadCtx != nil {
+		select {
+		case <-n.loadCtx.Done():
+			return
+		default:
+		}
+	}
+	// Record the attempt before it can fail. On error the alive message may still
+	// have been queued, and retrying every tick would turn a transient failure
+	// into an incarnation-bump storm; the refresh timer re-announces anyway.
+	n.lastBroadcastLoad = load
+	n.lastBroadcastAt = now
+	n.loadBroadcasted = true
+	if err := n.memberlist.UpdateNode(loadBroadcastTimeout); err != nil {
+		log.Printf("[SERVER] load broadcast failed for %s (retry on next refresh): %v",
+			n.serverConfig.NodeID, err)
+	}
 }
 
 func (n *ServerNode) Leave() error {

@@ -155,6 +155,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 	serverConfig.LoadTTL = p.LoadTTL.Duration.Duration()
 	serverConfig.MemSoftThreshold = p.MemSoftThreshold
 	serverConfig.EWMAAlpha = p.EWMAAlpha
+	serverConfig.LoadBroadcastThreshold = p.LoadBroadcastThreshold
 
 	return s, nil
 }

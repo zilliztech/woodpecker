@@ -132,6 +132,13 @@ woodpecker:
       loadTTL: 30               # Seconds; a node's load older than this is treated as unknown
       memSoftThreshold: 0.85    # Memory ratio above which memory escalates the load factor
       ewmaAlpha: 0.5            # EWMA weight on the newest load sample (0,1]
+      # Absolute load delta that makes a node announce its load cluster-wide via a gossip
+      # alive broadcast (issue #271). Without an announce, load only rides push/pull's
+      # pairwise user state, which reaches one random peer per 15s, so on clusters beyond a
+      # handful of nodes most peers hold an expired reading and score it as unknown (0.5).
+      # A node also re-announces an unchanged load every loadTTL/2 so peers never expire it.
+      # Lower = fresher cluster-wide view, more gossip; 0 disables broadcasting. Range [0,1).
+      loadBroadcastThreshold: 0.15
     diskWatermarkPolicy:
       enabled: true             # Local WAL disk watermark monitoring + backpressure (service/local storage only)
       softThresholdRatio: 0.80  # Used ratio (used/(used+free), df semantics) above which a rate-limited WARN recommends expanding the PVC or scaling out logstore nodes

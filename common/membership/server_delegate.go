@@ -96,9 +96,13 @@ func (d *ServerDelegate) MergeRemoteState(buf []byte, join bool) {
 }
 
 // SetLoadFactor updates the node's published load factor (clamped to [0,1])
-// and stamps load_updated_at. The new value rides out on memberlist's existing
-// push/pull anti-entropy via LocalState (no forced UpdateNode); peers ingest it
-// in MergeRemoteState. Best-effort hint propagation.
+// and stamps load_updated_at. Writing it here is local only. Two paths carry it
+// to peers: memberlist's push/pull anti-entropy via LocalState, which reaches one
+// random peer per interval and is ingested in MergeRemoteState; and — when the
+// load moved enough to be worth announcing — a gossip alive broadcast driven by
+// ServerNode.reportLoadOnce, which reaches the whole cluster and is ingested in
+// EventDelegate.NotifyUpdate. See issue #271 for why the first path alone is not
+// sufficient beyond a handful of nodes.
 func (d *ServerDelegate) SetLoadFactor(load float64) {
 	if load < 0 {
 		load = 0

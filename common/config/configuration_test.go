@@ -1256,6 +1256,7 @@ func TestNodeSelectionPolicyDefaults(t *testing.T) {
 	assert.Equal(t, 30, p.LoadTTL.Seconds())
 	assert.Equal(t, 0.85, p.MemSoftThreshold)
 	assert.Equal(t, 0.5, p.EWMAAlpha)
+	assert.Equal(t, 0.15, p.LoadBroadcastThreshold, "load broadcast should be on by default (issue #271)")
 }
 
 func TestNodeSelectionPolicyValidation(t *testing.T) {
@@ -1263,6 +1264,18 @@ func TestNodeSelectionPolicyValidation(t *testing.T) {
 	assert.NoError(t, err)
 	cfg.Woodpecker.Logstore.NodeSelectionPolicy.MemSoftThreshold = 1.5
 	assert.Error(t, cfg.validateLogstoreConfig(), "memSoftThreshold > 1 should fail validation")
+
+	// loadBroadcastThreshold: 0 is the documented opt-out, but a value at or above
+	// the top of the load range can never be crossed and would silently disable
+	// change-driven announces (issue #271).
+	cfg, err = NewConfiguration()
+	assert.NoError(t, err)
+	cfg.Woodpecker.Logstore.NodeSelectionPolicy.LoadBroadcastThreshold = 0
+	assert.NoError(t, cfg.validateLogstoreConfig(), "0 explicitly disables broadcasting and is valid")
+	cfg.Woodpecker.Logstore.NodeSelectionPolicy.LoadBroadcastThreshold = 1
+	assert.Error(t, cfg.validateLogstoreConfig(), "loadBroadcastThreshold of 1 is unreachable and should fail")
+	cfg.Woodpecker.Logstore.NodeSelectionPolicy.LoadBroadcastThreshold = -0.1
+	assert.Error(t, cfg.validateLogstoreConfig(), "negative loadBroadcastThreshold should fail")
 }
 
 func TestQuorumConfig_DynamicReplicasAffectsEnsembleSize(t *testing.T) {
