@@ -1205,67 +1205,46 @@ func TestLocalFileWriter_ProcessFlushTask_BlockHeaderWriteError(t *testing.T) {
 	assert.False(t, writer.storageWritable.Load())
 }
 
-func TestLocalFileWriter_ProcessFlushTask_WriteError_ReadOnlyFd(t *testing.T) {
+// A write that fails while a flush task is being processed must mark the segment
+// unwritable.
+//
+// The failure is arranged by closing the descriptor the writer already holds,
+// never by assigning to writer.file. That field is owned by the writer's flush
+// goroutine (run -> processFlushTask -> writeRecord reads it on every record),
+// so writing it from the test goroutine is a data race — the one this test used
+// to lose about one run in three under -race. Calling Close on the *os.File is
+// safe by contrast: os.File synchronises Close against a concurrent Write, which
+// then fails with os.ErrClosed, which is exactly the condition under test.
+//
+// This replaces a pair of tests (_ReadOnlyFd and _ClosedFd) that swapped the
+// descriptor for a read-only and a closed one respectively. They asserted the
+// same thing and reached the same error branch — writeRecord's w.file.Write
+// returning an error — so a read-only descriptor bought no extra coverage, and
+// installing one cannot be done without the racy assignment. Issue #274.
+func TestLocalFileWriter_ProcessFlushTask_WriteError(t *testing.T) {
 	dir := getTempDir(t)
 	cfg, _ := config.NewConfiguration()
 	writer, err := NewLocalFileWriter(context.Background(), dir, 1, 0, cfg)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
-	// Write and flush first entry to write header
+	// Write and flush the first entry so the header is written normally.
 	_, err = writer.WriteDataAsync(context.Background(), 0, []byte("first"), nil)
 	require.NoError(t, err)
 	writer.Sync(context.Background())
-	time.Sleep(300 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return writer.headerWritten.Load()
+	}, 10*time.Second, 10*time.Millisecond, "header was never flushed")
 
-	// Now write more data
+	// Queue more data, then break the descriptor under it.
 	_, err = writer.WriteDataAsync(context.Background(), 1, []byte("second data block"), nil)
 	require.NoError(t, err)
-
-	// Replace the fd with a read-only one so the block header write fails
-	filePath := getSegmentFilePath(dir, 1, 0)
-	writer.file.Close()
-	// Reopen as read-only to cause write failure
-	f, err := os.OpenFile(filePath, os.O_RDONLY, 0o644)
-	require.NoError(t, err)
-	writer.file = f
+	require.NoError(t, writer.file.Close())
 
 	writer.Sync(context.Background())
-	time.Sleep(300 * time.Millisecond)
-
-	assert.False(t, writer.storageWritable.Load())
-}
-
-func TestLocalFileWriter_ProcessFlushTask_WriteError_ClosedFd(t *testing.T) {
-	dir := getTempDir(t)
-	cfg, _ := config.NewConfiguration()
-	writer, err := NewLocalFileWriter(context.Background(), dir, 1, 0, cfg)
-	require.NoError(t, err)
-
-	// Write and flush first entry to write header normally
-	_, err = writer.WriteDataAsync(context.Background(), 0, []byte("data"), nil)
-	require.NoError(t, err)
-	writer.Sync(context.Background())
-	time.Sleep(300 * time.Millisecond)
-
-	// Write second entry
-	_, err = writer.WriteDataAsync(context.Background(), 1, []byte("more data"), nil)
-	require.NoError(t, err)
-
-	// Replace the fd with a closed one so writes fail
-	filePath := getSegmentFilePath(dir, 1, 0)
-	writer.file.Close()
-	closedFd, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND, 0o644)
-	require.NoError(t, err)
-	writer.file = closedFd
-	// Close it right away so file.Write() fails on the closed fd
-	closedFd.Close()
-
-	writer.Sync(context.Background())
-	time.Sleep(300 * time.Millisecond)
-
-	assert.False(t, writer.storageWritable.Load())
-	writer.Close(context.Background())
+	assert.Eventually(t, func() bool {
+		return !writer.storageWritable.Load()
+	}, 10*time.Second, 10*time.Millisecond, "a failed flush write must mark the segment unwritable")
 }
 
 // === rollBufferAndSubmitFlushTaskUnsafe context cancellation paths ===
