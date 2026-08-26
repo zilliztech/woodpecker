@@ -670,14 +670,14 @@ func (m *NodeMeta) CloneMessageVT() proto.Message {
 	return m.CloneVT()
 }
 
-func (m *LoadUpdate) CloneVT() *LoadUpdate {
+func (m *NodeRuntimeInfo) CloneVT() *NodeRuntimeInfo {
 	if m == nil {
-		return (*LoadUpdate)(nil)
+		return (*NodeRuntimeInfo)(nil)
 	}
-	r := new(LoadUpdate)
+	r := new(NodeRuntimeInfo)
 	r.NodeId = m.NodeId
+	r.UpdatedAt = m.UpdatedAt
 	r.LoadFactor = m.LoadFactor
-	r.LoadUpdatedAt = m.LoadUpdatedAt
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
 		copy(r.unknownFields, m.unknownFields)
@@ -685,7 +685,7 @@ func (m *LoadUpdate) CloneVT() *LoadUpdate {
 	return r
 }
 
-func (m *LoadUpdate) CloneMessageVT() proto.Message {
+func (m *NodeRuntimeInfo) CloneMessageVT() proto.Message {
 	return m.CloneVT()
 }
 
@@ -1744,7 +1744,7 @@ func (this *NodeMeta) EqualMessageVT(thatMsg proto.Message) bool {
 	}
 	return this.EqualVT(that)
 }
-func (this *LoadUpdate) EqualVT(that *LoadUpdate) bool {
+func (this *NodeRuntimeInfo) EqualVT(that *NodeRuntimeInfo) bool {
 	if this == that {
 		return true
 	} else if this == nil || that == nil {
@@ -1753,17 +1753,17 @@ func (this *LoadUpdate) EqualVT(that *LoadUpdate) bool {
 	if this.NodeId != that.NodeId {
 		return false
 	}
-	if this.LoadFactor != that.LoadFactor {
+	if this.UpdatedAt != that.UpdatedAt {
 		return false
 	}
-	if this.LoadUpdatedAt != that.LoadUpdatedAt {
+	if this.LoadFactor != that.LoadFactor {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *LoadUpdate) EqualMessageVT(thatMsg proto.Message) bool {
-	that, ok := thatMsg.(*LoadUpdate)
+func (this *NodeRuntimeInfo) EqualMessageVT(thatMsg proto.Message) bool {
+	that, ok := thatMsg.(*NodeRuntimeInfo)
 	if !ok {
 		return false
 	}
@@ -3806,7 +3806,7 @@ func (m *NodeMeta) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *LoadUpdate) MarshalVT() (dAtA []byte, err error) {
+func (m *NodeRuntimeInfo) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -3819,12 +3819,12 @@ func (m *LoadUpdate) MarshalVT() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *LoadUpdate) MarshalToVT(dAtA []byte) (int, error) {
+func (m *NodeRuntimeInfo) MarshalToVT(dAtA []byte) (int, error) {
 	size := m.SizeVT()
 	return m.MarshalToSizedBufferVT(dAtA[:size])
 }
 
-func (m *LoadUpdate) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+func (m *NodeRuntimeInfo) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m == nil {
 		return 0, nil
 	}
@@ -3836,16 +3836,16 @@ func (m *LoadUpdate) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
-	if m.LoadUpdatedAt != 0 {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LoadUpdatedAt))
-		i--
-		dAtA[i] = 0x18
-	}
 	if m.LoadFactor != 0 {
 		i -= 8
 		binary.LittleEndian.PutUint64(dAtA[i:], uint64(math.Float64bits(float64(m.LoadFactor))))
 		i--
-		dAtA[i] = 0x11
+		dAtA[i] = 0x19
+	}
+	if m.UpdatedAt != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.UpdatedAt))
+		i--
+		dAtA[i] = 0x10
 	}
 	if len(m.NodeId) > 0 {
 		i -= len(m.NodeId)
@@ -5007,7 +5007,7 @@ func (m *NodeMeta) SizeVT() (n int) {
 	return n
 }
 
-func (m *LoadUpdate) SizeVT() (n int) {
+func (m *NodeRuntimeInfo) SizeVT() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -5017,11 +5017,11 @@ func (m *LoadUpdate) SizeVT() (n int) {
 	if l > 0 {
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
+	if m.UpdatedAt != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.UpdatedAt))
+	}
 	if m.LoadFactor != 0 {
 		n += 9
-	}
-	if m.LoadUpdatedAt != 0 {
-		n += 1 + protohelpers.SizeOfVarint(uint64(m.LoadUpdatedAt))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -10018,7 +10018,7 @@ func (m *NodeMeta) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *LoadUpdate) UnmarshalVT(dAtA []byte) error {
+func (m *NodeRuntimeInfo) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -10041,10 +10041,10 @@ func (m *LoadUpdate) UnmarshalVT(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: LoadUpdate: wiretype end group for non-group")
+			return fmt.Errorf("proto: NodeRuntimeInfo: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: LoadUpdate: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: NodeRuntimeInfo: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -10080,6 +10080,25 @@ func (m *LoadUpdate) UnmarshalVT(dAtA []byte) error {
 			m.NodeId = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UpdatedAt", wireType)
+			}
+			m.UpdatedAt = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.UpdatedAt |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
 			if wireType != 1 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LoadFactor", wireType)
 			}
@@ -10090,25 +10109,6 @@ func (m *LoadUpdate) UnmarshalVT(dAtA []byte) error {
 			v = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
 			iNdEx += 8
 			m.LoadFactor = float64(math.Float64frombits(v))
-		case 3:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LoadUpdatedAt", wireType)
-			}
-			m.LoadUpdatedAt = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return protohelpers.ErrIntOverflow
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.LoadUpdatedAt |= int64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
@@ -16223,7 +16223,7 @@ func (m *NodeMeta) UnmarshalVTUnsafe(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *LoadUpdate) UnmarshalVTUnsafe(dAtA []byte) error {
+func (m *NodeRuntimeInfo) UnmarshalVTUnsafe(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -16246,10 +16246,10 @@ func (m *LoadUpdate) UnmarshalVTUnsafe(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: LoadUpdate: wiretype end group for non-group")
+			return fmt.Errorf("proto: NodeRuntimeInfo: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: LoadUpdate: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: NodeRuntimeInfo: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -16289,6 +16289,25 @@ func (m *LoadUpdate) UnmarshalVTUnsafe(dAtA []byte) error {
 			m.NodeId = stringValue
 			iNdEx = postIndex
 		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UpdatedAt", wireType)
+			}
+			m.UpdatedAt = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.UpdatedAt |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
 			if wireType != 1 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LoadFactor", wireType)
 			}
@@ -16299,25 +16318,6 @@ func (m *LoadUpdate) UnmarshalVTUnsafe(dAtA []byte) error {
 			v = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
 			iNdEx += 8
 			m.LoadFactor = float64(math.Float64frombits(v))
-		case 3:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LoadUpdatedAt", wireType)
-			}
-			m.LoadUpdatedAt = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return protohelpers.ErrIntOverflow
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.LoadUpdatedAt |= int64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])

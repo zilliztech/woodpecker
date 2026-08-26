@@ -2110,19 +2110,19 @@ func unique(ss []string) []string {
 	return out
 }
 
-// === Load merge (issue #271) ===
+// === Runtime info merge (issue #271) ===
 
-// ApplyLoad is the ingest point for the load gossip message. It updates the
-// reading without disturbing the node's identity fields.
-func TestApplyLoad_UpdatesLoadWithoutTouchingIdentity(t *testing.T) {
+// ApplyRuntimeInfo is the consumer end of the runtime gossip path. It updates
+// the signals discovery keeps without disturbing the node's identity fields.
+func TestApplyRuntimeInfo_UpdatesLoadWithoutTouchingIdentity(t *testing.T) {
 	sd := NewServiceDiscovery()
 	sd.UpdateServer("n1", &proto.NodeMeta{
 		NodeId: "n1", Az: "az-a", ResourceGroup: "rg-a",
 		Endpoint: "10.0.0.1:9000", LoadFactor: 0.1, LoadUpdatedAt: 100,
 	})
 
-	if !sd.ApplyLoad("n1", 0.8, 200) {
-		t.Fatalf("a newer reading should be applied")
+	if !sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.8, UpdatedAt: 200}) {
+		t.Fatalf("a newer snapshot should be applied")
 	}
 	got := sd.GetAllServers()["n1"]
 	if got.GetLoadFactor() != 0.8 || got.GetLoadUpdatedAt() != 200 {
@@ -2142,41 +2142,41 @@ func TestApplyLoad_UpdatesLoadWithoutTouchingIdentity(t *testing.T) {
 // Gossip retransmits and reorders. A reading that is not newer than the one
 // already held must be dropped, or a retransmitted sample could undo a fresher
 // one.
-func TestApplyLoad_IgnoresStaleAndDuplicateReadings(t *testing.T) {
+func TestApplyRuntimeInfo_IgnoresStaleAndDuplicateSnapshots(t *testing.T) {
 	sd := NewServiceDiscovery()
 	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", LoadFactor: 0.5, LoadUpdatedAt: 200})
 
-	if sd.ApplyLoad("n1", 0.1, 100) {
-		t.Fatalf("an older reading must be dropped")
+	if sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.1, UpdatedAt: 100}) {
+		t.Fatalf("an older snapshot must be dropped")
 	}
-	if sd.ApplyLoad("n1", 0.2, 200) {
-		t.Fatalf("a duplicate of the current reading must be dropped")
+	if sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.2, UpdatedAt: 200}) {
+		t.Fatalf("a duplicate of the current snapshot must be dropped")
 	}
 	if got := sd.GetAllServers()["n1"].GetLoadFactor(); got != 0.5 {
 		t.Fatalf("held reading was overwritten: %v", got)
 	}
 }
 
-// A load message can arrive before the node's join does. Dropping it is correct:
-// the next report carries the reading again.
-func TestApplyLoad_IgnoresUnknownNode(t *testing.T) {
+// A runtime snapshot can arrive before the node's join does. Dropping it is
+// correct: the next report carries it again.
+func TestApplyRuntimeInfo_IgnoresUnknownNode(t *testing.T) {
 	sd := NewServiceDiscovery()
-	if sd.ApplyLoad("ghost", 0.9, 100) {
-		t.Fatalf("a reading for an unknown node must be dropped")
+	if sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "ghost", LoadFactor: 0.9, UpdatedAt: 100}) {
+		t.Fatalf("a snapshot for an unknown node must be dropped")
 	}
 	if _, ok := sd.GetAllServers()["ghost"]; ok {
-		t.Fatalf("a load message must not conjure a node into discovery")
+		t.Fatalf("a runtime snapshot must not conjure a node into discovery")
 	}
 }
 
 // Whole-meta updates carry whatever load was current when that meta snapshot was
 // taken: push/pull ships the sender's meta as of that exchange, and an alive
 // message ships it as of the sender's last UpdateNode. Neither may roll back a
-// fresher reading the load gossip path already delivered.
+// fresher reading the runtime gossip path already delivered.
 func TestUpdateServer_DoesNotRollBackAFresherLoad(t *testing.T) {
 	sd := NewServiceDiscovery()
 	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", Az: "az-a", LoadFactor: 0.2, LoadUpdatedAt: 100})
-	sd.ApplyLoad("n1", 0.9, 300)
+	sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.9, UpdatedAt: 300})
 
 	// A stale whole-meta update that also changes an identity field.
 	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", Az: "az-b", LoadFactor: 0.2, LoadUpdatedAt: 100})

@@ -50,14 +50,14 @@ func TestClientDelegate_NotifyMsg(t *testing.T) {
 	d.discovery = NewServiceDiscovery()
 	d.discovery.UpdateServer("s1", &proto.NodeMeta{NodeId: "s1", LoadFactor: 0.1, LoadUpdatedAt: 100})
 
-	msg, err := encodeLoadUpdate("s1", 0.83, 200)
+	msg, err := encodeRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "s1", LoadFactor: 0.83, UpdatedAt: 200})
 	assert.NoError(t, err)
 	d.NotifyMsg(msg)
 	assert.Equal(t, 0.83, d.discovery.GetAllServers()["s1"].GetLoadFactor())
 
 	assert.NotPanics(t, func() {
-		d.NotifyMsg([]byte("test"))                        // unknown tag
-		d.NotifyMsg([]byte{msgTypeLoadUpdate, 0xff, 0xff}) // undecodable payload
+		d.NotifyMsg([]byte("test"))                             // unknown tag
+		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo, 0xff, 0xff}) // undecodable payload
 	})
 	assert.Equal(t, 0.83, d.discovery.GetAllServers()["s1"].GetLoadFactor(),
 		"an unusable payload must not disturb what the client holds")
@@ -164,15 +164,15 @@ func TestServerDelegate_NotifyMsg(t *testing.T) {
 	assert.NotPanics(t, func() {
 		d.NotifyMsg(nil)
 		d.NotifyMsg([]byte{})
-		d.NotifyMsg([]byte("test"))                        // tag 't' is not a known kind
-		d.NotifyMsg([]byte{msgTypeLoadUpdate, 0xff, 0xff}) // undecodable payload
-		d.NotifyMsg([]byte{msgTypeLoadUpdate})             // empty payload -> no node id
+		d.NotifyMsg([]byte("test"))                             // tag 't' is not a known kind
+		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo, 0xff, 0xff}) // undecodable payload
+		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo})             // empty payload -> no node id
 	})
 	assert.Equal(t, int64(100), d.discovery.GetAllServers()["n2"].GetLoadUpdatedAt(),
 		"a payload that could not be understood must not disturb what discovery holds")
 
-	// A well-formed load update lands in discovery.
-	msg, err := encodeLoadUpdate("n2", 0.62, 200)
+	// A well-formed runtime snapshot lands in discovery.
+	msg, err := encodeRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n2", LoadFactor: 0.62, UpdatedAt: 200})
 	assert.NoError(t, err)
 	d.NotifyMsg(msg)
 	assert.Equal(t, 0.62, d.discovery.GetAllServers()["n2"].GetLoadFactor())
@@ -183,10 +183,10 @@ func TestServerDelegate_GetBroadcasts(t *testing.T) {
 	d := NewServerDelegate(meta)
 	assert.Nil(t, d.GetBroadcasts(10, 100), "nothing queued yet")
 
-	d.BroadcastLoad("n1", 0.5, 1)
+	d.BroadcastRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.5, UpdatedAt: 1})
 	msgs := d.GetBroadcasts(0, 1024)
 	assert.Len(t, msgs, 1)
-	assert.Equal(t, msgTypeLoadUpdate, msgs[0][0], "payload must be tagged so receivers can route it")
+	assert.Equal(t, msgTypeNodeRuntimeInfo, msgs[0][0], "payload must be tagged so receivers can route it")
 }
 
 func TestServerDelegate_MergeRemoteState(t *testing.T) {

@@ -100,7 +100,7 @@ func NewServiceDiscovery(opts ...DiscoveryOption) *ServiceDiscovery {
 // UpdateServer updates server information and maintains all indexes.
 //
 // The load reading is merged rather than blindly overwritten. A whole-meta
-// update may carry an older reading than the load gossip path already
+// update may carry an older reading than the runtime gossip path already
 // delivered: push/pull ships the sender's meta as of that exchange, and an
 // alive message ships the meta as of the sender's last UpdateNode, which for a
 // steady node is its startup snapshot. Neither should roll a fresher reading
@@ -127,16 +127,26 @@ func (sd *ServiceDiscovery) UpdateServer(nodeID string, meta *proto.NodeMeta) {
 	sd.addToIndexes(nodeID, meta)
 }
 
-// ApplyLoad merges a load reading announced by a peer, leaving the node's
-// identity fields alone. Reports whether it was applied.
+// ApplyRuntimeInfo merges a runtime snapshot announced by a peer, leaving the
+// node's identity fields alone. Reports whether it was applied.
 //
-// It is dropped when the node is unknown — its join has not landed yet, and the
-// next report carries the reading again — or when the reading is not newer than
-// the one already held, which is what makes the gossip path safe against
-// retransmits and reordering. Comparison is always between two readings from
-// the same node, so it depends only on that node's clock moving forward, never
-// on clocks agreeing across the cluster.
-func (sd *ServiceDiscovery) ApplyLoad(nodeID string, load float64, updatedAt int64) bool {
+// This is the consumer end of the runtime gossip path: the transport hands over
+// whole NodeRuntimeInfo snapshots without interpreting them, and this decides
+// which signals discovery actually keeps. Adding a signal to the proto is a
+// change here and nowhere else.
+//
+// A snapshot is dropped when the node is unknown — its join has not landed yet,
+// and the next report carries the snapshot again — or when it is not newer than
+// what is already held, which is what makes the gossip path safe against
+// retransmits and reordering, and what the relay dedupes on. Comparison is
+// always between two snapshots from the same node, so it depends only on that
+// node's clock moving forward, never on clocks agreeing across the cluster.
+func (sd *ServiceDiscovery) ApplyRuntimeInfo(info *proto.NodeRuntimeInfo) bool {
+	if info == nil {
+		return false
+	}
+	nodeID, updatedAt := info.GetNodeId(), info.GetUpdatedAt()
+
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
 
@@ -148,9 +158,10 @@ func (sd *ServiceDiscovery) ApplyLoad(nodeID string, load float64, updatedAt int
 	// Replace the meta instead of mutating it in place: GetAllServers and the
 	// indexes hand out these *NodeMeta pointers, and callers read them after
 	// releasing sd.mu. That makes one float cost a deep copy and two index
-	// rebuilds — the price of load living in NodeMeta at all, which #273 removes.
+	// rebuilds — the price of runtime signals living inside NodeMeta at all,
+	// which #273 removes by holding NodeRuntimeInfo alongside it instead.
 	updated := cur.CloneVT()
-	updated.LoadFactor = load
+	updated.LoadFactor = info.GetLoadFactor()
 	updated.LoadUpdatedAt = updatedAt
 
 	sd.removeFromIndexes(nodeID, cur)

@@ -85,22 +85,22 @@ func TestStartLoadReporter_RunsAndStopsCleanly(t *testing.T) {
 // === Load broadcast (issue #271) ===
 
 // loadInBroadcastQueue drains the node's user-level gossip queue and returns the
-// load reading it is announcing for itself, if any. This is the payload that
+// load this node is announcing for itself, if any. This is the payload that
 // spreads to every peer and is ingested by ServerDelegate.NotifyMsg.
 //
 // GetBroadcasts counts as a transmission, so call it once per assertion.
 func loadInBroadcastQueue(t *testing.T, n *ServerNode) (float64, bool) {
 	t.Helper()
 	for _, msg := range n.delegate.GetBroadcasts(0, 1<<20) {
-		if len(msg) == 0 || msg[0] != msgTypeLoadUpdate {
+		if len(msg) == 0 || msg[0] != msgTypeNodeRuntimeInfo {
 			continue
 		}
-		upd, err := decodeLoadUpdate(msg[1:])
+		info, err := decodeRuntimeInfo(msg[1:])
 		if err != nil {
-			t.Fatalf("decode load update: %v", err)
+			t.Fatalf("decode runtime info: %v", err)
 		}
-		if upd.GetNodeId() == n.serverConfig.NodeID {
-			return upd.GetLoadFactor(), true
+		if info.GetNodeId() == n.serverConfig.NodeID {
+			return info.GetLoadFactor(), true
 		}
 	}
 	return 0, false
@@ -189,24 +189,24 @@ func TestReportLoadOnce_NoSamplerDoesNotAnnounce(t *testing.T) {
 	}
 }
 
-// Only the newest reading is worth the bytes: queuing a fresher sample must
+// Only the newest snapshot is worth the bytes: queuing a fresher sample must
 // replace the pending one rather than let stale samples pile up behind it. This
-// is what loadBroadcast.Name() buys.
-func TestBroadcastLoad_NewerReadingReplacesPending(t *testing.T) {
+// is what runtimeBroadcast.Name() buys.
+func TestBroadcastRuntimeInfo_NewerSnapshotReplacesPending(t *testing.T) {
 	d := NewServerDelegate(&proto.NodeMeta{NodeId: "n1"})
-	d.BroadcastLoad("n1", 0.10, 100)
-	d.BroadcastLoad("n1", 0.90, 200)
+	d.BroadcastRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.10, UpdatedAt: 100})
+	d.BroadcastRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.90, UpdatedAt: 200})
 
 	msgs := d.GetBroadcasts(0, 1<<20)
 	if len(msgs) != 1 {
-		t.Fatalf("a node should have exactly one pending load announce, got %d", len(msgs))
+		t.Fatalf("a node should have exactly one pending runtime announce, got %d", len(msgs))
 	}
-	upd, err := decodeLoadUpdate(msgs[0][1:])
+	info, err := decodeRuntimeInfo(msgs[0][1:])
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if upd.GetLoadFactor() != 0.90 {
-		t.Fatalf("the pending announce should be the newest reading, got %v", upd.GetLoadFactor())
+	if info.GetLoadFactor() != 0.90 {
+		t.Fatalf("the pending announce should be the newest snapshot, got %v", info.GetLoadFactor())
 	}
 }
 
@@ -361,33 +361,33 @@ func TestLoadBroadcast_ReachesEveryPeerInACluster(t *testing.T) {
 // Relaying must terminate. A node forwards a reading only the first time it
 // learns it, so re-delivering the same message is a no-op rather than something
 // that puts it back on the wire.
-func TestNotifyMsg_RelaysAReadingOnlyOnce(t *testing.T) {
+func TestNotifyMsg_RelaysASnapshotOnlyOnce(t *testing.T) {
 	d := NewServerDelegate(&proto.NodeMeta{NodeId: "self"})
 	d.discovery = NewServiceDiscovery()
 	d.discovery.UpdateServer("peer", &proto.NodeMeta{NodeId: "peer", LoadUpdatedAt: 100})
 
-	msg, err := encodeLoadUpdate("peer", 0.5, 200)
+	msg, err := encodeRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "peer", LoadFactor: 0.5, UpdatedAt: 200})
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	d.NotifyMsg(msg)
-	if got := d.loadQueue.NumQueued(); got != 1 {
-		t.Fatalf("a newly learned reading should be relayed, queued %d", got)
+	if got := d.runtimeQueue.NumQueued(); got != 1 {
+		t.Fatalf("a newly learned snapshot should be relayed, queued %d", got)
 	}
 
 	// Spend its retransmit budget so the queue empties.
-	for i := 0; i < 20 && d.loadQueue.NumQueued() > 0; i++ {
-		d.loadQueue.GetBroadcasts(0, 1<<20)
+	for i := 0; i < 20 && d.runtimeQueue.NumQueued() > 0; i++ {
+		d.runtimeQueue.GetBroadcasts(0, 1<<20)
 	}
-	if got := d.loadQueue.NumQueued(); got != 0 {
+	if got := d.runtimeQueue.NumQueued(); got != 0 {
 		t.Fatalf("the relay should stop after its retransmit budget, queued %d", got)
 	}
 
-	// The same reading arriving again is a retransmit, not news: it must not go
-	// back on the wire, or readings would echo around the cluster forever.
+	// The same snapshot arriving again is a retransmit, not news: it must not go
+	// back on the wire, or snapshots would echo around the cluster forever.
 	d.NotifyMsg(msg)
-	if got := d.loadQueue.NumQueued(); got != 0 {
-		t.Fatalf("a duplicate reading must not be relayed again, queued %d", got)
+	if got := d.runtimeQueue.NumQueued(); got != 0 {
+		t.Fatalf("a duplicate snapshot must not be relayed again, queued %d", got)
 	}
 }
 
