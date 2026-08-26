@@ -727,25 +727,28 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 		readerName = fmt.Sprintf("%s-r-%s-%d", l.Name, readerBaseName, time.Now().UnixNano())
 	}
 	startPoint := l.adjustPendingReadPointIfTruncated(ctx, readerName, from)
-	r, err := NewLogBatchReader(ctx, l, nil, startPoint, readerName, l.cfg)
-	if err != nil {
-		logger.Ctx(ctx).Warn("open log batch reader failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName), zap.Error(err))
-		return nil, err
-	}
 
-	err = l.Metadata.CreateReaderTempInfo(ctx, readerName, l.Id, startPoint.SegmentId, startPoint.EntryId)
+	// Register the reader temp info first: the session it returns is owned by
+	// the reader created below and lives exactly as long as that reader.
+	readerTempSession, err := l.Metadata.CreateReaderTempInfo(ctx, readerName, l.Id, startPoint.SegmentId, startPoint.EntryId)
 	if err != nil {
-		// Clean up the created reader before returning error
-		if closeErr := r.Close(ctx); closeErr != nil {
-			logger.Ctx(ctx).Warn("failed to close reader after CreateReaderTempInfo error",
-				zap.String("logName", l.Name),
-				zap.String("readerName", readerName),
-				zap.Error(closeErr))
-		}
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(l.logNs, logIdStr, "open_log_reader", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(l.logNs, logIdStr, "open_log_reader", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("open log reader failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName), zap.Error(err))
 		return nil, werr.ErrLogReaderTempInfoError.WithCauseErr(err)
+	}
+
+	r, err := NewLogBatchReader(ctx, l, nil, startPoint, readerName, readerTempSession, l.cfg)
+	if err != nil {
+		// No reader owns the session; retire it instead of leaking its keepalive
+		if delErr := l.Metadata.DeleteReaderTempInfo(ctx, readerTempSession); delErr != nil {
+			logger.Ctx(ctx).Warn("failed to delete reader temp info after open log batch reader error",
+				zap.String("logName", l.Name),
+				zap.String("readerName", readerName),
+				zap.Error(delErr))
+		}
+		logger.Ctx(ctx).Warn("open log batch reader failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName), zap.Error(err))
+		return nil, err
 	}
 
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(l.logNs, logIdStr, "open_log_reader", "success").Inc()

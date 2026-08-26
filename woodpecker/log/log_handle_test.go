@@ -105,7 +105,7 @@ func TestOpenLogReader_ReaderResourceLeak(t *testing.T) {
 	ctx := context.Background()
 
 	// Mock CreateReaderTempInfo failure
-	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(errors.New("metadata error"))
+	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(nil, errors.New("metadata error"))
 
 	// Mock GetTruncatedRecordId
 	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
@@ -116,8 +116,9 @@ func TestOpenLogReader_ReaderResourceLeak(t *testing.T) {
 		Revision: 1,
 	}, nil)
 
-	// Mock DeleteReaderTempInfo for cleanup
-	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), mock.AnythingOfType("string")).Return(nil)
+	// No DeleteReaderTempInfo is expected: the reader temp info is registered
+	// before the reader that would own its session, so a failed registration
+	// leaves neither a reader nor a session behind to clean up.
 
 	// Call OpenLogReader and expect error
 	reader, err := logHandle.OpenLogReader(ctx, &LogMessageId{SegmentId: 0, EntryId: 0}, "test-reader")
@@ -126,6 +127,7 @@ func TestOpenLogReader_ReaderResourceLeak(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, reader)
 	assert.Contains(t, err.Error(), "metadata error")
+	mockMeta.AssertNotCalled(t, "DeleteReaderTempInfo", mock.Anything, mock.Anything)
 
 	// Verify all expectations were met
 	mockMeta.AssertExpectations(t)
@@ -1948,14 +1950,14 @@ func TestLogHandle_OpenLogReader_Success(t *testing.T) {
 	}, nil)
 
 	// Mock CreateReaderTempInfo success
-	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(nil)
+	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(&fakeReaderTempSession{logId: 1}, nil)
 
 	reader, err := logHandle.OpenLogReader(ctx, &LogMessageId{SegmentId: 0, EntryId: 0}, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
 	// Cleanup
-	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), mock.AnythingOfType("string")).Return(nil)
+	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, mock.Anything).Return(nil)
 	_ = reader.Close(ctx)
 }
 
@@ -1972,14 +1974,14 @@ func TestLogHandle_OpenLogReader_WithReaderBaseName(t *testing.T) {
 		Revision: 1,
 	}, nil)
 
-	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(nil)
+	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(&fakeReaderTempSession{logId: 1}, nil)
 
 	reader, err := logHandle.OpenLogReader(ctx, &LogMessageId{SegmentId: 0, EntryId: 0}, "my-reader")
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 	assert.Contains(t, reader.GetName(), "my-reader")
 
-	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), mock.AnythingOfType("string")).Return(nil)
+	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, mock.Anything).Return(nil)
 	_ = reader.Close(ctx)
 }
 
@@ -1997,14 +1999,14 @@ func TestLogHandle_OpenLogReader_WithTruncation(t *testing.T) {
 	}, nil)
 
 	// Reader starts from earliest, should be adjusted to after truncation point
-	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(3), int64(11)).Return(nil)
+	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(3), int64(11)).Return(&fakeReaderTempSession{logId: 1}, nil)
 
 	earliest := EarliestLogMessageID()
 	reader, err := logHandle.OpenLogReader(ctx, &earliest, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
-	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), mock.AnythingOfType("string")).Return(nil)
+	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, mock.Anything).Return(nil)
 	_ = reader.Close(ctx)
 }
 

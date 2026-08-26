@@ -81,16 +81,22 @@ type MetadataProvider interface {
 	// GetQuorumInfo returns the quorum information for a specific quorum.
 	GetQuorumInfo(ctx context.Context, quorumId int64) (*proto.QuorumInfo, error)
 
-	// CreateReaderTempInfo creates a new reader temporary information record.
-	CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, segmentId int64, entryId int64) error
+	// CreateReaderTempInfo creates a new reader temporary information record and
+	// returns the session that keeps it alive. The caller (the reader) owns the
+	// returned session for its whole lifetime and must retire it with
+	// DeleteReaderTempInfo on close.
+	CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, segmentId int64, entryId int64) (ReaderTempInfoSession, error)
 	// GetReaderTempInfo returns the temporary information for a specific reader
 	GetReaderTempInfo(ctx context.Context, logId int64, readerName string) (*proto.ReaderTempInfo, error)
 	// GetAllReaderTempInfoForLog returns all reader temporary information for a given log
 	GetAllReaderTempInfoForLog(ctx context.Context, logId int64) ([]*proto.ReaderTempInfo, error)
-	// UpdateReaderTempInfo updates the reader's recent read position
-	UpdateReaderTempInfo(ctx context.Context, logId int64, readerName string, recentReadSegmentId int64, recentReadEntryId int64) error
-	// DeleteReaderTempInfo deletes the temporary information for a reader when it closes
-	DeleteReaderTempInfo(ctx context.Context, logId int64, readerName string) error
+	// UpdateReaderTempInfo updates the recent read position of the reader owning
+	// the given session. A retired session is rejected: only a live reader may
+	// write (and, after a lease loss, recreate) its own temp info.
+	UpdateReaderTempInfo(ctx context.Context, session ReaderTempInfoSession, recentReadSegmentId int64, recentReadEntryId int64) error
+	// DeleteReaderTempInfo retires the session and deletes the temporary
+	// information for its reader. It is idempotent.
+	DeleteReaderTempInfo(ctx context.Context, session ReaderTempInfoSession) error
 
 	// CreateSegmentCleanupStatus creates a new segment cleanup status record
 	CreateSegmentCleanupStatus(ctx context.Context, status *proto.SegmentCleanupStatus) error
@@ -138,6 +144,25 @@ type MetadataProvider interface {
 	// Returns the stored value if the key exists.
 	// Returns an error if the key doesn't exist or if there's an etcd operation error.
 	GetConditionWriteResult(ctx context.Context) (bool, error)
+}
+
+// ReaderTempInfoSession is one open reader's registration of its temp info.
+//
+// It owns the lease keepalive that keeps the reader's metadata — and with it
+// the protection of truncated segments the reader still needs — alive in the
+// metadata store, independently of read progress. Its lifetime is exactly the
+// reader's: CreateReaderTempInfo hands it out, the reader holds it as a field
+// and passes it back on every UpdateReaderTempInfo, and DeleteReaderTempInfo
+// retires it when the reader closes. Passing a retired session back is
+// rejected rather than honoured, so a closed reader can never resurrect its
+// key with a live keepalive and pin the cleanup low-watermark forever.
+type ReaderTempInfoSession interface {
+	// LogId returns the log this reader reads from.
+	LogId() int64
+	// ReaderName returns the name of the reader owning this session.
+	ReaderName() string
+	// IsActive reports whether the session still holds its reader temp info.
+	IsActive() bool
 }
 
 // LogMeta is a wrapper of proto.LogMeta with revision.
