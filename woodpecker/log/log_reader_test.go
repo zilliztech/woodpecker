@@ -182,16 +182,18 @@ func newTestConfig() *config.Configuration {
 
 func TestLogReader_GetName(t *testing.T) {
 	reader := &logBatchReaderImpl{
-		readerName: "my-reader",
+		readerTempSession: &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
+		readerName:        "my-reader",
 	}
 	assert.Equal(t, "my-reader", reader.GetName())
 }
 
 func TestLogReader_ReadNext_NilLogHandle(t *testing.T) {
 	reader := &logBatchReaderImpl{
-		logHandle: nil,
-		logIdStr:  "1",
-		logNs:     "",
+		readerTempSession: &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
+		logHandle:         nil,
+		logIdStr:          "1",
+		logNs:             "",
 	}
 
 	ctx := context.Background()
@@ -206,6 +208,7 @@ func TestLogReader_ReadNext_ContextCancelled(t *testing.T) {
 	mockLogHandle.Test(t)
 
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -241,6 +244,7 @@ func TestLogReader_ReadNext_FromCachedBatch(t *testing.T) {
 	require.NoError(t, err)
 
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -276,6 +280,7 @@ func TestLogReader_ReadNext_CachedBatchCorruptedData(t *testing.T) {
 	mockLogHandle.Test(t)
 
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -318,6 +323,7 @@ func TestLogReader_ReadNext_FreshBatchRead(t *testing.T) {
 	require.NoError(t, err)
 
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -379,6 +385,7 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 	require.NoError(t, err)
 
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -438,10 +445,11 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 
 func TestLogReader_UnmarshalAndCreateLogMessage(t *testing.T) {
 	reader := &logBatchReaderImpl{
-		logName:    "test-log",
-		logId:      1,
-		logIdStr:   "1",
-		readerName: "test-reader",
+		readerTempSession: &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
+		logName:           "test-log",
+		logId:             1,
+		logIdStr:          "1",
+		readerName:        "test-reader",
 	}
 
 	t.Run("Success", func(t *testing.T) {
@@ -473,6 +481,7 @@ func TestLogReader_UnmarshalAndCreateLogMessage(t *testing.T) {
 
 func TestLogReader_WaitWithContext(t *testing.T) {
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -516,6 +525,7 @@ func TestLogReader_IsEntryInCurrentSegment(t *testing.T) {
 		mockSegHandle.EXPECT().GetId(mock.Anything).Return(int64(0)).Maybe()
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -539,6 +549,7 @@ func TestLogReader_IsEntryInCurrentSegment(t *testing.T) {
 		})
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -563,6 +574,7 @@ func TestLogReader_IsEntryInCurrentSegment(t *testing.T) {
 		mockSegHandle.EXPECT().GetId(mock.Anything).Return(int64(0)).Maybe()
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -587,6 +599,7 @@ func TestLogReader_IsEntryInCurrentSegment(t *testing.T) {
 		mockSegHandle.EXPECT().GetId(mock.Anything).Return(int64(0)).Maybe()
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -607,6 +620,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockLogHandle.Test(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -632,6 +646,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -667,6 +682,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockTruncatedSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -705,6 +721,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockLiveSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -744,6 +761,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockSeg7 := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -779,6 +797,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockSeg1 := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -815,6 +834,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockSeg6 := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -848,6 +868,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockSeg1 := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -881,6 +902,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockLogHandle.Test(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -905,6 +927,7 @@ func TestLogReader_FindNextReadableSegment(t *testing.T) {
 		mockLogHandle.Test(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -932,6 +955,7 @@ func TestLogReader_HandleTailRead(t *testing.T) {
 		mockLogHandle.Test(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -958,6 +982,7 @@ func TestLogReader_HandleTailRead(t *testing.T) {
 		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -985,6 +1010,7 @@ func TestLogReader_HandleTailRead(t *testing.T) {
 		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -1011,6 +1037,7 @@ func TestLogReader_HandleTailRead(t *testing.T) {
 		mockLogHandle.Test(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -1038,6 +1065,7 @@ func TestLogReader_HandleTailRead(t *testing.T) {
 		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -1067,6 +1095,7 @@ func TestLogReader_GetNextSegHandleAndIDs(t *testing.T) {
 		mockLogHandle.Test(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -1092,6 +1121,7 @@ func TestLogReader_GetNextSegHandleAndIDs(t *testing.T) {
 		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -1120,6 +1150,7 @@ func TestLogReader_GetNextSegHandleAndIDs(t *testing.T) {
 		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 		reader := &logBatchReaderImpl{
+			readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 			logName:              "test-log",
 			logId:                1,
 			logIdStr:             "1",
@@ -1234,6 +1265,7 @@ func TestLogReader_ReadNext_EntryNotFound_ContextCancelled(t *testing.T) {
 	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -1336,6 +1368,66 @@ func TestLogReader_ReadNext_IdleReaderThrottlesPositionReports(t *testing.T) {
 		"an idle reader must report its unchanged position at most once per UpdateReaderInfoIntervalMs, not once per poll")
 }
 
+// A retired session means this reader is permanently dead - the reader closed,
+// or the metadata provider did - and nothing ever revives it. Reading on would
+// keep serving entries while the reader is already gone from the metadata
+// store, so the writer's cleanup no longer protects the segments being read.
+// Fail the read instead, the way os.File and sql.DB do after Close.
+func TestLogReader_ReadNext_RetiredSessionFailsFast(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+
+	reader := &logBatchReaderImpl{
+		logName:              "test-log",
+		logId:                1,
+		logIdStr:             "1",
+		logHandle:            mockLogHandle,
+		pendingReadSegmentId: 0,
+		pendingReadEntryId:   0,
+		readerName:           "test-reader",
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader", retired: true},
+		logNs:                "",
+		lastRead:             time.Now().UnixMilli(),
+	}
+
+	msg, err := reader.ReadNext(context.Background())
+	assert.Nil(t, msg)
+	require.Error(t, err)
+	assert.True(t, werr.ErrLogReaderClosed.Is(err), "expected ErrLogReaderClosed, got %v", err)
+}
+
+// A cached batch must not be drained past the reader's death either: the check
+// has to precede the fast path that returns already-fetched entries.
+func TestLogReader_ReadNext_RetiredSessionDoesNotDrainCachedBatch(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+
+	data, err := MarshalMessage(&WriteMessage{Payload: []byte("cached payload")})
+	require.NoError(t, err)
+
+	reader := &logBatchReaderImpl{
+		logName:              "test-log",
+		logId:                1,
+		logIdStr:             "1",
+		logHandle:            mockLogHandle,
+		pendingReadSegmentId: 0,
+		pendingReadEntryId:   0,
+		readerName:           "test-reader",
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader", retired: true},
+		logNs:                "",
+		batch: &proto.BatchReadResult{
+			Entries: []*proto.LogEntry{{SegId: 0, EntryId: 0, Values: data}},
+		},
+		next:     0,
+		lastRead: time.Now().UnixMilli(),
+	}
+
+	msg, err := reader.ReadNext(context.Background())
+	assert.Nil(t, msg)
+	require.Error(t, err)
+	assert.True(t, werr.ErrLogReaderClosed.Is(err), "expected ErrLogReaderClosed, got %v", err)
+}
+
 func TestLogReader_ReadNext_OtherReadError(t *testing.T) {
 	mockLogHandle := &testLogHandleMock{}
 	mockLogHandle.Test(t)
@@ -1343,6 +1435,7 @@ func TestLogReader_ReadNext_OtherReadError(t *testing.T) {
 	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -1391,6 +1484,7 @@ func TestLogReader_ReadNext_MultipleBatchEntries(t *testing.T) {
 	data2, _ := MarshalMessage(writeMsg2)
 
 	reader := &logBatchReaderImpl{
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
 		logName:              "test-log",
 		logId:                1,
 		logIdStr:             "1",
@@ -1429,8 +1523,11 @@ func TestLogReader_ReadNext_MultipleBatchEntries(t *testing.T) {
 type fakeReaderTempSession struct {
 	logId      int64
 	readerName string
+	// retired stands in for a session the provider has already taken back,
+	// either because the reader closed or because the provider did
+	retired bool
 }
 
 func (s *fakeReaderTempSession) LogId() int64       { return s.logId }
 func (s *fakeReaderTempSession) ReaderName() string { return s.readerName }
-func (s *fakeReaderTempSession) IsActive() bool     { return true }
+func (s *fakeReaderTempSession) IsActive() bool     { return !s.retired }

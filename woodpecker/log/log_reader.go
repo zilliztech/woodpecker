@@ -142,6 +142,17 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			// Continue with read operation
 		}
 
+		// A retired session means this reader is permanently dead: either it was
+		// closed, or the metadata provider was. Nothing revives it, so reading on
+		// would serve entries for a reader that no longer exists in metadata -
+		// and whose segments the writer's cleanup therefore no longer protects.
+		// Checked ahead of the cached batch so a closed reader cannot drain what
+		// it already fetched either.
+		if !l.readerTempSession.IsActive() {
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
+			return nil, werr.ErrLogReaderClosed
+		}
+
 		// get if cache fragment exists
 		if l.batch != nil && l.next < len(l.batch.Entries) {
 			readEntryData := l.batch.Entries[l.next]
