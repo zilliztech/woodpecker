@@ -2080,8 +2080,15 @@ type NodeMeta struct {
 	LastUpdate    int64                  `protobuf:"varint,7,opt,name=last_update,json=lastUpdate,proto3" json:"last_update,omitempty"` // Unix timestamp in milliseconds
 	ClusterName   string                 `protobuf:"bytes,8,opt,name=cluster_name,json=clusterName,proto3" json:"cluster_name,omitempty"`
 	Region        string                 `protobuf:"bytes,9,opt,name=region,proto3" json:"region,omitempty"`
-	LoadFactor    float64                `protobuf:"fixed64,10,opt,name=load_factor,json=loadFactor,proto3" json:"load_factor,omitempty"`           // EWMA-smoothed bottleneck load in [0,1]; 0 if never reported
-	LoadUpdatedAt int64                  `protobuf:"varint,11,opt,name=load_updated_at,json=loadUpdatedAt,proto3" json:"load_updated_at,omitempty"` // Unix ms when load_factor was last set; 0 = never reported
+	// Retained for rolling-upgrade compatibility only. Load is propagated by the
+	// LoadUpdate message below, not by NodeMeta — see #271 for why NodeMeta is the
+	// wrong carrier for a value that moves every report interval. These fields
+	// only still exist so a node running a build that predates that change can
+	// learn load from push/pull. New code must not read them; the scoring path in
+	// ServiceDiscovery is the one remaining reader, until #273 moves the reading
+	// into its own table and these become `reserved`.
+	LoadFactor    float64 `protobuf:"fixed64,10,opt,name=load_factor,json=loadFactor,proto3" json:"load_factor,omitempty"`           // EWMA-smoothed bottleneck load in [0,1]; 0 if never reported
+	LoadUpdatedAt int64   `protobuf:"varint,11,opt,name=load_updated_at,json=loadUpdatedAt,proto3" json:"load_updated_at,omitempty"` // Unix ms when load_factor was last set; 0 = never reported
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

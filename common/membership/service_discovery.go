@@ -104,7 +104,8 @@ func NewServiceDiscovery(opts ...DiscoveryOption) *ServiceDiscovery {
 // delivered: push/pull ships the sender's meta as of that exchange, and an
 // alive message ships the meta as of the sender's last UpdateNode, which for a
 // steady node is its startup snapshot. Neither should roll a fresher reading
-// back. Issue #271.
+// back. Issue #271; the guard goes away with #273, which leaves load a single
+// source.
 func (sd *ServiceDiscovery) UpdateServer(nodeID string, meta *proto.NodeMeta) {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
@@ -146,7 +147,8 @@ func (sd *ServiceDiscovery) ApplyLoad(nodeID string, load float64, updatedAt int
 
 	// Replace the meta instead of mutating it in place: GetAllServers and the
 	// indexes hand out these *NodeMeta pointers, and callers read them after
-	// releasing sd.mu.
+	// releasing sd.mu. That makes one float cost a deep copy and two index
+	// rebuilds — the price of load living in NodeMeta at all, which #273 removes.
 	updated := cur.CloneVT()
 	updated.LoadFactor = load
 	updated.LoadUpdatedAt = updatedAt

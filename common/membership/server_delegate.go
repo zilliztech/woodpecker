@@ -184,7 +184,8 @@ func (d *ServerDelegate) MergeRemoteState(buf []byte, join bool) {
 // reaches one random peer per PushPullInterval and is ingested in
 // MergeRemoteState. The second is the slow fallback that keeps a peer running
 // an older build — one that ignores the load message — from going blind. See
-// issue #271 for why that path alone is not sufficient beyond a handful of nodes.
+// issue #271 for why that path alone is not sufficient beyond a handful of
+// nodes, and #273 for retiring the meta copy once that fallback is unnecessary.
 func (d *ServerDelegate) SetLoadFactor(load float64) {
 	if load < 0 {
 		load = 0
