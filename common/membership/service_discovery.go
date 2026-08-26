@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -26,18 +27,56 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
+// NodeInfo is discovery's complete view of one node: who it is, and how it is
+// doing. The two halves have different lifetimes and are stored accordingly.
+//
+// Meta is identity and topology (node_id, az, resource_group, endpoint). It
+// changes rarely, and when it does the node is re-indexed, so it is immutable
+// for the lifetime of a NodeInfo — a meta change builds a new one.
+//
+// runtime is the latest measurement snapshot, replaced on every report. It is
+// held in an atomic pointer so a new reading costs one store and no index work,
+// and so readers that took a *NodeInfo out of the indexes can read it after
+// releasing sd.mu. nil until the node's first announce arrives.
+type NodeInfo struct {
+	Meta    *proto.NodeMeta
+	runtime atomic.Pointer[proto.NodeRuntimeInfo]
+}
+
+// Runtime returns the node's latest runtime snapshot, or nil if none has
+// arrived. The returned value is immutable — a newer snapshot replaces it
+// rather than mutating it.
+func (n *NodeInfo) Runtime() *proto.NodeRuntimeInfo {
+	if n == nil {
+		return nil
+	}
+	return n.runtime.Load()
+}
+
+// metasOf projects a node list down to the identity halves. Selection results
+// cross the package boundary as []*proto.NodeMeta: callers pick nodes in order
+// to dial them, and runtime signals are an input to that choice, never an
+// output of it.
+func metasOf(nodes []*NodeInfo) []*proto.NodeMeta {
+	out := make([]*proto.NodeMeta, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, n.Meta)
+	}
+	return out
+}
+
 // ServiceDiscovery - High-performance service discovery implementation designed for O(1) query optimization
 // Query frequency >> Update frequency, maintaining indexes for O(1) query priority
 type ServiceDiscovery struct {
 	mu    sync.RWMutex
-	Nodes map[string]*proto.NodeMeta // nodeId -> NodeMeta
+	Nodes map[string]*NodeInfo // nodeId -> NodeInfo
 
 	azList []string // All available AZs
 	rgList []string // All available RGs
 
 	// Core indexes: bidirectional indexes supporting all query strategies
-	azRgIndex map[string]map[string][]*proto.NodeMeta // az -> rg -> []*NodeMeta
-	rgAzIndex map[string]map[string][]*proto.NodeMeta // rg -> az -> []*NodeMeta
+	azRgIndex map[string]map[string][]*NodeInfo // az -> rg -> []*NodeInfo
+	rgAzIndex map[string]map[string][]*NodeInfo // rg -> az -> []*NodeInfo
 
 	// Auxiliary slices for O(1) random key selection
 	azRgIndexKeys map[string][]string // az -> []rg (all RGs in this AZ)
@@ -76,11 +115,11 @@ func NewServiceDiscovery(opts ...DiscoveryOption) *ServiceDiscovery {
 	}
 
 	sd := &ServiceDiscovery{
-		Nodes:         make(map[string]*proto.NodeMeta),
+		Nodes:         make(map[string]*NodeInfo),
 		azList:        make([]string, 0),
 		rgList:        make([]string, 0),
-		azRgIndex:     make(map[string]map[string][]*proto.NodeMeta),
-		rgAzIndex:     make(map[string]map[string][]*proto.NodeMeta),
+		azRgIndex:     make(map[string]map[string][]*NodeInfo),
+		rgAzIndex:     make(map[string]map[string][]*NodeInfo),
 		azRgIndexKeys: make(map[string][]string),
 		rgAzIndexKeys: make(map[string][]string),
 		regexCache:    cache,
@@ -97,34 +136,44 @@ func NewServiceDiscovery(opts ...DiscoveryOption) *ServiceDiscovery {
 	return sd
 }
 
-// UpdateServer updates server information and maintains all indexes.
+// UpdateServer updates a node's identity metadata and maintains all indexes.
 //
-// The load reading is merged rather than blindly overwritten. A whole-meta
-// update may carry an older reading than the runtime gossip path already
-// delivered: push/pull ships the sender's meta as of that exchange, and an
-// alive message ships the meta as of the sender's last UpdateNode, which for a
-// steady node is its startup snapshot. Neither should roll a fresher reading
-// back. Issue #271; the guard goes away with #273, which leaves load a single
-// source.
+// Only the identity half is replaced. Whatever runtime snapshot the node
+// already had carries over: a meta change (new tags, a re-registration) says
+// nothing about how busy the node is, and discarding the reading would send it
+// back to the neutral unknownLoad placeholder for no reason.
 func (sd *ServiceDiscovery) UpdateServer(nodeID string, meta *proto.NodeMeta) {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
 
-	// If node already exists, remove it from all indexes first
-	if oldMeta, exists := sd.Nodes[nodeID]; exists {
-		if meta != nil && oldMeta.GetLoadUpdatedAt() > meta.GetLoadUpdatedAt() {
-			meta = meta.CloneVT()
-			meta.LoadFactor = oldMeta.GetLoadFactor()
-			meta.LoadUpdatedAt = oldMeta.GetLoadUpdatedAt()
+	node := &NodeInfo{Meta: meta}
+
+	// If node already exists, remove it from all indexes first and carry its
+	// runtime snapshot onto the replacement.
+	if old, exists := sd.Nodes[nodeID]; exists {
+		if rt := old.Runtime(); rt != nil {
+			node.runtime.Store(rt)
 		}
-		sd.removeFromIndexes(nodeID, oldMeta)
+		sd.removeFromIndexes(nodeID, old)
 	}
 
 	// Add to main storage
-	sd.Nodes[nodeID] = meta
+	sd.Nodes[nodeID] = node
 
 	// Add to all indexes
-	sd.addToIndexes(nodeID, meta)
+	sd.addToIndexes(nodeID, node)
+
+	// Compatibility: a peer running a build that predates the runtime gossip
+	// path publishes its load inside NodeMeta, and push/pull is the only way it
+	// reaches us. Feed that through the same ordering rules as a real snapshot
+	// so it can fill in but never roll back a fresher one.
+	if meta.GetLoadUpdatedAt() > 0 {
+		applyRuntimeSnapshot(node, &proto.NodeRuntimeInfo{
+			NodeId:     nodeID,
+			UpdatedAt:  meta.GetLoadUpdatedAt(),
+			LoadFactor: meta.GetLoadFactor(),
+		})
+	}
 }
 
 // ApplyRuntimeInfo merges a runtime snapshot announced by a peer, leaving the
@@ -145,29 +194,33 @@ func (sd *ServiceDiscovery) ApplyRuntimeInfo(info *proto.NodeRuntimeInfo) bool {
 	if info == nil {
 		return false
 	}
-	nodeID, updatedAt := info.GetNodeId(), info.GetUpdatedAt()
 
-	sd.mu.Lock()
-	defer sd.mu.Unlock()
-
-	cur, exists := sd.Nodes[nodeID]
-	if !exists || updatedAt <= cur.GetLoadUpdatedAt() {
+	sd.mu.RLock()
+	node, exists := sd.Nodes[info.GetNodeId()]
+	sd.mu.RUnlock()
+	if !exists {
 		return false
 	}
+	return applyRuntimeSnapshot(node, info)
+}
 
-	// Replace the meta instead of mutating it in place: GetAllServers and the
-	// indexes hand out these *NodeMeta pointers, and callers read them after
-	// releasing sd.mu. That makes one float cost a deep copy and two index
-	// rebuilds — the price of runtime signals living inside NodeMeta at all,
-	// which #273 removes by holding NodeRuntimeInfo alongside it instead.
-	updated := cur.CloneVT()
-	updated.LoadFactor = info.GetLoadFactor()
-	updated.LoadUpdatedAt = updatedAt
-
-	sd.removeFromIndexes(nodeID, cur)
-	sd.Nodes[nodeID] = updated
-	sd.addToIndexes(nodeID, updated)
-	return true
+// applyRuntimeSnapshot installs a snapshot on a node if it is newer than the one
+// held, reporting whether it did. Storing it is a single atomic swap: identity
+// is untouched, so no index moves and no meta is copied.
+//
+// The compare-and-swap loop keeps two arriving snapshots from losing one another
+// — the gossip path and the legacy meta path can both reach a node, and neither
+// holds sd.mu for the write.
+func applyRuntimeSnapshot(node *NodeInfo, info *proto.NodeRuntimeInfo) bool {
+	for {
+		cur := node.runtime.Load()
+		if cur != nil && info.GetUpdatedAt() <= cur.GetUpdatedAt() {
+			return false
+		}
+		if node.runtime.CompareAndSwap(cur, info) {
+			return true
+		}
+	}
 }
 
 // RemoveServer removes server from all indexes
@@ -195,7 +248,7 @@ func (sd *ServiceDiscovery) RemoveServerIfMatch(nodeID string, leavingMeta *prot
 
 	// If the current node has a different endpoint or a newer timestamp,
 	// a new incarnation has joined — do not remove it.
-	if currentMeta.Endpoint != leavingMeta.Endpoint || currentMeta.LastUpdate > leavingMeta.LastUpdate {
+	if currentMeta.Meta.Endpoint != leavingMeta.Endpoint || currentMeta.Meta.LastUpdate > leavingMeta.LastUpdate {
 		return false
 	}
 
@@ -205,9 +258,9 @@ func (sd *ServiceDiscovery) RemoveServerIfMatch(nodeID string, leavingMeta *prot
 }
 
 // addToIndexes adds node to all indexes
-func (sd *ServiceDiscovery) addToIndexes(nodeID string, meta *proto.NodeMeta) {
-	az := meta.Az
-	rg := meta.ResourceGroup
+func (sd *ServiceDiscovery) addToIndexes(nodeID string, node *NodeInfo) {
+	az := node.Meta.Az
+	rg := node.Meta.ResourceGroup
 
 	// 1. Ensure AZ is in azList
 	sd.ensureAZInList(az)
@@ -217,15 +270,15 @@ func (sd *ServiceDiscovery) addToIndexes(nodeID string, meta *proto.NodeMeta) {
 
 	// 3. Add to azRgIndex
 	if sd.azRgIndex[az] == nil {
-		sd.azRgIndex[az] = make(map[string][]*proto.NodeMeta)
+		sd.azRgIndex[az] = make(map[string][]*NodeInfo)
 	}
-	sd.azRgIndex[az][rg] = append(sd.azRgIndex[az][rg], meta)
+	sd.azRgIndex[az][rg] = append(sd.azRgIndex[az][rg], node)
 
 	// 4. Add to rgAzIndex
 	if sd.rgAzIndex[rg] == nil {
-		sd.rgAzIndex[rg] = make(map[string][]*proto.NodeMeta)
+		sd.rgAzIndex[rg] = make(map[string][]*NodeInfo)
 	}
-	sd.rgAzIndex[rg][az] = append(sd.rgAzIndex[rg][az], meta)
+	sd.rgAzIndex[rg][az] = append(sd.rgAzIndex[rg][az], node)
 
 	// 5. Update azRgIndexKeys
 	sd.ensureRGInAZKeys(az, rg)
@@ -235,9 +288,9 @@ func (sd *ServiceDiscovery) addToIndexes(nodeID string, meta *proto.NodeMeta) {
 }
 
 // removeFromIndexes removes node from all indexes
-func (sd *ServiceDiscovery) removeFromIndexes(nodeID string, meta *proto.NodeMeta) {
-	az := meta.Az
-	rg := meta.ResourceGroup
+func (sd *ServiceDiscovery) removeFromIndexes(nodeID string, node *NodeInfo) {
+	az := node.Meta.Az
+	rg := node.Meta.ResourceGroup
 
 	// 1. Remove from azRgIndex
 	if azMap, exists := sd.azRgIndex[az]; exists {
@@ -309,7 +362,7 @@ func (sd *ServiceDiscovery) SelectSingleAzSingleRg(filter *proto.NodeFilter, aff
 		filteredNodes = sd.excludeDecommissioning(filteredNodes)
 
 		if len(filteredNodes) > 0 {
-			return sd.selectLowestLoadNodes(filteredNodes, int(filter.Limit)), nil
+			return metasOf(sd.selectLowestLoadNodes(filteredNodes, int(filter.Limit))), nil
 		}
 	}
 
@@ -333,7 +386,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzSingleRg(candidateAZs []stri
 	var validCombinations []struct {
 		az    string
 		rg    string
-		nodes []*proto.NodeMeta
+		nodes []*NodeInfo
 	}
 
 	for _, az := range candidateAZs {
@@ -346,7 +399,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzSingleRg(candidateAZs []stri
 				validCombinations = append(validCombinations, struct {
 					az    string
 					rg    string
-					nodes []*proto.NodeMeta
+					nodes []*NodeInfo
 				}{az, rg, filteredNodes})
 			}
 		}
@@ -359,7 +412,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzSingleRg(candidateAZs []stri
 
 	// Randomly select from valid combinations
 	selectedCombination := validCombinations[rand.Intn(len(validCombinations))]
-	return sd.selectLowestLoadNodes(selectedCombination.nodes, int(filter.Limit)), nil
+	return metasOf(sd.selectLowestLoadNodes(selectedCombination.nodes, int(filter.Limit))), nil
 }
 
 // SelectSingleAzMultiRg: azList → slice random az → azRgIndexKeys[az] → randomly select multiple rgs → randomly select one node from each rg
@@ -387,7 +440,7 @@ func (sd *ServiceDiscovery) SelectSingleAzMultiRg(filter *proto.NodeFilter, affi
 		}
 
 		// 4. Try to collect qualifying nodes
-		var selectedNodes []*proto.NodeMeta
+		var selectedNodes []*NodeInfo
 		limit := int(filter.Limit)
 		if limit == 0 || limit > len(candidateRGs) {
 			limit = len(candidateRGs)
@@ -407,7 +460,7 @@ func (sd *ServiceDiscovery) SelectSingleAzMultiRg(filter *proto.NodeFilter, affi
 		}
 
 		if len(selectedNodes) > 0 {
-			return selectedNodes, nil
+			return metasOf(selectedNodes), nil
 		}
 	}
 
@@ -417,7 +470,7 @@ func (sd *ServiceDiscovery) SelectSingleAzMultiRg(filter *proto.NodeFilter, affi
 
 // exhaustiveSearchSingleAzMultiRg exhaustive search for SingleAzMultiRg strategy
 func (sd *ServiceDiscovery) exhaustiveSearchSingleAzMultiRg(candidateAZs []string, filter *proto.NodeFilter, affinityMode proto.AffinityMode) ([]*proto.NodeMeta, error) {
-	var allValidNodes []*proto.NodeMeta
+	var allValidNodes []*NodeInfo
 
 	// Collect all qualifying nodes
 	for _, az := range candidateAZs {
@@ -441,10 +494,10 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzMultiRg(candidateAZs []strin
 	// Apply limit constraint
 	limit := int(filter.Limit)
 	if limit == 0 || limit >= len(allValidNodes) {
-		return allValidNodes, nil
+		return metasOf(allValidNodes), nil
 	}
 
-	return sd.selectLowestLoadNodes(allValidNodes, limit), nil
+	return metasOf(sd.selectLowestLoadNodes(allValidNodes, limit)), nil
 }
 
 // SelectMultiAzSingleRg: rgList → slice random rg → rgAzIndexKeys[rg] → randomly select multiple azs → randomly select one node from each az
@@ -472,7 +525,7 @@ func (sd *ServiceDiscovery) SelectMultiAzSingleRg(filter *proto.NodeFilter, affi
 		}
 
 		// 4. Try to collect qualifying nodes
-		var selectedNodes []*proto.NodeMeta
+		var selectedNodes []*NodeInfo
 		limit := int(filter.Limit)
 		if limit == 0 || limit > len(candidateAZs) {
 			limit = len(candidateAZs)
@@ -492,7 +545,7 @@ func (sd *ServiceDiscovery) SelectMultiAzSingleRg(filter *proto.NodeFilter, affi
 		}
 
 		if len(selectedNodes) > 0 {
-			return selectedNodes, nil
+			return metasOf(selectedNodes), nil
 		}
 	}
 
@@ -502,7 +555,7 @@ func (sd *ServiceDiscovery) SelectMultiAzSingleRg(filter *proto.NodeFilter, affi
 
 // exhaustiveSearchMultiAzSingleRg exhaustive search for MultiAzSingleRg strategy
 func (sd *ServiceDiscovery) exhaustiveSearchMultiAzSingleRg(candidateRGs []string, filter *proto.NodeFilter, affinityMode proto.AffinityMode) ([]*proto.NodeMeta, error) {
-	var allValidNodes []*proto.NodeMeta
+	var allValidNodes []*NodeInfo
 
 	// Collect all qualifying nodes
 	for _, rg := range candidateRGs {
@@ -526,10 +579,10 @@ func (sd *ServiceDiscovery) exhaustiveSearchMultiAzSingleRg(candidateRGs []strin
 	// Apply limit constraint
 	limit := int(filter.Limit)
 	if limit == 0 || limit >= len(allValidNodes) {
-		return allValidNodes, nil
+		return metasOf(allValidNodes), nil
 	}
 
-	return sd.selectLowestLoadNodes(allValidNodes, limit), nil
+	return metasOf(sd.selectLowestLoadNodes(allValidNodes, limit)), nil
 }
 
 // SelectMultiAzMultiRg: azList → slice randomly select multiple azs → randomly select rg from each az → azRgIndex[az][rg] random node
@@ -556,7 +609,7 @@ func (sd *ServiceDiscovery) SelectMultiAzMultiRg(filter *proto.NodeFilter, affin
 			numAZs = min(limit, len(candidateAZs))
 		}
 
-		var selectedNodes []*proto.NodeMeta
+		var selectedNodes []*NodeInfo
 		selectedAZs := sd.randomSelectStrings(candidateAZs, numAZs)
 
 		// 3. Randomly select RG from each AZ, then randomly select node
@@ -580,7 +633,7 @@ func (sd *ServiceDiscovery) SelectMultiAzMultiRg(filter *proto.NodeFilter, affin
 		}
 
 		if len(selectedNodes) > 0 {
-			return selectedNodes, nil
+			return metasOf(selectedNodes), nil
 		}
 	}
 
@@ -590,7 +643,7 @@ func (sd *ServiceDiscovery) SelectMultiAzMultiRg(filter *proto.NodeFilter, affin
 
 // exhaustiveSearchMultiAzMultiRg exhaustive search for MultiAzMultiRg strategy
 func (sd *ServiceDiscovery) exhaustiveSearchMultiAzMultiRg(candidateAZs []string, filter *proto.NodeFilter, affinityMode proto.AffinityMode) ([]*proto.NodeMeta, error) {
-	var allValidNodes []*proto.NodeMeta
+	var allValidNodes []*NodeInfo
 
 	// Collect all qualifying nodes (select one node from each AZ-RG combination)
 	for _, az := range candidateAZs {
@@ -614,10 +667,10 @@ func (sd *ServiceDiscovery) exhaustiveSearchMultiAzMultiRg(candidateAZs []string
 	// Apply limit constraint
 	limit := int(filter.Limit)
 	if limit == 0 || limit >= len(allValidNodes) {
-		return allValidNodes, nil
+		return metasOf(allValidNodes), nil
 	}
 
-	return sd.selectLowestLoadNodes(allValidNodes, limit), nil
+	return metasOf(sd.selectLowestLoadNodes(allValidNodes, limit)), nil
 }
 
 // SelectRandom: random selection (equivalent to SelectMultiAzMultiRg but without AZ/RG quantity constraints)
@@ -626,7 +679,7 @@ func (sd *ServiceDiscovery) SelectRandom(filter *proto.NodeFilter, affinityMode 
 	defer sd.mu.RUnlock()
 
 	// Collect all qualifying nodes
-	var allCandidates []*proto.NodeMeta
+	var allCandidates []*NodeInfo
 
 	candidateAZs := sd.getCandidateAZs(filter)
 	for _, az := range candidateAZs {
@@ -643,7 +696,7 @@ func (sd *ServiceDiscovery) SelectRandom(filter *proto.NodeFilter, affinityMode 
 		return nil, fmt.Errorf("no matching nodes found")
 	}
 
-	return sd.selectLowestLoadNodes(allCandidates, int(filter.Limit)), nil
+	return metasOf(sd.selectLowestLoadNodes(allCandidates, int(filter.Limit))), nil
 }
 
 // SelectCustom filter matches az/rg → corresponding slice randomly selects nodes
@@ -659,7 +712,7 @@ func (sd *ServiceDiscovery) SelectRandomGroup(filter *proto.NodeFilter, affinity
 	defer sd.mu.RUnlock()
 
 	// 1. Collect all candidates (same as SelectRandom)
-	var allCandidates []*proto.NodeMeta
+	var allCandidates []*NodeInfo
 	candidateAZs := sd.getCandidateAZs(filter)
 	for _, az := range candidateAZs {
 		candidateRGs := sd.getCandidateRGsInAZ(az, filter)
@@ -680,12 +733,12 @@ func (sd *ServiceDiscovery) SelectRandomGroup(filter *proto.NodeFilter, affinity
 
 	limit := int(filter.Limit)
 	if limit == 0 || limit >= len(allCandidates) {
-		return allCandidates, nil
+		return metasOf(allCandidates), nil
 	}
 
 	// 2. Sort by NodeId (deterministic, stable grouping)
 	sort.Slice(allCandidates, func(i, j int) bool {
-		return allCandidates[i].NodeId < allCandidates[j].NodeId
+		return allCandidates[i].Meta.NodeId < allCandidates[j].Meta.NodeId
 	})
 
 	// 3. Partition into groups of `limit` size
@@ -701,15 +754,15 @@ func (sd *ServiceDiscovery) SelectRandomGroup(filter *proto.NodeFilter, affinity
 
 	if end <= len(allCandidates) {
 		// Full group — return exactly `limit` nodes
-		return allCandidates[start:end], nil
+		return metasOf(allCandidates[start:end]), nil
 	}
 
 	// 5. Partial last group — take what's available, fill from remaining
-	selected := make([]*proto.NodeMeta, 0, limit)
+	selected := make([]*NodeInfo, 0, limit)
 	selected = append(selected, allCandidates[start:]...)
 
 	// Fill from other nodes (those not in this group)
-	remaining := make([]*proto.NodeMeta, 0, start)
+	remaining := make([]*NodeInfo, 0, start)
 	remaining = append(remaining, allCandidates[:start]...)
 
 	needed := limit - len(selected)
@@ -720,7 +773,7 @@ func (sd *ServiceDiscovery) SelectRandomGroup(filter *proto.NodeFilter, affinity
 	filled := sd.selectLowestLoadNodes(remaining, needed)
 	selected = append(selected, filled...)
 
-	return selected, nil
+	return metasOf(selected), nil
 }
 
 // === Helper method implementations ===
@@ -860,11 +913,25 @@ func (sd *ServiceDiscovery) getCandidateAZsInRG(rg string, filter *proto.NodeFil
 func (sd *ServiceDiscovery) GetAllServers() map[string]*proto.NodeMeta {
 	sd.mu.RLock()
 	defer sd.mu.RUnlock()
-	result := make(map[string]*proto.NodeMeta)
+	result := make(map[string]*proto.NodeMeta, len(sd.Nodes))
 	for k, v := range sd.Nodes {
-		result[k] = v
+		result[k] = v.Meta
 	}
 	return result
+}
+
+// RuntimeOf returns a node's latest runtime snapshot, or nil when the node is
+// unknown or has not announced one yet. The snapshot is immutable: a newer
+// reading replaces it rather than mutating it, so the caller may read it after
+// this returns.
+func (sd *ServiceDiscovery) RuntimeOf(nodeID string) *proto.NodeRuntimeInfo {
+	sd.mu.RLock()
+	node, exists := sd.Nodes[nodeID]
+	sd.mu.RUnlock()
+	if !exists {
+		return nil
+	}
+	return node.Runtime()
 }
 
 func (sd *ServiceDiscovery) GetResourceGroups() []string {
@@ -877,13 +944,13 @@ func (sd *ServiceDiscovery) GetServersByResourceGroup(resourceGroup string) []*p
 	sd.mu.RLock()
 	defer sd.mu.RUnlock()
 
-	var result []*proto.NodeMeta
+	var result []*NodeInfo
 	if azMap, exists := sd.rgAzIndex[resourceGroup]; exists {
 		for _, nodes := range azMap {
 			result = append(result, nodes...)
 		}
 	}
-	return result
+	return metasOf(result)
 }
 
 func (sd *ServiceDiscovery) GetAZDistribution(resourceGroup string) map[string]int {
@@ -912,7 +979,7 @@ func (sd *ServiceDiscovery) SelectServersAcrossAZ(resourceGroup string, count in
 		return nil, nil, fmt.Errorf("insufficient AZs: need %d, have %d", count, len(availableAZs))
 	}
 
-	selected := make([]*proto.NodeMeta, 0, count)
+	selected := make([]*NodeInfo, 0, count)
 	selectedAZs := make([]string, 0, count)
 
 	// Randomly select AZs
@@ -931,7 +998,7 @@ func (sd *ServiceDiscovery) SelectServersAcrossAZ(resourceGroup string, count in
 		return nil, nil, fmt.Errorf("cannot select %d servers across different AZs", count)
 	}
 
-	return selected, selectedAZs, nil
+	return metasOf(selected), selectedAZs, nil
 }
 
 // === Index maintenance helper methods ===
@@ -1036,9 +1103,9 @@ func (sd *ServiceDiscovery) removeAZFromRGKeys(rg, az string) {
 	}
 }
 
-func (sd *ServiceDiscovery) removeNodeFromSlice(nodes []*proto.NodeMeta, nodeID string) []*proto.NodeMeta {
+func (sd *ServiceDiscovery) removeNodeFromSlice(nodes []*NodeInfo, nodeID string) []*NodeInfo {
 	for i, node := range nodes {
-		if node.NodeId == nodeID {
+		if node.Meta.NodeId == nodeID {
 			return append(nodes[:i], nodes[i+1:]...)
 		}
 	}
@@ -1048,9 +1115,15 @@ func (sd *ServiceDiscovery) removeNodeFromSlice(nodes []*proto.NodeMeta, nodeID 
 // === Selection and filtering helper methods ===
 
 // loadOf returns the node's effective load and whether it is known (reported
-// and fresh within loadTTL).
-func (sd *ServiceDiscovery) loadOf(node *proto.NodeMeta) (float64, bool) {
-	updated := node.GetLoadUpdatedAt()
+// and fresh within loadTTL). It reads the runtime snapshot, which is where load
+// lives — NodeMeta's copy exists only to carry the value to peers running an
+// older build (issue #273).
+func (sd *ServiceDiscovery) loadOf(node *NodeInfo) (float64, bool) {
+	rt := node.Runtime()
+	if rt == nil {
+		return 0, false
+	}
+	updated := rt.GetUpdatedAt()
 	if updated <= 0 {
 		return 0, false
 	}
@@ -1058,7 +1131,7 @@ func (sd *ServiceDiscovery) loadOf(node *proto.NodeMeta) (float64, bool) {
 	if age < 0 || time.Duration(age)*time.Millisecond > sd.loadTTL {
 		return 0, false
 	}
-	load := node.GetLoadFactor()
+	load := rt.GetLoadFactor()
 	if load < 0 {
 		load = 0
 	}
@@ -1068,7 +1141,7 @@ func (sd *ServiceDiscovery) loadOf(node *proto.NodeMeta) (float64, bool) {
 	return load, true
 }
 
-func (sd *ServiceDiscovery) selectLowestLoadNode(nodes []*proto.NodeMeta) *proto.NodeMeta {
+func (sd *ServiceDiscovery) selectLowestLoadNode(nodes []*NodeInfo) *NodeInfo {
 	selected := sd.selectLowestLoadNodes(nodes, 1)
 	if len(selected) == 0 {
 		return nil
@@ -1085,9 +1158,9 @@ func (sd *ServiceDiscovery) selectLowestLoadNode(nodes []*proto.NodeMeta) *proto
 // neutral weight; if no node has a known load, selection falls back to uniform
 // random. When load-aware selection is disabled, load is ignored entirely and
 // selection is uniform random.
-func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*proto.NodeMeta, limit int) []*proto.NodeMeta {
+func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*NodeInfo, limit int) []*NodeInfo {
 	if len(nodes) == 0 {
-		return []*proto.NodeMeta{}
+		return []*NodeInfo{}
 	}
 
 	if !sd.loadAware {
@@ -1118,16 +1191,16 @@ func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*proto.NodeMeta, limit
 	metrics.WpQuorumSelectionSkew.WithLabelValues("weighted").Inc()
 
 	picked := weightedSampleIndices(weights, limit, sd.randFloat)
-	out := make([]*proto.NodeMeta, 0, len(picked))
+	out := make([]*NodeInfo, 0, len(picked))
 	for _, i := range picked {
 		out = append(out, nodes[i])
 	}
 	return out
 }
 
-func (sd *ServiceDiscovery) randomSelectNodes(nodes []*proto.NodeMeta, limit int) []*proto.NodeMeta {
+func (sd *ServiceDiscovery) randomSelectNodes(nodes []*NodeInfo, limit int) []*NodeInfo {
 	if len(nodes) == 0 {
-		return []*proto.NodeMeta{}
+		return []*NodeInfo{}
 	}
 
 	if limit == 0 || limit >= len(nodes) {
@@ -1135,7 +1208,7 @@ func (sd *ServiceDiscovery) randomSelectNodes(nodes []*proto.NodeMeta, limit int
 	}
 
 	// Fisher-Yates partial shuffle: O(limit) guaranteed, no retries
-	shuffled := make([]*proto.NodeMeta, len(nodes))
+	shuffled := make([]*NodeInfo, len(nodes))
 	copy(shuffled, nodes)
 	for i := 0; i < limit; i++ {
 		j := i + rand.Intn(len(shuffled)-i)
@@ -1163,17 +1236,17 @@ func (sd *ServiceDiscovery) randomSelectStrings(strs []string, limit int) []stri
 	return shuffled[:limit]
 }
 
-func (sd *ServiceDiscovery) filterByTags(nodes []*proto.NodeMeta, tags map[string]string) []*proto.NodeMeta {
+func (sd *ServiceDiscovery) filterByTags(nodes []*NodeInfo, tags map[string]string) []*NodeInfo {
 	if len(tags) == 0 {
 		return nodes
 	}
 
-	var filtered []*proto.NodeMeta
+	var filtered []*NodeInfo
 	for _, node := range nodes {
-		if node.Tags != nil {
+		if node.Meta.Tags != nil {
 			matches := true
 			for key, value := range tags {
-				if nodeValue, exists := node.Tags[key]; !exists || nodeValue != value {
+				if nodeValue, exists := node.Meta.Tags[key]; !exists || nodeValue != value {
 					matches = false
 					break
 				}
@@ -1187,11 +1260,11 @@ func (sd *ServiceDiscovery) filterByTags(nodes []*proto.NodeMeta, tags map[strin
 }
 
 // excludeDecommissioning filters out nodes that have the "status" tag set to "decommissioning" or "decommissioned".
-func (sd *ServiceDiscovery) excludeDecommissioning(nodes []*proto.NodeMeta) []*proto.NodeMeta {
-	var active []*proto.NodeMeta
+func (sd *ServiceDiscovery) excludeDecommissioning(nodes []*NodeInfo) []*NodeInfo {
+	var active []*NodeInfo
 	for _, node := range nodes {
-		if node.Tags != nil {
-			if status, exists := node.Tags["status"]; exists && (status == "decommissioning" || status == "decommissioned") {
+		if node.Meta.Tags != nil {
+			if status, exists := node.Meta.Tags["status"]; exists && (status == "decommissioning" || status == "decommissioned") {
 				continue
 			}
 		}

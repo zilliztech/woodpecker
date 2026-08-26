@@ -53,13 +53,13 @@ func TestClientDelegate_NotifyMsg(t *testing.T) {
 	msg, err := encodeRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "s1", LoadFactor: 0.83, UpdatedAt: 200})
 	assert.NoError(t, err)
 	d.NotifyMsg(msg)
-	assert.Equal(t, 0.83, d.discovery.GetAllServers()["s1"].GetLoadFactor())
+	assert.Equal(t, 0.83, d.discovery.RuntimeOf("s1").GetLoadFactor())
 
 	assert.NotPanics(t, func() {
 		d.NotifyMsg([]byte("test"))                             // unknown tag
 		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo, 0xff, 0xff}) // undecodable payload
 	})
-	assert.Equal(t, 0.83, d.discovery.GetAllServers()["s1"].GetLoadFactor(),
+	assert.Equal(t, 0.83, d.discovery.RuntimeOf("s1").GetLoadFactor(),
 		"an unusable payload must not disturb what the client holds")
 }
 
@@ -168,14 +168,14 @@ func TestServerDelegate_NotifyMsg(t *testing.T) {
 		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo, 0xff, 0xff}) // undecodable payload
 		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo})             // empty payload -> no node id
 	})
-	assert.Equal(t, int64(100), d.discovery.GetAllServers()["n2"].GetLoadUpdatedAt(),
+	assert.Equal(t, int64(100), d.discovery.RuntimeOf("n2").GetUpdatedAt(),
 		"a payload that could not be understood must not disturb what discovery holds")
 
 	// A well-formed runtime snapshot lands in discovery.
 	msg, err := encodeRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n2", LoadFactor: 0.62, UpdatedAt: 200})
 	assert.NoError(t, err)
 	d.NotifyMsg(msg)
-	assert.Equal(t, 0.62, d.discovery.GetAllServers()["n2"].GetLoadFactor())
+	assert.Equal(t, 0.62, d.discovery.RuntimeOf("n2").GetLoadFactor())
 }
 
 func TestServerDelegate_GetBroadcasts(t *testing.T) {
@@ -732,10 +732,10 @@ func TestServiceDiscovery_GetCandidateAZsInRG_Empty(t *testing.T) {
 func TestServiceDiscovery_RemoveNodeFromSlice(t *testing.T) {
 	sd := NewServiceDiscovery()
 
-	nodes := []*proto.NodeMeta{
-		{NodeId: "n1"},
-		{NodeId: "n2"},
-		{NodeId: "n3"},
+	nodes := []*NodeInfo{
+		{Meta: &proto.NodeMeta{NodeId: "n1"}},
+		{Meta: &proto.NodeMeta{NodeId: "n2"}},
+		{Meta: &proto.NodeMeta{NodeId: "n3"}},
 	}
 
 	// Remove from middle

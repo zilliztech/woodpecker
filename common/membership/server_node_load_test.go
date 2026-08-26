@@ -281,8 +281,7 @@ func TestLoadBroadcast_ReachesPeerDiscovery(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool {
 		b.discovery.mu.RLock()
 		defer b.discovery.mu.RUnlock()
-		meta, ok := b.discovery.Nodes["peer-a"]
-		return ok && meta.GetLoadFactor() == 0.88
+		return b.discovery.RuntimeOf("peer-a").GetLoadFactor() == 0.88
 	}, "peer never saw the announced load within 5s")
 }
 
@@ -310,7 +309,7 @@ func TestLoadBroadcast_ReachesClientDiscovery(t *testing.T) {
 	s.reportLoadOnce()
 
 	waitFor(t, 5*time.Second, func() bool {
-		return c.GetDiscovery().GetAllServers()["srv-a"].GetLoadFactor() == 0.66
+		return c.GetDiscovery().RuntimeOf("srv-a").GetLoadFactor() == 0.66
 	}, "client never saw the announced load within 5s")
 }
 
@@ -349,8 +348,7 @@ func TestLoadBroadcast_ReachesEveryPeerInACluster(t *testing.T) {
 
 	waitFor(t, 15*time.Second, func() bool {
 		for _, node := range nodes[1:] {
-			meta, ok := node.GetDiscovery().GetAllServers()["cov-0"]
-			if !ok || meta.GetLoadFactor() != 0.73 {
+			if node.GetDiscovery().RuntimeOf("cov-0").GetLoadFactor() != 0.73 {
 				return false
 			}
 		}
