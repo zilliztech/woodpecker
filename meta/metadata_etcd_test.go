@@ -107,6 +107,8 @@ func TestAll(t *testing.T) {
 	t.Run("test update after delete does not resurrect reader temp info", testUpdateAfterDeleteDoesNotResurrectReaderTempInfo)
 	t.Run("test update put failure does not revoke reader temp info lease", testUpdatePutFailureDoesNotRevokeReaderTempInfoLease)
 	t.Run("test update after provider close does not resurrect reader temp info", testUpdateAfterProviderCloseDoesNotResurrectReaderTempInfo)
+	t.Run("test create reader temp info after provider close is rejected", testCreateReaderTempInfoAfterProviderCloseIsRejected)
+	t.Run("test provider close is idempotent across reader sessions", testProviderCloseIsIdempotentAcrossReaderSessions)
 	t.Run("test reader temp info rejects foreign session", testReaderTempInfoRejectsForeignSession)
 	t.Run("test create reader temp info honors caller deadline when etcd unreachable", testCreateReaderTempInfoHonorsCallerDeadlineWhenEtcdUnreachable)
 	t.Run("test create segment cleanup status", testCreateSegmentCleanupStatus)
