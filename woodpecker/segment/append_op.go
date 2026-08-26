@@ -33,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
@@ -67,6 +68,7 @@ type AppendOp struct {
 	handle          SegmentHandle
 	ackSet          *bitset.BitSet
 	quorumInfo      *proto.QuorumInfo
+	nodeScopes      []string // per node index: how far that replica sits from this client
 	resultChannels  []channel.ResultChannel
 	channelAttempts []int
 	channelErrors   []error // Each channel has its own error
@@ -77,7 +79,7 @@ type AppendOp struct {
 }
 
 func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
-	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo,
+	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo, nodeScopes []string,
 ) *AppendOp {
 	op := &AppendOp{
 		bucketName: bucketName,
@@ -93,6 +95,7 @@ func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int6
 		handle:          handle,
 		ackSet:          &bitset.BitSet{},
 		quorumInfo:      quorumInfo,
+		nodeScopes:      nodeScopes,
 		resultChannels:  make([]channel.ResultChannel, 0),
 		channelAttempts: make([]int, len(quorumInfo.Nodes)),
 		channelErrors:   make([]error, len(quorumInfo.Nodes)),
@@ -104,6 +107,21 @@ func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int6
 
 func (op *AppendOp) Identifier() string {
 	return fmt.Sprintf("%d/%d/%d", op.logId, op.segmentId, op.entryId)
+}
+
+// recordReplicaResult counts one replica's outcome for this entry, labelled by
+// how far that replica sits from this client. A quorum append writes to every
+// replica, so this is where cross-AZ write traffic becomes visible.
+func (op *AppendOp) recordReplicaResult(serverIndex int, status string) {
+	scope := topology.ScopeUnknown
+	if serverIndex >= 0 && serverIndex < len(op.nodeScopes) {
+		scope = op.nodeScopes[serverIndex]
+	}
+	logIdStr := strconv.FormatInt(op.logId, 10)
+	metrics.WpClientReplicaAppendTotal.WithLabelValues(op.logNs, logIdStr, scope, status).Inc()
+	if status == "success" {
+		metrics.WpClientReplicaAppendBytesTotal.WithLabelValues(op.logNs, logIdStr, scope).Add(float64(len(op.value)))
+	}
 }
 
 func (op *AppendOp) Execute() {
@@ -159,6 +177,7 @@ func (op *AppendOp) sendWriteRequestRetry(ctx context.Context, serverIndex int) 
 	cli, clientErr := op.clientPool.GetLogStoreClient(ctx, serverAddr)
 	if clientErr != nil {
 		op.channelErrors[serverIndex] = clientErr
+		op.recordReplicaResult(serverIndex, "error")
 		// segHandle failure async
 		go op.handle.HandleAppendRequestFailure(ctx, op.entryId, clientErr, serverIndex, serverAddr)
 		return
@@ -207,6 +226,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 			return
 		}
 		op.channelErrors[serverIndex] = err
+		op.recordReplicaResult(serverIndex, "error")
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, serverIndex, serverAddr)
 		return
 	}
@@ -236,18 +256,21 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		}
 		// read chan error, retry if necessary
 		op.channelErrors[serverIndex] = readChanErr
+		op.recordReplicaResult(serverIndex, "error")
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, readChanErr, serverIndex, serverAddr)
 		return
 	}
 
 	if syncedResult.SyncedId == -1 || syncedResult.Err != nil {
 		op.channelErrors[serverIndex] = syncedResult.Err
+		op.recordReplicaResult(serverIndex, "error")
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, syncedResult.Err, serverIndex, serverAddr)
 		return
 	}
 
 	// set and count if ack >= aq
 	if syncedResult.SyncedId != -1 && syncedResult.SyncedId >= op.entryId {
+		op.recordReplicaResult(serverIndex, "success")
 		ackCount := op.ackSet.SetAndCount(serverIndex)
 		if ackCount >= int(op.quorumInfo.Aq) {
 			// Use atomic operation to ensure SendAppendSuccessCallbacks is called only once
@@ -278,15 +301,18 @@ func (op *AppendOp) applyNodeAck(ctx context.Context, startRequestTime time.Time
 	}
 	if readErr != nil {
 		op.channelErrors[serverIndex] = readErr
+		op.recordReplicaResult(serverIndex, "error")
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, readErr, serverIndex, serverAddr)
 		return
 	}
 	if result.SyncedId == -1 || result.Err != nil {
 		op.channelErrors[serverIndex] = result.Err
+		op.recordReplicaResult(serverIndex, "error")
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, result.Err, serverIndex, serverAddr)
 		return
 	}
 	if result.SyncedId >= op.entryId {
+		op.recordReplicaResult(serverIndex, "success")
 		if op.ackSet.SetAndCount(serverIndex) >= int(op.quorumInfo.Aq) {
 			if op.completed.CompareAndSwap(false, true) {
 				op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)

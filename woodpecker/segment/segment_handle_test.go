@@ -33,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -970,7 +971,7 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum)
+			segmentMeta.Metadata.Quorum, nil)
 		ops = append(ops, op)
 		testQueue.PushBack(op)
 	}
@@ -1053,7 +1054,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum)
+			segmentMeta.Metadata.Quorum, nil)
 		ops = append(ops, op)
 		testQueue.PushBack(op)
 	}
@@ -1146,7 +1147,7 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum)
+			segmentMeta.Metadata.Quorum, nil)
 		ops[i] = op
 		testQueue.PushBack(op)
 	}
@@ -1251,7 +1252,7 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum)
+			segmentMeta.Metadata.Quorum, nil)
 		testQueue.PushBack(op)
 	}
 
@@ -1407,7 +1408,7 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum)
+			segmentMeta.Metadata.Quorum, nil)
 		testQueue.PushBack(op)
 	}
 
@@ -1516,7 +1517,7 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum)
+			segmentMeta.Metadata.Quorum, nil)
 		testQueue.PushBack(op)
 	}
 
@@ -1625,7 +1626,7 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum)
+			segmentMeta.Metadata.Quorum, nil)
 		attempt := 1
 		if i == 1 {
 			attempt = 2 // This will be >= MaxRetries (2), so it will be removed
@@ -3126,7 +3127,7 @@ func TestSegmentHandle_HandleAppendRequestFailure_RetrySubmitFailed(t *testing.T
 		"a-bucket", "files", 1, 1, 0,
 		[]byte("test_data"), callback,
 		mockClientPool, segmentHandle,
-		segmentMeta.Metadata.Quorum)
+		segmentMeta.Metadata.Quorum, nil)
 	retryableOp.channelAttempts[0] = 0 // first attempt, retryable
 	testQueue.PushBack(retryableOp)
 
@@ -4825,9 +4826,10 @@ func TestOrderedQuorumReadCandidates_MissingLocalTopologyKeepsOriginalOrder(t *t
 		},
 	}, nil)
 
+	// A client that does not know its own zone cannot classify any replica.
 	assert.Equal(t, []quorumReadCandidate{
-		{node: "node-first", originalIndex: 0},
-		{node: "node-local", originalIndex: 1},
+		{node: "node-first", originalIndex: 0, azScope: topology.ScopeUnknown},
+		{node: "node-local", originalIndex: 1, azScope: topology.ScopeUnknown},
 	}, candidates)
 }
 
@@ -5992,7 +5994,7 @@ func TestSendAppendSuccessCallbacks_EntryIdBelowLAC(t *testing.T) {
 			mu.Lock()
 			successIds = append(successIds, eid)
 			mu.Unlock()
-		}, mockClientPool, sh, segmentMeta.Metadata.Quorum)
+		}, mockClientPool, sh, segmentMeta.Metadata.Quorum, nil)
 		op.completed.Store(true)
 		testQueue.PushBack(op)
 	}
@@ -6031,7 +6033,7 @@ func TestSendAppendSuccessCallbacks_NotCompleted_Break(t *testing.T) {
 	sh := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
 
 	// Add op that is NOT completed — should trigger the "not completed" break
-	op := NewAppendOp("b", "r", 1, 1, 0, []byte("data"), func(segmentId int64, eid int64, err error) {}, mockClientPool, sh, segmentMeta.Metadata.Quorum)
+	op := NewAppendOp("b", "r", 1, 1, 0, []byte("data"), func(segmentId int64, eid int64, err error) {}, mockClientPool, sh, segmentMeta.Metadata.Quorum, nil)
 	op.completed.Store(false)
 	testQueue.PushBack(op)
 
@@ -6524,7 +6526,7 @@ func TestHandleAppendRequestFailure_OpAlreadyRemovedFromQueue(t *testing.T) {
 		callbackCount++
 	}
 	appendOp := NewAppendOp("bucket", "root", 1, 1, 0, []byte("data"), callback,
-		mockClientPool, sh, segmentMeta.Metadata.Quorum)
+		mockClientPool, sh, segmentMeta.Metadata.Quorum, nil)
 
 	// Mark the op as completed (2 ack quorum nodes succeeded)
 	appendOp.completed.Store(true)

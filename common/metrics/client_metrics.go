@@ -229,7 +229,7 @@ var (
 		Subsystem: clientRole,
 		Name:      "active_segment_node",
 		Help:      "Quorum node membership of each log's current active (writable) segment (value always 1, one series per node)",
-	}, []string{"log_ns", "log_id", "segment_id", "node"})
+	}, []string{"log_ns", "log_id", "segment_id", "node", "az"})
 
 	// Direct read metrics (client reads sealed segments directly from object storage)
 	WpClientDirectReadRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -245,6 +245,45 @@ var (
 		Help:      "Latency of direct read operations from object storage for sealed segments",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
 	}, []string{"log_ns", "log_id"})
+
+	// Replica placement metrics. az_scope is where the peer sits relative to
+	// this client — local / cross_az / cross_region, or unknown when either
+	// side's topology is unset. The node endpoint is deliberately NOT a label:
+	// it would multiply by log_id and explode cardinality, while az_scope stays
+	// at four values and answers the question that costs money.
+	WpClientReplicaAppendTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "replica_append_total",
+		Help:      "Total per-replica append outcomes, by how far the replica sits from this client",
+	}, []string{"log_ns", "log_id", "az_scope", "status"})
+	WpClientReplicaAppendBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "replica_append_bytes_total",
+		Help:      "Total bytes acknowledged per replica, by how far the replica sits from this client",
+	}, []string{"log_ns", "log_id", "az_scope"})
+	// Quorum reads of an active segment. A caught-up tail reader polls
+	// continuously and gets "no entry yet" every time, so that outcome is not
+	// counted here at all — only reads that moved data or genuinely failed.
+	WpClientQuorumReadTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "quorum_read_total",
+		Help:      "Total quorum read outcomes, by how far the serving replica sits from this client",
+	}, []string{"log_ns", "log_id", "az_scope", "status"})
+	WpClientQuorumReadBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "quorum_read_bytes_total",
+		Help:      "Total bytes read from quorum replicas, by how far the serving replica sits from this client",
+	}, []string{"log_ns", "log_id", "az_scope"})
+	WpClientReadFailoverTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_failover_total",
+		Help:      "Total quorum reads served by a replica in a different scope than the preferred one",
+	}, []string{"log_ns", "log_id", "from_scope", "to_scope"})
 
 	// Etcd Meta metrics
 	WpEtcdMetaOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -312,6 +351,12 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		// Direct read metrics
 		registerer.MustRegister(WpClientDirectReadRequestsTotal)
 		registerer.MustRegister(WpClientDirectReadLatency)
+		// Replica placement metrics
+		registerer.MustRegister(WpClientReplicaAppendTotal)
+		registerer.MustRegister(WpClientReplicaAppendBytesTotal)
+		registerer.MustRegister(WpClientQuorumReadTotal)
+		registerer.MustRegister(WpClientQuorumReadBytesTotal)
+		registerer.MustRegister(WpClientReadFailoverTotal)
 		// etcd meta metrics
 		registerer.MustRegister(WpEtcdMetaOperationsTotal)
 		registerer.MustRegister(WpEtcdMetaOperationLatency)
@@ -351,18 +396,30 @@ func setMonotonicFrontier(frontiers map[string]progressFrontier, segmentGauge, e
 	frontierMu.Unlock()
 }
 
+// ActiveSegmentNode is one replica of a log's current writable segment: the
+// node's endpoint and the availability zone it sits in (empty when the quorum
+// metadata carries no placement for it).
+type ActiveSegmentNode struct {
+	Node string
+	AZ   string
+}
+
 // SetActiveSegmentNodes marks each node of an active (writable) segment's quorum
 // with a value of 1 (one series per node). Call when a segment becomes writable.
-func SetActiveSegmentNodes(logNs, logId, segmentId string, nodes []string) {
+func SetActiveSegmentNodes(logNs, logId, segmentId string, nodes []ActiveSegmentNode) {
 	for _, node := range nodes {
-		WpActiveSegmentNode.WithLabelValues(logNs, logId, segmentId, node).Set(1)
+		WpActiveSegmentNode.WithLabelValues(logNs, logId, segmentId, node.Node, node.AZ).Set(1)
 	}
 }
 
 // ClearActiveSegmentNodes deletes the per-node series for an active segment.
 // Call when the segment leaves the writable state (completed / rolling / closed).
-func ClearActiveSegmentNodes(logNs, logId, segmentId string, nodes []string) {
-	for _, node := range nodes {
-		WpActiveSegmentNode.DeleteLabelValues(logNs, logId, segmentId, node)
-	}
+// It matches on the segment alone, so a quorum whose membership or placement
+// changed since it was published is still removed in full.
+func ClearActiveSegmentNodes(logNs, logId, segmentId string) {
+	WpActiveSegmentNode.DeletePartialMatch(prometheus.Labels{
+		"log_ns":     logNs,
+		"log_id":     logId,
+		"segment_id": segmentId,
+	})
 }

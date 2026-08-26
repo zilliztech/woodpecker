@@ -289,3 +289,22 @@ func TestMetrics_UseLogNsLabel(t *testing.T) {
 		check(t, reg, "woodpecker_client_append_requests_total")
 	})
 }
+
+func TestRegisterReplicaPlacementMetrics(t *testing.T) {
+	WpClientRegisterOnce = sync.Once{}
+	registry := prometheus.NewRegistry()
+	RegisterClientMetricsWithRegisterer(registry)
+
+	WpClientReplicaAppendTotal.WithLabelValues("bucket/root", "1", "cross_az", "success").Inc()
+	WpClientReplicaAppendBytesTotal.WithLabelValues("bucket/root", "1", "cross_az").Add(64)
+	WpClientQuorumReadTotal.WithLabelValues("bucket/root", "1", "local", "success").Inc()
+	WpClientQuorumReadBytesTotal.WithLabelValues("bucket/root", "1", "local").Add(128)
+	WpClientReadFailoverTotal.WithLabelValues("bucket/root", "1", "local", "cross_az").Inc()
+
+	names := gatheredMetricNames(t, registry)
+	assert.True(t, names["woodpecker_client_replica_append_total"])
+	assert.True(t, names["woodpecker_client_replica_append_bytes_total"])
+	assert.True(t, names["woodpecker_client_quorum_read_total"])
+	assert.True(t, names["woodpecker_client_quorum_read_bytes_total"])
+	assert.True(t, names["woodpecker_client_read_failover_total"])
+}

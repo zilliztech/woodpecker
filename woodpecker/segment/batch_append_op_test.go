@@ -55,7 +55,7 @@ func TestBatchAppendOp_Execute_QuorumAck(t *testing.T) {
 	ops := make([]*AppendOp, batchN)
 	for i := 0; i < batchN; i++ {
 		ops[i] = NewAppendOp("a-bucket", "files", 1, 2, firstEntryId+int64(i), []byte("val"),
-			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo)
+			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
 	}
 
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
@@ -127,7 +127,7 @@ func TestSequentialExecutor_CoalescesAppendOps(t *testing.T) {
 	ops := make([]*AppendOp, batchN)
 	for i := 0; i < batchN; i++ {
 		ops[i] = NewAppendOp("a-bucket", "files", 1, 2, firstEntryId+int64(i), []byte("v"),
-			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo)
+			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
 	}
 
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
@@ -196,7 +196,7 @@ func newBatchOps(t *testing.T, n int, pool *mocks_logstore_client.LogStoreClient
 	ops := make([]*AppendOp, n)
 	for i := 0; i < n; i++ {
 		ops[i] = NewAppendOp("a-bucket", "files", 1, 2, int64(10+i), []byte("v"),
-			func(int64, int64, error) {}, pool, handle, quorumInfo)
+			func(int64, int64, error) {}, pool, handle, quorumInfo, nil)
 	}
 	return ops
 }

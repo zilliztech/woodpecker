@@ -120,6 +120,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 		lacSyncNotify:       make(chan struct{}, 1),
 		lacSyncStop:         make(chan struct{}),
 	}
+	segmentHandle.nodeScopes = quorumNodeScopes(segmentHandle.quorumInfo)
 	segmentHandle.lacSyncLatest.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
@@ -141,7 +142,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 			segmentHandle.logNs,
 			strconv.FormatInt(segmentHandle.logId, 10),
 			strconv.FormatInt(segmentHandle.segmentId, 10),
-			segmentHandle.quorumInfo.GetNodes(),
+			activeSegmentNodes(segmentHandle.quorumInfo),
 		)
 		segmentHandle.executor.Start(ctx)
 		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
@@ -184,6 +185,7 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 		lacSyncNotify: make(chan struct{}, 1),
 		lacSyncStop:   make(chan struct{}),
 	}
+	segmentHandle.nodeScopes = quorumNodeScopes(segmentHandle.quorumInfo)
 	segmentHandle.lacSyncLatest.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
@@ -215,8 +217,12 @@ type segmentHandleImpl struct {
 	metadata         meta.MetadataProvider
 	ClientPool       client.LogStoreClientPool
 	quorumInfo       *proto.QuorumInfo
-	cfg              *config.Configuration
-	logNs            string
+	// nodeScopes says, per quorum node index, how far that replica sits from
+	// this client. A segment's quorum is fixed, so it is resolved once here
+	// instead of on every append.
+	nodeScopes []string
+	cfg        *config.Configuration
+	logNs      string
 
 	sync.RWMutex
 	lastPushed       atomic.Int64
@@ -327,7 +333,8 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 		callback,
 		s.ClientPool,
 		s,
-		s.quorumInfo)
+		s.quorumInfo,
+		s.nodeScopes)
 	return pendingAppendOp
 }
 
@@ -594,6 +601,69 @@ func (s *segmentHandleImpl) directReadBatch(ctx context.Context, from int64, max
 type quorumReadCandidate struct {
 	node          string
 	originalIndex int
+	azScope       string
+}
+
+// quorumPlacements maps each quorum endpoint to the replica metadata that says
+// where it sits. Endpoints absent from the replica list — quorum metadata
+// written before placement was recorded — are simply missing from the map.
+func quorumPlacements(quorumInfo *proto.QuorumInfo) map[string]*proto.QuorumNode {
+	replicas := quorumInfo.GetReplicas()
+	placements := make(map[string]*proto.QuorumNode, len(replicas))
+	for _, replica := range replicas {
+		if replica != nil && replica.Endpoint != "" {
+			placements[replica.Endpoint] = replica
+		}
+	}
+	return placements
+}
+
+func scopeOfReplica(localRegion, localAZ string, replica *proto.QuorumNode) string {
+	if replica == nil {
+		return topology.ScopeUnknown
+	}
+	return topology.Scope(localRegion, localAZ, replica.Region, replica.Az)
+}
+
+// quorumNodeScopes returns, per quorum node index, how far that replica sits
+// from this client, for the per-replica traffic metrics.
+func quorumNodeScopes(quorumInfo *proto.QuorumInfo) []string {
+	nodes := quorumInfo.GetNodes()
+	placements := quorumPlacements(quorumInfo)
+	localRegion := topology.GetCurrentRegion()
+	localAZ := topology.GetCurrentAvailabilityZone()
+
+	scopes := make([]string, len(nodes))
+	for i, node := range nodes {
+		scopes[i] = scopeOfReplica(localRegion, localAZ, placements[node])
+	}
+	return scopes
+}
+
+// activeSegmentNodes pairs each quorum endpoint with its availability zone for
+// the active-segment membership gauge.
+func activeSegmentNodes(quorumInfo *proto.QuorumInfo) []metrics.ActiveSegmentNode {
+	nodes := quorumInfo.GetNodes()
+	placements := quorumPlacements(quorumInfo)
+
+	members := make([]metrics.ActiveSegmentNode, 0, len(nodes))
+	for _, node := range nodes {
+		member := metrics.ActiveSegmentNode{Node: node}
+		if placement := placements[node]; placement != nil {
+			member.AZ = placement.Az
+		}
+		members = append(members, member)
+	}
+	return members
+}
+
+// batchReadBytes is the payload size a quorum read actually moved.
+func batchReadBytes(result *proto.BatchReadResult) int {
+	total := 0
+	for _, entry := range result.GetEntries() {
+		total += len(entry.GetValues())
+	}
+	return total
 }
 
 func orderedQuorumReadCandidates(quorumInfo *proto.QuorumInfo, lastReadState *proto.LastReadState) []quorumReadCandidate {
@@ -612,33 +682,28 @@ func orderedQuorumReadCandidates(quorumInfo *proto.QuorumInfo, lastReadState *pr
 		}
 	}
 
+	placements := quorumPlacements(quorumInfo)
+	localRegion := topology.GetCurrentRegion()
+	localAZ := topology.GetCurrentAvailabilityZone()
+
 	ordered := make([]quorumReadCandidate, 0, len(nodes))
 	for i := 0; i < len(nodes); i++ {
 		nodeIndex := (startNodeIndex + i) % len(nodes)
+		node := nodes[nodeIndex]
 		ordered = append(ordered, quorumReadCandidate{
-			node:          nodes[nodeIndex],
+			node:          node,
 			originalIndex: nodeIndex,
+			azScope:       scopeOfReplica(localRegion, localAZ, placements[node]),
 		})
 	}
 
-	localRegion := topology.GetCurrentRegion()
-	localAZ := topology.GetCurrentAvailabilityZone()
-	if localRegion == "" || localAZ == "" || len(quorumInfo.GetReplicas()) == 0 {
-		return ordered
-	}
-
-	replicasByEndpoint := make(map[string]*proto.QuorumNode, len(quorumInfo.GetReplicas()))
-	for _, replica := range quorumInfo.GetReplicas() {
-		if replica != nil && replica.Endpoint != "" {
-			replicasByEndpoint[replica.Endpoint] = replica
-		}
-	}
-
+	// Prefer a replica in this client's own zone. A replica only counts as
+	// local when both sides know their placement, so a client without
+	// REGION / AVAILABILITY_ZONE keeps the original order.
 	localCandidates := make([]quorumReadCandidate, 0, len(ordered))
 	remainingCandidates := make([]quorumReadCandidate, 0, len(ordered))
 	for _, candidate := range ordered {
-		replica := replicasByEndpoint[candidate.node]
-		if replica != nil && replica.Region == localRegion && replica.Az == localAZ {
+		if candidate.azScope == topology.ScopeLocal {
 			localCandidates = append(localCandidates, candidate)
 			continue
 		}
@@ -663,6 +728,15 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 	nodeCount := len(candidates)
 	var lastError error
 
+	logIdStr := strconv.FormatInt(s.logId, 10)
+	// The scope we would have preferred: candidates are ordered local-first, so
+	// being served by a different scope means we crossed a zone boundary we
+	// did not want to cross.
+	preferredScope := topology.ScopeUnknown
+	if len(candidates) > 0 {
+		preferredScope = candidates[0].azScope
+	}
+
 	// Cycle through nodes starting from the preferred index
 	for i, candidate := range candidates {
 		node := candidate.node
@@ -674,6 +748,7 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 				zap.Int64("segId", s.segmentId),
 				zap.String("node", node),
 				zap.Error(err))
+			metrics.WpClientQuorumReadTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope, "error").Inc()
 			lastError = err
 			continue
 		}
@@ -697,12 +772,25 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 				// encounter EOF, stop reading immediately
 				break
 			}
+			// Count genuine failures only: a caught-up tail reader gets
+			// ErrEntryNotFound on every poll, and EOF (handled above) ends the
+			// segment — neither is traffic that failed to move.
+			if !werr.ErrEntryNotFound.Is(err) {
+				metrics.WpClientQuorumReadTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope, "error").Inc()
+			}
 			continue
 		}
 
 		// Success! Update the LastReadState with current node and return the result
 		if batchResult.LastReadState != nil {
 			batchResult.LastReadState.Node = node
+		}
+
+		metrics.WpClientQuorumReadTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope, "success").Inc()
+		metrics.WpClientQuorumReadBytesTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope).
+			Add(float64(batchReadBytes(batchResult)))
+		if candidate.azScope != preferredScope {
+			metrics.WpClientReadFailoverTotal.WithLabelValues(s.logNs, logIdStr, preferredScope, candidate.azScope).Inc()
 		}
 
 		logger.Ctx(ctx).Debug("finish read batch successfully",
@@ -962,7 +1050,6 @@ func (s *segmentHandleImpl) stopWritingUnsafe(ctx context.Context, lastFlushedEn
 		s.logNs,
 		strconv.FormatInt(s.logId, 10),
 		strconv.FormatInt(s.segmentId, 10),
-		s.quorumInfo.GetNodes(),
 	)
 
 	// fast fail all pending append operations
