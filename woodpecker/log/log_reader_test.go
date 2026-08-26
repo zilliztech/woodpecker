@@ -18,6 +18,7 @@ package log
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1163,6 +1164,21 @@ func TestNewLogBatchReader(t *testing.T) {
 	assert.Equal(t, "test-reader", reader.GetName())
 }
 
+func TestNewLogBatchReader_RejectsNilTempSession(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+	cfg := newTestConfig()
+
+	from := &LogMessageId{SegmentId: 0, EntryId: 0}
+	// A reader built without a session would silently stop reporting its read
+	// position and stop protecting the segments it still needs from cleanup
+	reader, err := NewLogBatchReader(context.Background(), mockLogHandle, mockSegHandle, from, "test-reader", nil, cfg)
+	require.Error(t, err)
+	assert.True(t, werr.ErrLogReaderTempInfoError.Is(err))
+	assert.Nil(t, reader)
+}
+
 func TestLogReader_Close(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		mockLogHandle := &testLogHandleMock{}
@@ -1256,6 +1272,68 @@ func TestLogReader_ReadNext_EntryNotFound_ContextCancelled(t *testing.T) {
 	assert.Nil(t, msg)
 	assert.Error(t, err)
 	assert.Equal(t, context.DeadlineExceeded, err)
+}
+
+// An idle reader parked on an active segment keeps looping through
+// getNextSegHandleAndIDs -> ReadBatchAdv(ErrEntryNotFound) -> wait, without ever
+// advancing its position. It must not re-report that unchanged position on every
+// poll: the only consumer of reader temp info is the writer's cleanup watermark,
+// which reads RecentReadSegmentId, so those writes are identical and pure load.
+func TestLogReader_ReadNext_IdleReaderThrottlesPositionReports(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	reader := &logBatchReaderImpl{
+		logName:              "test-log",
+		logId:                1,
+		logIdStr:             "1",
+		logHandle:            mockLogHandle,
+		pendingReadSegmentId: 0,
+		pendingReadEntryId:   0,
+		currentSegmentHandle: mockSegHandle,
+		readerName:           "test-reader",
+		readerTempSession:    &fakeReaderTempSession{logId: 1, readerName: "test-reader"},
+		logNs:                "",
+		batch:                nil,
+		next:                 0,
+		// Already idle for longer than one report interval, so the periodic
+		// branch is due on the very first loop iteration
+		lastRead: time.Now().UnixMilli() - 2*UpdateReaderInfoIntervalMs,
+	}
+
+	mockLogHandle.On("GetNextSegmentId", mock.Anything).Return(int64(1), nil)
+	mockSegHandle.EXPECT().GetId(mock.Anything).Return(int64(0)).Maybe()
+	mockSegHandle.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			State:       proto.SegmentState_Active,
+			LastEntryId: 10,
+		},
+	}).Maybe()
+	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
+
+	var updates atomic.Int32
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, meta.ReaderTempInfoSession, int64, int64) error {
+			updates.Add(1)
+			return nil
+		}).Maybe()
+
+	mockSegHandle.EXPECT().ReadBatchAdv(mock.Anything, int64(0), int64(DefaultBatchEntriesLimit), mock.Anything).Return(
+		nil, werr.ErrEntryNotFound,
+	)
+
+	// Long enough to spin several poll iterations (NoDataReadWaitIntervalMs apart)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*NoDataReadWaitIntervalMs*time.Millisecond)
+	defer cancel()
+
+	msg, err := reader.ReadNext(ctx)
+	assert.Nil(t, msg)
+	assert.Error(t, err)
+
+	assert.EqualValues(t, 1, updates.Load(),
+		"an idle reader must report its unchanged position at most once per UpdateReaderInfoIntervalMs, not once per poll")
 }
 
 func TestLogReader_ReadNext_OtherReadError(t *testing.T) {

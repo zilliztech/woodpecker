@@ -159,6 +159,24 @@ var (
 		Help:      "Latency of log reader operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
 	}, []string{"log_ns", "log_id", "operation", "status"})
+	// Failures to maintain a reader's temp info. A sustained non-zero rate means
+	// the reader's read position is going stale in metadata; if its session lease
+	// is also lost, the writer stops protecting the segments it still needs.
+	WpLogReaderTempInfoErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "reader_temp_info_errors_total",
+		Help:      "Total reader temp info maintenance failures, by operation",
+	}, []string{"log_ns", "log_id", "operation"})
+	// Forced read-position moves over physically cleaned (GC'd) segments. This is
+	// an expected outcome of truncation, but it is silent to the application, so
+	// it is counted here: entries in the skipped range are never delivered.
+	WpLogReaderGCSkipsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "reader_gc_skips_total",
+		Help:      "Total times a reader skipped forward over a cleaned(GC'd) segment range",
+	}, []string{"log_ns", "log_id"})
 
 	// LogWriter metrics
 	WpLogWriterBytesWritten = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -279,6 +297,8 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		// LogReader metrics
 		registerer.MustRegister(WpLogReaderBytesRead)
 		registerer.MustRegister(WpLogReaderOperationLatency)
+		registerer.MustRegister(WpLogReaderTempInfoErrorsTotal)
+		registerer.MustRegister(WpLogReaderGCSkipsTotal)
 		// LogWriter metrics
 		registerer.MustRegister(WpLogWriterBytesWritten)
 		registerer.MustRegister(WpLogWriterOperationLatency)
