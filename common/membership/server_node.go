@@ -50,11 +50,6 @@ type ServerNode struct {
 	sampler    LoadSampler
 }
 
-// loadBroadcastTimeout bounds how long a load announce may block the reporter
-// goroutine. It also bounds how long Shutdown waits on that goroutine, so it is
-// deliberately short: a dropped announce is superseded by the next tick.
-const loadBroadcastTimeout = 2 * time.Second
-
 // ServerConfig Server configuration
 type ServerConfig struct {
 	// node info
@@ -147,6 +142,7 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create memberlist: %w", err)
 	}
+	delegate.AttachMemberlist(list)                                // lets the load broadcast queue size its retransmits by cluster size
 	discovery.UpdateServer(config.NodeID, delegate.SnapshotMeta()) // store a snapshot, not the live meta pointer
 
 	loadCtx, loadCancel := context.WithCancel(context.Background())
@@ -245,7 +241,7 @@ func (n *ServerNode) reportLoadOnce() {
 	n.publishLoad()
 	snap := n.delegate.SnapshotMeta()
 	n.discovery.UpdateServer(snap.GetNodeId(), snap)
-	n.broadcastLoad()
+	n.announceLoad(snap)
 }
 
 // publishLoad samples load and writes it into the gossip meta (no I/O).
@@ -256,8 +252,9 @@ func (n *ServerNode) publishLoad() {
 	n.delegate.SetLoadFactor(n.sampler.Sample())
 }
 
-// broadcastLoad announces the freshly stamped meta to the whole cluster as a
-// gossip alive message (issue #271).
+// announceLoad puts the freshly sampled reading on memberlist's user-level
+// broadcast channel, where it spreads to the whole cluster and lands in each
+// peer's discovery via ServerDelegate.NotifyMsg (issue #271).
 //
 // Publishing above is purely local. The only other path that carries the value
 // off this node is push/pull's user state (LocalState/MergeRemoteState), which
@@ -267,28 +264,21 @@ func (n *ServerNode) publishLoad() {
 // while loadTTL stays fixed, so beyond a handful of nodes most peers hold an
 // expired reading and score this node at the neutral `unknownLoad` placeholder.
 //
-// An alive message reaches the whole cluster in well under a second and lands in
-// each peer's discovery via EventDelegate.NotifyUpdate. It is sent on every
-// report tick, which makes loadReportInterval the announce cadence and gives
-// loadTTL its meaning: with the shipped 10s/30s pair a peer must miss three
-// consecutive announces before it treats this node's load as unknown.
-func (n *ServerNode) broadcastLoad() {
-	if n.memberlist == nil {
-		return
-	}
-	// Don't start a blocking announce we are about to abandon; Shutdown waits on
-	// this goroutine.
-	if n.loadCtx != nil {
-		select {
-		case <-n.loadCtx.Done():
-			return
-		default:
-		}
-	}
-	if err := n.memberlist.UpdateNode(loadBroadcastTimeout); err != nil {
-		log.Printf("[SERVER] load broadcast failed for %s (superseded by next tick): %v",
-			n.serverConfig.NodeID, err)
-	}
+// The obvious way to reach everyone — memberlist.UpdateNode(), which republishes
+// NodeMeta as an alive message — is the wrong tool here. Load moves every report
+// interval, and UpdateNode bumps this node's incarnation and makes every peer
+// rewrite its node-table entry, so a routine sample would look like an identity
+// change to the whole cluster. It also blocks the reporter goroutine waiting for
+// the broadcast, and it writes fields that Members() readers observe without a
+// lock — which is exactly the data race this replaced.
+//
+// Queuing here is non-blocking. The message goes out on the next gossip round
+// and is retransmitted for a few more, so loadReportInterval stays the announce
+// cadence and loadTTL keeps its meaning: with the shipped 10s/30s pair a peer
+// must miss three consecutive announces before treating this node's load as
+// unknown.
+func (n *ServerNode) announceLoad(snap *proto.NodeMeta) {
+	n.delegate.BroadcastLoad(snap.GetNodeId(), snap.GetLoadFactor(), snap.GetLoadUpdatedAt())
 }
 
 func (n *ServerNode) Leave() error {

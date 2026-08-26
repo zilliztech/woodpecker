@@ -2109,3 +2109,95 @@ func unique(ss []string) []string {
 	}
 	return out
 }
+
+// === Load merge (issue #271) ===
+
+// ApplyLoad is the ingest point for the load gossip message. It updates the
+// reading without disturbing the node's identity fields.
+func TestApplyLoad_UpdatesLoadWithoutTouchingIdentity(t *testing.T) {
+	sd := NewServiceDiscovery()
+	sd.UpdateServer("n1", &proto.NodeMeta{
+		NodeId: "n1", Az: "az-a", ResourceGroup: "rg-a",
+		Endpoint: "10.0.0.1:9000", LoadFactor: 0.1, LoadUpdatedAt: 100,
+	})
+
+	if !sd.ApplyLoad("n1", 0.8, 200) {
+		t.Fatalf("a newer reading should be applied")
+	}
+	got := sd.GetAllServers()["n1"]
+	if got.GetLoadFactor() != 0.8 || got.GetLoadUpdatedAt() != 200 {
+		t.Fatalf("load not applied: %v @ %v", got.GetLoadFactor(), got.GetLoadUpdatedAt())
+	}
+	if got.GetAz() != "az-a" || got.GetResourceGroup() != "rg-a" || got.GetEndpoint() != "10.0.0.1:9000" {
+		t.Fatalf("identity fields were disturbed: %+v", got)
+	}
+	// The indexes must hand out the same updated meta selection reads, not the
+	// pre-update pointer.
+	indexed := sd.GetServersByResourceGroup("rg-a")
+	if len(indexed) != 1 || indexed[0].GetLoadFactor() != 0.8 {
+		t.Fatalf("indexes still point at the stale meta: %+v", indexed)
+	}
+}
+
+// Gossip retransmits and reorders. A reading that is not newer than the one
+// already held must be dropped, or a retransmitted sample could undo a fresher
+// one.
+func TestApplyLoad_IgnoresStaleAndDuplicateReadings(t *testing.T) {
+	sd := NewServiceDiscovery()
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", LoadFactor: 0.5, LoadUpdatedAt: 200})
+
+	if sd.ApplyLoad("n1", 0.1, 100) {
+		t.Fatalf("an older reading must be dropped")
+	}
+	if sd.ApplyLoad("n1", 0.2, 200) {
+		t.Fatalf("a duplicate of the current reading must be dropped")
+	}
+	if got := sd.GetAllServers()["n1"].GetLoadFactor(); got != 0.5 {
+		t.Fatalf("held reading was overwritten: %v", got)
+	}
+}
+
+// A load message can arrive before the node's join does. Dropping it is correct:
+// the next report carries the reading again.
+func TestApplyLoad_IgnoresUnknownNode(t *testing.T) {
+	sd := NewServiceDiscovery()
+	if sd.ApplyLoad("ghost", 0.9, 100) {
+		t.Fatalf("a reading for an unknown node must be dropped")
+	}
+	if _, ok := sd.GetAllServers()["ghost"]; ok {
+		t.Fatalf("a load message must not conjure a node into discovery")
+	}
+}
+
+// Whole-meta updates carry whatever load was current when that meta snapshot was
+// taken: push/pull ships the sender's meta as of that exchange, and an alive
+// message ships it as of the sender's last UpdateNode. Neither may roll back a
+// fresher reading the load gossip path already delivered.
+func TestUpdateServer_DoesNotRollBackAFresherLoad(t *testing.T) {
+	sd := NewServiceDiscovery()
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", Az: "az-a", LoadFactor: 0.2, LoadUpdatedAt: 100})
+	sd.ApplyLoad("n1", 0.9, 300)
+
+	// A stale whole-meta update that also changes an identity field.
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", Az: "az-b", LoadFactor: 0.2, LoadUpdatedAt: 100})
+
+	got := sd.GetAllServers()["n1"]
+	if got.GetLoadFactor() != 0.9 || got.GetLoadUpdatedAt() != 300 {
+		t.Fatalf("stale meta rolled the load back to %v @ %v", got.GetLoadFactor(), got.GetLoadUpdatedAt())
+	}
+	if got.GetAz() != "az-b" {
+		t.Fatalf("the rest of the meta should still be applied, az = %q", got.GetAz())
+	}
+}
+
+// The guard is one-directional: a meta that genuinely carries a newer reading
+// still wins, which is what keeps the push/pull fallback useful.
+func TestUpdateServer_AcceptsAFresherLoadFromMeta(t *testing.T) {
+	sd := NewServiceDiscovery()
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", LoadFactor: 0.2, LoadUpdatedAt: 100})
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", LoadFactor: 0.7, LoadUpdatedAt: 400})
+
+	if got := sd.GetAllServers()["n1"]; got.GetLoadFactor() != 0.7 {
+		t.Fatalf("a newer reading carried by meta should win, got %v", got.GetLoadFactor())
+	}
+}

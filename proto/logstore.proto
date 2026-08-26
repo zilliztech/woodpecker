@@ -281,6 +281,21 @@ message NodeMeta {
   int64 load_updated_at = 11;   // Unix ms when load_factor was last set; 0 = never reported
 }
 
+// LoadUpdate is the payload of the load gossip message (issue #271).
+//
+// Load is a hint that moves every report interval, which is the wrong shape for
+// NodeMeta: memberlist only republishes meta through UpdateNode(), and that
+// bumps the node's incarnation and rewrites its entry in every peer's node
+// table. Carrying load that way makes a routine sample look like an identity
+// change to the whole cluster. This message rides memberlist's user-level
+// broadcast channel instead (Delegate.GetBroadcasts/NotifyMsg), which gets the
+// same epidemic spread without touching membership state.
+message LoadUpdate {
+  string node_id = 1;
+  double load_factor = 2;     // EWMA-smoothed bottleneck load in [0,1]
+  int64 load_updated_at = 3;  // Unix ms when load_factor was sampled; orders updates per node
+}
+
 // Node selection strategy types
 enum StrategyType {
   RANDOM = 0;

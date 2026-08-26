@@ -97,13 +97,25 @@ func NewServiceDiscovery(opts ...DiscoveryOption) *ServiceDiscovery {
 	return sd
 }
 
-// UpdateServer updates server information and maintains all indexes
+// UpdateServer updates server information and maintains all indexes.
+//
+// The load reading is merged rather than blindly overwritten. A whole-meta
+// update may carry an older reading than the load gossip path already
+// delivered: push/pull ships the sender's meta as of that exchange, and an
+// alive message ships the meta as of the sender's last UpdateNode, which for a
+// steady node is its startup snapshot. Neither should roll a fresher reading
+// back. Issue #271.
 func (sd *ServiceDiscovery) UpdateServer(nodeID string, meta *proto.NodeMeta) {
 	sd.mu.Lock()
 	defer sd.mu.Unlock()
 
 	// If node already exists, remove it from all indexes first
 	if oldMeta, exists := sd.Nodes[nodeID]; exists {
+		if meta != nil && oldMeta.GetLoadUpdatedAt() > meta.GetLoadUpdatedAt() {
+			meta = meta.CloneVT()
+			meta.LoadFactor = oldMeta.GetLoadFactor()
+			meta.LoadUpdatedAt = oldMeta.GetLoadUpdatedAt()
+		}
 		sd.removeFromIndexes(nodeID, oldMeta)
 	}
 
@@ -112,6 +124,37 @@ func (sd *ServiceDiscovery) UpdateServer(nodeID string, meta *proto.NodeMeta) {
 
 	// Add to all indexes
 	sd.addToIndexes(nodeID, meta)
+}
+
+// ApplyLoad merges a load reading announced by a peer, leaving the node's
+// identity fields alone. Reports whether it was applied.
+//
+// It is dropped when the node is unknown — its join has not landed yet, and the
+// next report carries the reading again — or when the reading is not newer than
+// the one already held, which is what makes the gossip path safe against
+// retransmits and reordering. Comparison is always between two readings from
+// the same node, so it depends only on that node's clock moving forward, never
+// on clocks agreeing across the cluster.
+func (sd *ServiceDiscovery) ApplyLoad(nodeID string, load float64, updatedAt int64) bool {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+
+	cur, exists := sd.Nodes[nodeID]
+	if !exists || updatedAt <= cur.GetLoadUpdatedAt() {
+		return false
+	}
+
+	// Replace the meta instead of mutating it in place: GetAllServers and the
+	// indexes hand out these *NodeMeta pointers, and callers read them after
+	// releasing sd.mu.
+	updated := cur.CloneVT()
+	updated.LoadFactor = load
+	updated.LoadUpdatedAt = updatedAt
+
+	sd.removeFromIndexes(nodeID, cur)
+	sd.Nodes[nodeID] = updated
+	sd.addToIndexes(nodeID, updated)
+	return true
 }
 
 // RemoveServer removes server from all indexes
