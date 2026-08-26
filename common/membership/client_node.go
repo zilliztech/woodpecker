@@ -41,6 +41,7 @@ type ClientConfig struct {
 func NewClientNode(config *ClientConfig) (*ClientNode, error) {
 	discovery := NewServiceDiscovery()
 	delegate := NewClientDelegate()
+	delegate.discovery = discovery // ingest peer runtime snapshots (issue #271)
 	eventDel := NewEventDelegate(discovery, RoleClient, fmt.Sprintf("%s:%d", config.BindAddr, config.BindPort))
 
 	mlConfig := ml.DefaultLocalConfig()

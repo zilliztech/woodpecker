@@ -277,8 +277,44 @@ message NodeMeta {
   int64 last_update = 7; // Unix timestamp in milliseconds
   string cluster_name = 8;
   string region = 9;
+  // Retained for rolling-upgrade compatibility only. Load is propagated by the
+  // NodeRuntimeInfo message below, not by NodeMeta — see #271 for why NodeMeta is the
+  // wrong carrier for a value that moves every report interval. These fields
+  // only still exist so a node running a build that predates that change can
+  // learn load from push/pull. New code must not read them; the scoring path in
+  // ServiceDiscovery is the one remaining reader, until #273 moves the reading
+  // into NodeRuntimeInfo proper and these become `reserved`.
   double load_factor = 10;      // EWMA-smoothed bottleneck load in [0,1]; 0 if never reported
   int64 load_updated_at = 11;   // Unix ms when load_factor was last set; 0 = never reported
+}
+
+// NodeRuntimeInfo carries a node's volatile runtime state. It is the counterpart
+// of NodeMeta: together they describe a node, but they are shaped by opposite
+// requirements.
+//
+// NodeMeta is identity and topology — node_id, az, resource_group, endpoint. It
+// changes on deploy or reconfigure, each change is an *event* that must not be
+// lost, and it is worth an incarnation bump to deliver. memberlist republishes
+// it only through UpdateNode(), which rewrites the node's entry in every peer's
+// node table.
+//
+// NodeRuntimeInfo is measurement. It changes continuously, each value is a
+// *sample* whose loss the next tick repairs, and it is worth no membership churn
+// at all. It travels memberlist's user-level broadcast channel
+// (Delegate.GetBroadcasts/NotifyMsg), which gets the same epidemic spread
+// without touching membership state. See #271 for what routing it through
+// NodeMeta cost.
+//
+// updated_at versions the whole message, not individual fields: every value here
+// comes from one sampling pass, so the message is a snapshot. That keeps
+// ordering, dedup and relay logic uniform — adding a field below changes no
+// transport code, only what a consumer chooses to read.
+message NodeRuntimeInfo {
+  string node_id = 1;
+  int64 updated_at = 2;   // Unix ms this snapshot was sampled; orders snapshots per node
+  double load_factor = 3; // EWMA-smoothed bottleneck load in [0,1]
+  // Room for further runtime signals — disk watermark, in-flight requests, etc.
+  // Add them here; the gossip path carries them unchanged.
 }
 
 // Node selection strategy types

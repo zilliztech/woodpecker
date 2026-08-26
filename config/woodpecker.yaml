@@ -128,8 +128,8 @@ woodpecker:
       reconcileMinDataLogAge: 1800 # Seconds (default 30m); the compacted-file-cleanup pull reconcile only HEADs a segment's footer once its local data.log has been idle this long (> roll interval + compaction time), avoiding wasted object-storage HEADs on segments still being written/compacted. Does not affect the push (marked) fast path. <=0 disables.
     nodeSelectionPolicy:
       loadAwareEnabled: true    # Prefer lower-load nodes among eligible candidates (issue #114)
-      loadReportInterval: 10    # Seconds between a node publishing its own load factor
-      loadTTL: 30               # Seconds; a node's load older than this is treated as unknown
+      loadReportInterval: 10    # Seconds between a node sampling its load and announcing it to the cluster over gossip
+      loadTTL: 30               # Seconds; a node's load older than this is treated as unknown. Keep it a small multiple of loadReportInterval — with 10/30 a peer must miss three consecutive announces before the load is dropped
       memSoftThreshold: 0.85    # Memory ratio above which memory escalates the load factor
       ewmaAlpha: 0.5            # EWMA weight on the newest load sample (0,1]
     diskWatermarkPolicy:

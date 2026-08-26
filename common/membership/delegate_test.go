@@ -37,11 +37,30 @@ func TestClientDelegate_NodeMeta(t *testing.T) {
 
 func TestClientDelegate_NotifyMsg(t *testing.T) {
 	d := NewClientDelegate()
-	// Should not panic
+	// Should not panic, with or without a discovery attached
 	assert.NotPanics(t, func() {
 		d.NotifyMsg([]byte("test"))
 		d.NotifyMsg(nil)
 	})
+
+	// A client selects on load too, and with PushPullInterval 0 and a no-op
+	// MergeRemoteState this is its only path to a server's current load. Without
+	// it a client would keep selecting on whatever each server published when the
+	// client joined. Issue #271.
+	d.discovery = NewServiceDiscovery()
+	d.discovery.UpdateServer("s1", &proto.NodeMeta{NodeId: "s1", LoadFactor: 0.1, LoadUpdatedAt: 100})
+
+	msg, err := encodeRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "s1", LoadFactor: 0.83, UpdatedAt: 200})
+	assert.NoError(t, err)
+	d.NotifyMsg(msg)
+	assert.Equal(t, 0.83, d.discovery.RuntimeOf("s1").GetLoadFactor())
+
+	assert.NotPanics(t, func() {
+		d.NotifyMsg([]byte("test"))                             // unknown tag
+		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo, 0xff, 0xff}) // undecodable payload
+	})
+	assert.Equal(t, 0.83, d.discovery.RuntimeOf("s1").GetLoadFactor(),
+		"an unusable payload must not disturb what the client holds")
 }
 
 func TestClientDelegate_GetBroadcasts(t *testing.T) {
@@ -136,15 +155,38 @@ func TestServerDelegate_LocalState(t *testing.T) {
 func TestServerDelegate_NotifyMsg(t *testing.T) {
 	meta := &proto.NodeMeta{NodeId: "n1"}
 	d := NewServerDelegate(meta)
+	d.discovery = NewServiceDiscovery()
+	d.discovery.UpdateServer("n2", &proto.NodeMeta{NodeId: "n2", LoadUpdatedAt: 100})
+
+	// Unknown tags and malformed payloads must be ignored, not fatal: a node
+	// running an older build sends neither, and a newer one may add message
+	// kinds this build does not know. Issue #271.
 	assert.NotPanics(t, func() {
-		d.NotifyMsg([]byte("test"))
+		d.NotifyMsg(nil)
+		d.NotifyMsg([]byte{})
+		d.NotifyMsg([]byte("test"))                             // tag 't' is not a known kind
+		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo, 0xff, 0xff}) // undecodable payload
+		d.NotifyMsg([]byte{msgTypeNodeRuntimeInfo})             // empty payload -> no node id
 	})
+	assert.Equal(t, int64(100), d.discovery.RuntimeOf("n2").GetUpdatedAt(),
+		"a payload that could not be understood must not disturb what discovery holds")
+
+	// A well-formed runtime snapshot lands in discovery.
+	msg, err := encodeRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n2", LoadFactor: 0.62, UpdatedAt: 200})
+	assert.NoError(t, err)
+	d.NotifyMsg(msg)
+	assert.Equal(t, 0.62, d.discovery.RuntimeOf("n2").GetLoadFactor())
 }
 
 func TestServerDelegate_GetBroadcasts(t *testing.T) {
 	meta := &proto.NodeMeta{NodeId: "n1"}
 	d := NewServerDelegate(meta)
-	assert.Nil(t, d.GetBroadcasts(10, 100))
+	assert.Nil(t, d.GetBroadcasts(10, 100), "nothing queued yet")
+
+	d.BroadcastRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.5, UpdatedAt: 1})
+	msgs := d.GetBroadcasts(0, 1024)
+	assert.Len(t, msgs, 1)
+	assert.Equal(t, msgTypeNodeRuntimeInfo, msgs[0][0], "payload must be tagged so receivers can route it")
 }
 
 func TestServerDelegate_MergeRemoteState(t *testing.T) {
@@ -690,10 +732,10 @@ func TestServiceDiscovery_GetCandidateAZsInRG_Empty(t *testing.T) {
 func TestServiceDiscovery_RemoveNodeFromSlice(t *testing.T) {
 	sd := NewServiceDiscovery()
 
-	nodes := []*proto.NodeMeta{
-		{NodeId: "n1"},
-		{NodeId: "n2"},
-		{NodeId: "n3"},
+	nodes := []*NodeInfo{
+		{Meta: &proto.NodeMeta{NodeId: "n1"}},
+		{Meta: &proto.NodeMeta{NodeId: "n2"}},
+		{Meta: &proto.NodeMeta{NodeId: "n3"}},
 	}
 
 	// Remove from middle

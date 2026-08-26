@@ -142,6 +142,7 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create memberlist: %w", err)
 	}
+	delegate.AttachMemberlist(list)                                // lets the load broadcast queue size its retransmits by cluster size
 	discovery.UpdateServer(config.NodeID, delegate.SnapshotMeta()) // store a snapshot, not the live meta pointer
 
 	loadCtx, loadCancel := context.WithCancel(context.Background())
@@ -234,16 +235,24 @@ func (n *ServerNode) reportLoadOnce() {
 	if n.sampler == nil {
 		return
 	}
-	// Stamp the fresh load onto our own meta only. We deliberately do NOT call
-	// memberlist.UpdateNode here: load is a best-effort hint, not worth churning
-	// memberlist node state / bumping incarnations on our own cadence (which also
-	// raced with status readers). memberlist already gossips this meta on its own
-	// push/pull cadence via LocalState, and peers ingest it in MergeRemoteState.
+	// Stamp the fresh load onto our own meta, then keep our own discovery copy
+	// current for local selections. Store a snapshot, not the live meta pointer,
+	// so the reporter's writes don't race with selectors.
 	n.publishLoad()
-	// Keep our own discovery copy current for local selections. Store a snapshot,
-	// not the live meta pointer, so the reporter's writes don't race with selectors.
 	snap := n.delegate.SnapshotMeta()
 	n.discovery.UpdateServer(snap.GetNodeId(), snap)
+	n.announceRuntimeInfo(n.collectRuntimeInfo(snap))
+}
+
+// collectRuntimeInfo assembles this node's runtime snapshot. Everything in it
+// comes from one sampling pass, which is why NodeRuntimeInfo carries a single
+// updated_at. Further runtime signals belong here.
+func (n *ServerNode) collectRuntimeInfo(snap *proto.NodeMeta) *proto.NodeRuntimeInfo {
+	return &proto.NodeRuntimeInfo{
+		NodeId:     snap.GetNodeId(),
+		UpdatedAt:  snap.GetLoadUpdatedAt(),
+		LoadFactor: snap.GetLoadFactor(),
+	}
 }
 
 // publishLoad samples load and writes it into the gossip meta (no I/O).
@@ -252,6 +261,35 @@ func (n *ServerNode) publishLoad() {
 		return
 	}
 	n.delegate.SetLoadFactor(n.sampler.Sample())
+}
+
+// announceRuntimeInfo puts the freshly sampled snapshot on memberlist's
+// user-level broadcast channel, where it spreads to the whole cluster and lands
+// in each peer's discovery via ServerDelegate.NotifyMsg (issue #271).
+//
+// Publishing above is purely local. The only other path that carries the value
+// off this node is push/pull's user state (LocalState/MergeRemoteState), which
+// sends just this node's own meta to ONE randomly chosen peer per
+// PushPullInterval — a pairwise channel, not a gossip one. The expected wait for
+// any specific peer therefore grows with cluster size (~PushPullInterval*(N-1)/2)
+// while loadTTL stays fixed, so beyond a handful of nodes most peers hold an
+// expired reading and score this node at the neutral `unknownLoad` placeholder.
+//
+// The obvious way to reach everyone — memberlist.UpdateNode(), which republishes
+// NodeMeta as an alive message — is the wrong tool here. Runtime signals move
+// every report interval, and UpdateNode bumps this node's incarnation and makes
+// every peer rewrite its node-table entry, so a routine sample would look like
+// an identity change to the whole cluster. It also blocks the reporter goroutine
+// waiting for the broadcast, and it writes fields that Members() readers observe
+// without a lock — which is exactly the data race this replaced.
+//
+// Queuing here is non-blocking. The message goes out on the next gossip round
+// and is retransmitted for a few more, so loadReportInterval stays the announce
+// cadence and loadTTL keeps its meaning: with the shipped 10s/30s pair a peer
+// must miss three consecutive announces before treating this node's load as
+// unknown.
+func (n *ServerNode) announceRuntimeInfo(info *proto.NodeRuntimeInfo) {
+	n.delegate.BroadcastRuntimeInfo(info)
 }
 
 func (n *ServerNode) Leave() error {

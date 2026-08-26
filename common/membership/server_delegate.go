@@ -14,6 +14,7 @@ package membership
 import (
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/memberlist"
@@ -30,12 +31,44 @@ type ServerDelegate struct {
 	meta        *proto.NodeMeta
 	metaVersion int64 // metadata version, corresponds to version in ServerMeta for compatibility between nodes of different versions
 	// discovery receives peer metas merged in via push/pull anti-entropy
-	// (MergeRemoteState). Optional; nil disables ingestion. Issue #114.
+	// (MergeRemoteState) and runtime snapshots merged in via NotifyMsg.
+	// Optional; nil disables ingestion. Issues #114 and #271.
 	discovery *ServiceDiscovery
+
+	// runtimeQueue holds this node's pending NodeRuntimeInfo snapshot for
+	// memberlist's user-level broadcast channel. Runtime signals move every
+	// report interval, which is the wrong shape for NodeMeta: memberlist only
+	// republishes meta through UpdateNode(), and that bumps the node's
+	// incarnation and rewrites its entry in every peer's node table. This channel
+	// gets the same epidemic spread without touching membership state. Issue #271.
+	runtimeQueue *memberlist.TransmitLimitedQueue
+	// ml is stored once memberlist.Create returns, so runtimeQueue can size its
+	// retransmit count from the cluster size. Held atomically because
+	// memberlist's gossip loop is already running by the time it is set.
+	ml atomic.Pointer[memberlist.Memberlist]
 }
 
 func NewServerDelegate(meta *proto.NodeMeta) *ServerDelegate {
-	return &ServerDelegate{meta: meta, metaVersion: 1}
+	d := &ServerDelegate{meta: meta, metaVersion: 1}
+	d.runtimeQueue = &memberlist.TransmitLimitedQueue{
+		NumNodes:       d.numMembers,
+		RetransmitMult: runtimeRetransmitMult,
+	}
+	return d
+}
+
+// AttachMemberlist wires the delegate to the memberlist it belongs to. Call it
+// once, right after memberlist.Create; until then the node counts as a cluster
+// of one for retransmit sizing.
+func (d *ServerDelegate) AttachMemberlist(m *memberlist.Memberlist) { d.ml.Store(m) }
+
+// numMembers reports cluster size to the broadcast queue, which derives the
+// retransmit count from log(N+1).
+func (d *ServerDelegate) numMembers() int {
+	if m := d.ml.Load(); m != nil {
+		return m.NumMembers()
+	}
+	return 1
 }
 
 // NodeMeta returns node metadata for gossip propagation
@@ -58,11 +91,59 @@ func (d *ServerDelegate) NodeMeta(limit int) []byte {
 	return data
 }
 
-// NotifyMsg handles received messages
-func (d *ServerDelegate) NotifyMsg(buf []byte) {}
+// NotifyMsg handles a user-level gossip message from a peer. The first byte
+// tags the payload kind; unknown tags are ignored so nodes on either side of an
+// upgrade can gossip together.
+//
+// A snapshot that is new to this node is relayed onward, which is what makes the
+// announce epidemic rather than a single sender fanning out to a bounded number
+// of peers. Without it the originator's retransmit budget —
+// RetransmitMult * ceil(log10(N+1)) deliveries, ~8 for a 16-node cluster — is
+// the whole reach, and most peers never hear a given snapshot. Relaying only on
+// first sight is what keeps it terminating; see applyRuntimeInfo.
+func (d *ServerDelegate) NotifyMsg(buf []byte) {
+	if len(buf) == 0 {
+		return
+	}
+	switch buf[0] {
+	case msgTypeNodeRuntimeInfo:
+		if nodeID, applied := applyRuntimeInfo(d.discovery, buf[1:]); applied {
+			d.relayRuntimeInfo(nodeID, buf)
+		}
+	}
+}
 
-// GetBroadcasts returns messages to be broadcast
-func (d *ServerDelegate) GetBroadcasts(overhead, limit int) [][]byte { return nil }
+// relayRuntimeInfo re-queues a peer's snapshot verbatim so this node gossips it
+// onward. Queuing by the originating node's name means a newer snapshot for that
+// node — whether relayed or received later — replaces this one rather than both
+// going out.
+func (d *ServerDelegate) relayRuntimeInfo(nodeID string, msg []byte) {
+	if nodeID == "" {
+		return
+	}
+	relayed := make([]byte, len(msg))
+	copy(relayed, msg) // memberlist reuses the receive buffer
+	d.runtimeQueue.QueueBroadcast(&runtimeBroadcast{name: runtimeBroadcastName(nodeID), msg: relayed})
+}
+
+// GetBroadcasts hands memberlist the user-level messages waiting to ride this
+// gossip round. memberlist frames each one and the receiver gets it in NotifyMsg.
+func (d *ServerDelegate) GetBroadcasts(overhead, limit int) [][]byte {
+	return d.runtimeQueue.GetBroadcasts(overhead, limit)
+}
+
+// BroadcastRuntimeInfo queues this node's current runtime snapshot for gossip.
+// Queuing is non-blocking: the message goes out on the next gossip round, is
+// retransmitted a few rounds for reach, and a newer snapshot replaces it in
+// place rather than queueing behind it.
+func (d *ServerDelegate) BroadcastRuntimeInfo(info *proto.NodeRuntimeInfo) {
+	msg, err := encodeRuntimeInfo(info)
+	if err != nil {
+		log.Printf("[SERVER] failed to encode runtime info for %s: %v", info.GetNodeId(), err)
+		return
+	}
+	d.runtimeQueue.QueueBroadcast(&runtimeBroadcast{name: runtimeBroadcastName(info.GetNodeId()), msg: msg})
+}
 
 // LocalState returns local state
 func (d *ServerDelegate) LocalState(join bool) []byte {
@@ -96,9 +177,15 @@ func (d *ServerDelegate) MergeRemoteState(buf []byte, join bool) {
 }
 
 // SetLoadFactor updates the node's published load factor (clamped to [0,1])
-// and stamps load_updated_at. The new value rides out on memberlist's existing
-// push/pull anti-entropy via LocalState (no forced UpdateNode); peers ingest it
-// in MergeRemoteState. Best-effort hint propagation.
+// and stamps load_updated_at. Writing it here is local only. Two paths carry it
+// to peers: the NodeRuntimeInfo snapshot queued by ServerNode.reportLoadOnce,
+// which reaches the whole cluster within a gossip round or two and is ingested
+// in NotifyMsg; and memberlist's push/pull anti-entropy via LocalState, which
+// reaches one random peer per PushPullInterval and is ingested in
+// MergeRemoteState. The second is the slow fallback that keeps a peer running
+// an older build — one that ignores the load message — from going blind. See
+// issue #271 for why that path alone is not sufficient beyond a handful of
+// nodes, and #273 for retiring the meta copy once that fallback is unnecessary.
 func (d *ServerDelegate) SetLoadFactor(load float64) {
 	if load < 0 {
 		load = 0

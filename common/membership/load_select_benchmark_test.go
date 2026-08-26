@@ -27,8 +27,8 @@ const quorumK = 3
 // makeLoadedNodes builds n candidates each carrying a fresh (within loadTTL),
 // distinct load in [0,1), so selectLowestLoadNodes exercises the weighted path
 // (not the all-unknown random fallback).
-func makeLoadedNodes(n int) []*proto.NodeMeta {
-	nodes := make([]*proto.NodeMeta, n)
+func makeLoadedNodes(n int) []*NodeInfo {
+	nodes := make([]*NodeInfo, n)
 	for i := 0; i < n; i++ {
 		load := float64(i%100) / 100.0 // spread across [0.00, 0.99]
 		nodes[i] = nodeWithLoad(fmt.Sprintf("n%d", i), load, 1000)
@@ -78,8 +78,9 @@ func BenchmarkSelectRandomEndToEnd(b *testing.B) {
 	filter := &proto.NodeFilter{Limit: quorumK}
 	for _, n := range loadSelectSizes {
 		sd := newTestDiscoveryFixedNow()
-		for _, meta := range makeLoadedNodes(n) {
-			sd.UpdateServer(meta.GetNodeId(), meta)
+		for _, node := range makeLoadedNodes(n) {
+			sd.UpdateServer(node.Meta.GetNodeId(), node.Meta)
+			sd.ApplyRuntimeInfo(node.Runtime())
 		}
 		b.Run(fmt.Sprintf("nodes=%d", n), func(b *testing.B) {
 			b.ReportAllocs()

@@ -57,7 +57,7 @@ func TestFinalServiceDiscovery(t *testing.T) {
 	t.Run("Basic structure validation", func(t *testing.T) {
 		// Verify main storage
 		assert.Equal(t, 4, len(sd.Nodes))
-		assert.Equal(t, nodes[0], sd.Nodes["node1"])
+		assert.Equal(t, nodes[0], sd.Nodes["node1"].Meta)
 
 		// Verify azList and rgList
 		assert.Equal(t, 3, len(sd.azList)) // us-east-1a, us-east-1b, eu-west-1a
@@ -267,7 +267,7 @@ func TestNodeUpdateAndRemove(t *testing.T) {
 
 		// Verify node was properly updated
 		assert.Equal(t, 4, len(sd.Nodes))
-		actualNode := sd.Nodes["node1"]
+		actualNode := sd.Nodes["node1"].Meta
 		assert.Equal(t, "2.0", actualNode.Tags["version"])
 		assert.Equal(t, "master", actualNode.Tags["role"])
 
@@ -291,7 +291,7 @@ func TestNodeUpdateAndRemove(t *testing.T) {
 		sd.UpdateServer("node2", updatedNode2)
 
 		// Verify node info updated
-		actualNode := sd.Nodes["node2"]
+		actualNode := sd.Nodes["node2"].Meta
 		assert.Equal(t, "rg3", actualNode.ResourceGroup)
 		assert.Equal(t, "az3", actualNode.Az)
 		assert.Equal(t, "test", actualNode.Tags["env"])
@@ -502,13 +502,13 @@ func TestConcurrentOperations(t *testing.T) {
 		assert.Equal(t, 1, len(sd.Nodes), "Should only have one node")
 		finalNode := sd.Nodes[nodeID]
 		assert.NotNil(t, finalNode, "Node should exist")
-		assert.Equal(t, "concurrent-test", finalNode.Tags["env"], "Node should have correct tag")
+		assert.Equal(t, "concurrent-test", finalNode.Meta.Tags["env"], "Node should have correct tag")
 
 		// Verify index consistency
 		foundInIndex := false
 		for az, rgMap := range sd.azRgIndex {
-			if len(rgMap[finalNode.ResourceGroup]) > 0 {
-				assert.Equal(t, finalNode.Az, az, "Node should be in correct AZ index")
+			if len(rgMap[finalNode.Meta.ResourceGroup]) > 0 {
+				assert.Equal(t, finalNode.Meta.Az, az, "Node should be in correct AZ index")
 				foundInIndex = true
 				break
 			}
@@ -558,16 +558,16 @@ func TestConcurrentOperations(t *testing.T) {
 		// Verify all nodes are in correct indexes - check index consistency, not specific node references
 		for nodeID, node := range sd.Nodes {
 			// Verify node in AZ-RG index
-			azRgMap, exists := sd.azRgIndex[node.Az]
+			azRgMap, exists := sd.azRgIndex[node.Meta.Az]
 			assert.True(t, exists, "Node's AZ should be in azRgIndex: %s", nodeID)
 
-			rgNodes, exists := azRgMap[node.ResourceGroup]
+			rgNodes, exists := azRgMap[node.Meta.ResourceGroup]
 			assert.True(t, exists, "Node's RG should be in azRgIndex[AZ]: %s", nodeID)
 
 			// Verify node ID in slice (not pointer reference)
 			found := false
 			for _, n := range rgNodes {
-				if n.NodeId == nodeID {
+				if n.Meta.NodeId == nodeID {
 					found = true
 					break
 				}
@@ -575,16 +575,16 @@ func TestConcurrentOperations(t *testing.T) {
 			assert.True(t, found, "Node should be in azRgIndex[AZ][RG]: %s", nodeID)
 
 			// Verify node in RG-AZ index
-			rgAzMap, exists := sd.rgAzIndex[node.ResourceGroup]
+			rgAzMap, exists := sd.rgAzIndex[node.Meta.ResourceGroup]
 			assert.True(t, exists, "Node's RG should be in rgAzIndex: %s", nodeID)
 
-			azNodes, exists := rgAzMap[node.Az]
+			azNodes, exists := rgAzMap[node.Meta.Az]
 			assert.True(t, exists, "Node's AZ should be in rgAzIndex[RG]: %s", nodeID)
 
 			// Verify node ID in slice (not pointer reference)
 			found = false
 			for _, n := range azNodes {
-				if n.NodeId == nodeID {
+				if n.Meta.NodeId == nodeID {
 					found = true
 					break
 				}
@@ -1415,9 +1415,9 @@ func TestRandomSelectNodes_FisherYates(t *testing.T) {
 	sd := NewServiceDiscovery()
 
 	// Create 10 nodes
-	nodes := make([]*proto.NodeMeta, 10)
+	nodes := make([]*NodeInfo, 10)
 	for i := 0; i < 10; i++ {
-		nodes[i] = &proto.NodeMeta{NodeId: fmt.Sprintf("node-%d", i)}
+		nodes[i] = &NodeInfo{Meta: &proto.NodeMeta{NodeId: fmt.Sprintf("node-%d", i)}}
 	}
 
 	t.Run("Returns exactly limit nodes", func(t *testing.T) {
@@ -1430,8 +1430,8 @@ func TestRandomSelectNodes_FisherYates(t *testing.T) {
 			result := sd.randomSelectNodes(nodes, 5)
 			seen := make(map[string]bool)
 			for _, n := range result {
-				assert.False(t, seen[n.NodeId], "duplicate node: %s", n.NodeId)
-				seen[n.NodeId] = true
+				assert.False(t, seen[n.Meta.NodeId], "duplicate node: %s", n.Meta.NodeId)
+				seen[n.Meta.NodeId] = true
 			}
 		}
 	})
@@ -1439,12 +1439,12 @@ func TestRandomSelectNodes_FisherYates(t *testing.T) {
 	t.Run("All results are from input", func(t *testing.T) {
 		inputSet := make(map[string]bool)
 		for _, n := range nodes {
-			inputSet[n.NodeId] = true
+			inputSet[n.Meta.NodeId] = true
 		}
 		for trial := 0; trial < 100; trial++ {
 			result := sd.randomSelectNodes(nodes, 4)
 			for _, n := range result {
-				assert.True(t, inputSet[n.NodeId], "unexpected node: %s", n.NodeId)
+				assert.True(t, inputSet[n.Meta.NodeId], "unexpected node: %s", n.Meta.NodeId)
 			}
 		}
 	})
@@ -1452,13 +1452,13 @@ func TestRandomSelectNodes_FisherYates(t *testing.T) {
 	t.Run("Does not modify original slice", func(t *testing.T) {
 		original := make([]string, len(nodes))
 		for i, n := range nodes {
-			original[i] = n.NodeId
+			original[i] = n.Meta.NodeId
 		}
 		for trial := 0; trial < 50; trial++ {
 			sd.randomSelectNodes(nodes, 3)
 		}
 		for i, n := range nodes {
-			assert.Equal(t, original[i], n.NodeId, "original slice was modified at index %d", i)
+			assert.Equal(t, original[i], n.Meta.NodeId, "original slice was modified at index %d", i)
 		}
 	})
 
@@ -1469,22 +1469,22 @@ func TestRandomSelectNodes_FisherYates(t *testing.T) {
 		for i := 0; i < iterations; i++ {
 			result := sd.randomSelectNodes(nodes, limit)
 			for _, n := range result {
-				counts[n.NodeId]++
+				counts[n.Meta.NodeId]++
 			}
 		}
 		// Expected count per node: iterations * limit / len(nodes) = 10000 * 3 / 10 = 3000
 		expected := float64(iterations) * float64(limit) / float64(len(nodes))
 		for _, node := range nodes {
-			count := counts[node.NodeId]
+			count := counts[node.Meta.NodeId]
 			// Allow 20% deviation from expected
 			assert.InDelta(t, expected, float64(count), expected*0.2,
-				"node %s count %d deviates too much from expected %.0f", node.NodeId, count, expected)
+				"node %s count %d deviates too much from expected %.0f", node.Meta.NodeId, count, expected)
 		}
 	})
 
 	t.Run("Edge cases", func(t *testing.T) {
 		// Empty input
-		result := sd.randomSelectNodes([]*proto.NodeMeta{}, 3)
+		result := sd.randomSelectNodes([]*NodeInfo{}, 3)
 		assert.Equal(t, 0, len(result))
 
 		// Limit 0 returns all
@@ -1500,10 +1500,10 @@ func TestRandomSelectNodes_FisherYates(t *testing.T) {
 		assert.Equal(t, len(nodes), len(result))
 
 		// Single node, limit 1
-		single := []*proto.NodeMeta{{NodeId: "only"}}
+		single := []*NodeInfo{{Meta: &proto.NodeMeta{NodeId: "only"}}}
 		result = sd.randomSelectNodes(single, 1)
 		assert.Equal(t, 1, len(result))
-		assert.Equal(t, "only", result[0].NodeId)
+		assert.Equal(t, "only", result[0].Meta.NodeId)
 	})
 }
 
@@ -1893,18 +1893,23 @@ func newTestDiscoveryFixedNow() *ServiceDiscovery {
 	return sd
 }
 
-func nodeWithLoad(id string, load float64, ageMS int64) *proto.NodeMeta {
-	return &proto.NodeMeta{
-		NodeId:        id,
-		LoadFactor:    load,
-		LoadUpdatedAt: 1_000_000 - ageMS,
-	}
+// nodeWithLoad builds a candidate whose runtime snapshot carries the given load
+// at the given age. Load lives in NodeRuntimeInfo, not NodeMeta — the meta copy
+// exists only for peers on older builds (issue #273).
+func nodeWithLoad(id string, load float64, ageMS int64) *NodeInfo {
+	n := &NodeInfo{Meta: &proto.NodeMeta{NodeId: id}}
+	n.runtime.Store(&proto.NodeRuntimeInfo{
+		NodeId:     id,
+		LoadFactor: load,
+		UpdatedAt:  1_000_000 - ageMS,
+	})
+	return n
 }
 
-func idsOf(nodes []*proto.NodeMeta) []string {
+func idsOf(nodes []*NodeInfo) []string {
 	out := make([]string, len(nodes))
 	for i, n := range nodes {
-		out[i] = n.GetNodeId()
+		out[i] = n.Meta.GetNodeId()
 	}
 	return out
 }
@@ -1914,7 +1919,7 @@ func idsOf(nodes []*proto.NodeMeta) []string {
 // is what distinguishes weighted selection from greedy argmin (which would herd).
 func TestSelectLoadAware_PrefersLowerLoad(t *testing.T) {
 	sd := newTestDiscoveryFixedNow()
-	nodes := []*proto.NodeMeta{
+	nodes := []*NodeInfo{
 		nodeWithLoad("busy", 0.80, 1000), // weight 0.20
 		nodeWithLoad("idle", 0.10, 1000), // weight 0.90
 	}
@@ -1922,7 +1927,7 @@ func TestSelectLoadAware_PrefersLowerLoad(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		got := sd.selectLowestLoadNodes(nodes, 1)
 		if len(got) == 1 {
-			counts[got[0].GetNodeId()]++
+			counts[got[0].Meta.GetNodeId()]++
 		}
 	}
 	if counts["idle"] <= counts["busy"] {
@@ -1939,7 +1944,7 @@ func TestSelectLoadAware_PrefersLowerLoad(t *testing.T) {
 // receives some traffic over many draws.
 func TestSelectLoadAware_StronglyPrefersLowerLoadButStaysSelectable(t *testing.T) {
 	sd := newTestDiscoveryFixedNow()
-	nodes := []*proto.NodeMeta{
+	nodes := []*NodeInfo{
 		nodeWithLoad("over", 0.95, 1000), // weight 0.05
 		nodeWithLoad("ok", 0.50, 1000),   // weight 0.50
 	}
@@ -1947,7 +1952,7 @@ func TestSelectLoadAware_StronglyPrefersLowerLoadButStaysSelectable(t *testing.T
 	for i := 0; i < 5000; i++ {
 		got := sd.selectLowestLoadNodes(nodes, 1)
 		if len(got) == 1 {
-			counts[got[0].GetNodeId()]++
+			counts[got[0].Meta.GetNodeId()]++
 		}
 	}
 	if counts["ok"] <= counts["over"] {
@@ -1962,7 +1967,7 @@ func TestSelectLoadAware_StronglyPrefersLowerLoadButStaysSelectable(t *testing.T
 // node rather than nothing — quorum formation is never starved by load.
 func TestSelectLoadAware_AllHighLoadStillSelectable(t *testing.T) {
 	sd := newTestDiscoveryFixedNow()
-	nodes := []*proto.NodeMeta{
+	nodes := []*NodeInfo{
 		nodeWithLoad("a", 0.90, 1000),
 		nodeWithLoad("b", 0.95, 1000),
 	}
@@ -1970,7 +1975,7 @@ func TestSelectLoadAware_AllHighLoadStillSelectable(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("must still return a node when all are high-load, got %v", idsOf(got))
 	}
-	if id := got[0].GetNodeId(); id != "a" && id != "b" {
+	if id := got[0].Meta.GetNodeId(); id != "a" && id != "b" {
 		t.Fatalf("returned unexpected node %q", id)
 	}
 }
@@ -1980,14 +1985,14 @@ func TestSelectLoadAware_AllHighLoadStillSelectable(t *testing.T) {
 // selectable. (If the value were fresh it would be muted and never appear.)
 func TestSelectLoadAware_StaleLoadTreatedAsUnknown(t *testing.T) {
 	sd := newTestDiscoveryFixedNow()
-	nodes := []*proto.NodeMeta{
+	nodes := []*NodeInfo{
 		nodeWithLoad("stale", 0.95, 60_000), // 60s old > 30s TTL => unknown
 		nodeWithLoad("fresh", 0.10, 1000),
 	}
 	seenStale := false
 	for i := 0; i < 5000; i++ {
 		got := sd.selectLowestLoadNodes(nodes, 1)
-		if len(got) == 1 && got[0].GetNodeId() == "stale" {
+		if len(got) == 1 && got[0].Meta.GetNodeId() == "stale" {
 			seenStale = true
 			break
 		}
@@ -1999,9 +2004,9 @@ func TestSelectLoadAware_StaleLoadTreatedAsUnknown(t *testing.T) {
 
 func TestSelectLoadAware_NoKnownLoadFallsBackToRandom(t *testing.T) {
 	sd := newTestDiscoveryFixedNow()
-	nodes := []*proto.NodeMeta{
-		{NodeId: "x"},
-		{NodeId: "y"},
+	nodes := []*NodeInfo{
+		{Meta: &proto.NodeMeta{NodeId: "x"}},
+		{Meta: &proto.NodeMeta{NodeId: "y"}},
 	}
 	got := sd.selectLowestLoadNodes(nodes, 2)
 	if len(got) != 2 {
@@ -2015,7 +2020,7 @@ func TestSelectLoadAware_DistributesAcrossLowLoadNodes(t *testing.T) {
 	// greedy argmin onto a single node — while the busy node, strongly
 	// de-prioritized but not excluded, gets only a small share.
 	sd := newTestDiscoveryFixedNow()
-	nodes := []*proto.NodeMeta{
+	nodes := []*NodeInfo{
 		nodeWithLoad("low1", 0.10, 1000), // weight 0.90
 		nodeWithLoad("low2", 0.15, 1000), // weight 0.85
 		nodeWithLoad("busy", 0.90, 1000), // weight 0.10
@@ -2024,7 +2029,7 @@ func TestSelectLoadAware_DistributesAcrossLowLoadNodes(t *testing.T) {
 	for i := 0; i < 3000; i++ {
 		got := sd.selectLowestLoadNodes(nodes, 1)
 		if len(got) == 1 {
-			counts[got[0].GetNodeId()]++
+			counts[got[0].Meta.GetNodeId()]++
 		}
 	}
 	if counts["low1"] == 0 || counts["low2"] == 0 {
@@ -2041,7 +2046,7 @@ func TestSelectLoadAware_DistributesAcrossLowLoadNodes(t *testing.T) {
 // the regression for the "insufficient nodes (1/3)" quorum-formation failure.
 func TestSelectLoadAware_ReturnsLimitWhenAllHighLoad(t *testing.T) {
 	sd := newTestDiscoveryFixedNow()
-	nodes := []*proto.NodeMeta{
+	nodes := []*NodeInfo{
 		nodeWithLoad("a", 0.90, 1000),
 		nodeWithLoad("b", 0.95, 1000),
 		nodeWithLoad("c", 0.99, 1000),
@@ -2060,7 +2065,7 @@ func TestSelectLoadAware_ReturnsLimitWhenAllHighLoad(t *testing.T) {
 // fill up to the requested count regardless of how many are over threshold.
 func TestSelectLoadAware_ReturnsLimitWhenSomeHighLoad(t *testing.T) {
 	sd := newTestDiscoveryFixedNow()
-	nodes := []*proto.NodeMeta{
+	nodes := []*NodeInfo{
 		nodeWithLoad("low", 0.10, 1000),
 		nodeWithLoad("high1", 0.90, 1000),
 		nodeWithLoad("high2", 0.95, 1000),
@@ -2079,7 +2084,7 @@ func TestSelectLoadAware_ReturnsLimitWhenSomeHighLoad(t *testing.T) {
 // (unlike the weighted path, where the busy node would be picked ~1% of the time).
 func TestSelectLoadAware_DisabledIgnoresLoad(t *testing.T) {
 	sd := NewServiceDiscovery(WithLoadAware(false, 0)) // disable load-aware selection
-	nodes := []*proto.NodeMeta{
+	nodes := []*NodeInfo{
 		nodeWithLoad("idle", 0.0, 1000),  // weight 1.00 if weighted
 		nodeWithLoad("busy", 0.99, 1000), // weight 0.01 if weighted
 	}
@@ -2087,7 +2092,7 @@ func TestSelectLoadAware_DisabledIgnoresLoad(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		got := sd.selectLowestLoadNodes(nodes, 1)
 		if len(got) == 1 {
-			counts[got[0].GetNodeId()]++
+			counts[got[0].Meta.GetNodeId()]++
 		}
 	}
 	// Uniform random => busy ~2500/5000. Weighted would give busy ~50. The loose
@@ -2108,4 +2113,103 @@ func unique(ss []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// === Runtime info merge (issue #271) ===
+
+// ApplyRuntimeInfo is the consumer end of the runtime gossip path. It updates
+// the signals discovery keeps without disturbing the node's identity fields.
+func TestApplyRuntimeInfo_UpdatesLoadWithoutTouchingIdentity(t *testing.T) {
+	sd := NewServiceDiscovery()
+	sd.UpdateServer("n1", &proto.NodeMeta{
+		NodeId: "n1", Az: "az-a", ResourceGroup: "rg-a",
+		Endpoint: "10.0.0.1:9000", LoadFactor: 0.1, LoadUpdatedAt: 100,
+	})
+
+	if !sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.8, UpdatedAt: 200}) {
+		t.Fatalf("a newer snapshot should be applied")
+	}
+	rt := sd.RuntimeOf("n1")
+	if rt.GetLoadFactor() != 0.8 || rt.GetUpdatedAt() != 200 {
+		t.Fatalf("snapshot not applied: %v @ %v", rt.GetLoadFactor(), rt.GetUpdatedAt())
+	}
+	meta := sd.GetAllServers()["n1"]
+	if meta.GetAz() != "az-a" || meta.GetResourceGroup() != "rg-a" || meta.GetEndpoint() != "10.0.0.1:9000" {
+		t.Fatalf("identity fields were disturbed: %+v", meta)
+	}
+	// A reading must not move the node in the indexes: they hold the same
+	// *NodeInfo as the main table, so one atomic swap is visible from both. This
+	// is what makes a reading cost no index work.
+	sd.mu.RLock()
+	indexed := sd.rgAzIndex["rg-a"]["az-a"]
+	sd.mu.RUnlock()
+	if len(indexed) != 1 || indexed[0] != sd.Nodes["n1"] {
+		t.Fatalf("indexes should still hold the same NodeInfo, got %+v", indexed)
+	}
+	if indexed[0].Runtime().GetLoadFactor() != 0.8 {
+		t.Fatalf("the indexed node should see the new reading, got %v", indexed[0].Runtime().GetLoadFactor())
+	}
+}
+
+// Gossip retransmits and reorders. A reading that is not newer than the one
+// already held must be dropped, or a retransmitted sample could undo a fresher
+// one.
+func TestApplyRuntimeInfo_IgnoresStaleAndDuplicateSnapshots(t *testing.T) {
+	sd := NewServiceDiscovery()
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", LoadFactor: 0.5, LoadUpdatedAt: 200})
+
+	if sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.1, UpdatedAt: 100}) {
+		t.Fatalf("an older snapshot must be dropped")
+	}
+	if sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.2, UpdatedAt: 200}) {
+		t.Fatalf("a duplicate of the current snapshot must be dropped")
+	}
+	if got := sd.RuntimeOf("n1").GetLoadFactor(); got != 0.5 {
+		t.Fatalf("held reading was overwritten: %v", got)
+	}
+}
+
+// A runtime snapshot can arrive before the node's join does. Dropping it is
+// correct: the next report carries it again.
+func TestApplyRuntimeInfo_IgnoresUnknownNode(t *testing.T) {
+	sd := NewServiceDiscovery()
+	if sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "ghost", LoadFactor: 0.9, UpdatedAt: 100}) {
+		t.Fatalf("a snapshot for an unknown node must be dropped")
+	}
+	if _, ok := sd.GetAllServers()["ghost"]; ok {
+		t.Fatalf("a runtime snapshot must not conjure a node into discovery")
+	}
+}
+
+// Whole-meta updates carry whatever load was current when that meta snapshot was
+// taken: push/pull ships the sender's meta as of that exchange, and an alive
+// message ships it as of the sender's last UpdateNode. Neither may roll back a
+// fresher reading the runtime gossip path already delivered.
+func TestUpdateServer_DoesNotRollBackAFresherLoad(t *testing.T) {
+	sd := NewServiceDiscovery()
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", Az: "az-a", LoadFactor: 0.2, LoadUpdatedAt: 100})
+	sd.ApplyRuntimeInfo(&proto.NodeRuntimeInfo{NodeId: "n1", LoadFactor: 0.9, UpdatedAt: 300})
+
+	// A stale whole-meta update that also changes an identity field.
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", Az: "az-b", LoadFactor: 0.2, LoadUpdatedAt: 100})
+
+	rt := sd.RuntimeOf("n1")
+	if rt.GetLoadFactor() != 0.9 || rt.GetUpdatedAt() != 300 {
+		t.Fatalf("stale meta rolled the reading back to %v @ %v", rt.GetLoadFactor(), rt.GetUpdatedAt())
+	}
+	if got := sd.GetAllServers()["n1"]; got.GetAz() != "az-b" {
+		t.Fatalf("the rest of the meta should still be applied, az = %q", got.GetAz())
+	}
+}
+
+// The guard is one-directional: a meta that genuinely carries a newer reading
+// still wins, which is what keeps the push/pull fallback useful.
+func TestUpdateServer_AcceptsAFresherLoadFromMeta(t *testing.T) {
+	sd := NewServiceDiscovery()
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", LoadFactor: 0.2, LoadUpdatedAt: 100})
+	sd.UpdateServer("n1", &proto.NodeMeta{NodeId: "n1", LoadFactor: 0.7, LoadUpdatedAt: 400})
+
+	if got := sd.RuntimeOf("n1"); got.GetLoadFactor() != 0.7 {
+		t.Fatalf("a newer reading carried by meta should win, got %v", got.GetLoadFactor())
+	}
 }
