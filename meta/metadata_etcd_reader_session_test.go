@@ -18,6 +18,7 @@ package meta
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -81,12 +82,14 @@ func setupReaderSessionTest(t *testing.T, logName string, readerName string, fro
 // An open reader that reads nothing (idle or slow consumer) must keep its temp
 // info alive well past the lease TTL. This is exactly the reader the cleanup
 // protection exists for.
+// This is the only case covering the original defect, so it must run in the
+// unit-test target: that target passes -short and excludes ./tests/..., so a
+// short-mode skip here would leave the bug uncovered by every CI target. The
+// TTL is kept small enough that waiting out two of them fits a unit-test
+// budget rather than being skipped.
 func testReaderTempInfoOutlivesLeaseTTLWhileIdle(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping multi-TTL idle wait in short mode")
-	}
 	restoreTTL := readerTempInfoSessionTTLSeconds
-	readerTempInfoSessionTTLSeconds = 5
+	readerTempInfoSessionTTLSeconds = 2
 	defer func() { readerTempInfoSessionTTLSeconds = restoreTTL }()
 
 	env := setupReaderSessionTest(t, "reader_session_idle_test_"+time.Now().Format("20060102150405"), "idle-reader", 1, 10)
@@ -210,6 +213,59 @@ func testUpdateAfterProviderCloseDoesNotResurrectReaderTempInfo(t *testing.T) {
 
 	// A reader closing after the provider did is a no-op, not an error
 	require.NoError(t, env.provider.DeleteReaderTempInfo(context.Background(), env.session))
+}
+
+// A closed provider must refuse to hand out new reader temp info sessions.
+// Close() retires the sessions in its registry, but a session created after
+// that scan is registered too late to be seen by anything: its keepalive runs
+// on the etcd client's own context - which Close() does not cancel - so it
+// renews the lease until the process exits. The orphaned reader key then pins
+// the truncated-segment cleanup low-watermark forever, because the writer's
+// cleanup applies no staleness filter to reader temp info.
+func testCreateReaderTempInfoAfterProviderCloseIsRejected(t *testing.T) {
+	env := setupReaderSessionTest(t, "reader_session_createafterclose_test_"+time.Now().Format("20060102150405"), "pre-close-reader", 1, 10)
+
+	require.NoError(t, env.provider.Close())
+	assert.False(t, env.session.IsActive(), "provider close must retire the sessions it can see")
+
+	session, err := env.provider.CreateReaderTempInfo(context.Background(), "post-close-reader", env.logId, 2, 20)
+	require.Error(t, err, "a closed provider must refuse to create reader temp info")
+	assert.Nil(t, session, "a refused create must not hand out a session")
+
+	// A refused create must leave nothing behind holding a live lease
+	postCloseKey := legacyKeyBuilder().BuildLogReaderTempInfoKey(env.logId, "post-close-reader")
+	resp, err := env.etcdCli.Get(context.Background(), postCloseKey)
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(resp.Kvs), "a refused create must not leave a reader temp info key behind")
+}
+
+// Provider Close() must be idempotent and must retire every registered session,
+// so a second close (or a close racing a reader's own close) cannot revoke the
+// same lease twice or block a second time.
+func testProviderCloseIsIdempotentAcrossReaderSessions(t *testing.T) {
+	env := setupReaderSessionTest(t, "reader_session_closeidem_test_"+time.Now().Format("20060102150405"), "idem-reader-0", 1, 10)
+
+	extra := make([]ReaderTempInfoSession, 0, 3)
+	for i := 1; i <= 3; i++ {
+		name := "idem-reader-" + strconv.Itoa(i)
+		s, err := env.provider.CreateReaderTempInfo(context.Background(), name, env.logId, int64(i), int64(i*10))
+		require.NoError(t, err)
+		extra = append(extra, s)
+	}
+
+	require.NoError(t, env.provider.Close())
+	require.NoError(t, env.provider.Close(), "a second provider close must be a no-op")
+
+	assert.False(t, env.session.IsActive())
+	for i, s := range extra {
+		assert.Falsef(t, s.IsActive(), "session %d must be retired by provider close", i+1)
+	}
+
+	// Every reader key is gone, and a reader closing afterwards is a no-op
+	resp, err := env.etcdCli.Get(context.Background(), legacyKeyBuilder().BuildLogAllReaderTempInfosKey(env.logId), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(resp.Kvs), "provider close must leave no reader temp info behind")
+	require.NoError(t, env.provider.DeleteReaderTempInfo(context.Background(), extra[0]))
 }
 
 // A session this provider never handed out carries no ownership proof and must

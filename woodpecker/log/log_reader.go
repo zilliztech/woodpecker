@@ -37,10 +37,18 @@ const (
 	ReaderScopeName = "LogReader"
 	// UpdateReaderInfoIntervalMs bounds how often a reader re-reports an unchanged
 	// read position. It also bounds how long a temp info key lost to a lease
-	// expiry stays missing, since the periodic report is what re-creates it, so it
-	// is kept well below the session TTL. Idle readers write at this rate, so the
-	// steady-state metadata write load is (reader count / interval).
-	UpdateReaderInfoIntervalMs = 5000
+	// expiry stays missing, since the periodic report is what re-creates it.
+	//
+	// It must stay well above the etcd request timeout. The report is issued
+	// synchronously on the ReadNext path, so when etcd is degraded enough that
+	// each write burns its full timeout, an interval shorter than that timeout
+	// is already elapsed again by the time the next poll comes round: every
+	// batch boundary would then stall for a full timeout instead of one stall
+	// per interval. Shortening the post-lease-loss recovery window is not worth
+	// that trade - opening the window at all takes a full session TTL of
+	// continuous etcd unavailability, i.e. exactly the conditions under which
+	// the tighter interval does the most damage.
+	UpdateReaderInfoIntervalMs = 30000
 	NoDataReadWaitIntervalMs   = 200
 	DefaultBatchEntriesLimit   = 200
 )

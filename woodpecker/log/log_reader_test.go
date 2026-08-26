@@ -1336,6 +1336,22 @@ func TestLogReader_ReadNext_IdleReaderThrottlesPositionReports(t *testing.T) {
 		"an idle reader must report its unchanged position at most once per UpdateReaderInfoIntervalMs, not once per poll")
 }
 
+// The position report at ReadNext is synchronous and bounded by the etcd
+// request timeout. If the reporting interval were shorter than that timeout, a
+// degraded etcd would make every report burn its full budget and still leave
+// the interval elapsed by the next poll, so a caught-up reader would stall for
+// a full timeout at every batch boundary instead of once per interval. Guard
+// the ordering between the two so the interval cannot be tightened past it.
+func TestUpdateReaderInfoIntervalOutlastsEtcdRequestTimeout(t *testing.T) {
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+
+	requestTimeoutMs := cfg.Etcd.RequestTimeout.Milliseconds()
+	require.Positive(t, requestTimeoutMs, "etcd request timeout must be configured")
+	assert.Greater(t, int(UpdateReaderInfoIntervalMs), requestTimeoutMs,
+		"reader reporting interval must outlast one etcd request timeout, else a degraded etcd stalls every poll")
+}
+
 func TestLogReader_ReadNext_OtherReadError(t *testing.T) {
 	mockLogHandle := &testLogHandleMock{}
 	mockLogHandle.Test(t)
