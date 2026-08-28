@@ -364,9 +364,9 @@ func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName stri
 	return nil
 }
 
-func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64) (err error) {
+func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
-	resp, err := l.innerClient.MarkLogDeleted(ctx, &proto.MarkLogDeletedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId})
+	resp, err := l.innerClient.MarkLogDeleted(ctx, &proto.MarkLogDeletedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, Sync: sync})
 	if err != nil {
 		return err
 	}

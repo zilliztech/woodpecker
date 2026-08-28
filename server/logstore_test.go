@@ -1255,7 +1255,7 @@ func TestLogStore_EvictLog_RejectsServing(t *testing.T) {
 	store.stopped.Store(false)
 	ctx := context.Background()
 
-	err := store.EvictLog(ctx, testBucketName, testRootPath, testLogId)
+	err := store.EvictLog(ctx, testBucketName, testRootPath, testLogId, false)
 	assert.NoError(t, err)
 
 	// AddEntry should now return ErrLogBeingDeleted
@@ -1279,7 +1279,7 @@ func TestLogStore_EvictLog_ClosesProcessors(t *testing.T) {
 	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
 	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{0: mockProc}
 
-	err := store.EvictLog(ctx, testBucketName, testRootPath, testLogId)
+	err := store.EvictLog(ctx, testBucketName, testRootPath, testLogId, false)
 	assert.NoError(t, err)
 
 	store.spMu.RLock()
@@ -1314,8 +1314,8 @@ func TestLogStore_EvictLog_Idempotent(t *testing.T) {
 	mockProc.EXPECT().Close(mock.Anything).Return(nil).Once() // exactly once across BOTH evicts
 	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)] = map[int64]processor.SegmentProcessor{0: mockProc}
 
-	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId))
-	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId))
+	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId, false))
+	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId, false))
 }
 
 func TestLogStore_EvictInstance_ClosesProcessors(t *testing.T) {
@@ -1388,7 +1388,7 @@ func TestLogStore_EvictLog_PersistsMarker(t *testing.T) {
 	store.cfg.Woodpecker.Storage.RootPath = root
 	store.stopped.Store(false)
 
-	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId))
+	require.NoError(t, store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId, false))
 
 	markers, err := scanDeleteMarkers(context.Background(), root)
 	require.NoError(t, err)
@@ -1448,7 +1448,7 @@ func TestLogStore_EvictLog_MarkerWriteFailure(t *testing.T) {
 	require.NoError(t, os.WriteFile(badFile, []byte("x"), 0o644))
 	store.cfg.Woodpecker.Storage.RootPath = badFile
 
-	err := store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId)
+	err := store.EvictLog(context.Background(), testBucketName, testRootPath, testLogId, false)
 	require.Error(t, err)
 	assert.False(t, werr.ErrLogBeingDeleted.Is(err), "a mark-write failure must NOT look like ErrLogBeingDeleted")
 	assert.True(t, werr.ErrMarkDeleteFailed.Is(err), "a mark-write failure should be ErrMarkDeleteFailed")

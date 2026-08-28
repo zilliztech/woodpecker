@@ -83,8 +83,8 @@ func (l *logStoreClientLocal) SegmentClean(ctx context.Context, bucketName strin
 	return l.store.CleanSegment(ctx, bucketName, rootPath, logId, segmentId, flag)
 }
 
-func (l *logStoreClientLocal) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64) error {
-	return l.store.EvictLog(ctx, bucketName, rootPath, logId)
+func (l *logStoreClientLocal) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error {
+	return l.store.EvictLog(ctx, bucketName, rootPath, logId, sync)
 }
 
 func (l *logStoreClientLocal) MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) error {

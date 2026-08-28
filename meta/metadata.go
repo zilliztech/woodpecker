@@ -45,6 +45,11 @@ type MetadataProvider interface {
 	GetLogMeta(ctx context.Context, logName string) (*LogMeta, error)
 	// UpdateLogMeta updates the metadata for a specific log.
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error
+	// ClearMeta removes all content metadata for this instance (logs, segments, quorums,
+	// node registrations, reader sessions, cleanup and compacted-mark records) and re-seeds
+	// the instance-level keys. clearLogIdGen decides whether the log id counter restarts;
+	// keeping it is what makes a reused instance safe against object-storage residue.
+	ClearMeta(ctx context.Context, clearLogIdGen bool) error
 	// DeleteLogMetadata removes a log's active metadata. When force is true the
 	// log meta, its segments, and its orphan reader/cleanup keys are hard-deleted.
 	// When force is false the log meta and its segments are first copied to the

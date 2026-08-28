@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -208,6 +209,33 @@ func hasLegacyMetadata(ctx context.Context, client *clientv3.Client) (bool, erro
 	return false, nil
 }
 
+// onlyLogIdGenSurvives reports whether the sole surviving instance-level key is logidgen.
+//
+// ClearMeta deliberately preserves the log id counter while clearing everything else, because
+// logId appears in object-storage and node-local data paths and restarting it would let a new
+// log reuse a directory an old one may still have objects in. That leaves exactly one of the
+// four keys present, which the all-or-nothing check above would otherwise reject — the node
+// would refuse to start after a legitimate clear.
+//
+// Any other partial combination is still an error: it means something wrote or deleted these
+// keys outside of ClearMeta, and guessing at the intent is worse than refusing.
+//
+// The response order matches `keys` in InitIfNecessary: instance, version, logidgen,
+// quorumidgen.
+func onlyLogIdGenSurvives(responses []*etcdserverpb.ResponseOp) bool {
+	if len(responses) != 4 {
+		return false
+	}
+	const logIdGenIndex = 2
+	for i, rp := range responses {
+		present := len(rp.GetResponseRange().Kvs) > 0
+		if (i == logIdGenIndex) != present {
+			return false
+		}
+	}
+	return true
+}
+
 // InitIfNecessary initializes the metadata provider if necessary.
 // It checks if there is logIdGen,instance,quorumIdGen keys in etcd.
 // If not, it creates them.
@@ -270,7 +298,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 		// cluster already initialized successfully
 		log.Debug("cluster already initialized, skipping initialization")
 		return nil
-	} else if len(initOps) != len(keys) {
+	} else if len(initOps) != len(keys) && !onlyLogIdGenSurvives(resp.Responses) {
 		// cluster already initialized partially, but not all
 		err = werr.ErrMetadataInit.WithCauseErrMsg("some keys already exists")
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "init_if_necessary", "error").Inc()

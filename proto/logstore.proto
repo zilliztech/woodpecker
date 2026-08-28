@@ -362,6 +362,11 @@ message MarkLogDeletedRequest {
   string bucket_name = 1;
   string root_path = 2;
   int64 log_id = 3;
+  // When true the node reclaims the log's local data before replying, instead of
+  // deferring it to the grace-based reclaim task. Callers that must observe an empty
+  // WAL before restarting Milvus need this; the delete API already implies the caller
+  // has confirmed the data is no longer needed.
+  bool sync = 4;
 }
 message MarkLogDeletedResponse {
   Status status = 1;

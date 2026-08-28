@@ -292,8 +292,8 @@ func main() {
 				return opReg.Stats()
 			},
 		},
-		MarkLogDeleted: func(bucketName, rootPath string, logId int64) error {
-			return srv.EvictLog(context.Background(), bucketName, rootPath, logId)
+		MarkLogDeleted: func(bucketName, rootPath string, logId int64, sync bool) error {
+			return srv.EvictLog(context.Background(), bucketName, rootPath, logId, sync)
 		},
 		MarkInstanceDeleted: func(bucketName, rootPath string) error {
 			return srv.EvictInstance(context.Background(), bucketName, rootPath)

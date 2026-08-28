@@ -405,17 +405,17 @@ func (_c *LogStore_EvictInstance_Call) RunAndReturn(run func(context.Context, st
 	return _c
 }
 
-// EvictLog provides a mock function with given fields: ctx, bucketName, rootPath, logId
-func (_m *LogStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error {
-	ret := _m.Called(ctx, bucketName, rootPath, logId)
+// EvictLog provides a mock function with given fields: ctx, bucketName, rootPath, logId, sync
+func (_m *LogStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, sync)
 
 	if len(ret) == 0 {
 		panic("no return value specified for EvictLog")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64) error); ok {
-		r0 = rf(ctx, bucketName, rootPath, logId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, bool) error); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, sync)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -433,13 +433,14 @@ type LogStore_EvictLog_Call struct {
 //   - bucketName string
 //   - rootPath string
 //   - logId int64
-func (_e *LogStore_Expecter) EvictLog(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}) *LogStore_EvictLog_Call {
-	return &LogStore_EvictLog_Call{Call: _e.mock.On("EvictLog", ctx, bucketName, rootPath, logId)}
+//   - sync bool
+func (_e *LogStore_Expecter) EvictLog(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, sync interface{}) *LogStore_EvictLog_Call {
+	return &LogStore_EvictLog_Call{Call: _e.mock.On("EvictLog", ctx, bucketName, rootPath, logId, sync)}
 }
 
-func (_c *LogStore_EvictLog_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64)) *LogStore_EvictLog_Call {
+func (_c *LogStore_EvictLog_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool)) *LogStore_EvictLog_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(bool))
 	})
 	return _c
 }
@@ -449,7 +450,7 @@ func (_c *LogStore_EvictLog_Call) Return(_a0 error) *LogStore_EvictLog_Call {
 	return _c
 }
 
-func (_c *LogStore_EvictLog_Call) RunAndReturn(run func(context.Context, string, string, int64) error) *LogStore_EvictLog_Call {
+func (_c *LogStore_EvictLog_Call) RunAndReturn(run func(context.Context, string, string, int64, bool) error) *LogStore_EvictLog_Call {
 	_c.Call.Return(run)
 	return _c
 }

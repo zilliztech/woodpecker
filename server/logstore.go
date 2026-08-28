@@ -75,7 +75,7 @@ type LogStore interface {
 	AllowNewWrites()
 	MarkRetired()
 	HasLocalSegmentData() bool
-	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error
+	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error
 	EvictInstance(ctx context.Context, bucketName string, rootPath string) error
 	// EvictSegmentReader invalidates the cached segment reader (if any) for an
 	// already-created segment processor, without creating one. No-op if no
@@ -883,11 +883,19 @@ func (l *logStore) HasLocalSegmentData() bool {
 	return found
 }
 
-func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error {
-	if root := l.cfg.Woodpecker.Storage.RootPath; root != "" {
-		if err := writeDeleteMarker(ctx, root, deleteMarker{
-			Bucket: bucketName, RootPath: rootPath, LogId: logId, DeletedAt: time.Now().Unix(),
-		}); err != nil {
+// EvictLog stops this node from serving the log and arranges for its local data to go away.
+//
+// With sync=false the local removal is deferred to the grace-based reclaim task. With
+// sync=true the removal happens before returning, so a caller that must observe an empty WAL
+// (an offline WAL switch, a cold restore) can rely on the reply. Both paths write the marker
+// first and go through reclaimMarker, so a crash mid-way is still picked up by the task.
+func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error {
+	root := l.cfg.Woodpecker.Storage.RootPath
+	marker := deleteMarker{
+		Bucket: bucketName, RootPath: rootPath, LogId: logId, DeletedAt: time.Now().Unix(),
+	}
+	if root != "" {
+		if err := writeDeleteMarker(ctx, root, marker); err != nil {
 			return werr.ErrMarkDeleteFailed.WithCauseErr(err)
 		}
 	}
@@ -905,6 +913,14 @@ func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath str
 		l.closeSegmentProcessor(ctx, logKey, segmentId, proc)
 	}
 	logger.Ctx(ctx).Info("evicted log", zap.String("logKey", logKey), zap.Int("closedProcessors", len(procs)))
+
+	// Reclaim inline only after the processors are closed and the gate is set: the removal
+	// must not race a writer that is still flushing into the directory.
+	if sync && root != "" {
+		if err := reclaimMarker(ctx, l, root, marker); err != nil {
+			return werr.ErrMarkDeleteFailed.WithCauseErr(err)
+		}
+	}
 	return nil
 }
 

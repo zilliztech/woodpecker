@@ -46,8 +46,10 @@ type LogStoreClient interface {
 	NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error
 	// SegmentClean cleans up the specified log segment and returns an error if any.
 	SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error
-	// MarkLogDeleted marks a single log deleted on the target node.
-	MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64) error
+	// MarkLogDeleted marks a single log deleted on the target node. With sync=true the node
+	// reclaims the log's local data before replying, so the caller can rely on the reply
+	// meaning "this node holds nothing for that log any more".
+	MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error
 	// MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on the target node.
 	MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.

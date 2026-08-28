@@ -444,7 +444,7 @@ type fakeLogStore struct {
 	getBlockCountFn   func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
 	updateLACFn       func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) error
 	cleanFn           func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, flag int) error
-	evictLogFn        func(ctx context.Context, bucketName, rootPath string, logId int64) error
+	evictLogFn        func(ctx context.Context, bucketName, rootPath string, logId int64, sync bool) error
 	evictInstanceFn   func(ctx context.Context, bucketName, rootPath string) error
 	notifyCompactedFn func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) error
 	evictReaderFn     func(ctx context.Context, bucketName, rootPath string, logId int64, segId int64) error
@@ -517,9 +517,9 @@ func (f *fakeLogStore) RejectNewWrites()             { f.writesRejected = true }
 func (f *fakeLogStore) AllowNewWrites()              { f.writesRejected = false }
 func (f *fakeLogStore) MarkRetired()                 { f.retired = true }
 func (f *fakeLogStore) HasLocalSegmentData() bool    { return false }
-func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64) error {
+func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64, sync bool) error {
 	if f.evictLogFn != nil {
-		return f.evictLogFn(ctx, bucketName, rootPath, logId)
+		return f.evictLogFn(ctx, bucketName, rootPath, logId, sync)
 	}
 	return nil
 }
@@ -1848,7 +1848,7 @@ func TestServer_DecommissionAfterCancel_RestartsMonitor(t *testing.T) {
 
 func TestServer_MarkLogDeleted_Success(t *testing.T) {
 	fake := &fakeLogStore{
-		evictLogFn: func(ctx context.Context, bn, rp string, logId int64) error {
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, _ bool) error {
 			return nil
 		},
 	}
@@ -1865,7 +1865,7 @@ func TestServer_MarkLogDeleted_Success(t *testing.T) {
 
 func TestServer_MarkLogDeleted_Error(t *testing.T) {
 	fake := &fakeLogStore{
-		evictLogFn: func(ctx context.Context, bn, rp string, logId int64) error {
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, _ bool) error {
 			return assert.AnError
 		},
 	}

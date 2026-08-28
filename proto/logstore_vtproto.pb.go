@@ -773,6 +773,7 @@ func (m *MarkLogDeletedRequest) CloneVT() *MarkLogDeletedRequest {
 	r.BucketName = m.BucketName
 	r.RootPath = m.RootPath
 	r.LogId = m.LogId
+	r.Sync = m.Sync
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
 		copy(r.unknownFields, m.unknownFields)
@@ -1897,6 +1898,9 @@ func (this *MarkLogDeletedRequest) EqualVT(that *MarkLogDeletedRequest) bool {
 		return false
 	}
 	if this.LogId != that.LogId {
+		return false
+	}
+	if this.Sync != that.Sync {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -4073,6 +4077,16 @@ func (m *MarkLogDeletedRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error)
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if m.Sync {
+		i--
+		if m.Sync {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x20
+	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
@@ -5117,6 +5131,9 @@ func (m *MarkLogDeletedRequest) SizeVT() (n int) {
 	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
+	}
+	if m.Sync {
+		n += 2
 	}
 	n += len(m.unknownFields)
 	return n
@@ -10767,6 +10784,26 @@ func (m *MarkLogDeletedRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Sync", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Sync = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
@@ -17000,6 +17037,26 @@ func (m *MarkLogDeletedRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Sync", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Sync = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])

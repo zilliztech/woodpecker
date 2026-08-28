@@ -652,7 +652,7 @@ func (s *Server) CleanSegment(ctx context.Context, request *proto.CleanSegmentRe
 }
 
 func (s *Server) MarkLogDeleted(ctx context.Context, request *proto.MarkLogDeletedRequest) (*proto.MarkLogDeletedResponse, error) {
-	if err := s.logStore.EvictLog(ctx, request.BucketName, request.RootPath, request.LogId); err != nil {
+	if err := s.logStore.EvictLog(ctx, request.BucketName, request.RootPath, request.LogId, request.Sync); err != nil {
 		return &proto.MarkLogDeletedResponse{Status: werr.Status(err)}, nil
 	}
 	return &proto.MarkLogDeletedResponse{Status: werr.Success()}, nil
@@ -667,8 +667,8 @@ func (s *Server) MarkInstanceDeleted(ctx context.Context, request *proto.MarkIns
 
 // EvictLog marks a single log as deleted on this node.
 // This is the HTTP-admin counterpart of the gRPC MarkLogDeleted RPC.
-func (s *Server) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64) error {
-	return s.logStore.EvictLog(ctx, bucketName, rootPath, logId)
+func (s *Server) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64, sync bool) error {
+	return s.logStore.EvictLog(ctx, bucketName, rootPath, logId, sync)
 }
 
 // EvictInstance marks a whole instance (all logs under bucketName/rootPath) as deleted.

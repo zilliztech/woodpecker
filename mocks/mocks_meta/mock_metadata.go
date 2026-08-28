@@ -255,6 +255,53 @@ func (_c *MetadataProvider_CheckSessionLockAlive_Call) RunAndReturn(run func(con
 	return _c
 }
 
+// ClearMeta provides a mock function with given fields: ctx, clearLogIdGen
+func (_m *MetadataProvider) ClearMeta(ctx context.Context, clearLogIdGen bool) error {
+	ret := _m.Called(ctx, clearLogIdGen)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ClearMeta")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, bool) error); ok {
+		r0 = rf(ctx, clearLogIdGen)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_ClearMeta_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClearMeta'
+type MetadataProvider_ClearMeta_Call struct {
+	*mock.Call
+}
+
+// ClearMeta is a helper method to define mock.On call
+//   - ctx context.Context
+//   - clearLogIdGen bool
+func (_e *MetadataProvider_Expecter) ClearMeta(ctx interface{}, clearLogIdGen interface{}) *MetadataProvider_ClearMeta_Call {
+	return &MetadataProvider_ClearMeta_Call{Call: _e.mock.On("ClearMeta", ctx, clearLogIdGen)}
+}
+
+func (_c *MetadataProvider_ClearMeta_Call) Run(run func(ctx context.Context, clearLogIdGen bool)) *MetadataProvider_ClearMeta_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(bool))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_ClearMeta_Call) Return(_a0 error) *MetadataProvider_ClearMeta_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_ClearMeta_Call) RunAndReturn(run func(context.Context, bool) error) *MetadataProvider_ClearMeta_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Close provides a mock function with no fields
 func (_m *MetadataProvider) Close() error {
 	ret := _m.Called()

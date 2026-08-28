@@ -372,7 +372,17 @@ func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) e
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, logName)
+	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), logName, false)
+}
+
+// DeleteLogSync deletes the log and waits for the local data to be reclaimed.
+func (c *woodpeckerEmbedClient) DeleteLogSync(ctx context.Context, logName string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), logName, true)
 }
 
 // DeleteAllLogs deletes all logs managed by this client.
@@ -382,7 +392,41 @@ func (c *woodpeckerEmbedClient) DeleteAllLogs(ctx context.Context) error {
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg)
+	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), false)
+}
+
+// DeleteAllLogsSync deletes every log and waits for local reclaim on each.
+func (c *woodpeckerEmbedClient) DeleteAllLogsSync(ctx context.Context) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), true)
+}
+
+// ClearMeta wipes this instance's content metadata.
+func (c *woodpeckerEmbedClient) ClearMeta(ctx context.Context, clearLogIdGen bool) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	return c.Metadata.ClearMeta(ctx, clearLogIdGen)
+}
+
+// ClearMetaExceptLogIdGen wipes content metadata but keeps the log id counter.
+func (c *woodpeckerEmbedClient) ClearMetaExceptLogIdGen(ctx context.Context) error {
+	return c.ClearMeta(ctx, false)
+}
+
+// cleanupStorage returns the object-storage handle used by log deletion, or nil in the
+// local-disk mode where there are no objects to remove.
+func (c *woodpeckerEmbedClient) cleanupStorage() storageclient.ObjectStorage {
+	if c.cfg.Woodpecker.Storage.IsStorageLocal() {
+		return nil
+	}
+	return c.storageClient
 }
 
 // LogExists checks if a log with the specified name exists.
