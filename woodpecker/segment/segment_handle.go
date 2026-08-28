@@ -604,16 +604,57 @@ type quorumReadCandidate struct {
 	azScope       string
 }
 
-// quorumPlacements maps each quorum endpoint to the replica metadata that says
-// where it sits. Endpoints absent from the replica list — quorum metadata
-// written before placement was recorded — are simply missing from the map.
-func quorumPlacements(quorumInfo *proto.QuorumInfo) map[string]*proto.QuorumNode {
+// quorumPlacements returns, per quorum node index, the replica metadata that
+// says where that node sits — nil where the placement is not known.
+//
+// nodes[] and replicas[] are appended in lockstep by every selection path in
+// quorum/discovery.go, so they are aligned by index. QuorumNode.endpoint
+// existed only to join the two lists by address, which cost a second full copy
+// of every endpoint string in every segment's metadata; it is deprecated and no
+// longer written (issue #280).
+//
+// Segments written before that still carry it, and two legacy shapes still need
+// the address join: a replica list shorter than the node list (placement was
+// not recorded for every node), and — defensively — one whose stored endpoints
+// contradict the positional pairing.
+func quorumPlacements(quorumInfo *proto.QuorumInfo) []*proto.QuorumNode {
+	nodes := quorumInfo.GetNodes()
 	replicas := quorumInfo.GetReplicas()
-	placements := make(map[string]*proto.QuorumNode, len(replicas))
-	for _, replica := range replicas {
-		if replica != nil && replica.Endpoint != "" {
-			placements[replica.Endpoint] = replica
+
+	if replicasAlignWithNodes(nodes, replicas) {
+		return replicas
+	}
+	return joinPlacementsByEndpoint(nodes, replicas)
+}
+
+// replicasAlignWithNodes reports whether replicas[i] can be trusted to describe
+// nodes[i]: the lists must be the same length, and any endpoint left over from
+// before the deprecation must agree with the positional pairing. Replicas
+// written after the deprecation carry no endpoint and so agree vacuously.
+func replicasAlignWithNodes(nodes []string, replicas []*proto.QuorumNode) bool {
+	if len(replicas) != len(nodes) {
+		return false
+	}
+	for i, replica := range replicas {
+		if endpoint := replica.GetEndpoint(); endpoint != "" && endpoint != nodes[i] {
+			return false
 		}
+	}
+	return true
+}
+
+// joinPlacementsByEndpoint is the legacy join, kept for segment metadata
+// written while QuorumNode.endpoint was still populated.
+func joinPlacementsByEndpoint(nodes []string, replicas []*proto.QuorumNode) []*proto.QuorumNode {
+	byEndpoint := make(map[string]*proto.QuorumNode, len(replicas))
+	for _, replica := range replicas {
+		if endpoint := replica.GetEndpoint(); endpoint != "" {
+			byEndpoint[endpoint] = replica
+		}
+	}
+	placements := make([]*proto.QuorumNode, len(nodes))
+	for i, node := range nodes {
+		placements[i] = byEndpoint[node]
 	}
 	return placements
 }
@@ -634,8 +675,8 @@ func quorumNodeScopes(quorumInfo *proto.QuorumInfo) []string {
 	localAZ := topology.GetCurrentAvailabilityZone()
 
 	scopes := make([]string, len(nodes))
-	for i, node := range nodes {
-		scopes[i] = scopeOfReplica(localRegion, localAZ, placements[node])
+	for i := range nodes {
+		scopes[i] = scopeOfReplica(localRegion, localAZ, placements[i])
 	}
 	return scopes
 }
@@ -647,9 +688,9 @@ func activeSegmentNodes(quorumInfo *proto.QuorumInfo) []metrics.ActiveSegmentNod
 	placements := quorumPlacements(quorumInfo)
 
 	members := make([]metrics.ActiveSegmentNode, 0, len(nodes))
-	for _, node := range nodes {
+	for i, node := range nodes {
 		member := metrics.ActiveSegmentNode{Node: node}
-		if placement := placements[node]; placement != nil {
+		if placement := placements[i]; placement != nil {
 			member.AZ = placement.Az
 		}
 		members = append(members, member)
@@ -693,7 +734,7 @@ func orderedQuorumReadCandidates(quorumInfo *proto.QuorumInfo, lastReadState *pr
 		ordered = append(ordered, quorumReadCandidate{
 			node:          node,
 			originalIndex: nodeIndex,
-			azScope:       scopeOfReplica(localRegion, localAZ, placements[node]),
+			azScope:       scopeOfReplica(localRegion, localAZ, placements[nodeIndex]),
 		})
 	}
 
