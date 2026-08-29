@@ -19,7 +19,7 @@ services:
     restart: "no"
 
   prometheus:
-    image: bitnami/prometheus:latest
+    image: soldevelo/prometheus:latest
     container_name: prometheus
     ports:
       - "9090:9090"
