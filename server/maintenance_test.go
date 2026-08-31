@@ -558,3 +558,46 @@ func TestSyncEvictKeepsTheDeletingGate(t *testing.T) {
 	}
 	assert.True(t, found, "the delete marker must remain for the grace-based reclaim to retire")
 }
+
+// TestSyncEvictFailsClosedWhenLocalDataCannotBeRemoved pins the other half of the gate
+// invariant. A removal that fails must not be reported as done and must not open the node
+// back up: the caller is about to delete objects and metadata on the strength of this reply,
+// and a node that resumed serving would write into the prefix being enumerated.
+//
+// The failure is induced by making a parent path component a regular file, so the stat
+// returns ENOTDIR rather than ENOENT. That distinction is the point — "not there" is a
+// legitimate no-op, "cannot tell" is not — and unlike a permission bit it behaves the same
+// when the tests run as root.
+func TestSyncEvictFailsClosedWhenLocalDataCannotBeRemoved(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := createTestLogStore()
+	root := t.TempDir()
+	store.cfg.Woodpecker.Storage.RootPath = root
+	store.cfg.Woodpecker.Storage.Type = "local"
+
+	// localLogDataDir resolves to {root}/{rootPath}/{logId} in local mode; a regular file at
+	// {root}/{rootPath} makes every path below it unstattable.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "r"), []byte("not a directory"), 0o644))
+
+	existed, err := store.EvictLog(ctx, "b", "r", 31, true)
+	require.Error(t, err, "a local removal that could not be verified must not report success")
+	assert.False(t, existed)
+
+	key := GetLogKey("b", "r", 31)
+	store.spMu.Lock()
+	_, gated := store.deletingLogs[key]
+	store.spMu.Unlock()
+	assert.True(t, gated, "the gate must stay up when the reclaim failed")
+
+	markers, listErr := scanDeleteMarkers(ctx, root)
+	require.NoError(t, listErr)
+	found := false
+	for _, m := range markers {
+		if m.LogId == 31 && !m.Instance {
+			found = true
+		}
+	}
+	assert.True(t, found, "the marker must survive so the next pass retries")
+}

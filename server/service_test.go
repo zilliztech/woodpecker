@@ -2027,3 +2027,54 @@ func TestServer_AddEntries_SyncError(t *testing.T) {
 	}
 	assert.True(t, sawFailed, "a Failed frame must be sent for the durability failure")
 }
+
+// TestServer_MarkLogDeleted_EchoesSyncApplied pins the mixed-version handshake from the server
+// side. A node that understands the flag has to say so, because the client uses the absence of
+// this field to tell an old node apart from one that honoured the request — and reporting an
+// old node's async delete as a completed synchronous one is how an operator ends up switching
+// backends on a WAL that still has data on disk.
+func TestServer_MarkLogDeleted_EchoesSyncApplied(t *testing.T) {
+	fake := &fakeLogStore{
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, _ bool) error { return nil },
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	syncResp, err := s.MarkLogDeleted(context.Background(), &proto.MarkLogDeletedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, Sync: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, syncResp.GetSyncApplied(), "a sync request must be acknowledged as applied")
+
+	asyncResp, err := s.MarkLogDeleted(context.Background(), &proto.MarkLogDeletedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	require.NoError(t, err)
+	assert.False(t, asyncResp.GetSyncApplied(), "an async request promises nothing about local data")
+}
+
+// TestServer_EvictLog_AdminWrapper covers the HTTP-admin counterpart of the RPC, which shares
+// the same logStore call but drops the local-data answer.
+func TestServer_EvictLog_AdminWrapper(t *testing.T) {
+	var gotSync bool
+	fake := &fakeLogStore{
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, sync bool) error {
+			gotSync = sync
+			return nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	require.NoError(t, s.EvictLog(context.Background(), "b", "r", 1, true))
+	assert.True(t, gotSync, "the admin path must pass the sync flag through")
+
+	failing := &fakeLogStore{
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, _ bool) error {
+			return assert.AnError
+		},
+	}
+	s2 := createTestServerWithFakeLogStore(failing)
+	defer s2.cancel()
+	assert.Error(t, s2.EvictLog(context.Background(), "b", "r", 1, false))
+}
