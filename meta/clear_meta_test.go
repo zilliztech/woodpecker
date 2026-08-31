@@ -20,6 +20,7 @@ import (
 	"context"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 // resp builds the four Get responses InitIfNecessary inspects, in its key order:
@@ -197,4 +199,62 @@ func testClearMetaWithLogIdGenResetsCounter(t *testing.T) {
 	counter, ok := readKey(t, cli, kb.LogIdGeneratorKey())
 	require.True(t, ok)
 	assert.Equal(t, "0", counter)
+}
+
+// testListParkedLogIdsSeesOnlyLogMetaRecords pins the enumeration the parked-object sweep
+// depends on. Parked LogMeta and parked segment records live under the same prefix and are
+// told apart by key shape — LogMeta has exactly one segment after logs-deleted/, segments sit
+// a level deeper. Getting that wrong either misses logs whose objects would then be
+// unreachable once ClearMeta drops the prefix, or feeds segment records to a prefix delete.
+func testListParkedLogIdsSeesOnlyLogMetaRecords(t *testing.T) {
+	prefix := "parked-ids-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	ctx := context.Background()
+	provider := NewMetadataProvider(ctx, etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	require.NoError(t, provider.InitIfNecessary(ctx))
+
+	// Nothing parked yet.
+	ids, err := provider.ListParkedLogIds(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+
+	// Two logs, one of them with several segments, so the parked subtree contains segment
+	// records alongside the LogMeta.
+	want := make([]int64, 0, 2)
+	for i, name := range []string{"parked-a", "parked-b"} {
+		require.NoError(t, provider.CreateLog(ctx, name))
+		logMeta, err := provider.GetLogMeta(ctx, name)
+		require.NoError(t, err)
+		want = append(want, logMeta.Metadata.LogId)
+		if i == 0 {
+			for segNo := int64(0); segNo < 3; segNo++ {
+				seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: segNo, State: proto.SegmentState_Active}}
+				require.NoError(t, provider.StoreSegmentMetadata(ctx, name, logMeta.Metadata.LogId, seg))
+			}
+		}
+		require.NoError(t, provider.DeleteLogMetadata(ctx, name, false))
+	}
+
+	ids, err = provider.ListParkedLogIds(ctx)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, want, ids,
+		"exactly the parked logs, once each — segment records must not add ids or duplicates")
+
+	// A hard delete does not park, so it must not appear.
+	require.NoError(t, provider.CreateLog(ctx, "hard-deleted"))
+	require.NoError(t, provider.DeleteLogMetadata(ctx, "hard-deleted", true))
+	ids, err = provider.ListParkedLogIds(ctx)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, want, ids, "a forced delete parks nothing")
+
+	// ClearMeta drops the prefix, which is exactly why the sweep has to run before it.
+	require.NoError(t, provider.ClearMeta(ctx, false))
+	ids, err = provider.ListParkedLogIds(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
 }

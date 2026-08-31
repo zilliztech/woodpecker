@@ -101,6 +101,7 @@ func TestAll(t *testing.T) {
 	t.Run("test clear meta resumes after interruption", testClearMetaResumesAfterInterruption)
 	t.Run("test clear meta only logidgen left still starts", testClearMetaOnlyLogIdGenLeftStillStarts)
 	t.Run("test clear meta with logidgen resets counter", testClearMetaWithLogIdGenResetsCounter)
+	t.Run("test list parked log ids sees only log meta records", testListParkedLogIdsSeesOnlyLogMetaRecords)
 	t.Run("test create reader temp info", testCreateReaderTempInfo)
 	t.Run("test get reader temp info", testGetReaderTempInfo)
 	t.Run("test update reader temp info", testUpdateReaderTempInfo)
