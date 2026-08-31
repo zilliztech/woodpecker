@@ -96,13 +96,13 @@ func TestDeleteLog_MarksQuorumNodesThenDeletesMetadata(t *testing.T) {
 
 	// MarkLogDeleted called 3× (n1, n2, n3 — each distinct node once)
 	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(5), false).
-		Return(nil).Times(3)
+		Return(false, nil).Times(3)
 
 	// DeleteLogMetadata called once with force=false
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "foo", false).
 		Return(nil).Once()
 
-	err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
 	assert.NoError(t, err)
 }
 
@@ -131,11 +131,11 @@ func TestDeleteLog_NodeMarkFailure_DoesNotDeleteMetadata(t *testing.T) {
 
 	markErr := errors.New("node unreachable")
 	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(7), false).
-		Return(markErr).Once()
+		Return(false, markErr).Once()
 
 	// DeleteLogMetadata must NOT be called — enforced by testify (no EXPECT set).
 
-	err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
 	assert.Error(t, err)
 	assert.ErrorContains(t, err, "node unreachable")
 }
@@ -156,7 +156,7 @@ func TestDeleteLog_AlreadyGone_Idempotent(t *testing.T) {
 
 	// No pool or client calls expected — enforced by testify.
 
-	err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
 	assert.NoError(t, err)
 }
 
@@ -181,12 +181,12 @@ func TestDeleteLog_NoSegments_JustDeletesMetadata(t *testing.T) {
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "").Return(mockClient, nil).Once()
 	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(99), false).
-		Return(nil).Once()
+		Return(false, nil).Once()
 
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "empty-log", false).
 		Return(nil).Once()
 
-	err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "empty-log", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "empty-log", false)
 	assert.NoError(t, err)
 }
 
@@ -216,7 +216,7 @@ func TestDeleteLog_NoSegments_ServiceMode_NothingToFence(t *testing.T) {
 		Return(nil).Once()
 
 	// No pool/client calls expected.
-	err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, storage, "empty-log", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, storage, "empty-log", false)
 	assert.NoError(t, err)
 }
 
@@ -236,7 +236,7 @@ func TestDeleteLog_ObjectStorageUnavailable_KeepsMetadata(t *testing.T) {
 		Return(map[int64]*meta.SegmentMeta{}, nil).Once()
 	// DeleteLogMetadata must NOT be called.
 
-	err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
 	assert.Error(t, err)
 }
 
@@ -260,9 +260,9 @@ func TestDeleteAllLogs_DeletesEachLog(t *testing.T) {
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "").Return(mockClient, nil).Twice()
 	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(1), false).
-		Return(nil).Once()
+		Return(false, nil).Once()
 	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(2), false).
-		Return(nil).Once()
+		Return(false, nil).Once()
 
 	// Log "a": logId=1, no segments
 	mockMeta.EXPECT().GetLogMeta(mock.Anything, "a").
@@ -280,6 +280,6 @@ func TestDeleteAllLogs_DeletesEachLog(t *testing.T) {
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "b", false).
 		Return(nil).Once()
 
-	err := deleteAllLogsUnsafe(ctx, mockMeta, mockPool, cfg, nil, false)
+	_, err := deleteAllLogsUnsafe(ctx, mockMeta, mockPool, cfg, nil, false)
 	assert.NoError(t, err)
 }

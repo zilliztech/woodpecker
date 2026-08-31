@@ -370,6 +370,16 @@ message MarkLogDeletedRequest {
 }
 message MarkLogDeletedResponse {
   Status status = 1;
+  // Whether this node actually had local data for the log when it reclaimed. Only set
+  // when the request asked for a synchronous delete; the asynchronous path replies
+  // before the reclaim task runs and has nothing to report yet.
+  //
+  // A node legitimately reports false when the log's data was already compacted and
+  // uploaded, so this is not an error signal on its own. It matters in aggregate: a
+  // whole-instance clear where no node on any log had local data and no objects were
+  // removed almost always means the caller aimed at the wrong bucket/rootPath, which
+  // otherwise looks exactly like success.
+  bool local_data_found = 2;
 }
 message MarkInstanceDeletedRequest {
   string bucket_name = 1;

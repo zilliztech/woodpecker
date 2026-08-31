@@ -975,7 +975,7 @@ func TestRemoteClient_MarkLogDeleted_Success(t *testing.T) {
 	mockClient.On("MarkLogDeleted", ctx, mock.AnythingOfType("*proto.MarkLogDeletedRequest")).
 		Return(&proto.MarkLogDeletedResponse{}, nil)
 
-	err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	_, err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
 	assert.NoError(t, err)
 }
 
@@ -986,7 +986,7 @@ func TestRemoteClient_MarkLogDeleted_GrpcError(t *testing.T) {
 	mockClient.On("MarkLogDeleted", ctx, mock.Anything).
 		Return(nil, fmt.Errorf("mark log deleted error"))
 
-	err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	_, err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
 	assert.Error(t, err)
 }
 
@@ -999,7 +999,7 @@ func TestRemoteClient_MarkLogDeleted_StatusError(t *testing.T) {
 			Status: werr.Status(werr.ErrSegmentNotFound),
 		}, nil)
 
-	err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	_, err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
 	assert.Error(t, err)
 }
 

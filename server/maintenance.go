@@ -187,7 +187,13 @@ func (i *idleProcessorCleanupTask) Run(ctx context.Context) error {
 //
 // Object storage is not touched here. It is deleted client-side, driven by the log's object
 // prefix rather than by segment metadata — see woodpecker/log_object_cleanup.go.
-func reclaimMarker(ctx context.Context, store *logStore, root string, m deleteMarker) error {
+//
+// Reports whether the directory it was asked to remove actually existed. os.RemoveAll cannot
+// answer that — removing a path that was never there succeeds — so a caller pointed at the
+// wrong bucket/rootPath would otherwise be told the reclaim worked. The bool is not an error
+// on its own (a log whose data is already compacted and uploaded legitimately has no local
+// directory); it is the raw fact a caller needs to notice a whole clear that touched nothing.
+func reclaimMarker(ctx context.Context, store *logStore, root string, m deleteMarker) (bool, error) {
 	var dir, key string
 	if m.Instance {
 		dir = localInstanceDataDir(store.cfg, m.Bucket, m.RootPath)
@@ -196,12 +202,19 @@ func reclaimMarker(ctx context.Context, store *logStore, root string, m deleteMa
 		dir = localLogDataDir(store.cfg, m.Bucket, m.RootPath, m.LogId)
 		key = GetLogKey(m.Bucket, m.RootPath, m.LogId)
 	}
+	existed := false
 	if dir != "" {
+		if _, statErr := os.Stat(dir); statErr == nil {
+			existed = true
+		} else if !os.IsNotExist(statErr) {
+			return false, statErr
+		}
 		if rmErr := os.RemoveAll(dir); rmErr != nil {
-			return rmErr
+			return false, rmErr
 		}
 		logger.Ctx(ctx).Info("reclaim: removed local data directory",
-			zap.String("dir", dir), zap.String("key", key), zap.Bool("instance", m.Instance))
+			zap.String("dir", dir), zap.String("key", key),
+			zap.Bool("existed", existed), zap.Bool("instance", m.Instance))
 	}
 	// Remove the marker and prune the in-memory gate ATOMICALLY under spMu so a
 	// concurrent EvictLog (which re-adds the gate under spMu) cannot interleave and
@@ -209,7 +222,7 @@ func reclaimMarker(ctx context.Context, store *logStore, root string, m deleteMa
 	store.spMu.Lock()
 	defer store.spMu.Unlock()
 	if rmErr := removeDeleteMarker(ctx, root, m); rmErr != nil {
-		return rmErr
+		return false, rmErr
 	}
 	if m.Instance {
 		delete(store.deletingInstances, key)
@@ -217,8 +230,8 @@ func reclaimMarker(ctx context.Context, store *logStore, root string, m deleteMa
 		delete(store.deletingLogs, key)
 	}
 	logger.Ctx(ctx).Info("reclaimed deleted log/instance local data",
-		zap.String("key", key), zap.Bool("instance", m.Instance))
-	return nil
+		zap.String("key", key), zap.Bool("existed", existed), zap.Bool("instance", m.Instance))
+	return existed, nil
 }
 
 // deletedLogReclaimTask reclaims the LOCAL data of logs/instances marked deleted more than
@@ -263,7 +276,7 @@ func (r *deletedLogReclaimTask) Run(ctx context.Context) error {
 				zap.Int64("deletedAt", m.DeletedAt), zap.Int64("cutoff", cutoff))
 			continue
 		}
-		if rmErr := reclaimMarker(ctx, r.store, root, m); rmErr != nil {
+		if _, rmErr := reclaimMarker(ctx, r.store, root, m); rmErr != nil {
 			logger.Ctx(ctx).Warn("reclaim: failed; marker and gate kept, will retry next pass",
 				zap.String("bucket", m.Bucket), zap.String("rootPath", m.RootPath),
 				zap.Int64("logId", m.LogId), zap.Bool("instance", m.Instance), zap.Error(rmErr))

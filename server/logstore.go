@@ -75,7 +75,9 @@ type LogStore interface {
 	AllowNewWrites()
 	MarkRetired()
 	HasLocalSegmentData() bool
-	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error
+	// EvictLog reports whether the node had local data for the log. Only meaningful with
+	// sync=true; the asynchronous path returns before the reclaim task has run.
+	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error)
 	EvictInstance(ctx context.Context, bucketName string, rootPath string) error
 	// EvictSegmentReader invalidates the cached segment reader (if any) for an
 	// already-created segment processor, without creating one. No-op if no
@@ -889,14 +891,14 @@ func (l *logStore) HasLocalSegmentData() bool {
 // sync=true the removal happens before returning, so a caller that must observe an empty WAL
 // (an offline WAL switch, a cold restore) can rely on the reply. Both paths write the marker
 // first and go through reclaimMarker, so a crash mid-way is still picked up by the task.
-func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error {
+func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error) {
 	root := l.cfg.Woodpecker.Storage.RootPath
 	marker := deleteMarker{
 		Bucket: bucketName, RootPath: rootPath, LogId: logId, DeletedAt: time.Now().Unix(),
 	}
 	if root != "" {
 		if err := writeDeleteMarker(ctx, root, marker); err != nil {
-			return werr.ErrMarkDeleteFailed.WithCauseErr(err)
+			return false, werr.ErrMarkDeleteFailed.WithCauseErr(err)
 		}
 	}
 	logKey := GetLogKey(bucketName, rootPath, logId)
@@ -917,11 +919,13 @@ func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath str
 	// Reclaim inline only after the processors are closed and the gate is set: the removal
 	// must not race a writer that is still flushing into the directory.
 	if sync && root != "" {
-		if err := reclaimMarker(ctx, l, root, marker); err != nil {
-			return werr.ErrMarkDeleteFailed.WithCauseErr(err)
+		existed, err := reclaimMarker(ctx, l, root, marker)
+		if err != nil {
+			return false, werr.ErrMarkDeleteFailed.WithCauseErr(err)
 		}
+		return existed, nil
 	}
-	return nil
+	return false, nil
 }
 
 func (l *logStore) EvictInstance(ctx context.Context, bucketName string, rootPath string) error {

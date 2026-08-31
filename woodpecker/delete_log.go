@@ -36,6 +36,36 @@ import (
 // store.
 const defaultLogDeleteConcurrency = 8
 
+// DeleteStats reports what a delete actually removed, tier by tier.
+//
+// It exists because a delete that removed nothing is indistinguishable, by return value
+// alone, from a delete that had nothing to remove: os.RemoveAll on a missing directory
+// succeeds and an empty object prefix lists clean. A caller pointed at the wrong
+// bucket/rootPath therefore gets a confident success while every byte survives.
+//
+// None of these counts is an error on its own — a log whose data is already compacted has
+// no local directory, and a freshly cleared instance has no objects. They matter in
+// aggregate, which is why they are reported rather than judged here.
+type DeleteStats struct {
+	// Logs whose metadata was deleted.
+	Logs int
+	// Objects removed from object storage.
+	ObjectsDeleted int
+	// Successful fence calls, counted per node per log.
+	NodesFenced int
+	// Of those, the ones that found a local directory to remove. Always 0 for an
+	// asynchronous delete, which returns before the reclaim task runs.
+	NodesWithLocalData int
+}
+
+// Add accumulates another delete's counts.
+func (d *DeleteStats) Add(other DeleteStats) {
+	d.Logs += other.Logs
+	d.ObjectsDeleted += other.ObjectsDeleted
+	d.NodesFenced += other.NodesFenced
+	d.NodesWithLocalData += other.NodesWithLocalData
+}
+
 // deleteLogUnsafe removes every trace of one log: the node-local staged data, the objects in
 // object storage, and finally the metadata.
 //
@@ -66,22 +96,26 @@ func deleteLogUnsafe(
 	storage storageclient.ObjectStorage,
 	logName string,
 	sync bool,
-) error {
+) (DeleteStats, error) {
+	var stats DeleteStats
 	// Step 1: resolve logId; treat not-found as a successful no-op.
 	logMeta, err := md.GetLogMeta(ctx, logName)
 	if err != nil {
 		if werr.ErrMetadataRead.Is(err) {
 			logger.Ctx(ctx).Info("deleteLogUnsafe: log not found, treating as already deleted",
 				zap.String("logName", logName))
-			return nil
+			return stats, nil
 		}
-		return err
+		return stats, err
 	}
 	logId := logMeta.Metadata.GetLogId()
 
 	// Step 2: stop every node that could still be writing this log.
-	if err := markLogDeletedOnNodes(ctx, md, pool, cfg, logName, logId, sync); err != nil {
-		return err
+	fenced, withData, err := markLogDeletedOnNodes(ctx, md, pool, cfg, logName, logId, sync)
+	stats.NodesFenced += fenced
+	stats.NodesWithLocalData += withData
+	if err != nil {
+		return stats, err
 	}
 
 	// Step 3: object storage. Only the object-backed modes have anything here; a local-only
@@ -91,13 +125,15 @@ func deleteLogUnsafe(
 		// and deleting the metadata anyway would strand them with nothing left to enumerate
 		// them by. Failing here keeps the log discoverable so a retry can finish the job.
 		if storage == nil {
-			return werr.ErrMetadataWrite.WithCauseErrMsg(
+			return stats, werr.ErrMetadataWrite.WithCauseErrMsg(
 				"object storage client unavailable; refusing to delete metadata while objects remain")
 		}
-		if _, _, objErr := deleteLogObjects(ctx, storage, cfg, logId); objErr != nil {
+		deleted, _, objErr := deleteLogObjects(ctx, storage, cfg, logId)
+		stats.ObjectsDeleted += deleted
+		if objErr != nil {
 			logger.Ctx(ctx).Warn("deleteLogUnsafe: object cleanup failed, keeping metadata for retry",
 				zap.String("logName", logName), zap.Int64("logId", logId), zap.Error(objErr))
-			return objErr
+			return stats, objErr
 		}
 	}
 
@@ -105,12 +141,16 @@ func deleteLogUnsafe(
 	if delErr := md.DeleteLogMetadata(ctx, logName, false); delErr != nil {
 		logger.Ctx(ctx).Warn("deleteLogUnsafe: DeleteLogMetadata failed",
 			zap.String("logName", logName), zap.Error(delErr))
-		return delErr
+		return stats, delErr
 	}
+	stats.Logs++
 
 	logger.Ctx(ctx).Info("deleteLogUnsafe: log deleted successfully",
-		zap.String("logName", logName), zap.Int64("logId", logId), zap.Bool("sync", sync))
-	return nil
+		zap.String("logName", logName), zap.Int64("logId", logId), zap.Bool("sync", sync),
+		zap.Int("objectsDeleted", stats.ObjectsDeleted),
+		zap.Int("nodesFenced", stats.NodesFenced),
+		zap.Int("nodesWithLocalData", stats.NodesWithLocalData))
+	return stats, nil
 }
 
 // markLogDeletedOnNodes fences the log on every node that could hold data for it.
@@ -126,10 +166,10 @@ func markLogDeletedOnNodes(
 	logName string,
 	logId int64,
 	sync bool,
-) error {
+) (fenced int, withLocalData int, err error) {
 	nodes, err := logQuorumNodes(ctx, md, logName)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	bucketName := cfg.Minio.BucketName
 	rootPath := cfg.Minio.RootPath
@@ -140,16 +180,23 @@ func markLogDeletedOnNodes(
 			// away, so no node is serving this log. Nothing to fence.
 			logger.Ctx(ctx).Info("deleteLogUnsafe: no quorum nodes recorded, nothing to fence",
 				zap.String("logName", logName), zap.Int64("logId", logId))
-			return nil
+			return 0, 0, nil
 		}
 		// Embedded deployments (minio / local) run a single in-process logstore and the
 		// local pool ignores the target, so any target reaches it. Fence it so it stops
 		// serving and — with sync — reclaims its directory before we touch anything else.
 		lsClient, getErr := pool.GetLogStoreClient(ctx, "")
 		if getErr != nil {
-			return getErr
+			return 0, 0, getErr
 		}
-		return lsClient.MarkLogDeleted(ctx, bucketName, rootPath, logId, sync)
+		hadData, markErr := lsClient.MarkLogDeleted(ctx, bucketName, rootPath, logId, sync)
+		if markErr != nil {
+			return 0, 0, markErr
+		}
+		if hadData {
+			return 1, 1, nil
+		}
+		return 1, 0, nil
 	}
 
 	logger.Ctx(ctx).Info("deleteLogUnsafe: fencing log on quorum nodes",
@@ -161,15 +208,20 @@ func markLogDeletedOnNodes(
 		if getErr != nil {
 			logger.Ctx(ctx).Warn("deleteLogUnsafe: failed to get logstore client",
 				zap.String("node", node), zap.Error(getErr))
-			return getErr
+			return fenced, withLocalData, getErr
 		}
-		if markErr := lsClient.MarkLogDeleted(ctx, bucketName, rootPath, logId, sync); markErr != nil {
+		hadData, markErr := lsClient.MarkLogDeleted(ctx, bucketName, rootPath, logId, sync)
+		if markErr != nil {
 			logger.Ctx(ctx).Warn("deleteLogUnsafe: MarkLogDeleted failed",
 				zap.String("node", node), zap.Int64("logId", logId), zap.Error(markErr))
-			return markErr
+			return fenced, withLocalData, markErr
+		}
+		fenced++
+		if hadData {
+			withLocalData++
 		}
 	}
-	return nil
+	return fenced, withLocalData, nil
 }
 
 // logQuorumNodes returns the distinct quorum endpoints recorded across a log's segments.
@@ -209,13 +261,14 @@ func deleteAllLogsUnsafe(
 	cfg *config.Configuration,
 	storage storageclient.ObjectStorage,
 	syncDelete bool,
-) error {
+) (DeleteStats, error) {
+	var total DeleteStats
 	logs, err := md.ListLogs(ctx)
 	if err != nil {
-		return err
+		return total, err
 	}
 	if len(logs) == 0 {
-		return nil
+		return total, nil
 	}
 
 	workers := defaultLogDeleteConcurrency
@@ -233,12 +286,14 @@ func deleteAllLogsUnsafe(
 		go func() {
 			defer wg.Done()
 			for logName := range jobs {
-				if delErr := deleteLogUnsafe(ctx, md, pool, cfg, storage, logName, syncDelete); delErr != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = delErr
-					}
-					mu.Unlock()
+				stats, delErr := deleteLogUnsafe(ctx, md, pool, cfg, storage, logName, syncDelete)
+				mu.Lock()
+				total.Add(stats)
+				if delErr != nil && firstErr == nil {
+					firstErr = delErr
+				}
+				mu.Unlock()
+				if delErr != nil {
 					logger.Ctx(ctx).Warn("deleteAllLogsUnsafe: failed to delete log",
 						zap.String("logName", logName), zap.Error(delErr))
 				}
@@ -250,11 +305,22 @@ func deleteAllLogsUnsafe(
 		case <-ctx.Done():
 			close(jobs)
 			wg.Wait()
-			return ctx.Err()
+			return total, ctx.Err()
 		case jobs <- logName:
 		}
 	}
 	close(jobs)
 	wg.Wait()
-	return firstErr
+
+	// Report, do not judge. A clear that fenced nodes but found nothing anywhere is the
+	// signature of a wrong bucket/rootPath — and also of an instance that was already
+	// empty, which is why this warns rather than fails.
+	if syncDelete && firstErr == nil && total.Logs > 0 &&
+		total.ObjectsDeleted == 0 && total.NodesWithLocalData == 0 {
+		logger.Ctx(ctx).Warn("deleteAllLogsUnsafe: deleted metadata but found no data on any tier; "+
+			"verify the bucket and rootPath point at this instance's WAL",
+			zap.Int("logs", total.Logs), zap.Int("nodesFenced", total.NodesFenced),
+			zap.String("bucket", cfg.Minio.BucketName), zap.String("rootPath", cfg.Minio.RootPath))
+	}
+	return total, firstErr
 }

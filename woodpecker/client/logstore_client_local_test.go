@@ -425,9 +425,9 @@ func TestLocalClient_MarkLogDeleted_Success(t *testing.T) {
 	ctx := context.Background()
 
 	mockStore.EXPECT().EvictLog(mock.Anything, "bucket", "root", int64(1), false).
-		Return(nil)
+		Return(false, nil)
 
-	err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	_, err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
 	assert.NoError(t, err)
 }
 
@@ -438,9 +438,9 @@ func TestLocalClient_MarkLogDeleted_Error(t *testing.T) {
 	expectedErr := fmt.Errorf("evict log failed")
 
 	mockStore.EXPECT().EvictLog(mock.Anything, "bucket", "root", int64(1), false).
-		Return(expectedErr)
+		Return(false, expectedErr)
 
-	err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	_, err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 }

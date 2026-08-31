@@ -48,10 +48,11 @@ type Client interface {
 	// DeleteAllLogs deletes all logs managed by this client.
 	DeleteAllLogs(ctx context.Context) error
 	// DeleteLogSync deletes a log and waits until every node has reclaimed its local data,
-	// so the return means the log holds nothing anywhere.
-	DeleteLogSync(ctx context.Context, logName string) error
+	// so the return means the log holds nothing anywhere. The stats report what was actually
+	// removed per tier; see DeleteStats for why that is worth returning.
+	DeleteLogSync(ctx context.Context, logName string) (DeleteStats, error)
 	// DeleteAllLogsSync is DeleteAllLogs with the same wait-for-reclaim guarantee.
-	DeleteAllLogsSync(ctx context.Context) error
+	DeleteAllLogsSync(ctx context.Context) (DeleteStats, error)
 	// ClearMeta wipes this instance's content metadata and re-seeds the instance-level keys.
 	// See ClearMetaExceptLogIdGen for the safe default.
 	ClearMeta(ctx context.Context, clearLogIdGen bool) error
@@ -272,15 +273,16 @@ func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error 
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), logName, false)
+	_, err := deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), logName, false)
+	return err
 }
 
 // DeleteLogSync deletes the log and waits for every node to reclaim its local data.
-func (c *woodpeckerClient) DeleteLogSync(ctx context.Context, logName string) error {
+func (c *woodpeckerClient) DeleteLogSync(ctx context.Context, logName string) (DeleteStats, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
-		return werr.ErrWoodpeckerClientClosed
+		return DeleteStats{}, werr.ErrWoodpeckerClientClosed
 	}
 	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), logName, true)
 }
@@ -292,15 +294,16 @@ func (c *woodpeckerClient) DeleteAllLogs(ctx context.Context) error {
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), false)
+	_, err := deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), false)
+	return err
 }
 
 // DeleteAllLogsSync deletes every log and waits for local reclaim on each.
-func (c *woodpeckerClient) DeleteAllLogsSync(ctx context.Context) error {
+func (c *woodpeckerClient) DeleteAllLogsSync(ctx context.Context) (DeleteStats, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
-		return werr.ErrWoodpeckerClientClosed
+		return DeleteStats{}, werr.ErrWoodpeckerClientClosed
 	}
 	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), true)
 }

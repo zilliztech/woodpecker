@@ -364,13 +364,16 @@ func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName stri
 	return nil
 }
 
-func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (err error) {
+func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (localDataFound bool, err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.MarkLogDeleted(ctx, &proto.MarkLogDeletedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, Sync: sync})
 	if err != nil {
-		return err
+		return false, err
 	}
-	return werr.Error(resp.GetStatus())
+	if statusErr := werr.Error(resp.GetStatus()); statusErr != nil {
+		return false, statusErr
+	}
+	return resp.GetLocalDataFound(), nil
 }
 
 func (l *logStoreClientRemote) MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) (err error) {

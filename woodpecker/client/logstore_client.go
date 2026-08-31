@@ -49,7 +49,9 @@ type LogStoreClient interface {
 	// MarkLogDeleted marks a single log deleted on the target node. With sync=true the node
 	// reclaims the log's local data before replying, so the caller can rely on the reply
 	// meaning "this node holds nothing for that log any more".
-	MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error
+	// Returns whether the node actually had local data for the log. Only meaningful with
+	// sync=true; see MarkLogDeletedResponse.local_data_found for why it is reported.
+	MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error)
 	// MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on the target node.
 	MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.

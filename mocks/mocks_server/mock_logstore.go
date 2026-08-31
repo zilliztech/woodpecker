@@ -406,21 +406,31 @@ func (_c *LogStore_EvictInstance_Call) RunAndReturn(run func(context.Context, st
 }
 
 // EvictLog provides a mock function with given fields: ctx, bucketName, rootPath, logId, sync
-func (_m *LogStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) error {
+func (_m *LogStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error) {
 	ret := _m.Called(ctx, bucketName, rootPath, logId, sync)
 
 	if len(ret) == 0 {
 		panic("no return value specified for EvictLog")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, bool) error); ok {
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, bool) (bool, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, sync)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, bool) bool); ok {
 		r0 = rf(ctx, bucketName, rootPath, logId, sync)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(bool)
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, bool) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, sync)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // LogStore_EvictLog_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'EvictLog'
@@ -445,12 +455,12 @@ func (_c *LogStore_EvictLog_Call) Run(run func(ctx context.Context, bucketName s
 	return _c
 }
 
-func (_c *LogStore_EvictLog_Call) Return(_a0 error) *LogStore_EvictLog_Call {
-	_c.Call.Return(_a0)
+func (_c *LogStore_EvictLog_Call) Return(_a0 bool, _a1 error) *LogStore_EvictLog_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogStore_EvictLog_Call) RunAndReturn(run func(context.Context, string, string, int64, bool) error) *LogStore_EvictLog_Call {
+func (_c *LogStore_EvictLog_Call) RunAndReturn(run func(context.Context, string, string, int64, bool) (bool, error)) *LogStore_EvictLog_Call {
 	_c.Call.Return(run)
 	return _c
 }

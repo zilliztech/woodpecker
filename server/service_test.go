@@ -517,11 +517,11 @@ func (f *fakeLogStore) RejectNewWrites()             { f.writesRejected = true }
 func (f *fakeLogStore) AllowNewWrites()              { f.writesRejected = false }
 func (f *fakeLogStore) MarkRetired()                 { f.retired = true }
 func (f *fakeLogStore) HasLocalSegmentData() bool    { return false }
-func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64, sync bool) error {
+func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64, sync bool) (bool, error) {
 	if f.evictLogFn != nil {
-		return f.evictLogFn(ctx, bucketName, rootPath, logId, sync)
+		return false, f.evictLogFn(ctx, bucketName, rootPath, logId, sync)
 	}
-	return nil
+	return false, nil
 }
 
 func (f *fakeLogStore) EvictInstance(ctx context.Context, bucketName, rootPath string) error {
