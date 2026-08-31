@@ -54,8 +54,20 @@ import (
 // every log was deleted synchronously first — or when the instance is being abandoned and
 // nothing will ever be restored onto the same bucket/rootPath.
 //
-// The instance-level keys are re-seeded rather than deleted so InitIfNecessary always sees a
-// fully initialised cluster. Idempotent: running it twice leaves the same state.
+// The instance-level keys are re-seeded rather than deleted, never dropped, so the cluster is
+// never observed with fewer than four of them and InitIfNecessary always sees something it can
+// work with.
+//
+// Idempotency and interruption: every step is either a prefix delete (a no-op once the prefix
+// is empty), an unconditional overwrite, or a create-if-absent, so re-running is safe and an
+// interrupted run resumes simply by being called again. An interruption cannot leave a state
+// that fails to start either: the content prefixes are cleared before the instance keys are
+// touched, and those keys are only ever overwritten, so a run cut short anywhere leaves a
+// cluster that is at worst partially emptied — never partially initialised.
+//
+// The one value that is not stable across runs is the instance UUID, which is regenerated each
+// time. Nothing reads it for behaviour; it exists as an "initialised" marker and for legacy
+// prefix detection.
 func (e *metadataProviderEtcd) ClearMeta(ctx context.Context, clearLogIdGen bool) error {
 	e.Lock()
 	defer e.Unlock()
@@ -114,24 +126,23 @@ func (e *metadataProviderEtcd) ClearMeta(ctx context.Context, clearLogIdGen bool
 		return werr.ErrMetadataWrite.WithCauseErrMsg("failed to re-seed instance-level keys")
 	}
 
-	// A preserved logidgen must still exist — a clear that dropped it would leave the cluster
-	// partially initialised and, worse, silently reset the counter on the next start.
+	// A preserved logidgen must still exist, otherwise the cluster is left partially
+	// initialised. Seed it only when it is genuinely absent — a never-initialised instance.
+	//
+	// Create-if-absent, not read-then-write: a Get followed by a Put would race a concurrent
+	// CreateLog that set the counter in between, and writing "0" over it is exactly the
+	// regression this whole path exists to prevent. The compare makes the write a no-op the
+	// moment the key exists.
 	if !clearLogIdGen {
-		ctxGet, cancelGet := e.getContextWithTimeout(ctx)
-		got, getErr := e.client.Get(ctxGet, e.keyBuilder.LogIdGeneratorKey())
-		cancelGet()
-		if getErr != nil {
-			return werr.ErrMetadataRead.WithCauseErr(getErr)
-		}
-		if len(got.Kvs) == 0 {
-			// Nothing to preserve (a never-initialised instance): seed it so the cluster is
-			// consistent either way.
-			ctxPut, cancelPut := e.getContextWithTimeout(ctx)
-			_, putErr := e.client.Put(ctxPut, e.keyBuilder.LogIdGeneratorKey(), "0")
-			cancelPut()
-			if putErr != nil {
-				return werr.ErrMetadataWrite.WithCauseErr(putErr)
-			}
+		key := e.keyBuilder.LogIdGeneratorKey()
+		ctxSeed, cancelSeed := e.getContextWithTimeout(ctx)
+		_, seedErr := e.client.Txn(ctxSeed).
+			If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
+			Then(clientv3.OpPut(key, "0")).
+			Commit()
+		cancelSeed()
+		if seedErr != nil {
+			return werr.ErrMetadataWrite.WithCauseErr(seedErr)
 		}
 	}
 
