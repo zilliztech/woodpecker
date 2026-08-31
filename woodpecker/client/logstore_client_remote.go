@@ -373,6 +373,14 @@ func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName st
 	if statusErr := werr.Error(resp.GetStatus()); statusErr != nil {
 		return false, statusErr
 	}
+	// Fail closed on a node that did not confirm it applied the flag. proto3 drops unknown
+	// fields, so an older node answers Success to a sync request while its local data stays
+	// on disk; reporting that as a completed synchronous delete is how an operator ends up
+	// switching backends on a WAL that is not actually empty.
+	if sync && !resp.GetSyncApplied() {
+		return false, werr.ErrUnsupportedVersionError.WithCauseErrMsg(
+			"logstore node did not confirm synchronous delete support; upgrade the node")
+	}
 	return resp.GetLocalDataFound(), nil
 }
 

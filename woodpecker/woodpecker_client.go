@@ -93,7 +93,7 @@ type woodpeckerClient struct {
 	objectStorageClient storageclient.ObjectStorage
 
 	// object storage client used by log deletion; independent of the direct-read flag
-	cleanupStorageOnce   sync.Once
+	cleanupStorageMu     sync.Mutex
 	cleanupStorageClient storageclient.ObjectStorage
 
 	// close state
@@ -315,6 +315,9 @@ func (c *woodpeckerClient) ClearMeta(ctx context.Context, clearLogIdGen bool) er
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
+	if _, err := sweepParkedLogObjects(ctx, c.Metadata, c.cfg, c.getOrCreateCleanupStorage(ctx)); err != nil {
+		return err
+	}
 	return c.Metadata.ClearMeta(ctx, clearLogIdGen)
 }
 
@@ -323,22 +326,43 @@ func (c *woodpeckerClient) ClearMetaExceptLogIdGen(ctx context.Context) error {
 	return c.ClearMeta(ctx, false)
 }
 
-// getOrCreateCleanupStorage returns an object-storage client for deletion.
+// getOrCreateCleanupStorage lazily builds the object-storage client the delete path uses.
 //
 // Deliberately separate from getOrCreateObjectStorageClient: that one is gated on the
 // direct-read feature flag, and cleanup must work regardless of whether direct read is on.
+//
+// Deliberately not a sync.Once. NewObjectStorage is not a local construction — NewMinioHandler
+// makes BucketExists/MakeBucket calls with retries — so a brief outage, a credential hiccup,
+// or a caller context expiring mid-retry is enough to fail it. With a Once, that one failure
+// is permanent for the life of the client: the Once is spent, the field stays nil, and every
+// later delete refuses with "object storage client unavailable" because deleting metadata
+// while objects remain would strand them. These clients are long-lived inside Milvus, so the
+// only recovery would be a process restart.
+//
+// This is the opposite trade-off from getOrCreateObjectStorageClient, where a spent Once only
+// disables direct read — a performance fallback, not a correctness stop.
+//
+// The lock is held across construction so concurrent deletes do not each build a client; the
+// loser of the race sees the winner's result.
 func (c *woodpeckerClient) getOrCreateCleanupStorage(ctx context.Context) storageclient.ObjectStorage {
 	if c.cfg.Woodpecker.Storage.IsStorageLocal() {
 		return nil
 	}
-	c.cleanupStorageOnce.Do(func() {
-		cli, err := storageclient.NewObjectStorage(ctx, c.cfg)
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to create object storage client for cleanup", zap.Error(err))
-			return
-		}
-		c.cleanupStorageClient = cli
-	})
+	c.cleanupStorageMu.Lock()
+	defer c.cleanupStorageMu.Unlock()
+	if c.cleanupStorageClient != nil {
+		return c.cleanupStorageClient
+	}
+	cli, err := storageclient.NewObjectStorage(ctx, c.cfg)
+	if err != nil {
+		// Leave the field nil so the next call retries. The caller refuses to delete
+		// metadata without a storage client, so a nil here fails the delete rather than
+		// silently skipping object cleanup.
+		logger.Ctx(ctx).Warn("failed to create object storage client for cleanup; will retry on next delete",
+			zap.Error(err))
+		return nil
+	}
+	c.cleanupStorageClient = cli
 	return c.cleanupStorageClient
 }
 

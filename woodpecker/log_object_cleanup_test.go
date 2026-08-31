@@ -18,7 +18,9 @@ package woodpecker
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -28,14 +30,39 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 )
 
-func TestLogObjectPrefix(t *testing.T) {
-	assert.Equal(t, "root/7/", logObjectPrefix("root", 7))
-	// A configured rootPath with a trailing slash must not produce a doubled separator:
-	// the prefix is compared against real object keys.
-	assert.Equal(t, "root/7/", logObjectPrefix("root/", 7))
+// TestLogObjectPrefixMatchesWriterKeys pins the only property that matters: the enumeration
+// prefix must be a prefix of the keys the writers actually produce, for every rootPath the
+// config layer tolerates.
+//
+// The writers concatenate the configured value verbatim —
+//
+//	getSegmentFileKey:  fmt.Sprintf("%s/%d/%d", rootPath, logId, segmentId)
+//	getFooterObjectKey: fmt.Sprintf("%s/%d/%d/footer.blk", rootPath, logId, segmentId)
+//
+// which is exactly why ValidateMinioConfig only warns about a non-canonical rootPath in
+// minio/local mode instead of rejecting it: every site agrees, so the object space is
+// self-consistent. Normalising here would break that agreement in the one place that decides
+// what gets deleted.
+func TestLogObjectPrefixMatchesWriterKeys(t *testing.T) {
+	writerSegmentKey := func(rootPath string, logId, segId int64) string {
+		return fmt.Sprintf("%s/%d/%d", rootPath, logId, segId)
+	}
+	// "root/" and "a//b" are non-canonical but tolerated in minio/local mode; "" is the
+	// bucket root. All of them must round-trip.
+	for _, rootPath := range []string{"root", "root/", "wp/data", "", "a//b"} {
+		prefix := logObjectPrefix(rootPath, 7)
+		key := writerSegmentKey(rootPath, 7, 3)
+		assert.True(t, strings.HasPrefix(key, prefix),
+			"rootPath %q: writer key %q must live under enumeration prefix %q", rootPath, key, prefix)
+		// And a different log must not be swept up by it.
+		other := writerSegmentKey(rootPath, 8, 3)
+		assert.False(t, strings.HasPrefix(other, prefix),
+			"rootPath %q: prefix %q must not cover logId 8 key %q", rootPath, prefix, other)
+	}
 }
 
 // TestIsLogObject pins the matcher that bounds how much a wrong bucket/rootPath argument can
@@ -170,4 +197,46 @@ func TestDeleteLogObjectsNilStorage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, deleted)
 	assert.Empty(t, skipped)
+}
+
+// TestSweepParkedLogObjectsReclaimsSoftDeletedLogs pins the residue path that ClearMeta would
+// otherwise make permanent. A log soft-deleted by an older client — one that removed metadata
+// without touching object storage — lives on only in logs-deleted/. ListLogs does not cover
+// that prefix, so DeleteAllLogs never sees it, and ClearMeta deletes the prefix outright. The
+// sweep has to run first, or those objects lose their last handle.
+func TestSweepParkedLogObjectsReclaimsSoftDeletedLogs(t *testing.T) {
+	ctx := context.Background()
+	cfg := newCleanupCfg()
+
+	md := mocks_meta.NewMetadataProvider(t)
+	md.EXPECT().ListParkedLogIds(mock.Anything).Return([]int64{7}, nil)
+
+	storage := mocks_objectstorage.NewObjectStorage(t)
+	walkReturning(storage, "root/7/0/0.blk", "root/7/0/footer.blk")
+	storage.EXPECT().RemoveObject(mock.Anything, "bucket", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	deleted, err := sweepParkedLogObjects(ctx, md, cfg, storage)
+	require.NoError(t, err)
+	assert.Equal(t, 2, deleted)
+}
+
+// A sweep that cannot reach object storage must not let the caller clear the metadata: the
+// parked record is the only thing that still knows those objects exist.
+func TestSweepParkedLogObjectsRefusesWithoutStorage(t *testing.T) {
+	md := mocks_meta.NewMetadataProvider(t)
+	md.EXPECT().ListParkedLogIds(mock.Anything).Return([]int64{7}, nil)
+
+	_, err := sweepParkedLogObjects(context.Background(), md, newCleanupCfg(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parked logs")
+}
+
+// Nothing parked is the common case and must stay a cheap no-op that never touches storage.
+func TestSweepParkedLogObjectsNoParkedLogsIsANoOp(t *testing.T) {
+	md := mocks_meta.NewMetadataProvider(t)
+	md.EXPECT().ListParkedLogIds(mock.Anything).Return(nil, nil)
+
+	deleted, err := sweepParkedLogObjects(context.Background(), md, newCleanupCfg(), nil)
+	require.NoError(t, err)
+	assert.Zero(t, deleted)
 }

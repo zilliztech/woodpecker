@@ -414,6 +414,9 @@ func (c *woodpeckerEmbedClient) ClearMeta(ctx context.Context, clearLogIdGen boo
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
+	if _, err := sweepParkedLogObjects(ctx, c.Metadata, c.cfg, c.cleanupStorage()); err != nil {
+		return err
+	}
 	return c.Metadata.ClearMeta(ctx, clearLogIdGen)
 }
 

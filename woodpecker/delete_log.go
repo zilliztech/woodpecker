@@ -324,3 +324,48 @@ func deleteAllLogsUnsafe(
 	}
 	return total, firstErr
 }
+
+// sweepParkedLogObjects deletes the objects of logs that are soft-deleted but still parked.
+//
+// A soft delete parks LogMeta under logs-deleted/ and nothing ever reads that prefix again, so
+// parked logs are invisible to ListLogs and therefore to DeleteAllLogs. That was harmless
+// while parked records simply accumulated; it stops being harmless when ClearMeta deletes the
+// prefix, because for a log deleted by an older client — one that did not clean object storage
+// — the parked record is the last thing that knows the objects exist.
+//
+// Runs before the metadata is cleared, and a failure aborts the clear, on the same principle
+// as deleteLogUnsafe: never destroy the handle on data you have not managed to delete.
+func sweepParkedLogObjects(
+	ctx context.Context,
+	md meta.MetadataProvider,
+	cfg *config.Configuration,
+	storage storageclient.ObjectStorage,
+) (int, error) {
+	if cfg.Woodpecker.Storage.IsStorageLocal() {
+		return 0, nil // no object storage; parked logs left only node-local data
+	}
+	ids, err := md.ListParkedLogIds(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if storage == nil {
+		return 0, werr.ErrMetadataWrite.WithCauseErrMsg(
+			"object storage client unavailable; refusing to clear metadata while parked logs may still have objects")
+	}
+	total := 0
+	for _, logId := range ids {
+		deleted, _, delErr := deleteLogObjects(ctx, storage, cfg, logId)
+		total += deleted
+		if delErr != nil {
+			logger.Ctx(ctx).Warn("sweepParkedLogObjects: cleanup failed, keeping parked metadata for retry",
+				zap.Int64("logId", logId), zap.Error(delErr))
+			return total, delErr
+		}
+	}
+	logger.Ctx(ctx).Info("sweepParkedLogObjects: reclaimed objects of soft-deleted logs",
+		zap.Int("parkedLogs", len(ids)), zap.Int("objectsDeleted", total))
+	return total, nil
+}

@@ -39,6 +39,11 @@ type MetadataProvider interface {
 	CheckExists(ctx context.Context, logName string) (bool, error)
 	// ListLogs returns a list of all logs in the metadata provider.
 	ListLogs(ctx context.Context) ([]string, error)
+	// ListParkedLogIds returns the log ids of soft-deleted logs still parked under
+	// logs-deleted/. ListLogs does not cover them, and nothing else in the codebase reads
+	// that prefix, so this is the only way to learn which objects a parked record still
+	// accounts for before the record itself is dropped.
+	ListParkedLogIds(ctx context.Context) ([]int64, error)
 	// ListLogsWithPrefix returns a list of all logs in the metadata provider with a given prefix.
 	ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error)
 	// GetLogMeta returns the metadata for a specific log.

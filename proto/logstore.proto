@@ -380,6 +380,14 @@ message MarkLogDeletedResponse {
   // removed almost always means the caller aimed at the wrong bucket/rootPath, which
   // otherwise looks exactly like success.
   bool local_data_found = 2;
+  // Echoes back that this node understood and honoured the request's sync flag.
+  //
+  // proto3 drops unknown fields, so a node running an older binary treats a sync request as
+  // an ordinary asynchronous delete and still answers Success — leaving its local data on
+  // disk until the grace-period task runs, while the caller reads the reply as "this node is
+  // clean". A caller that asked for sync must therefore require this field, the same way the
+  // legacy CompactSegment RPC fails closed for old clients rather than guessing.
+  bool sync_applied = 3;
 }
 message MarkInstanceDeletedRequest {
   string bucket_name = 1;

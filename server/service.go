@@ -656,7 +656,13 @@ func (s *Server) MarkLogDeleted(ctx context.Context, request *proto.MarkLogDelet
 	if err != nil {
 		return &proto.MarkLogDeletedResponse{Status: werr.Status(err)}, nil
 	}
-	return &proto.MarkLogDeletedResponse{Status: werr.Success(), LocalDataFound: localDataFound}, nil
+	// SyncApplied echoes the request: this build always honours the flag. Its absence is
+	// what tells a new client it is talking to a node that does not.
+	return &proto.MarkLogDeletedResponse{
+		Status:         werr.Success(),
+		LocalDataFound: localDataFound,
+		SyncApplied:    request.Sync,
+	}, nil
 }
 
 func (s *Server) MarkInstanceDeleted(ctx context.Context, request *proto.MarkInstanceDeletedRequest) (*proto.MarkInstanceDeletedResponse, error) {

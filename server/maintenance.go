@@ -177,44 +177,65 @@ func (i *idleProcessorCleanupTask) Run(ctx context.Context) error {
 	return nil
 }
 
-// reclaimMarker removes the local data one delete marker refers to, then clears the marker
-// and prunes the in-memory deleting-set entry.
+// removeLocalData removes the local directory one delete marker refers to, and reports
+// whether that directory existed.
 //
-// Shared by the grace-based reclaim task and by the synchronous EvictLog path so both go
-// through the same invariants: on a failed removal the marker and the gate are BOTH left in
-// place, so the next pass (or the caller's retry) tries again rather than silently resuming
-// service on half-deleted data.
+// It deliberately does NOT touch the marker or the deleting gate. The gate is what makes
+// getOrCreateSegmentProcessor reject an arriving append, so it has to outlive the client-side
+// work that follows a fence — object deletion and metadata deletion. Dropping it here would
+// let a new writer rebuild a processor and write fresh blocks into the prefix that was just
+// enumerated, invisible to the enumeration that already ran and unreferenced by any metadata
+// afterwards.
+//
+// os.RemoveAll cannot report existence — removing a path that was never there succeeds — so
+// the stat is taken first. The bool is not an error on its own: a log whose data is already
+// compacted and uploaded legitimately has no local directory. It is the raw fact a caller
+// needs to notice a clear that was aimed at the wrong bucket/rootPath.
 //
 // Object storage is not touched here. It is deleted client-side, driven by the log's object
 // prefix rather than by segment metadata — see woodpecker/log_object_cleanup.go.
-//
-// Reports whether the directory it was asked to remove actually existed. os.RemoveAll cannot
-// answer that — removing a path that was never there succeeds — so a caller pointed at the
-// wrong bucket/rootPath would otherwise be told the reclaim worked. The bool is not an error
-// on its own (a log whose data is already compacted and uploaded legitimately has no local
-// directory); it is the raw fact a caller needs to notice a whole clear that touched nothing.
-func reclaimMarker(ctx context.Context, store *logStore, root string, m deleteMarker) (bool, error) {
-	var dir, key string
+func removeLocalData(ctx context.Context, store *logStore, m deleteMarker) (bool, error) {
+	var dir string
 	if m.Instance {
 		dir = localInstanceDataDir(store.cfg, m.Bucket, m.RootPath)
-		key = GetInstanceKey(m.Bucket, m.RootPath)
 	} else {
 		dir = localLogDataDir(store.cfg, m.Bucket, m.RootPath, m.LogId)
-		key = GetLogKey(m.Bucket, m.RootPath, m.LogId)
+	}
+	if dir == "" {
+		return false, nil
 	}
 	existed := false
-	if dir != "" {
-		if _, statErr := os.Stat(dir); statErr == nil {
-			existed = true
-		} else if !os.IsNotExist(statErr) {
-			return false, statErr
-		}
-		if rmErr := os.RemoveAll(dir); rmErr != nil {
-			return false, rmErr
-		}
-		logger.Ctx(ctx).Info("reclaim: removed local data directory",
-			zap.String("dir", dir), zap.String("key", key),
-			zap.Bool("existed", existed), zap.Bool("instance", m.Instance))
+	if _, statErr := os.Stat(dir); statErr == nil {
+		existed = true
+	} else if !os.IsNotExist(statErr) {
+		return false, statErr
+	}
+	if rmErr := os.RemoveAll(dir); rmErr != nil {
+		return false, rmErr
+	}
+	logger.Ctx(ctx).Info("reclaim: removed local data directory",
+		zap.String("dir", dir), zap.Bool("existed", existed), zap.Bool("instance", m.Instance))
+	return existed, nil
+}
+
+// reclaimMarker removes the local data one delete marker refers to, then clears the marker
+// and prunes the in-memory deleting-set entry.
+//
+// This is the grace-based path. By the time it runs, the grace period has elapsed since the
+// fence, so the client-side deletion it was racing has had its window and the gate can go.
+// The synchronous path calls removeLocalData directly and leaves the marker in place, so this
+// task is what eventually retires it.
+//
+// On a failed removal the marker and the gate are BOTH left in place, so the next pass (or
+// the caller's retry) tries again rather than silently resuming service on half-deleted data.
+func reclaimMarker(ctx context.Context, store *logStore, root string, m deleteMarker) (bool, error) {
+	existed, err := removeLocalData(ctx, store, m)
+	if err != nil {
+		return false, err
+	}
+	key := GetLogKey(m.Bucket, m.RootPath, m.LogId)
+	if m.Instance {
+		key = GetInstanceKey(m.Bucket, m.RootPath)
 	}
 	// Remove the marker and prune the in-memory gate ATOMICALLY under spMu so a
 	// concurrent EvictLog (which re-adds the gate under spMu) cannot interleave and

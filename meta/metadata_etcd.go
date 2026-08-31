@@ -604,6 +604,56 @@ func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) 
 	return true, nil
 }
 
+// ListParkedLogIds returns the log ids recorded in the parked (soft-deleted) log metadata.
+//
+// A soft delete copies LogMeta and every segment record under logs-deleted/<name>-<ts>/ before
+// removing the active keys. Nothing else in the codebase reads that prefix, and ListLogs is
+// scoped to logs/, so parked logs are invisible to every enumeration — including the one that
+// drives object cleanup. Since ClearMeta deletes the prefix outright, the ids have to be
+// harvested before the records go, or the objects of anything deleted by an older client
+// (which did not clean object storage) become unreachable.
+//
+// Only the LogMeta keys are decoded. Their key has exactly one segment after the prefix
+// (logs-deleted/<name>-<ts>); the parked segment records sit one level deeper
+// (logs-deleted/<name>-<ts>/segments/<id>) and are skipped by that shape check rather than by
+// trusting protobuf to reject them.
+func (e *metadataProviderEtcd) ListParkedLogIds(ctx context.Context) ([]int64, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListParkedLogIds")
+	defer sp.End()
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	prefix := e.keyBuilder.LogDeletedPrefix() + "/"
+	resp, err := e.client.Get(ctx1, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, werr.ErrMetadataRead.WithCauseErr(err)
+	}
+
+	seen := make(map[int64]struct{}, len(resp.Kvs))
+	ids := make([]int64, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		rel := strings.TrimPrefix(string(kv.Key), prefix)
+		if strings.Contains(rel, "/") {
+			continue // a parked segment record, not the LogMeta
+		}
+		logMeta := &proto.LogMeta{}
+		if err := pb.Unmarshal(kv.Value, logMeta); err != nil {
+			logger.Ctx(ctx).Warn("skipping undecodable parked log metadata",
+				zap.String("key", string(kv.Key)), zap.Error(err))
+			continue
+		}
+		if logMeta.LogId == 0 {
+			continue
+		}
+		if _, dup := seen[logMeta.LogId]; dup {
+			continue
+		}
+		seen[logMeta.LogId] = struct{}{}
+		ids = append(ids, logMeta.LogId)
+	}
+	return ids, nil
+}
+
 func (e *metadataProviderEtcd) ListLogs(ctx context.Context) ([]string, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListLogs")
 	defer sp.End()

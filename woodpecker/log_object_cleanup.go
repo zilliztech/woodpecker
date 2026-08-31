@@ -55,8 +55,17 @@ const (
 // baseDir is Minio.RootPath: the writer builds keys as {baseDir}/{logId}/{segmentId}/...
 // (getSegmentFileKey), and logIds are never reused, so this prefix is exclusive to one log
 // for the lifetime of the instance — including against any log created later.
+// logObjectPrefix builds the enumeration prefix for one log's objects.
+//
+// rootPath is used VERBATIM, deliberately. Every key-building site in the writers concatenates
+// the configured value as-is (getSegmentFileKey, getFooterObjectKey), which is why a
+// non-canonical rootPath is only warned about in minio/local mode rather than rejected: the
+// whole chain stays self-consistent. Normalising here would make this the one link that
+// disagrees — with rootPath "root/" objects live under "root//{logId}/" while enumeration
+// would look in "root/{logId}/", find nothing, and let the caller delete the metadata that
+// was the last handle on them.
 func logObjectPrefix(rootPath string, logId int64) string {
-	return fmt.Sprintf("%s/%d/", strings.TrimSuffix(rootPath, "/"), logId)
+	return fmt.Sprintf("%s/%d/", rootPath, logId)
 }
 
 // isLogObject reports whether a key relative to a log's prefix is one woodpecker wrote.

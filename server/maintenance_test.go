@@ -514,3 +514,47 @@ func TestReclaimMarkerReportsWhetherLocalDataExisted(t *testing.T) {
 	require.NoError(t, err, "a missing directory is not an error; it is just nothing to remove")
 	assert.False(t, existed, "nothing was there, and the caller must be able to tell")
 }
+
+// TestSyncEvictKeepsTheDeletingGate pins the ordering invariant the synchronous delete exists
+// to uphold. EvictLog returns while the caller still has object storage and metadata to
+// delete; if the gate were dropped at that point, an arriving append would rebuild a segment
+// processor and write fresh blocks into the prefix the caller is about to enumerate —
+// invisible to that enumeration and unreferenced by any metadata once it finishes.
+func TestSyncEvictKeepsTheDeletingGate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := createTestLogStore()
+	root := t.TempDir()
+	store.cfg.Woodpecker.Storage.RootPath = root
+	store.cfg.Woodpecker.Storage.Type = "local"
+
+	dir := localLogDataDir(store.cfg, "b", "r", 21)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.log"), []byte("data"), 0o644))
+
+	existed, err := store.EvictLog(ctx, "b", "r", 21, true)
+	require.NoError(t, err)
+	assert.True(t, existed, "the local directory was there and must be reported as removed")
+
+	_, statErr := os.Stat(dir)
+	assert.True(t, os.IsNotExist(statErr), "local data must be gone when a sync evict returns")
+
+	key := GetLogKey("b", "r", 21)
+	store.spMu.Lock()
+	_, gated := store.deletingLogs[key]
+	store.spMu.Unlock()
+	assert.True(t, gated, "the deleting gate must outlive the sync evict: the caller has "+
+		"object and metadata deletion still to do, and the gate is what rejects new writers")
+
+	// The marker must survive too, so the grace task can retire both later.
+	markers, listErr := scanDeleteMarkers(ctx, root)
+	require.NoError(t, listErr)
+	found := false
+	for _, m := range markers {
+		if m.LogId == 21 && !m.Instance {
+			found = true
+		}
+	}
+	assert.True(t, found, "the delete marker must remain for the grace-based reclaim to retire")
+}

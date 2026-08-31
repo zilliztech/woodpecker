@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -1036,4 +1037,34 @@ func TestRemoteClient_MarkInstanceDeleted_StatusError(t *testing.T) {
 
 	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
 	assert.Error(t, err)
+}
+
+// TestMarkLogDeletedSyncFailsClosedOnOldNode pins the mixed-version behaviour. proto3 drops
+// the unknown sync field, so an old node runs its ordinary asynchronous delete and still
+// answers Success with sync_applied unset. Reporting that as a completed synchronous delete
+// is precisely how an operator switches backends on a WAL that still has data on disk.
+func TestMarkLogDeletedSyncFailsClosedOnOldNode(t *testing.T) {
+	ctx := context.Background()
+
+	// An old node: Success, but nothing echoed back.
+	oldClient, oldMock := newRemoteClientWithMock(t)
+	oldMock.On("MarkLogDeleted", ctx, mock.AnythingOfType("*proto.MarkLogDeletedRequest")).
+		Return(&proto.MarkLogDeletedResponse{}, nil)
+
+	_, err := oldClient.MarkLogDeleted(ctx, "bucket", "root", 1, true)
+	require.Error(t, err, "a sync delete must not be reported as done by a node that ignored the flag")
+	assert.Contains(t, err.Error(), "synchronous delete")
+
+	// The same reply is fine for an async delete, which promises nothing about local data.
+	_, err = oldClient.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	assert.NoError(t, err)
+
+	// A new node echoes the flag and reports what it found.
+	newClient, newMock := newRemoteClientWithMock(t)
+	newMock.On("MarkLogDeleted", ctx, mock.AnythingOfType("*proto.MarkLogDeletedRequest")).
+		Return(&proto.MarkLogDeletedResponse{SyncApplied: true, LocalDataFound: true}, nil)
+
+	found, err := newClient.MarkLogDeleted(ctx, "bucket", "root", 1, true)
+	require.NoError(t, err)
+	assert.True(t, found)
 }

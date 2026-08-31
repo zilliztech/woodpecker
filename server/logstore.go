@@ -918,8 +918,13 @@ func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath str
 
 	// Reclaim inline only after the processors are closed and the gate is set: the removal
 	// must not race a writer that is still flushing into the directory.
+	//
+	// Only the local data goes; the marker and the deleting gate stay. The caller still has
+	// object storage and metadata to delete after this returns, and the gate is what keeps an
+	// arriving append from rebuilding a processor and writing into the prefix it is about to
+	// enumerate. The grace-based reclaim task retires both once the grace period has passed.
 	if sync && root != "" {
-		existed, err := reclaimMarker(ctx, l, root, marker)
+		existed, err := removeLocalData(ctx, l, marker)
 		if err != nil {
 			return false, werr.ErrMarkDeleteFailed.WithCauseErr(err)
 		}
