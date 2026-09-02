@@ -20,9 +20,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -102,7 +106,7 @@ func TestDeleteLog_MarksQuorumNodesThenDeletesMetadata(t *testing.T) {
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "foo", false).
 		Return(nil).Once()
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, deleteOptions{})
 	assert.NoError(t, err)
 }
 
@@ -135,7 +139,7 @@ func TestDeleteLog_NodeMarkFailure_DoesNotDeleteMetadata(t *testing.T) {
 
 	// DeleteLogMetadata must NOT be called — enforced by testify (no EXPECT set).
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, deleteOptions{})
 	assert.Error(t, err)
 	assert.ErrorContains(t, err, "node unreachable")
 }
@@ -156,7 +160,7 @@ func TestDeleteLog_AlreadyGone_Idempotent(t *testing.T) {
 
 	// No pool or client calls expected — enforced by testify.
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, deleteOptions{})
 	assert.NoError(t, err)
 }
 
@@ -186,7 +190,7 @@ func TestDeleteLog_NoSegments_JustDeletesMetadata(t *testing.T) {
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "empty-log", false).
 		Return(nil).Once()
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "empty-log", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "empty-log", false, deleteOptions{})
 	assert.NoError(t, err)
 }
 
@@ -216,7 +220,7 @@ func TestDeleteLog_NoSegments_ServiceMode_NothingToFence(t *testing.T) {
 		Return(nil).Once()
 
 	// No pool/client calls expected.
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, storage, "empty-log", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, storage, "empty-log", false, deleteOptions{})
 	assert.NoError(t, err)
 }
 
@@ -236,7 +240,7 @@ func TestDeleteLog_ObjectStorageUnavailable_KeepsMetadata(t *testing.T) {
 		Return(map[int64]*meta.SegmentMeta{}, nil).Once()
 	// DeleteLogMetadata must NOT be called.
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false)
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, deleteOptions{})
 	assert.Error(t, err)
 }
 
@@ -280,6 +284,143 @@ func TestDeleteAllLogs_DeletesEachLog(t *testing.T) {
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "b", false).
 		Return(nil).Once()
 
-	_, err := deleteAllLogsUnsafe(ctx, mockMeta, mockPool, cfg, nil, false)
+	_, err := deleteAllLogsUnsafe(ctx, mockMeta, mockPool, cfg, nil, false, deleteOptions{})
 	assert.NoError(t, err)
+}
+
+// unavailableErr is what grpc-go produces for every transport-layer failure, and therefore
+// what werr.IsTransportError recognises. Using the real shape matters: the retry predicate and
+// the skip predicate both key off it, so a hand-rolled error would exercise neither.
+func unavailableErr() error {
+	return status.Error(codes.Unavailable, "connection refused")
+}
+
+// shrinkFenceBackoff makes the retry loop finish instantly. The production values are seconds
+// apart on purpose; tests only care about the number of attempts.
+func shrinkFenceBackoff(t *testing.T) {
+	t.Helper()
+	sleep, maxSleep := fenceRetrySleep, fenceMaxSleep
+	fenceRetrySleep, fenceMaxSleep = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { fenceRetrySleep, fenceMaxSleep = sleep, maxSleep })
+}
+
+// TestFenceRetriesTransientUnavailability is the common case this exists for: a pod
+// mid-rolling-restart or a DNS record that has not re-resolved yet. The pool evicts its
+// cached connection on each transport failure so the next attempt re-dials — without a retry
+// that recovery mechanism never gets a turn, and one blip aborts the whole run.
+func TestFenceRetriesTransientUnavailability(t *testing.T) {
+	shrinkFenceBackoff(t)
+	ctx := context.Background()
+	cfg := testDeleteCfg()
+
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "foo").Return(buildLogMeta(7), nil).Once()
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "foo").
+		Return(map[int64]*meta.SegmentMeta{0: buildSegmentMeta([]string{"n1"})}, nil).Once()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "n1").Return(mockClient, nil).Times(3)
+	// Unavailable twice, then the node comes back.
+	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(7), true).
+		Return(false, unavailableErr()).Twice()
+	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(7), true).
+		Return(true, nil).Once()
+	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "foo", false).Return(nil).Once()
+
+	stats, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true, deleteOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Logs)
+	assert.Equal(t, 1, stats.NodesFenced)
+	assert.Empty(t, stats.SkippedNodes, "the node answered in the end; nothing was skipped")
+}
+
+// TestFenceExhaustedFailsClosedByDefault pins the default. Without an explicit opt-in an
+// unreachable node stops the delete, so the log keeps its objects AND its metadata and stays
+// enumerable for a later retry.
+func TestFenceExhaustedFailsClosedByDefault(t *testing.T) {
+	shrinkFenceBackoff(t)
+	ctx := context.Background()
+	cfg := testDeleteCfg()
+
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "foo").Return(buildLogMeta(7), nil).Once()
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "foo").
+		Return(map[int64]*meta.SegmentMeta{0: buildSegmentMeta([]string{"n1"})}, nil).Once()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "n1").Return(mockClient, nil).Times(int(fenceAttempts))
+	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(7), true).
+		Return(false, unavailableErr()).Times(int(fenceAttempts))
+	// DeleteLogMetadata is deliberately NOT expected: reaching it would be the bug.
+
+	stats, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true, deleteOptions{})
+	require.Error(t, err)
+	assert.True(t, werr.IsTransportError(err), "the classification must survive the retry loop")
+	assert.Zero(t, stats.Logs, "metadata must not be deleted when a node could not be fenced")
+	assert.Empty(t, stats.SkippedNodes)
+}
+
+// TestFenceExhaustedSkipsOnlyWhenAsked covers the opt-in, and what it must report. The
+// skipped node keeps that log's staged data forever, so the operator needs the node and the
+// log id to decide between "scrap hardware, leave it" and "reclaim the space by hand".
+func TestFenceExhaustedSkipsOnlyWhenAsked(t *testing.T) {
+	shrinkFenceBackoff(t)
+	ctx := context.Background()
+	cfg := testDeleteCfg()
+
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "foo").Return(buildLogMeta(7), nil).Once()
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "foo").
+		Return(map[int64]*meta.SegmentMeta{0: buildSegmentMeta([]string{"n1", "n2"})}, nil).Once()
+
+	dead := mocks_logstore_client.NewLogStoreClient(t)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "n1").Return(dead, nil).Times(int(fenceAttempts))
+	dead.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(7), true).
+		Return(false, unavailableErr()).Times(int(fenceAttempts))
+
+	alive := mocks_logstore_client.NewLogStoreClient(t)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "n2").Return(alive, nil).Once()
+	alive.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(7), true).
+		Return(true, nil).Once()
+
+	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "foo", false).Return(nil).Once()
+
+	stats, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true,
+		newDeleteOptions([]DeleteOption{WithSkipUnreachableNodes()}))
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Logs)
+	assert.Equal(t, 1, stats.NodesFenced, "only the reachable node was fenced")
+	assert.Equal(t, map[string][]int64{"n1": {7}}, stats.SkippedNodes,
+		"the operator needs the node and the log id to locate the residue")
+}
+
+// TestSkipDoesNotCoverALogicalRejection keeps the option honest to its name. A node that
+// answers and refuses is reporting a real problem, not a connectivity one, and swallowing
+// that would hide a genuine failure behind a flag meant for dead hardware.
+func TestSkipDoesNotCoverALogicalRejection(t *testing.T) {
+	shrinkFenceBackoff(t)
+	ctx := context.Background()
+	cfg := testDeleteCfg()
+
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "foo").Return(buildLogMeta(7), nil).Once()
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "foo").
+		Return(map[int64]*meta.SegmentMeta{0: buildSegmentMeta([]string{"n1"})}, nil).Once()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "n1").Return(mockClient, nil).Once()
+	// A reachable node refusing: not a transport error, so neither retried nor skipped.
+	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(7), true).
+		Return(false, errors.New("log is being compacted")).Once()
+
+	stats, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true,
+		newDeleteOptions([]DeleteOption{WithSkipUnreachableNodes()}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "being compacted")
+	assert.Zero(t, stats.Logs)
+	assert.Empty(t, stats.SkippedNodes)
 }

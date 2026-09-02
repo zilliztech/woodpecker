@@ -19,12 +19,14 @@ package woodpecker
 import (
 	"context"
 	stdsync "sync"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/retry"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
@@ -56,6 +58,25 @@ type DeleteStats struct {
 	// Of those, the ones that found a local directory to remove. Always 0 for an
 	// asynchronous delete, which returns before the reclaim task runs.
 	NodesWithLocalData int
+	// SkippedNodes maps a node address to the log ids whose fence it never received,
+	// because it stayed unreachable through every retry and the caller opted into
+	// WithSkipUnreachableNodes. Empty otherwise — without that option an unreachable node
+	// fails the delete instead.
+	//
+	// Each entry is staged data left on that node forever: nothing references it once the
+	// metadata is gone, and no reclaim will run because the node never got a delete marker.
+	// That residue is bounded and harmless — logId never repeats, so a future log cannot
+	// land in the same directory — but only an operator can tell scrap hardware from a node
+	// that is coming back, so the detail is reported rather than swallowed.
+	SkippedNodes map[string][]int64
+}
+
+// recordSkippedNode notes that a log's fence never reached a node.
+func (d *DeleteStats) recordSkippedNode(node string, logId int64) {
+	if d.SkippedNodes == nil {
+		d.SkippedNodes = make(map[string][]int64, 1)
+	}
+	d.SkippedNodes[node] = append(d.SkippedNodes[node], logId)
 }
 
 // Add accumulates another delete's counts.
@@ -64,6 +85,45 @@ func (d *DeleteStats) Add(other DeleteStats) {
 	d.ObjectsDeleted += other.ObjectsDeleted
 	d.NodesFenced += other.NodesFenced
 	d.NodesWithLocalData += other.NodesWithLocalData
+	for node, logIds := range other.SkippedNodes {
+		for _, logId := range logIds {
+			d.recordSkippedNode(node, logId)
+		}
+	}
+}
+
+// DeleteOption configures a delete.
+type DeleteOption func(*deleteOptions)
+
+type deleteOptions struct {
+	skipUnreachableNodes bool
+}
+
+func newDeleteOptions(opts []DeleteOption) deleteOptions {
+	var o deleteOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// WithSkipUnreachableNodes lets a delete finish without a node that stays unreachable
+// through every retry, instead of failing.
+//
+// Off by default, and deliberately not something retries can decide on their own. Retrying
+// cannot tell "this node is scrap" from "this node is down for a ten-minute maintenance
+// window" — both fail every attempt inside any sane budget, and only the operator knows
+// which it is. A network partition is worse still: from the client it is indistinguishable
+// from a dead node, and skipping one would delete objects out from under a node that is
+// still alive and possibly still writing, since the fence is also what closes the segment
+// processors and raises the deleting gate.
+//
+// Only transport failures are ever skipped. A reachable node that rejects the fence is
+// reporting a real problem, not a connectivity one, and still fails the delete.
+//
+// What was skipped comes back in DeleteStats.SkippedNodes so the decision leaves a trace.
+func WithSkipUnreachableNodes() DeleteOption {
+	return func(o *deleteOptions) { o.skipUnreachableNodes = true }
 }
 
 // deleteLogUnsafe removes every trace of one log: the node-local staged data, the objects in
@@ -96,6 +156,7 @@ func deleteLogUnsafe(
 	storage storageclient.ObjectStorage,
 	logName string,
 	sync bool,
+	opts deleteOptions,
 ) (DeleteStats, error) {
 	var stats DeleteStats
 	// Step 1: resolve logId; treat not-found as a successful no-op.
@@ -111,9 +172,8 @@ func deleteLogUnsafe(
 	logId := logMeta.Metadata.GetLogId()
 
 	// Step 2: stop every node that could still be writing this log.
-	fenced, withData, err := markLogDeletedOnNodes(ctx, md, pool, cfg, logName, logId, sync)
-	stats.NodesFenced += fenced
-	stats.NodesWithLocalData += withData
+	fenceStats, err := markLogDeletedOnNodes(ctx, md, pool, cfg, logName, logId, sync, opts)
+	stats.Add(fenceStats)
 	if err != nil {
 		return stats, err
 	}
@@ -166,10 +226,11 @@ func markLogDeletedOnNodes(
 	logName string,
 	logId int64,
 	sync bool,
-) (fenced int, withLocalData int, err error) {
+	opts deleteOptions,
+) (stats DeleteStats, err error) {
 	nodes, err := logQuorumNodes(ctx, md, logName)
 	if err != nil {
-		return 0, 0, err
+		return stats, err
 	}
 	bucketName := cfg.Minio.BucketName
 	rootPath := cfg.Minio.RootPath
@@ -180,23 +241,20 @@ func markLogDeletedOnNodes(
 			// away, so no node is serving this log. Nothing to fence.
 			logger.Ctx(ctx).Info("deleteLogUnsafe: no quorum nodes recorded, nothing to fence",
 				zap.String("logName", logName), zap.Int64("logId", logId))
-			return 0, 0, nil
+			return stats, nil
 		}
 		// Embedded deployments (minio / local) run a single in-process logstore and the
 		// local pool ignores the target, so any target reaches it. Fence it so it stops
 		// serving and — with sync — reclaims its directory before we touch anything else.
-		lsClient, getErr := pool.GetLogStoreClient(ctx, "")
-		if getErr != nil {
-			return 0, 0, getErr
+		hadData, fenceErr := fenceLogOnNode(ctx, pool, "", bucketName, rootPath, logId, sync)
+		if fenceErr != nil {
+			return stats, fenceErr
 		}
-		hadData, markErr := lsClient.MarkLogDeleted(ctx, bucketName, rootPath, logId, sync)
-		if markErr != nil {
-			return 0, 0, markErr
-		}
+		stats.NodesFenced = 1
 		if hadData {
-			return 1, 1, nil
+			stats.NodesWithLocalData = 1
 		}
-		return 1, 0, nil
+		return stats, nil
 	}
 
 	logger.Ctx(ctx).Info("deleteLogUnsafe: fencing log on quorum nodes",
@@ -204,24 +262,89 @@ func markLogDeletedOnNodes(
 		zap.Strings("nodes", nodes), zap.Bool("sync", sync))
 
 	for _, node := range nodes {
-		lsClient, getErr := pool.GetLogStoreClient(ctx, node)
-		if getErr != nil {
-			logger.Ctx(ctx).Warn("deleteLogUnsafe: failed to get logstore client",
-				zap.String("node", node), zap.Error(getErr))
-			return fenced, withLocalData, getErr
+		hadData, fenceErr := fenceLogOnNode(ctx, pool, node, bucketName, rootPath, logId, sync)
+		if fenceErr == nil {
+			stats.NodesFenced++
+			if hadData {
+				stats.NodesWithLocalData++
+			}
+			continue
 		}
-		hadData, markErr := lsClient.MarkLogDeleted(ctx, bucketName, rootPath, logId, sync)
-		if markErr != nil {
-			logger.Ctx(ctx).Warn("deleteLogUnsafe: MarkLogDeleted failed",
-				zap.String("node", node), zap.Int64("logId", logId), zap.Error(markErr))
-			return fenced, withLocalData, markErr
+		// Skipping is opt-in and limited to nodes we could not reach. A reachable node that
+		// rejected the fence is reporting a real problem and still fails the delete.
+		if opts.skipUnreachableNodes && werr.IsTransportError(fenceErr) {
+			logger.Ctx(ctx).Warn("deleteLogUnsafe: node unreachable after retries, skipping as requested; "+
+				"its staged data for this log stays on disk",
+				zap.String("node", node), zap.String("logName", logName),
+				zap.Int64("logId", logId), zap.Error(fenceErr))
+			stats.recordSkippedNode(node, logId)
+			continue
 		}
-		fenced++
-		if hadData {
-			withLocalData++
-		}
+		logger.Ctx(ctx).Warn("deleteLogUnsafe: failed to fence log on node",
+			zap.String("node", node), zap.Int64("logId", logId),
+			zap.Bool("transport", werr.IsTransportError(fenceErr)), zap.Error(fenceErr))
+		return stats, fenceErr
 	}
-	return fenced, withLocalData, nil
+	return stats, nil
+}
+
+// Fence bounds. Package vars so tests can shrink them, matching the convention
+// appendFirstResponseTimeout established in logstore_client_remote.go.
+var (
+	// fenceAttempts is how many times one node's fence is tried before it counts as
+	// unreachable. Transport failures only: the pool evicts its cached connection on each
+	// one, so a retry re-resolves DNS. That is exactly what a pod mid-rolling-restart or a
+	// peer that came back with a new IP needs, and without a retry the eviction is wasted
+	// because there is never a next call.
+	fenceAttempts   uint = 3
+	fenceRetrySleep      = time.Second
+	fenceMaxSleep        = 4 * time.Second
+
+	// fenceAttemptTimeout bounds ONE attempt. grpc.WaitForReady(false) already makes an
+	// unconnectable peer fail fast, but it does nothing for a peer that accepts the
+	// connection and then never answers — a hung process or a black-holing network — which
+	// would otherwise wedge the whole delete with no way out but Ctrl-C.
+	//
+	// Deliberately generous. A synchronous fence has the node os.RemoveAll its staged
+	// directory for that log, which is legitimately slow when the log has a large
+	// un-compacted tail. Cutting off a reclaim that is making progress would be worse than
+	// the hang this prevents.
+	fenceAttemptTimeout = 2 * time.Minute
+)
+
+// fenceLogOnNode marks a log deleted on one node, retrying transport failures.
+//
+// Returns whether the node had local data, and the last error if every attempt failed. The
+// error is returned unwrapped so the caller can still classify it with werr.IsTransportError
+// when deciding whether skipping is allowed.
+func fenceLogOnNode(
+	ctx context.Context,
+	pool client.LogStoreClientPool,
+	node, bucketName, rootPath string,
+	logId int64,
+	sync bool,
+) (bool, error) {
+	var hadData bool
+	err := retry.Do(ctx, func() error {
+		attemptCtx, cancel := context.WithTimeout(ctx, fenceAttemptTimeout)
+		defer cancel()
+
+		lsClient, getErr := pool.GetLogStoreClient(attemptCtx, node)
+		if getErr != nil {
+			return getErr
+		}
+		var markErr error
+		hadData, markErr = lsClient.MarkLogDeleted(attemptCtx, bucketName, rootPath, logId, sync)
+		return markErr
+	},
+		retry.Attempts(fenceAttempts),
+		retry.Sleep(fenceRetrySleep),
+		retry.MaxSleepTime(fenceMaxSleep),
+		// Retry only what a retry can fix. A reachable node that rejects the fence is
+		// reporting a real problem; retrying it just turns a clear error into a timeout.
+		retry.RetryErr(werr.IsTransportError),
+	)
+	return hadData, err
 }
 
 // logQuorumNodes returns the distinct quorum endpoints recorded across a log's segments.
@@ -261,6 +384,7 @@ func deleteAllLogsUnsafe(
 	cfg *config.Configuration,
 	storage storageclient.ObjectStorage,
 	syncDelete bool,
+	opts deleteOptions,
 ) (DeleteStats, error) {
 	var total DeleteStats
 	logs, err := md.ListLogs(ctx)
@@ -286,7 +410,7 @@ func deleteAllLogsUnsafe(
 		go func() {
 			defer wg.Done()
 			for logName := range jobs {
-				stats, delErr := deleteLogUnsafe(ctx, md, pool, cfg, storage, logName, syncDelete)
+				stats, delErr := deleteLogUnsafe(ctx, md, pool, cfg, storage, logName, syncDelete, opts)
 				mu.Lock()
 				total.Add(stats)
 				if delErr != nil && firstErr == nil {

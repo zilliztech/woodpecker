@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -143,6 +144,20 @@ func deleteLogObjects(ctx context.Context, storage storageclient.ObjectStorage, 
 // removeObjectsConcurrently deletes keys with a bounded worker pool and returns the first
 // error, after every worker has drained. Partial progress is fine: the caller's retry
 // re-enumerates and only sees what is left.
+// objectRequestTimeout bounds ONE object-storage delete. Package var so tests can shrink it,
+// matching the convention appendFirstResponseTimeout established in the logstore client.
+//
+// Deliberately NOT wired to minio.requestTimeoutMs. That setting has no reader anywhere in
+// the repository, so its 1s default has never been exercised; activating it from here would
+// silently impose a tight bound on every object delete that no operator opted into. Making it
+// live belongs to the timeout audit (#229), which can weigh it across all object-storage
+// calls at once.
+//
+// Only the per-object delete is bounded, not the prefix walk. A single delete's duration does
+// not scale with anything, so a fixed ceiling is safe; a walk's does scale with the object
+// count, and a fixed ceiling there would fail exactly the largest logs it is meant to protect.
+var objectRequestTimeout = 2 * time.Minute
+
 func removeObjectsConcurrently(ctx context.Context, storage storageclient.ObjectStorage, bucket string, keys []string, logNs, logIdStr string) (int, error) {
 	workers := defaultObjectDeleteConcurrency
 	if len(keys) < workers {
@@ -160,7 +175,11 @@ func removeObjectsConcurrently(ctx context.Context, storage storageclient.Object
 		go func() {
 			defer wg.Done()
 			for key := range jobs {
-				err := storage.RemoveObject(ctx, bucket, key, logNs, logIdStr)
+				err := func() error {
+					reqCtx, cancel := context.WithTimeout(ctx, objectRequestTimeout)
+					defer cancel()
+					return storage.RemoveObject(reqCtx, bucket, key, logNs, logIdStr)
+				}()
 				mu.Lock()
 				switch {
 				case err == nil, storage.IsObjectNotExistsError(err):
