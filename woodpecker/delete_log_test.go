@@ -106,7 +106,7 @@ func TestDeleteLog_MarksQuorumNodesThenDeletesMetadata(t *testing.T) {
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "foo", false).
 		Return(nil).Once()
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, deleteOptions{})
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, newDeleteOptions(nil))
 	assert.NoError(t, err)
 }
 
@@ -139,7 +139,7 @@ func TestDeleteLog_NodeMarkFailure_DoesNotDeleteMetadata(t *testing.T) {
 
 	// DeleteLogMetadata must NOT be called — enforced by testify (no EXPECT set).
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, deleteOptions{})
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, newDeleteOptions(nil))
 	assert.Error(t, err)
 	assert.ErrorContains(t, err, "node unreachable")
 }
@@ -160,7 +160,7 @@ func TestDeleteLog_AlreadyGone_Idempotent(t *testing.T) {
 
 	// No pool or client calls expected — enforced by testify.
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, deleteOptions{})
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, newDeleteOptions(nil))
 	assert.NoError(t, err)
 }
 
@@ -190,7 +190,7 @@ func TestDeleteLog_NoSegments_JustDeletesMetadata(t *testing.T) {
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "empty-log", false).
 		Return(nil).Once()
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "empty-log", false, deleteOptions{})
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "empty-log", false, newDeleteOptions(nil))
 	assert.NoError(t, err)
 }
 
@@ -220,7 +220,7 @@ func TestDeleteLog_NoSegments_ServiceMode_NothingToMark(t *testing.T) {
 		Return(nil).Once()
 
 	// No pool/client calls expected.
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, storage, "empty-log", false, deleteOptions{})
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, storage, "empty-log", false, newDeleteOptions(nil))
 	assert.NoError(t, err)
 }
 
@@ -240,7 +240,7 @@ func TestDeleteLog_ObjectStorageUnavailable_KeepsMetadata(t *testing.T) {
 		Return(map[int64]*meta.SegmentMeta{}, nil).Once()
 	// DeleteLogMetadata must NOT be called.
 
-	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, deleteOptions{})
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", false, newDeleteOptions(nil))
 	assert.Error(t, err)
 }
 
@@ -284,7 +284,7 @@ func TestDeleteAllLogs_DeletesEachLog(t *testing.T) {
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "b", false).
 		Return(nil).Once()
 
-	_, err := deleteAllLogsUnsafe(ctx, mockMeta, mockPool, cfg, nil, false, deleteOptions{})
+	_, err := deleteAllLogsUnsafe(ctx, mockMeta, mockPool, cfg, nil, false, newDeleteOptions(nil))
 	assert.NoError(t, err)
 }
 
@@ -328,7 +328,7 @@ func TestDeleteMarkRetriesTransientUnavailability(t *testing.T) {
 		Return(true, nil).Once()
 	mockMeta.EXPECT().DeleteLogMetadata(mock.Anything, "foo", false).Return(nil).Once()
 
-	stats, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true, deleteOptions{})
+	stats, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true, newDeleteOptions(nil))
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Logs)
 	assert.Equal(t, 1, stats.NodesMarked)
@@ -355,7 +355,7 @@ func TestDeleteMarkExhaustedFailsClosedByDefault(t *testing.T) {
 		Return(false, unavailableErr()).Times(int(markAttempts))
 	// DeleteLogMetadata is deliberately NOT expected: reaching it would be the bug.
 
-	stats, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true, deleteOptions{})
+	stats, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true, newDeleteOptions(nil))
 	require.Error(t, err)
 	assert.True(t, werr.IsTransportError(err), "the classification must survive the retry loop")
 	assert.Zero(t, stats.Logs, "metadata must not be deleted when a node could not be marked")
@@ -423,4 +423,58 @@ func TestSkipDoesNotCoverALogicalRejection(t *testing.T) {
 	assert.Contains(t, err.Error(), "being compacted")
 	assert.Zero(t, stats.Logs)
 	assert.Empty(t, stats.SkippedNodes)
+}
+
+// TestDeleteOptionsResolveAgainstDefaults pins the guard that keeps a caller-supplied zero
+// from becoming a delete that never returns. retry.Do reads attempts==0 as "retry forever",
+// which is exactly what an unconfigured CLI flag looks like, and a non-positive timeout would
+// switch off the bound the option exists to provide.
+func TestDeleteOptionsResolveAgainstDefaults(t *testing.T) {
+	def := newDeleteOptions(nil)
+	assert.Equal(t, markAttempts, def.markAttempts)
+	assert.Equal(t, markAttemptTimeout, def.markAttemptTimeout)
+	assert.False(t, def.skipUnreachableNodes, "skipping must never be the default")
+
+	set := newDeleteOptions([]DeleteOption{
+		WithMarkAttempts(7),
+		WithMarkAttemptTimeout(90 * time.Second),
+		WithSkipUnreachableNodes(),
+	})
+	assert.Equal(t, uint(7), set.markAttempts)
+	assert.Equal(t, 90*time.Second, set.markAttemptTimeout)
+	assert.True(t, set.skipUnreachableNodes)
+
+	// Values a caller can get wrong quietly fall back instead of disabling the bound.
+	degenerate := newDeleteOptions([]DeleteOption{
+		WithMarkAttempts(0),
+		WithMarkAttemptTimeout(0),
+	})
+	assert.Equal(t, markAttempts, degenerate.markAttempts, "zero attempts must not mean forever")
+	assert.Equal(t, markAttemptTimeout, degenerate.markAttemptTimeout)
+
+	negative := newDeleteOptions([]DeleteOption{WithMarkAttemptTimeout(-time.Second)})
+	assert.Equal(t, markAttemptTimeout, negative.markAttemptTimeout)
+}
+
+// TestWithMarkAttemptsIsHonoured proves the option reaches the retry loop rather than just
+// being stored — the package default is 3, so asking for 5 has to produce 5 calls.
+func TestWithMarkAttemptsIsHonoured(t *testing.T) {
+	shrinkMarkBackoff(t)
+	ctx := context.Background()
+	cfg := testDeleteCfg()
+
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "foo").Return(buildLogMeta(7), nil).Once()
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "foo").
+		Return(map[int64]*meta.SegmentMeta{0: buildSegmentMeta([]string{"n1"})}, nil).Once()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "n1").Return(mockClient, nil).Times(5)
+	mockClient.EXPECT().MarkLogDeleted(mock.Anything, "test-bucket", "test-root", int64(7), true).
+		Return(false, unavailableErr()).Times(5)
+
+	_, err := deleteLogUnsafe(ctx, mockMeta, mockPool, cfg, nil, "foo", true,
+		newDeleteOptions([]DeleteOption{WithMarkAttempts(5)}))
+	require.Error(t, err)
 }

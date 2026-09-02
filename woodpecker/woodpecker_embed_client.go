@@ -372,7 +372,7 @@ func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) e
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	_, err := deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), logName, false, deleteOptions{})
+	_, err := deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), logName, false, newDeleteOptions(nil))
 	return err
 }
 
@@ -393,7 +393,7 @@ func (c *woodpeckerEmbedClient) DeleteAllLogs(ctx context.Context) error {
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	_, err := deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), false, deleteOptions{})
+	_, err := deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), false, newDeleteOptions(nil))
 	return err
 }
 

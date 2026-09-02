@@ -97,14 +97,52 @@ type DeleteOption func(*deleteOptions)
 
 type deleteOptions struct {
 	skipUnreachableNodes bool
+	markAttempts         uint
+	markAttemptTimeout   time.Duration
 }
 
+// newDeleteOptions resolves caller options against the package defaults.
+//
+// Always construct options through this, never as a zero-value literal: retry.Do reads
+// attempts==0 as "retry forever", so an unset field is the difference between a bounded
+// delete and one that never returns.
 func newDeleteOptions(opts []DeleteOption) deleteOptions {
-	var o deleteOptions
+	o := deleteOptions{
+		markAttempts:       markAttempts,
+		markAttemptTimeout: markAttemptTimeout,
+	}
 	for _, opt := range opts {
 		opt(&o)
 	}
+	// Fall back rather than fail on the two values a caller can get wrong quietly. Zero
+	// attempts is what an unconfigured CLI flag looks like, and a non-positive timeout would
+	// disable the bound these exist to provide.
+	if o.markAttempts == 0 {
+		o.markAttempts = markAttempts
+	}
+	if o.markAttemptTimeout <= 0 {
+		o.markAttemptTimeout = markAttemptTimeout
+	}
 	return o
+}
+
+// WithMarkAttempts sets how many times one node is asked to mark the log deleted before it
+// counts as unreachable. Zero keeps the default.
+//
+// Only transport failures are retried, so raising this buys patience with a node that is
+// restarting, not with one that is rejecting the request.
+func WithMarkAttempts(attempts uint) DeleteOption {
+	return func(o *deleteOptions) { o.markAttempts = attempts }
+}
+
+// WithMarkAttemptTimeout bounds one attempt at marking a log deleted on one node. A
+// non-positive duration keeps the default.
+//
+// Raise it when nodes hold large un-compacted tails: a synchronous mark has the node
+// os.RemoveAll its staged directory for that log, and cutting off a reclaim that is making
+// progress is worse than the hang the bound prevents.
+func WithMarkAttemptTimeout(d time.Duration) DeleteOption {
+	return func(o *deleteOptions) { o.markAttemptTimeout = d }
 }
 
 // WithSkipUnreachableNodes lets a delete finish without a node that stays unreachable
@@ -246,7 +284,7 @@ func markLogDeletedOnNodes(
 		// Embedded deployments (minio / local) run a single in-process logstore and the
 		// local pool ignores the target, so any target reaches it. Mark it so it stops
 		// serving and — with sync — reclaims its directory before we touch anything else.
-		hadData, deleteMarkErr := markLogDeletedOnNode(ctx, pool, "", bucketName, rootPath, logId, sync)
+		hadData, deleteMarkErr := markLogDeletedOnNode(ctx, pool, "", bucketName, rootPath, logId, sync, opts)
 		if deleteMarkErr != nil {
 			return stats, deleteMarkErr
 		}
@@ -262,7 +300,7 @@ func markLogDeletedOnNodes(
 		zap.Strings("nodes", nodes), zap.Bool("sync", sync))
 
 	for _, node := range nodes {
-		hadData, deleteMarkErr := markLogDeletedOnNode(ctx, pool, node, bucketName, rootPath, logId, sync)
+		hadData, deleteMarkErr := markLogDeletedOnNode(ctx, pool, node, bucketName, rootPath, logId, sync, opts)
 		if deleteMarkErr == nil {
 			stats.NodesMarked++
 			if hadData {
@@ -323,10 +361,11 @@ func markLogDeletedOnNode(
 	node, bucketName, rootPath string,
 	logId int64,
 	sync bool,
+	opts deleteOptions,
 ) (bool, error) {
 	var hadData bool
 	err := retry.Do(ctx, func() error {
-		attemptCtx, cancel := context.WithTimeout(ctx, markAttemptTimeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, opts.markAttemptTimeout)
 		defer cancel()
 
 		lsClient, getErr := pool.GetLogStoreClient(attemptCtx, node)
@@ -337,7 +376,7 @@ func markLogDeletedOnNode(
 		hadData, markErr = lsClient.MarkLogDeleted(attemptCtx, bucketName, rootPath, logId, sync)
 		return markErr
 	},
-		retry.Attempts(markAttempts),
+		retry.Attempts(opts.markAttempts),
 		retry.Sleep(markRetrySleep),
 		retry.MaxSleepTime(markMaxSleep),
 		// Retry only what a retry can fix. A reachable node that rejects the mark is
