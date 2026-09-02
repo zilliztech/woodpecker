@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -208,6 +209,33 @@ func hasLegacyMetadata(ctx context.Context, client *clientv3.Client) (bool, erro
 	return false, nil
 }
 
+// onlyLogIdGenSurvives reports whether the sole surviving instance-level key is logidgen.
+//
+// ClearMeta deliberately preserves the log id counter while clearing everything else, because
+// logId appears in object-storage and node-local data paths and restarting it would let a new
+// log reuse a directory an old one may still have objects in. That leaves exactly one of the
+// four keys present, which the all-or-nothing check above would otherwise reject — the node
+// would refuse to start after a legitimate clear.
+//
+// Any other partial combination is still an error: it means something wrote or deleted these
+// keys outside of ClearMeta, and guessing at the intent is worse than refusing.
+//
+// The response order matches `keys` in InitIfNecessary: instance, version, logidgen,
+// quorumidgen.
+func onlyLogIdGenSurvives(responses []*etcdserverpb.ResponseOp) bool {
+	if len(responses) != 4 {
+		return false
+	}
+	const logIdGenIndex = 2
+	for i, rp := range responses {
+		present := len(rp.GetResponseRange().Kvs) > 0
+		if (i == logIdGenIndex) != present {
+			return false
+		}
+	}
+	return true
+}
+
 // InitIfNecessary initializes the metadata provider if necessary.
 // It checks if there is logIdGen,instance,quorumIdGen keys in etcd.
 // If not, it creates them.
@@ -270,7 +298,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 		// cluster already initialized successfully
 		log.Debug("cluster already initialized, skipping initialization")
 		return nil
-	} else if len(initOps) != len(keys) {
+	} else if len(initOps) != len(keys) && !onlyLogIdGenSurvives(resp.Responses) {
 		// cluster already initialized partially, but not all
 		err = werr.ErrMetadataInit.WithCauseErrMsg("some keys already exists")
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "init_if_necessary", "error").Inc()
@@ -574,6 +602,56 @@ func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) 
 		return false, nil
 	}
 	return true, nil
+}
+
+// ListParkedLogIds returns the log ids recorded in the parked (soft-deleted) log metadata.
+//
+// A soft delete copies LogMeta and every segment record under logs-deleted/<name>-<ts>/ before
+// removing the active keys. Nothing else in the codebase reads that prefix, and ListLogs is
+// scoped to logs/, so parked logs are invisible to every enumeration — including the one that
+// drives object cleanup. Since ClearMeta deletes the prefix outright, the ids have to be
+// harvested before the records go, or the objects of anything deleted by an older client
+// (which did not clean object storage) become unreachable.
+//
+// Only the LogMeta keys are decoded. Their key has exactly one segment after the prefix
+// (logs-deleted/<name>-<ts>); the parked segment records sit one level deeper
+// (logs-deleted/<name>-<ts>/segments/<id>) and are skipped by that shape check rather than by
+// trusting protobuf to reject them.
+func (e *metadataProviderEtcd) ListParkedLogIds(ctx context.Context) ([]int64, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListParkedLogIds")
+	defer sp.End()
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	prefix := e.keyBuilder.LogDeletedPrefix() + "/"
+	resp, err := e.client.Get(ctx1, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, werr.ErrMetadataRead.WithCauseErr(err)
+	}
+
+	seen := make(map[int64]struct{}, len(resp.Kvs))
+	ids := make([]int64, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		rel := strings.TrimPrefix(string(kv.Key), prefix)
+		if strings.Contains(rel, "/") {
+			continue // a parked segment record, not the LogMeta
+		}
+		logMeta := &proto.LogMeta{}
+		if err := pb.Unmarshal(kv.Value, logMeta); err != nil {
+			logger.Ctx(ctx).Warn("skipping undecodable parked log metadata",
+				zap.String("key", string(kv.Key)), zap.Error(err))
+			continue
+		}
+		if logMeta.LogId == 0 {
+			continue
+		}
+		if _, dup := seen[logMeta.LogId]; dup {
+			continue
+		}
+		seen[logMeta.LogId] = struct{}{}
+		ids = append(ids, logMeta.LogId)
+	}
+	return ids, nil
 }
 
 func (e *metadataProviderEtcd) ListLogs(ctx context.Context) ([]string, error) {

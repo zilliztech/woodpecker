@@ -364,13 +364,24 @@ func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName stri
 	return nil
 }
 
-func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64) (err error) {
+func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (localDataFound bool, err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
-	resp, err := l.innerClient.MarkLogDeleted(ctx, &proto.MarkLogDeletedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId})
+	resp, err := l.innerClient.MarkLogDeleted(ctx, &proto.MarkLogDeletedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, Sync: sync})
 	if err != nil {
-		return err
+		return false, err
 	}
-	return werr.Error(resp.GetStatus())
+	if statusErr := werr.Error(resp.GetStatus()); statusErr != nil {
+		return false, statusErr
+	}
+	// Fail closed on a node that did not confirm it applied the flag. proto3 drops unknown
+	// fields, so an older node answers Success to a sync request while its local data stays
+	// on disk; reporting that as a completed synchronous delete is how an operator ends up
+	// switching backends on a WAL that is not actually empty.
+	if sync && !resp.GetSyncApplied() {
+		return false, werr.ErrUnsupportedVersionError.WithCauseErrMsg(
+			"logstore node did not confirm synchronous delete support; upgrade the node")
+	}
+	return resp.GetLocalDataFound(), nil
 }
 
 func (l *logStoreClientRemote) MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) (err error) {

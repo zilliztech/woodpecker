@@ -28,7 +28,7 @@ import (
 
 // NewLogDeleteHandler returns an http.HandlerFunc for POST /admin/log/delete.
 // markDeleted is a callback that marks a single log as deleted on the node.
-func NewLogDeleteHandler(markDeleted func(bucketName, rootPath string, logId int64) error) http.HandlerFunc {
+func NewLogDeleteHandler(markDeleted func(bucketName, rootPath string, logId int64, sync bool) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -38,6 +38,8 @@ func NewLogDeleteHandler(markDeleted func(bucketName, rootPath string, logId int
 			BucketName string `json:"bucketName"`
 			RootPath   string `json:"rootPath"`
 			LogId      int64  `json:"logId"`
+			// Sync makes the node reclaim the log's local data before replying.
+			Sync bool `json:"sync"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -49,8 +51,9 @@ func NewLogDeleteHandler(markDeleted func(bucketName, rootPath string, logId int
 			zap.String("remoteAddr", r.RemoteAddr),
 			zap.String("bucketName", body.BucketName),
 			zap.String("rootPath", body.RootPath),
-			zap.Int64("logId", body.LogId))
-		if err := markDeleted(body.BucketName, body.RootPath, body.LogId); err != nil {
+			zap.Int64("logId", body.LogId),
+			zap.Bool("sync", body.Sync))
+		if err := markDeleted(body.BucketName, body.RootPath, body.LogId, body.Sync); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

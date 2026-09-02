@@ -39,12 +39,22 @@ type MetadataProvider interface {
 	CheckExists(ctx context.Context, logName string) (bool, error)
 	// ListLogs returns a list of all logs in the metadata provider.
 	ListLogs(ctx context.Context) ([]string, error)
+	// ListParkedLogIds returns the log ids of soft-deleted logs still parked under
+	// logs-deleted/. ListLogs does not cover them, and nothing else in the codebase reads
+	// that prefix, so this is the only way to learn which objects a parked record still
+	// accounts for before the record itself is dropped.
+	ListParkedLogIds(ctx context.Context) ([]int64, error)
 	// ListLogsWithPrefix returns a list of all logs in the metadata provider with a given prefix.
 	ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error)
 	// GetLogMeta returns the metadata for a specific log.
 	GetLogMeta(ctx context.Context, logName string) (*LogMeta, error)
 	// UpdateLogMeta updates the metadata for a specific log.
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error
+	// ClearMeta removes all content metadata for this instance (logs, segments, quorums,
+	// node registrations, reader sessions, cleanup and compacted-mark records) and re-seeds
+	// the instance-level keys. clearLogIdGen decides whether the log id counter restarts;
+	// keeping it is what makes a reused instance safe against object-storage residue.
+	ClearMeta(ctx context.Context, clearLogIdGen bool) error
 	// DeleteLogMetadata removes a log's active metadata. When force is true the
 	// log meta, its segments, and its orphan reader/cleanup keys are hard-deleted.
 	// When force is false the log meta and its segments are first copied to the

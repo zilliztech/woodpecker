@@ -652,10 +652,17 @@ func (s *Server) CleanSegment(ctx context.Context, request *proto.CleanSegmentRe
 }
 
 func (s *Server) MarkLogDeleted(ctx context.Context, request *proto.MarkLogDeletedRequest) (*proto.MarkLogDeletedResponse, error) {
-	if err := s.logStore.EvictLog(ctx, request.BucketName, request.RootPath, request.LogId); err != nil {
+	localDataFound, err := s.logStore.EvictLog(ctx, request.BucketName, request.RootPath, request.LogId, request.Sync)
+	if err != nil {
 		return &proto.MarkLogDeletedResponse{Status: werr.Status(err)}, nil
 	}
-	return &proto.MarkLogDeletedResponse{Status: werr.Success()}, nil
+	// SyncApplied echoes the request: this build always honours the flag. Its absence is
+	// what tells a new client it is talking to a node that does not.
+	return &proto.MarkLogDeletedResponse{
+		Status:         werr.Success(),
+		LocalDataFound: localDataFound,
+		SyncApplied:    request.Sync,
+	}, nil
 }
 
 func (s *Server) MarkInstanceDeleted(ctx context.Context, request *proto.MarkInstanceDeletedRequest) (*proto.MarkInstanceDeletedResponse, error) {
@@ -667,8 +674,9 @@ func (s *Server) MarkInstanceDeleted(ctx context.Context, request *proto.MarkIns
 
 // EvictLog marks a single log as deleted on this node.
 // This is the HTTP-admin counterpart of the gRPC MarkLogDeleted RPC.
-func (s *Server) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64) error {
-	return s.logStore.EvictLog(ctx, bucketName, rootPath, logId)
+func (s *Server) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64, sync bool) error {
+	_, err := s.logStore.EvictLog(ctx, bucketName, rootPath, logId, sync)
+	return err
 }
 
 // EvictInstance marks a whole instance (all logs under bucketName/rootPath) as deleted.

@@ -33,7 +33,7 @@ import (
 func TestLogDeleteHandler_Success(t *testing.T) {
 	var gotBucket, gotRoot string
 	var gotLogId int64
-	handler := NewLogDeleteHandler(func(bucketName, rootPath string, logId int64) error {
+	handler := NewLogDeleteHandler(func(bucketName, rootPath string, logId int64, sync bool) error {
 		gotBucket = bucketName
 		gotRoot = rootPath
 		gotLogId = logId
@@ -54,7 +54,7 @@ func TestLogDeleteHandler_Success(t *testing.T) {
 }
 
 func TestLogDeleteHandler_BadJSON(t *testing.T) {
-	handler := NewLogDeleteHandler(func(bucketName, rootPath string, logId int64) error {
+	handler := NewLogDeleteHandler(func(bucketName, rootPath string, logId int64, sync bool) error {
 		return nil
 	})
 
@@ -68,7 +68,7 @@ func TestLogDeleteHandler_BadJSON(t *testing.T) {
 }
 
 func TestLogDeleteHandler_CallbackError(t *testing.T) {
-	handler := NewLogDeleteHandler(func(bucketName, rootPath string, logId int64) error {
+	handler := NewLogDeleteHandler(func(bucketName, rootPath string, logId int64, sync bool) error {
 		return errors.New("evict failed")
 	})
 
@@ -82,7 +82,7 @@ func TestLogDeleteHandler_CallbackError(t *testing.T) {
 }
 
 func TestLogDeleteHandler_MethodNotAllowed(t *testing.T) {
-	handler := NewLogDeleteHandler(func(bucketName, rootPath string, logId int64) error {
+	handler := NewLogDeleteHandler(func(bucketName, rootPath string, logId int64, sync bool) error {
 		return nil
 	})
 

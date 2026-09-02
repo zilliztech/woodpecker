@@ -1378,3 +1378,35 @@ func TestNewEmbedClientFromConfig_MinioObjectStorageError(t *testing.T) {
 	assert.Nil(t, c)
 	assert.True(t, werr.ErrWoodpeckerClientConnectionFailed.Is(err))
 }
+
+// TestEmbedDeleteAndClearRefuseOnAClosedClient mirrors the service client's guard. Same
+// reason: these are the data-destroying entry points, and a half-torn-down client is exactly
+// where a partial delete leaves metadata gone and objects behind.
+func TestEmbedDeleteAndClearRefuseOnAClosedClient(t *testing.T) {
+	c := &woodpeckerEmbedClient{cfg: &config.Configuration{}}
+	c.closeState.Store(true)
+	ctx := context.Background()
+
+	assert.ErrorIs(t, c.DeleteLog(ctx, "l"), werr.ErrWoodpeckerClientClosed)
+	assert.ErrorIs(t, c.DeleteAllLogs(ctx), werr.ErrWoodpeckerClientClosed)
+	assert.ErrorIs(t, c.ClearMeta(ctx, false), werr.ErrWoodpeckerClientClosed)
+	assert.ErrorIs(t, c.ClearMetaExceptLogIdGen(ctx), werr.ErrWoodpeckerClientClosed)
+
+	_, err := c.DeleteLogSync(ctx, "l")
+	assert.ErrorIs(t, err, werr.ErrWoodpeckerClientClosed)
+	_, err = c.DeleteAllLogsSync(ctx)
+	assert.ErrorIs(t, err, werr.ErrWoodpeckerClientClosed)
+}
+
+// TestEmbedClearMetaExceptLogIdGenPreservesTheCounter pins the safe default on the embedded
+// client too: the wrapper must never be the one that resets the log id counter.
+func TestEmbedClearMetaExceptLogIdGenPreservesTheCounter(t *testing.T) {
+	md := mocks_meta.NewMetadataProvider(t)
+	md.EXPECT().ClearMeta(mock.Anything, false).Return(nil).Once()
+
+	cfg := &config.Configuration{}
+	cfg.Woodpecker.Storage.Type = "local"
+	c := &woodpeckerEmbedClient{cfg: cfg, Metadata: md}
+
+	require.NoError(t, c.ClearMetaExceptLogIdGen(context.Background()))
+}

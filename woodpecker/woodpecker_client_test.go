@@ -911,3 +911,53 @@ func TestNewClient_WithEmbedEtcd(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+// TestDeleteAndClearRefuseOnAClosedClient covers the guard every delete and clear entry point
+// shares. It matters because these are the operations that destroy data: running one against
+// a half-torn-down client, whose metadata provider and pool may already be closed, is how a
+// partial delete turns into metadata deleted with objects left behind.
+func TestDeleteAndClearRefuseOnAClosedClient(t *testing.T) {
+	c := &woodpeckerClient{cfg: &config.Configuration{}}
+	c.closeState.Store(true)
+	ctx := context.Background()
+
+	assert.ErrorIs(t, c.DeleteLog(ctx, "l"), werr.ErrWoodpeckerClientClosed)
+	assert.ErrorIs(t, c.DeleteAllLogs(ctx), werr.ErrWoodpeckerClientClosed)
+	assert.ErrorIs(t, c.ClearMeta(ctx, false), werr.ErrWoodpeckerClientClosed)
+	assert.ErrorIs(t, c.ClearMetaExceptLogIdGen(ctx), werr.ErrWoodpeckerClientClosed)
+
+	_, err := c.DeleteLogSync(ctx, "l")
+	assert.ErrorIs(t, err, werr.ErrWoodpeckerClientClosed)
+	_, err = c.DeleteAllLogsSync(ctx)
+	assert.ErrorIs(t, err, werr.ErrWoodpeckerClientClosed)
+}
+
+// TestClearMetaExceptLogIdGenPreservesTheCounter pins the safe default. The counter is what
+// keeps a reused instance from writing a new log into a previous one's directory, so the
+// convenience wrapper must never be the one that clears it.
+func TestClearMetaExceptLogIdGenPreservesTheCounter(t *testing.T) {
+	md := mocks_meta.NewMetadataProvider(t)
+	md.EXPECT().ClearMeta(mock.Anything, false).Return(nil).Once()
+
+	// Local mode has no object storage, so the parked-log sweep is a no-op and the
+	// delegation is the whole behaviour under test.
+	cfg := &config.Configuration{}
+	cfg.Woodpecker.Storage.Type = "local"
+	c := &woodpeckerClient{cfg: cfg, Metadata: md}
+
+	require.NoError(t, c.ClearMetaExceptLogIdGen(context.Background()))
+}
+
+// TestGetOrCreateCleanupStorageRetriesAfterFailure pins the reason this is not a sync.Once:
+// a construction failure must not disable deletion for the life of the client.
+func TestGetOrCreateCleanupStorageRetriesAfterFailure(t *testing.T) {
+	cfg := &config.Configuration{}
+	cfg.Woodpecker.Storage.Type = "minio"
+	cfg.Minio.CloudProvider = "no-such-provider" // makes NewObjectStorage fail deterministically
+	c := &woodpeckerClient{cfg: cfg}
+
+	assert.Nil(t, c.getOrCreateCleanupStorage(context.Background()))
+	// The second call must try again rather than return a cached failure.
+	assert.Nil(t, c.getOrCreateCleanupStorage(context.Background()))
+	assert.Nil(t, c.cleanupStorageClient, "a failed construction must not be cached")
+}

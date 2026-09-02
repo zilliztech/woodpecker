@@ -362,9 +362,32 @@ message MarkLogDeletedRequest {
   string bucket_name = 1;
   string root_path = 2;
   int64 log_id = 3;
+  // When true the node reclaims the log's local data before replying, instead of
+  // deferring it to the grace-based reclaim task. Callers that must observe an empty
+  // WAL before restarting Milvus need this; the delete API already implies the caller
+  // has confirmed the data is no longer needed.
+  bool sync = 4;
 }
 message MarkLogDeletedResponse {
   Status status = 1;
+  // Whether this node actually had local data for the log when it reclaimed. Only set
+  // when the request asked for a synchronous delete; the asynchronous path replies
+  // before the reclaim task runs and has nothing to report yet.
+  //
+  // A node legitimately reports false when the log's data was already compacted and
+  // uploaded, so this is not an error signal on its own. It matters in aggregate: a
+  // whole-instance clear where no node on any log had local data and no objects were
+  // removed almost always means the caller aimed at the wrong bucket/rootPath, which
+  // otherwise looks exactly like success.
+  bool local_data_found = 2;
+  // Echoes back that this node understood and honoured the request's sync flag.
+  //
+  // proto3 drops unknown fields, so a node running an older binary treats a sync request as
+  // an ordinary asynchronous delete and still answers Success — leaving its local data on
+  // disk until the grace-period task runs, while the caller reads the reply as "this node is
+  // clean". A caller that asked for sync must therefore require this field, the same way the
+  // legacy CompactSegment RPC fails closed for old clients rather than guessing.
+  bool sync_applied = 3;
 }
 message MarkInstanceDeletedRequest {
   string bucket_name = 1;

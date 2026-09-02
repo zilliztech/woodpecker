@@ -529,22 +529,32 @@ func (_c *LogStoreClient_MarkInstanceDeleted_Call) RunAndReturn(run func(context
 	return _c
 }
 
-// MarkLogDeleted provides a mock function with given fields: ctx, bucketName, rootPath, logId
-func (_m *LogStoreClient) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64) error {
-	ret := _m.Called(ctx, bucketName, rootPath, logId)
+// MarkLogDeleted provides a mock function with given fields: ctx, bucketName, rootPath, logId, sync
+func (_m *LogStoreClient) MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, sync)
 
 	if len(ret) == 0 {
 		panic("no return value specified for MarkLogDeleted")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64) error); ok {
-		r0 = rf(ctx, bucketName, rootPath, logId)
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, bool) (bool, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, sync)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, bool) bool); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, sync)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(bool)
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, bool) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, sync)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // LogStoreClient_MarkLogDeleted_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkLogDeleted'
@@ -557,23 +567,24 @@ type LogStoreClient_MarkLogDeleted_Call struct {
 //   - bucketName string
 //   - rootPath string
 //   - logId int64
-func (_e *LogStoreClient_Expecter) MarkLogDeleted(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}) *LogStoreClient_MarkLogDeleted_Call {
-	return &LogStoreClient_MarkLogDeleted_Call{Call: _e.mock.On("MarkLogDeleted", ctx, bucketName, rootPath, logId)}
+//   - sync bool
+func (_e *LogStoreClient_Expecter) MarkLogDeleted(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, sync interface{}) *LogStoreClient_MarkLogDeleted_Call {
+	return &LogStoreClient_MarkLogDeleted_Call{Call: _e.mock.On("MarkLogDeleted", ctx, bucketName, rootPath, logId, sync)}
 }
 
-func (_c *LogStoreClient_MarkLogDeleted_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64)) *LogStoreClient_MarkLogDeleted_Call {
+func (_c *LogStoreClient_MarkLogDeleted_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool)) *LogStoreClient_MarkLogDeleted_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(bool))
 	})
 	return _c
 }
 
-func (_c *LogStoreClient_MarkLogDeleted_Call) Return(_a0 error) *LogStoreClient_MarkLogDeleted_Call {
-	_c.Call.Return(_a0)
+func (_c *LogStoreClient_MarkLogDeleted_Call) Return(_a0 bool, _a1 error) *LogStoreClient_MarkLogDeleted_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogStoreClient_MarkLogDeleted_Call) RunAndReturn(run func(context.Context, string, string, int64) error) *LogStoreClient_MarkLogDeleted_Call {
+func (_c *LogStoreClient_MarkLogDeleted_Call) RunAndReturn(run func(context.Context, string, string, int64, bool) (bool, error)) *LogStoreClient_MarkLogDeleted_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -405,22 +405,32 @@ func (_c *LogStore_EvictInstance_Call) RunAndReturn(run func(context.Context, st
 	return _c
 }
 
-// EvictLog provides a mock function with given fields: ctx, bucketName, rootPath, logId
-func (_m *LogStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64) error {
-	ret := _m.Called(ctx, bucketName, rootPath, logId)
+// EvictLog provides a mock function with given fields: ctx, bucketName, rootPath, logId, sync
+func (_m *LogStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, sync)
 
 	if len(ret) == 0 {
 		panic("no return value specified for EvictLog")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64) error); ok {
-		r0 = rf(ctx, bucketName, rootPath, logId)
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, bool) (bool, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, sync)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, bool) bool); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, sync)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(bool)
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, bool) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, sync)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // LogStore_EvictLog_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'EvictLog'
@@ -433,23 +443,24 @@ type LogStore_EvictLog_Call struct {
 //   - bucketName string
 //   - rootPath string
 //   - logId int64
-func (_e *LogStore_Expecter) EvictLog(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}) *LogStore_EvictLog_Call {
-	return &LogStore_EvictLog_Call{Call: _e.mock.On("EvictLog", ctx, bucketName, rootPath, logId)}
+//   - sync bool
+func (_e *LogStore_Expecter) EvictLog(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, sync interface{}) *LogStore_EvictLog_Call {
+	return &LogStore_EvictLog_Call{Call: _e.mock.On("EvictLog", ctx, bucketName, rootPath, logId, sync)}
 }
 
-func (_c *LogStore_EvictLog_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64)) *LogStore_EvictLog_Call {
+func (_c *LogStore_EvictLog_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool)) *LogStore_EvictLog_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(bool))
 	})
 	return _c
 }
 
-func (_c *LogStore_EvictLog_Call) Return(_a0 error) *LogStore_EvictLog_Call {
-	_c.Call.Return(_a0)
+func (_c *LogStore_EvictLog_Call) Return(_a0 bool, _a1 error) *LogStore_EvictLog_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogStore_EvictLog_Call) RunAndReturn(run func(context.Context, string, string, int64) error) *LogStore_EvictLog_Call {
+func (_c *LogStore_EvictLog_Call) RunAndReturn(run func(context.Context, string, string, int64, bool) (bool, error)) *LogStore_EvictLog_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -473,3 +473,131 @@ func TestDiskWatermarkTask_WarnCooldown(t *testing.T) {
 	require.NoError(t, task.Run(ctx))
 	assert.NotEqual(t, firstWarnAt, task.lastWarnAt, "level change must re-stamp lastWarnAt")
 }
+
+// TestReclaimMarkerReportsWhetherLocalDataExisted pins the signal that makes a misdirected
+// clear visible. os.RemoveAll succeeds on a path that was never there, so without this the
+// node cannot distinguish "removed the data" from "was pointed somewhere else entirely" —
+// and the caller is told the reclaim worked either way.
+func TestReclaimMarkerReportsWhetherLocalDataExisted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := createTestLogStore()
+	root := t.TempDir()
+	store.cfg.Woodpecker.Storage.RootPath = root
+	store.cfg.Woodpecker.Storage.Type = "local"
+
+	// A log whose directory is really there.
+	present := deleteMarker{Bucket: "b", RootPath: "r", LogId: 11, DeletedAt: time.Now().Unix()}
+	require.NoError(t, writeDeleteMarker(ctx, root, present))
+	dir := localLogDataDir(store.cfg, "b", "r", 11)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.log"), []byte("data"), 0o644))
+	store.spMu.Lock()
+	store.deletingLogs[GetLogKey("b", "r", 11)] = struct{}{}
+	store.spMu.Unlock()
+
+	existed, err := reclaimMarker(ctx, store, root, present)
+	require.NoError(t, err)
+	assert.True(t, existed, "a directory that was removed must be reported as found")
+	_, statErr := os.Stat(dir)
+	assert.True(t, os.IsNotExist(statErr), "the directory should be gone")
+
+	// A log whose directory never existed — the wrong-rootPath case.
+	absent := deleteMarker{Bucket: "b", RootPath: "wrong-root", LogId: 12, DeletedAt: time.Now().Unix()}
+	require.NoError(t, writeDeleteMarker(ctx, root, absent))
+	store.spMu.Lock()
+	store.deletingLogs[GetLogKey("b", "wrong-root", 12)] = struct{}{}
+	store.spMu.Unlock()
+
+	existed, err = reclaimMarker(ctx, store, root, absent)
+	require.NoError(t, err, "a missing directory is not an error; it is just nothing to remove")
+	assert.False(t, existed, "nothing was there, and the caller must be able to tell")
+}
+
+// TestSyncEvictKeepsTheDeletingGate pins the ordering invariant the synchronous delete exists
+// to uphold. EvictLog returns while the caller still has object storage and metadata to
+// delete; if the gate were dropped at that point, an arriving append would rebuild a segment
+// processor and write fresh blocks into the prefix the caller is about to enumerate —
+// invisible to that enumeration and unreferenced by any metadata once it finishes.
+func TestSyncEvictKeepsTheDeletingGate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := createTestLogStore()
+	root := t.TempDir()
+	store.cfg.Woodpecker.Storage.RootPath = root
+	store.cfg.Woodpecker.Storage.Type = "local"
+
+	dir := localLogDataDir(store.cfg, "b", "r", 21)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.log"), []byte("data"), 0o644))
+
+	existed, err := store.EvictLog(ctx, "b", "r", 21, true)
+	require.NoError(t, err)
+	assert.True(t, existed, "the local directory was there and must be reported as removed")
+
+	_, statErr := os.Stat(dir)
+	assert.True(t, os.IsNotExist(statErr), "local data must be gone when a sync evict returns")
+
+	key := GetLogKey("b", "r", 21)
+	store.spMu.Lock()
+	_, gated := store.deletingLogs[key]
+	store.spMu.Unlock()
+	assert.True(t, gated, "the deleting gate must outlive the sync evict: the caller has "+
+		"object and metadata deletion still to do, and the gate is what rejects new writers")
+
+	// The marker must survive too, so the grace task can retire both later.
+	markers, listErr := scanDeleteMarkers(ctx, root)
+	require.NoError(t, listErr)
+	found := false
+	for _, m := range markers {
+		if m.LogId == 21 && !m.Instance {
+			found = true
+		}
+	}
+	assert.True(t, found, "the delete marker must remain for the grace-based reclaim to retire")
+}
+
+// TestSyncEvictFailsClosedWhenLocalDataCannotBeRemoved pins the other half of the gate
+// invariant. A removal that fails must not be reported as done and must not open the node
+// back up: the caller is about to delete objects and metadata on the strength of this reply,
+// and a node that resumed serving would write into the prefix being enumerated.
+//
+// The failure is induced by making a parent path component a regular file, so the stat
+// returns ENOTDIR rather than ENOENT. That distinction is the point — "not there" is a
+// legitimate no-op, "cannot tell" is not — and unlike a permission bit it behaves the same
+// when the tests run as root.
+func TestSyncEvictFailsClosedWhenLocalDataCannotBeRemoved(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := createTestLogStore()
+	root := t.TempDir()
+	store.cfg.Woodpecker.Storage.RootPath = root
+	store.cfg.Woodpecker.Storage.Type = "local"
+
+	// localLogDataDir resolves to {root}/{rootPath}/{logId} in local mode; a regular file at
+	// {root}/{rootPath} makes every path below it unstattable.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "r"), []byte("not a directory"), 0o644))
+
+	existed, err := store.EvictLog(ctx, "b", "r", 31, true)
+	require.Error(t, err, "a local removal that could not be verified must not report success")
+	assert.False(t, existed)
+
+	key := GetLogKey("b", "r", 31)
+	store.spMu.Lock()
+	_, gated := store.deletingLogs[key]
+	store.spMu.Unlock()
+	assert.True(t, gated, "the gate must stay up when the reclaim failed")
+
+	markers, listErr := scanDeleteMarkers(ctx, root)
+	require.NoError(t, listErr)
+	found := false
+	for _, m := range markers {
+		if m.LogId == 31 && !m.Instance {
+			found = true
+		}
+	}
+	assert.True(t, found, "the marker must survive so the next pass retries")
+}

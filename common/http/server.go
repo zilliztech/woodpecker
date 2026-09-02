@@ -64,7 +64,7 @@ type AdminCallbacks struct {
 	// Phase 2 callbacks
 	Logstore            LogstoreCallbacks
 	Ops                 OpsCallbacks
-	MarkLogDeleted      func(bucketName, rootPath string, logId int64) error
+	MarkLogDeleted      func(bucketName, rootPath string, logId int64, sync bool) error
 	MarkInstanceDeleted func(bucketName, rootPath string) error
 }
 

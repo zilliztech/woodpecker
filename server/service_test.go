@@ -444,7 +444,7 @@ type fakeLogStore struct {
 	getBlockCountFn   func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
 	updateLACFn       func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) error
 	cleanFn           func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, flag int) error
-	evictLogFn        func(ctx context.Context, bucketName, rootPath string, logId int64) error
+	evictLogFn        func(ctx context.Context, bucketName, rootPath string, logId int64, sync bool) error
 	evictInstanceFn   func(ctx context.Context, bucketName, rootPath string) error
 	notifyCompactedFn func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) error
 	evictReaderFn     func(ctx context.Context, bucketName, rootPath string, logId int64, segId int64) error
@@ -517,11 +517,11 @@ func (f *fakeLogStore) RejectNewWrites()             { f.writesRejected = true }
 func (f *fakeLogStore) AllowNewWrites()              { f.writesRejected = false }
 func (f *fakeLogStore) MarkRetired()                 { f.retired = true }
 func (f *fakeLogStore) HasLocalSegmentData() bool    { return false }
-func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64) error {
+func (f *fakeLogStore) EvictLog(ctx context.Context, bucketName, rootPath string, logId int64, sync bool) (bool, error) {
 	if f.evictLogFn != nil {
-		return f.evictLogFn(ctx, bucketName, rootPath, logId)
+		return false, f.evictLogFn(ctx, bucketName, rootPath, logId, sync)
 	}
-	return nil
+	return false, nil
 }
 
 func (f *fakeLogStore) EvictInstance(ctx context.Context, bucketName, rootPath string) error {
@@ -1848,7 +1848,7 @@ func TestServer_DecommissionAfterCancel_RestartsMonitor(t *testing.T) {
 
 func TestServer_MarkLogDeleted_Success(t *testing.T) {
 	fake := &fakeLogStore{
-		evictLogFn: func(ctx context.Context, bn, rp string, logId int64) error {
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, _ bool) error {
 			return nil
 		},
 	}
@@ -1865,7 +1865,7 @@ func TestServer_MarkLogDeleted_Success(t *testing.T) {
 
 func TestServer_MarkLogDeleted_Error(t *testing.T) {
 	fake := &fakeLogStore{
-		evictLogFn: func(ctx context.Context, bn, rp string, logId int64) error {
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, _ bool) error {
 			return assert.AnError
 		},
 	}
@@ -2026,4 +2026,55 @@ func TestServer_AddEntries_SyncError(t *testing.T) {
 		}
 	}
 	assert.True(t, sawFailed, "a Failed frame must be sent for the durability failure")
+}
+
+// TestServer_MarkLogDeleted_EchoesSyncApplied pins the mixed-version handshake from the server
+// side. A node that understands the flag has to say so, because the client uses the absence of
+// this field to tell an old node apart from one that honoured the request — and reporting an
+// old node's async delete as a completed synchronous one is how an operator ends up switching
+// backends on a WAL that still has data on disk.
+func TestServer_MarkLogDeleted_EchoesSyncApplied(t *testing.T) {
+	fake := &fakeLogStore{
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, _ bool) error { return nil },
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	syncResp, err := s.MarkLogDeleted(context.Background(), &proto.MarkLogDeletedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, Sync: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, syncResp.GetSyncApplied(), "a sync request must be acknowledged as applied")
+
+	asyncResp, err := s.MarkLogDeleted(context.Background(), &proto.MarkLogDeletedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	require.NoError(t, err)
+	assert.False(t, asyncResp.GetSyncApplied(), "an async request promises nothing about local data")
+}
+
+// TestServer_EvictLog_AdminWrapper covers the HTTP-admin counterpart of the RPC, which shares
+// the same logStore call but drops the local-data answer.
+func TestServer_EvictLog_AdminWrapper(t *testing.T) {
+	var gotSync bool
+	fake := &fakeLogStore{
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, sync bool) error {
+			gotSync = sync
+			return nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	require.NoError(t, s.EvictLog(context.Background(), "b", "r", 1, true))
+	assert.True(t, gotSync, "the admin path must pass the sync flag through")
+
+	failing := &fakeLogStore{
+		evictLogFn: func(ctx context.Context, bn, rp string, logId int64, _ bool) error {
+			return assert.AnError
+		},
+	}
+	s2 := createTestServerWithFakeLogStore(failing)
+	defer s2.cancel()
+	assert.Error(t, s2.EvictLog(context.Background(), "b", "r", 1, false))
 }

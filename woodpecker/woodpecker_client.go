@@ -47,6 +47,19 @@ type Client interface {
 	DeleteLog(ctx context.Context, logName string) error
 	// DeleteAllLogs deletes all logs managed by this client.
 	DeleteAllLogs(ctx context.Context) error
+	// DeleteLogSync deletes a log and waits until every node has reclaimed its local data,
+	// so the return means the log holds nothing anywhere. The stats report what was actually
+	// removed per tier; see DeleteStats for why that is worth returning.
+	DeleteLogSync(ctx context.Context, logName string) (DeleteStats, error)
+	// DeleteAllLogsSync is DeleteAllLogs with the same wait-for-reclaim guarantee.
+	DeleteAllLogsSync(ctx context.Context) (DeleteStats, error)
+	// ClearMeta wipes this instance's content metadata and re-seeds the instance-level keys.
+	// See ClearMetaExceptLogIdGen for the safe default.
+	ClearMeta(ctx context.Context, clearLogIdGen bool) error
+	// ClearMetaExceptLogIdGen wipes the instance's content metadata while preserving the log
+	// id counter, so a reused instance can never hand a new log a directory that an old log's
+	// objects may still occupy. This is the form callers should use.
+	ClearMetaExceptLogIdGen(ctx context.Context) error
 	// LogExists checks if a log with the specified name exists.
 	LogExists(ctx context.Context, logName string) (bool, error)
 	// GetAllLogs retrieves all log names.
@@ -78,6 +91,10 @@ type woodpeckerClient struct {
 	// object storage client for direct read of sealed segments
 	objectStorageOnce   sync.Once
 	objectStorageClient storageclient.ObjectStorage
+
+	// object storage client used by log deletion; independent of the direct-read flag
+	cleanupStorageMu     sync.Mutex
+	cleanupStorageClient storageclient.ObjectStorage
 
 	// close state
 	closeState atomic.Bool
@@ -256,7 +273,18 @@ func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error 
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, logName)
+	_, err := deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), logName, false)
+	return err
+}
+
+// DeleteLogSync deletes the log and waits for every node to reclaim its local data.
+func (c *woodpeckerClient) DeleteLogSync(ctx context.Context, logName string) (DeleteStats, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return DeleteStats{}, werr.ErrWoodpeckerClientClosed
+	}
+	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), logName, true)
 }
 
 // DeleteAllLogs deletes all logs managed by this client.
@@ -266,7 +294,76 @@ func (c *woodpeckerClient) DeleteAllLogs(ctx context.Context) error {
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg)
+	_, err := deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), false)
+	return err
+}
+
+// DeleteAllLogsSync deletes every log and waits for local reclaim on each.
+func (c *woodpeckerClient) DeleteAllLogsSync(ctx context.Context) (DeleteStats, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return DeleteStats{}, werr.ErrWoodpeckerClientClosed
+	}
+	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), true)
+}
+
+// ClearMeta wipes this instance's content metadata.
+func (c *woodpeckerClient) ClearMeta(ctx context.Context, clearLogIdGen bool) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	if _, err := sweepParkedLogObjects(ctx, c.Metadata, c.cfg, c.getOrCreateCleanupStorage(ctx)); err != nil {
+		return err
+	}
+	return c.Metadata.ClearMeta(ctx, clearLogIdGen)
+}
+
+// ClearMetaExceptLogIdGen wipes content metadata but keeps the log id counter.
+func (c *woodpeckerClient) ClearMetaExceptLogIdGen(ctx context.Context) error {
+	return c.ClearMeta(ctx, false)
+}
+
+// getOrCreateCleanupStorage lazily builds the object-storage client the delete path uses.
+//
+// Deliberately separate from getOrCreateObjectStorageClient: that one is gated on the
+// direct-read feature flag, and cleanup must work regardless of whether direct read is on.
+//
+// Deliberately not a sync.Once. NewObjectStorage is not a local construction — NewMinioHandler
+// makes BucketExists/MakeBucket calls with retries — so a brief outage, a credential hiccup,
+// or a caller context expiring mid-retry is enough to fail it. With a Once, that one failure
+// is permanent for the life of the client: the Once is spent, the field stays nil, and every
+// later delete refuses with "object storage client unavailable" because deleting metadata
+// while objects remain would strand them. These clients are long-lived inside Milvus, so the
+// only recovery would be a process restart.
+//
+// This is the opposite trade-off from getOrCreateObjectStorageClient, where a spent Once only
+// disables direct read — a performance fallback, not a correctness stop.
+//
+// The lock is held across construction so concurrent deletes do not each build a client; the
+// loser of the race sees the winner's result.
+func (c *woodpeckerClient) getOrCreateCleanupStorage(ctx context.Context) storageclient.ObjectStorage {
+	if c.cfg.Woodpecker.Storage.IsStorageLocal() {
+		return nil
+	}
+	c.cleanupStorageMu.Lock()
+	defer c.cleanupStorageMu.Unlock()
+	if c.cleanupStorageClient != nil {
+		return c.cleanupStorageClient
+	}
+	cli, err := storageclient.NewObjectStorage(ctx, c.cfg)
+	if err != nil {
+		// Leave the field nil so the next call retries. The caller refuses to delete
+		// metadata without a storage client, so a nil here fails the delete rather than
+		// silently skipping object cleanup.
+		logger.Ctx(ctx).Warn("failed to create object storage client for cleanup; will retry on next delete",
+			zap.Error(err))
+		return nil
+	}
+	c.cleanupStorageClient = cli
+	return c.cleanupStorageClient
 }
 
 // LogExists checks if a log with the specified name exists.
