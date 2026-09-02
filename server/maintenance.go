@@ -182,7 +182,7 @@ func (i *idleProcessorCleanupTask) Run(ctx context.Context) error {
 //
 // It deliberately does NOT touch the marker or the deleting gate. The gate is what makes
 // getOrCreateSegmentProcessor reject an arriving append, so it has to outlive the client-side
-// work that follows a fence — object deletion and metadata deletion. Dropping it here would
+// work that follows the delete mark — object deletion and metadata deletion. Dropping it here would
 // let a new writer rebuild a processor and write fresh blocks into the prefix that was just
 // enumerated, invisible to the enumeration that already ran and unreferenced by any metadata
 // afterwards.
@@ -222,7 +222,7 @@ func removeLocalData(ctx context.Context, store *logStore, m deleteMarker) (bool
 // and prunes the in-memory deleting-set entry.
 //
 // This is the grace-based path. By the time it runs, the grace period has elapsed since the
-// fence, so the client-side deletion it was racing has had its window and the gate can go.
+// mark, so the client-side deletion it was racing has had its window and the gate can go.
 // The synchronous path calls removeLocalData directly and leaves the marker in place, so this
 // task is what eventually retires it.
 //

@@ -372,18 +372,18 @@ func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) e
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	_, err := deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), logName, false)
+	_, err := deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), logName, false, newDeleteOptions(nil))
 	return err
 }
 
 // DeleteLogSync deletes the log and waits for the local data to be reclaimed.
-func (c *woodpeckerEmbedClient) DeleteLogSync(ctx context.Context, logName string) (DeleteStats, error) {
+func (c *woodpeckerEmbedClient) DeleteLogSync(ctx context.Context, logName string, opts ...DeleteOption) (DeleteStats, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return DeleteStats{}, werr.ErrWoodpeckerClientClosed
 	}
-	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), logName, true)
+	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), logName, true, newDeleteOptions(opts))
 }
 
 // DeleteAllLogs deletes all logs managed by this client.
@@ -393,18 +393,18 @@ func (c *woodpeckerEmbedClient) DeleteAllLogs(ctx context.Context) error {
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	_, err := deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), false)
+	_, err := deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), false, newDeleteOptions(nil))
 	return err
 }
 
 // DeleteAllLogsSync deletes every log and waits for local reclaim on each.
-func (c *woodpeckerEmbedClient) DeleteAllLogsSync(ctx context.Context) (DeleteStats, error) {
+func (c *woodpeckerEmbedClient) DeleteAllLogsSync(ctx context.Context, opts ...DeleteOption) (DeleteStats, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return DeleteStats{}, werr.ErrWoodpeckerClientClosed
 	}
-	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), true)
+	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.cleanupStorage(), true, newDeleteOptions(opts))
 }
 
 // ClearMeta wipes this instance's content metadata.
