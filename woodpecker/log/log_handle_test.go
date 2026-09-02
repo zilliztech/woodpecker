@@ -1877,8 +1877,10 @@ func TestLogHandle_ShouldMoveToTruncationPoint(t *testing.T) {
 	})
 }
 
-// TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_WithActiveSeg tests truncation with active segment needing update
-func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_WithActiveSeg(t *testing.T) {
+// TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_SkipsFrontierAndLaterSegments tests that
+// only finalized segments strictly below the truncation point are marked: the frontier
+// segment itself and anything after it are left alone regardless of their state.
+func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_SkipsFrontierAndLaterSegments(t *testing.T) {
 	logHandle, mockMeta := createMockLogHandle(t)
 	ctx := context.Background()
 
@@ -1891,7 +1893,7 @@ func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_WithActiveSeg(t *testing.T)
 	}, nil)
 
 	segments := map[int64]*meta.SegmentMeta{
-		0: {Metadata: &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Active}, Revision: 1},
+		0: {Metadata: &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Sealed}, Revision: 1},
 		3: {Metadata: &proto.SegmentMetadata{SegNo: 3, State: proto.SegmentState_Completed}, Revision: 1},
 		5: {Metadata: &proto.SegmentMetadata{SegNo: 5, State: proto.SegmentState_Active}, Revision: 1}, // truncation segment - skip
 		8: {Metadata: &proto.SegmentMetadata{SegNo: 8, State: proto.SegmentState_Active}, Revision: 1}, // after truncation - skip
@@ -1901,7 +1903,7 @@ func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_WithActiveSeg(t *testing.T)
 	// Only segments 0 and 3 (before truncation seg 5) should be marked as truncated
 	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", int64(1), mock.MatchedBy(func(sm *meta.SegmentMeta) bool {
 		return sm.Metadata.State == proto.SegmentState_Truncated && sm.Metadata.SegNo == 0
-	}), proto.SegmentState_Active).Return(nil)
+	}), proto.SegmentState_Sealed).Return(nil)
 	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", int64(1), mock.MatchedBy(func(sm *meta.SegmentMeta) bool {
 		return sm.Metadata.State == proto.SegmentState_Truncated && sm.Metadata.SegNo == 3
 	}), proto.SegmentState_Completed).Return(nil)
@@ -1924,7 +1926,7 @@ func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_UpdateError(t *testing.T) {
 	}, nil)
 
 	segments := map[int64]*meta.SegmentMeta{
-		0: {Metadata: &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Active}, Revision: 1},
+		0: {Metadata: &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Completed}, Revision: 1},
 	}
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(segments, nil)
 
@@ -2405,4 +2407,112 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_RollingNextSegmentAlreadyExi
 
 	mockOldSegment.AssertExpectations(t)
 	mockMeta.AssertExpectations(t)
+}
+
+// truncationAuditSegments returns a snapshot with a still-Active segment sitting below the
+// truncation frontier -- the shape a roll produces when it found a non-empty append queue:
+// segment 4 is the new writable one, segment 2 was rolled away from but its completion has
+// not published Completed yet.
+func truncationAuditSegments() map[int64]*meta.SegmentMeta {
+	return map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: 10}, Revision: 11},
+		2: {Metadata: &proto.SegmentMetadata{SegNo: 2, State: proto.SegmentState_Active, LastEntryId: -1}, Revision: 22},
+		3: {Metadata: &proto.SegmentMetadata{SegNo: 3, State: proto.SegmentState_Sealed, LastEntryId: 30}, Revision: 33},
+		4: {Metadata: &proto.SegmentMetadata{SegNo: 4, State: proto.SegmentState_Active, LastEntryId: -1}, Revision: 44},
+	}
+}
+
+// TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_OnlyTruncatesFinalizedSegments pins the
+// invariant the auditor depends on: it must never rewrite a segment that is still Active.
+// Doing so bumps the segment key's etcd revision, which fails the CAS of that segment's own
+// in-flight completion; completion reads ErrMetadataRevisionInvalid as a writer takeover and
+// fences its LogWriter. Asserting that no update is issued for the Active segment is
+// therefore the same as asserting that its completion cannot be made to lose.
+func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_OnlyTruncatesFinalizedSegments(t *testing.T) {
+	t.Run("SkipsActiveSegmentBelowFrontier", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{TruncatedSegmentId: 4, TruncatedEntryId: 5},
+			Revision: 1,
+		}, nil)
+		mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(truncationAuditSegments(), nil)
+
+		var updatedSegIds []int64
+		var updatedFromStates []proto.SegmentState
+		mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", int64(1), mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, _ string, _ int64, segMeta *meta.SegmentMeta, oldState proto.SegmentState) error {
+				updatedSegIds = append(updatedSegIds, segMeta.Metadata.SegNo)
+				updatedFromStates = append(updatedFromStates, oldState)
+				return nil
+			})
+
+		require.NoError(t, logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx))
+
+		// 1 (Completed) and 3 (Sealed) are finalized and below the frontier; 4 is the
+		// frontier itself and is skipped by segment id.
+		assert.ElementsMatch(t, []int64{1, 3}, updatedSegIds)
+		// The regression: segment 2 must not be written at all, and no transition may
+		// ever originate from Active.
+		assert.NotContains(t, updatedSegIds, int64(2))
+		assert.NotContains(t, updatedFromStates, proto.SegmentState_Active)
+	})
+
+	t.Run("PicksUpTheSegmentOnceCompletionPublishesCompleted", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{TruncatedSegmentId: 4, TruncatedEntryId: 5},
+			Revision: 1,
+		}, nil)
+
+		// Cycle 1 sees segment 2 mid-completion; cycle 2 sees the Completed it published.
+		firstCycle := truncationAuditSegments()
+		secondCycle := truncationAuditSegments()
+		secondCycle[2].Metadata.State = proto.SegmentState_Completed
+		secondCycle[2].Metadata.LastEntryId = 20
+		secondCycle[1].Metadata.State = proto.SegmentState_Truncated
+		secondCycle[3].Metadata.State = proto.SegmentState_Truncated
+		mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(firstCycle, nil).Once()
+		mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(secondCycle, nil).Once()
+
+		var cycleTwoSegIds []int64
+		var sawFirstCycle bool
+		mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", int64(1), mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, _ string, _ int64, segMeta *meta.SegmentMeta, _ proto.SegmentState) error {
+				if sawFirstCycle {
+					cycleTwoSegIds = append(cycleTwoSegIds, segMeta.Metadata.SegNo)
+				}
+				return nil
+			})
+
+		require.NoError(t, logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx))
+		sawFirstCycle = true
+		require.NoError(t, logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx))
+
+		// Skipping costs exactly one auditor cycle: nothing is lost, the segment is
+		// truncated on the next pass.
+		assert.Equal(t, []int64{2}, cycleTwoSegIds)
+	})
+
+	t.Run("SkipsSegmentsAlreadyTruncated", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		segments := truncationAuditSegments()
+		segments[1].Metadata.State = proto.SegmentState_Truncated
+		segments[2].Metadata.State = proto.SegmentState_Truncated
+		segments[3].Metadata.State = proto.SegmentState_Truncated
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{TruncatedSegmentId: 4, TruncatedEntryId: 5},
+			Revision: 1,
+		}, nil)
+		mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(segments, nil)
+
+		// No UpdateSegmentMetadata expectation: any call is an unexpected-call failure.
+		require.NoError(t, logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx))
+	})
 }
