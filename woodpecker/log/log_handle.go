@@ -907,8 +907,19 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 			continue
 		}
 
-		if segMetadata.Metadata.State == proto.SegmentState_Truncated {
-			// already truncated, skip
+		// Only a finalized segment may be truncated. Truncated is already done, and an
+		// Active segment still has an in-flight completion holding the revision the
+		// segment was created with: marking it here bumps that revision, so completion's
+		// CAS fails with ErrMetadataRevisionInvalid, which it reads as a writer takeover
+		// and answers by fencing its own LogWriter. Such a segment exists whenever a roll
+		// found a non-empty append queue -- the new segment starts taking writes, and the
+		// truncation frontier can reach past the old one, while its completion is still
+		// running fence/complete RPCs. Skipping it costs one auditor cycle: the next pass
+		// sees Completed and truncates it then. It also keeps the truncated metadata
+		// well-formed, since an Active segment still carries LastEntryId=-1 and
+		// CompletionTime=0 from storeNewSegmentMeta.
+		if segMetadata.Metadata.State != proto.SegmentState_Completed &&
+			segMetadata.Metadata.State != proto.SegmentState_Sealed {
 			continue
 		}
 
