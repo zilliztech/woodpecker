@@ -111,7 +111,7 @@ tests/monitor/
 |---|---|---|---|---|
 | `woodpecker_client_read_requests_total` | Counter | log_id | Total read requests | Read QPS |
 | `woodpecker_client_read_entries_total` | Counter | log_id | Total entries read | Read throughput (entries) |
-| `woodpecker_client_reader_bytes_read` | Counter | log_id, reader_name | Bytes read | Read throughput (bytes) |
+| `woodpecker_client_reader_bytes_read` | Counter | log_id | Bytes read | Read throughput (bytes) |
 | `woodpecker_client_reader_operation_latency` | Histogram | log_id, operation, status | Reader operation latency | Read latency P50/P99 |
 
 ### LogHandle / SegmentHandle Module
