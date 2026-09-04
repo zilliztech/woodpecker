@@ -127,7 +127,19 @@ func (r *RemoteResultChannel) ReadResult(ctx context.Context) (*AppendResult, er
 	// If gRPC stream is available, read from it
 	r.mu.RLock()
 	ch := r.ch
+	cancel := r.cancel
 	r.mu.RUnlock()
+
+	// Recv observes only the stream's own context, which carries no deadline, so
+	// the caller's budget has to be enforced by cancelling that stream when it
+	// runs out - the same device AppendEntry already uses to bound the first
+	// response. Without this ctx is decorative on this path: a peer that accepts
+	// the entry and then goes silent blocks the read for as long as the
+	// connection survives.
+	if deadline, ok := ctx.Deadline(); ok && cancel != nil {
+		budgetTimer := time.AfterFunc(time.Until(deadline), cancel)
+		defer budgetTimer.Stop()
+	}
 
 	resultResponse, readErr := ch.Recv()
 	if readErr != nil {
