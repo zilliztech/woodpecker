@@ -80,11 +80,30 @@ func TestQuorumNodeScopes(t *testing.T) {
 }
 
 func TestActiveSegmentNodes(t *testing.T) {
+	// node-unmapped has no replica entry at all. Its AZ is reported as Unknown
+	// rather than left blank: a blank label collapses into an unnamed bucket that
+	// reads like an ordinary aggregation, so a cluster that cannot determine its
+	// own placement looks indistinguishable from a healthy one.
 	assert.Equal(t, []metrics.ActiveSegmentNode{
 		{Node: "node-remote-a", AZ: "az-remote-a"},
 		{Node: "node-local", AZ: "az-local"},
-		{Node: "node-unmapped", AZ: ""},
+		{Node: "node-unmapped", AZ: topology.Unknown},
 	}, activeSegmentNodes(scopeTestQuorum()))
+}
+
+// A replica that registered while its own REGION/AVAILABILITY_ZONE were unset
+// carries an entry with an empty Az — different from having no entry at all, and
+// the case actually seen in the field. Both must reach the label as Unknown.
+func TestActiveSegmentNodes_ReplicaWithoutPlacement(t *testing.T) {
+	quorum := &proto.QuorumInfo{
+		Id: 1, Aq: 1, Es: 1, Wq: 1,
+		Nodes:    []string{"node-unplaced"},
+		Replicas: []*proto.QuorumNode{{Endpoint: "node-unplaced", Region: "", Az: ""}},
+	}
+
+	assert.Equal(t, []metrics.ActiveSegmentNode{
+		{Node: "node-unplaced", AZ: topology.Unknown},
+	}, activeSegmentNodes(quorum))
 }
 
 func TestOrderedQuorumReadCandidates_CarriesScope(t *testing.T) {

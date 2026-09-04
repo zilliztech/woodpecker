@@ -282,6 +282,7 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 	}
 	// init logger
 	logger.InitLogger(cfg)
+	warnIfPlacementUnknown(ctx)
 	// Initialize metadata provider
 	metadataProvider := meta.NewMetadataProvider(ctx, etcdCli, cfg)
 	// Detect and store condition write capability if storage client is available

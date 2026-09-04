@@ -648,9 +648,12 @@ func activeSegmentNodes(quorumInfo *proto.QuorumInfo) []metrics.ActiveSegmentNod
 
 	members := make([]metrics.ActiveSegmentNode, 0, len(nodes))
 	for _, node := range nodes {
-		member := metrics.ActiveSegmentNode{Node: node}
+		// A replica whose placement was never configured is labelled Unknown
+		// rather than left blank: a blank label aggregates into an unnamed bucket
+		// that reads like a normal result, so the gap goes unnoticed.
+		member := metrics.ActiveSegmentNode{Node: node, AZ: topology.Unknown}
 		if placement := placements[node]; placement != nil {
-			member.AZ = placement.Az
+			member.AZ = topology.LabelOrUnknown(placement.Az)
 		}
 		members = append(members, member)
 	}

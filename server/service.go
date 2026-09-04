@@ -118,6 +118,19 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 	if err := configuration.ValidateMinioConfig(); err != nil {
 		return nil, err
 	}
+	// Placement is optional — a single-AZ deployment has nothing to declare — but
+	// an unset REGION/AVAILABILITY_ZONE must not pass silently. It is published to
+	// gossip and persisted into every segment's quorum info, so every client that
+	// later reads it back degrades all of its cross-AZ traffic accounting to
+	// "unknown" with nothing anywhere saying why.
+	if serverConfig.Region == "" || serverConfig.AZ == "" {
+		logger.Ctx(ctx).Warn("node placement is unknown: cross-AZ traffic accounting will be unavailable for every client of this node",
+			zap.String("regionEnv", topology.RegionEnvKey),
+			zap.String("azEnv", topology.AvailabilityZoneEnvKey),
+			zap.String("region", topology.LabelOrUnknown(serverConfig.Region)),
+			zap.String("az", topology.LabelOrUnknown(serverConfig.AZ)),
+			zap.String("clusterName", serverConfig.ClusterName))
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	var storageCli storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {

@@ -48,3 +48,54 @@ func TestScope(t *testing.T) {
 		})
 	}
 }
+
+func TestLabelOrUnknown(t *testing.T) {
+	assert.Equal(t, Unknown, LabelOrUnknown(""))
+	assert.Equal(t, "us-west-2c", LabelOrUnknown("us-west-2c"))
+	assert.Equal(t, Unknown, LabelOrUnknown(Unknown))
+}
+
+func TestCurrentPlacement(t *testing.T) {
+	t.Run("fully configured", func(t *testing.T) {
+		t.Setenv(RegionEnvKey, "region-a")
+		t.Setenv(AvailabilityZoneEnvKey, "az-a")
+
+		region, az, configured := CurrentPlacement()
+		assert.Equal(t, "region-a", region)
+		assert.Equal(t, "az-a", az)
+		assert.True(t, configured)
+	})
+
+	t.Run("half configured is not configured", func(t *testing.T) {
+		// A region without an AZ cannot classify anything: Scope needs both.
+		t.Setenv(RegionEnvKey, "region-a")
+		t.Setenv(AvailabilityZoneEnvKey, "")
+
+		_, _, configured := CurrentPlacement()
+		assert.False(t, configured)
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv(RegionEnvKey, "")
+		t.Setenv(AvailabilityZoneEnvKey, "")
+
+		region, az, configured := CurrentPlacement()
+		assert.Equal(t, "", region)
+		assert.Equal(t, "", az)
+		assert.False(t, configured)
+	})
+}
+
+// The empty string is Scope's "never configured" sentinel and must stay that way.
+// Rewriting placement to Unknown before classifying is the obvious simplification
+// once Unknown exists, and it is a trap: two unplaced processes would then compare
+// equal on both region and AZ and be classified ScopeLocal, reporting every byte
+// between them as node-local traffic. That is strictly worse than reporting it as
+// unknown, and it would be invisible. LabelOrUnknown is documented as label-only
+// for this reason; this test fails loudly if the boundary is ever crossed.
+func TestScope_EmptyIsTheUnsetSentinel(t *testing.T) {
+	assert.Equal(t, ScopeUnknown, Scope("", "", "", ""),
+		"two unplaced processes are unknown to each other")
+	assert.Equal(t, ScopeLocal, Scope(Unknown, Unknown, Unknown, Unknown),
+		"pre-rewriting placement to Unknown makes unplaced processes look co-located — do not do it")
+}

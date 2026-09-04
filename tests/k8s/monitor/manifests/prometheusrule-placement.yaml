@@ -1,0 +1,31 @@
+# A cluster that cannot determine its own placement should say so without anyone
+# opening a dashboard. An unset REGION/AVAILABILITY_ZONE is not an outage, but it
+# silently disables every cross-AZ traffic metric, and a blank label reads like a
+# normal aggregation rather than like missing data.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: woodpecker-placement
+  namespace: woodpecker
+  labels:
+    app.kubernetes.io/name: woodpecker
+    app.kubernetes.io/component: client
+spec:
+  groups:
+    - name: woodpecker-placement
+      rules:
+        - alert: WoodpeckerPlacementUnknown
+          # Held for 10m so a rolling restart, during which a node briefly
+          # re-registers, does not trip it.
+          expr: count(woodpecker_client_active_segment_node{az="unknown"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Woodpecker replicas report an unknown availability zone
+            description: >-
+              {{ $value }} active-segment replicas carry az="unknown", so cross-AZ
+              traffic accounting is unavailable for them. Either the logstore
+              nodes or the client are missing REGION / AVAILABILITY_ZONE; check
+              the "node placement is unknown" / "client placement is unknown"
+              warnings in their startup logs.
