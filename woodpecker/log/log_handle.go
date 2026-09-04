@@ -459,9 +459,35 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 	return nil
 }
 
-func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error) {
+func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segHandle segment.SegmentHandle, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetOrCreateWritableSegmentHandle")
 	defer sp.End()
+
+	// Every append passes through here, and the log handle lock makes this the only
+	// serialization point on that path. Time it from entry rather than from the
+	// point the lock is acquired: a caller parked at the mutex behind a roll then
+	// shows up as a slow cached lookup, and that wait is what a blocked append
+	// actually experiences -- it is visible nowhere else today.
+	//
+	// The three paths cost wildly different amounts (a map lookup; an etcd write;
+	// an etcd write plus a completion that is synchronous when the append queue
+	// happens to be empty), so each carries its own operation label. Averaging them
+	// would bury the expensive ones under the cheap path's call volume, which is
+	// exactly the mistake that made rolling cost look negligible.
+	start := time.Now()
+	logIdStr := strconv.FormatInt(l.Id, 10)
+	op := "get_or_create_writable_segment"
+	defer func() {
+		// Registered before `defer l.Unlock()` below, so LIFO ordering runs this
+		// after the lock is released: the observation costs the critical section
+		// nothing.
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(l.logNs, logIdStr, op, status).Inc()
+		metrics.WpLogHandleOperationLatency.WithLabelValues(l.logNs, logIdStr, op, status).Observe(float64(time.Since(start).Milliseconds()))
+	}()
 
 	l.Lock()
 	defer l.Unlock()
@@ -470,6 +496,7 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 
 	// create new segment handle if not exists
 	if !writableExists {
+		op = "get_or_create_writable_segment_create"
 		handle, err := l.createAndCacheWritableSegmentHandle(ctx, writerInvalidationNotifier)
 		if err != nil {
 			if werr.ErrMetadataSegmentAlreadyExists.Is(err) {
@@ -488,6 +515,7 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 
 	// Check if the writable segment handle needs to be rolling close and create a new one
 	if l.shouldRollingCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle) {
+		op = "get_or_create_writable_segment_roll"
 		logger.Ctx(ctx).Debug("start to close segment",
 			zap.String("logName", l.Name),
 			zap.Int64("logId", l.GetId()),
