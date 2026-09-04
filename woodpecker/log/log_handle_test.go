@@ -2516,3 +2516,86 @@ func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_OnlyTruncatesFinalizedSegme
 		require.NoError(t, logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx))
 	})
 }
+
+// GetOrCreateWritableSegmentHandle is the only serialization point on the append
+// path, and its three branches cost wildly different amounts: a map lookup, an
+// etcd write, or an etcd write plus a completion that is synchronous when the
+// append queue happens to be empty. They must not share one label — the cheap
+// path's call volume would bury the expensive ones, which is precisely how
+// rolling cost came to look negligible.
+func TestGetOrCreateWritableSegmentHandle_LabelsEachPath(t *testing.T) {
+	count := func(l *logHandleImpl, op, status string) float64 {
+		return testutil.ToFloat64(metrics.WpLogHandleOperationsTotal.WithLabelValues(l.logNs, "1", op, status))
+	}
+
+	t.Run("cached handle", func(t *testing.T) {
+		metrics.WpLogHandleOperationsTotal.Reset()
+		logHandle, _ := createMockLogHandle(t)
+
+		seg := mocks_segment_handle.NewSegmentHandle(t)
+		logHandle.SegmentHandles[1] = seg
+		logHandle.WritableSegmentId = 1
+		seg.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
+		seg.EXPECT().GetSize(mock.Anything).Return(int64(1))
+		seg.EXPECT().GetBlocksCount(mock.Anything).Return(int64(1))
+
+		handle, err := logHandle.GetOrCreateWritableSegmentHandle(context.Background(), nil)
+
+		require.NoError(t, err)
+		assert.Equal(t, seg, handle)
+		assert.Equal(t, float64(1), count(logHandle, "get_or_create_writable_segment", "success"))
+		assert.Equal(t, float64(0), count(logHandle, "get_or_create_writable_segment_create", "success"))
+		assert.Equal(t, float64(0), count(logHandle, "get_or_create_writable_segment_roll", "success"))
+	})
+
+	t.Run("first creation", func(t *testing.T) {
+		metrics.WpLogHandleOperationsTotal.Reset()
+		logHandle, mockMeta := createMockLogHandle(t)
+		logHandle.WritableSegmentId = -1
+		mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.Anything).Return(nil)
+
+		handle, err := logHandle.GetOrCreateWritableSegmentHandle(context.Background(), nil)
+
+		require.NoError(t, err)
+		assert.NotNil(t, handle)
+		assert.Equal(t, float64(1), count(logHandle, "get_or_create_writable_segment_create", "success"))
+		assert.Equal(t, float64(0), count(logHandle, "get_or_create_writable_segment", "success"))
+	})
+
+	t.Run("first creation failure is labelled error", func(t *testing.T) {
+		metrics.WpLogHandleOperationsTotal.Reset()
+		logHandle, mockMeta := createMockLogHandle(t)
+		logHandle.WritableSegmentId = -1
+		mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.Anything).
+			Return(errors.New("storage error"))
+
+		handle, err := logHandle.GetOrCreateWritableSegmentHandle(context.Background(), nil)
+
+		require.Error(t, err)
+		assert.Nil(t, handle)
+		assert.Equal(t, float64(1), count(logHandle, "get_or_create_writable_segment_create", "error"))
+		assert.Equal(t, float64(0), count(logHandle, "get_or_create_writable_segment_create", "success"))
+	})
+
+	t.Run("roll", func(t *testing.T) {
+		metrics.WpLogHandleOperationsTotal.Reset()
+		logHandle, mockMeta := createMockLogHandle(t)
+
+		old := mocks_segment_handle.NewSegmentHandle(t)
+		logHandle.SegmentHandles[1] = old
+		logHandle.WritableSegmentId = 1
+		old.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
+		old.EXPECT().GetSize(mock.Anything).Return(int64(65 * 1024 * 1024)) // past MaxSize
+		old.EXPECT().GetBlocksCount(mock.Anything).Return(int64(1))
+		old.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+		old.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
+		mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.Anything).Return(nil)
+
+		handle, err := logHandle.GetOrCreateWritableSegmentHandle(context.Background(), nil)
+
+		require.NoError(t, err)
+		assert.NotNil(t, handle)
+		assert.Equal(t, float64(1), count(logHandle, "get_or_create_writable_segment_roll", "success"))
+		assert.Equal(t, float64(0), count(logHandle, "get_or_create_writable_segment", "success"))
+	})
+}

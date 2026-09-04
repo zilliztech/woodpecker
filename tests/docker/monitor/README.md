@@ -119,6 +119,7 @@ tests/monitor/
 | Metric Name | Type | Labels | Description | Key Design Metric |
 |---|---|---|---|---|
 | `woodpecker_client_log_handle_operations_total` | Counter | log_id, operation, status | LogHandle operation count | Metadata operation success rate |
+| `woodpecker_client_log_handle_operation_latency` | Histogram | log_id, operation, status | LogHandle operation latency | Cost of the writable-segment handoff every append passes through |
 | `woodpecker_client_segment_handle_operations_total` | Counter | log_id, operation, status | Segment operation count | Segment rolling/close frequency |
 | `woodpecker_client_segment_handle_pending_append_ops` | Gauge | log_id | Pending append operations | Write backpressure observation |
 | `woodpecker_client_writer_bytes_written` | Counter | log_id | Writer bytes written | Per-writer throughput |
