@@ -151,7 +151,7 @@ var (
 		Subsystem: clientRole,
 		Name:      "reader_bytes_read",
 		Help:      "Total bytes read by log readers",
-	}, []string{"log_ns", "log_id", "reader_name"})
+	}, []string{"log_ns", "log_id"})
 	WpLogReaderOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
