@@ -162,12 +162,6 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 		}
 		close(ch)
 	}
-	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
-	if err != nil {
-		callback(-1, -1, err)
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return <-ch
-	}
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
 		logger.Ctx(ctx).Warn("serialize message failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
@@ -176,6 +170,13 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 			LogMessageId: nil,
 			Err:          err,
 		}
+	}
+
+	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
+	if err != nil {
+		callback(-1, -1, err)
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
+		return <-ch
 	}
 
 	writableSegmentHandle.AppendAsync(ctx, bytes, callback)
