@@ -95,8 +95,38 @@ func (sl *SessionLock) GetSession() *concurrency.Session {
 	return sl.session
 }
 
+// metadataProviderEtcd is the etcd-backed MetadataProvider.
+//
+// Locking model. Per-log metadata writes take no lock at all. Each of them is a
+// single etcd transaction already guarded by the compare it needs:
+// StoreSegmentMetadata compares the parent log's existence and the segment's
+// absence, UpdateSegmentMetadata compares the segment's ModRevision,
+// DeleteSegmentMetadata compares its CreateRevision, DeleteLogMetadata compares
+// the log key's ModRevision. Those compares are not optional - a second client
+// process is not excluded by anything in this process, so etcd, not a mutex
+// here, is what makes concurrent metadata writes correct. A provider-wide lock
+// on top of them bought nothing and cost blast radius: one slow etcd write
+// stalled metadata writes for every log the client hosts.
+//
+// The two locks that remain each carry their reason at the field.
 type metadataProviderEtcd struct {
-	sync.Mutex
+	// stateMu guards closed, the only mutable field this struct has - every
+	// other field is set once in the constructor or is a sync.Map. It is never
+	// held across an etcd round-trip, so Close() and reader open never queue
+	// behind somebody else's request.
+	stateMu sync.Mutex
+
+	// instanceMu serializes the two operations that write instance-level keys
+	// shared by every log: CreateLog, which allocates from the log id
+	// generator, and ClearMeta, which wipes and re-seeds it. Both are rare and
+	// neither sits on a per-log write path.
+	//
+	// For CreateLog this is liveness, not correctness - its transaction is
+	// CAS-guarded and createLogUnsafe retries. But that retry budget is five
+	// attempts, which concurrent creation of more than five logs in one process
+	// would exhaust for no reason.
+	instanceMu sync.Mutex
+
 	client           *clientv3.Client
 	requestTimeout   time.Duration
 	logNs            string // for metrics label
@@ -115,10 +145,10 @@ type metadataProviderEtcd struct {
 	// Close() can stop every keepalive that would otherwise outlive it.
 	readerTempSessions sync.Map // map[*readerTempSession]struct{}
 
-	// closed is set by Close() under the provider mutex. It is what makes
-	// Close() and CreateReaderTempInfo mutually exclusive: the registry alone
-	// cannot express "this session was created too late to be retired", so
-	// every registration is gated on this flag under the same lock.
+	// closed is set by Close() under stateMu. It is what makes Close() and
+	// CreateReaderTempInfo mutually exclusive: the registry alone cannot
+	// express "this session was created too late to be retired", so every
+	// registration is gated on this flag under the same lock.
 	closed bool
 }
 
@@ -359,8 +389,10 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CreateLog")
 	defer sp.End()
 	startTime := time.Now()
-	e.Lock()
-	defer e.Unlock()
+	// The log id generator is the one key every log contends on, so this read
+	// and the transaction that consumes it stay serialized within the process.
+	e.instanceMu.Lock()
+	defer e.instanceMu.Unlock()
 	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
@@ -848,8 +880,6 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "StoreSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
-	e.Lock()
-	defer e.Unlock()
 	segmentKey := e.keyBuilder.BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentMeta.Metadata.GetSegNo()))
 	segmentMetadata, err := pb.Marshal(segmentMeta.Metadata)
 	if err != nil {
@@ -911,8 +941,6 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
-	e.Lock()
-	defer e.Unlock()
 	segmentKey := e.keyBuilder.BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentMeta.Metadata.GetSegNo()))
 	segmentMetadata, err := pb.Marshal(segmentMeta.Metadata)
 	if err != nil {
@@ -1067,8 +1095,6 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "DeleteSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
-	e.Lock()
-	defer e.Unlock()
 
 	segmentKey := e.keyBuilder.BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
 	ctx1, cancel := e.getContextWithTimeout(ctx)
@@ -1325,9 +1351,9 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 
 	// Fast path: don't grant a lease and write a key we would only have to
 	// revoke again. The authoritative check is at registration time below.
-	e.Lock()
+	e.stateMu.Lock()
 	alreadyClosed := e.closed
-	e.Unlock()
+	e.stateMu.Unlock()
 	if alreadyClosed {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -1400,9 +1426,9 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 	// and Close() retires the session, or Close() got there first and this
 	// create must undo itself - there is no third outcome where a live
 	// keepalive ends up tracked by nothing.
-	e.Lock()
+	e.stateMu.Lock()
 	if e.closed {
-		e.Unlock()
+		e.stateMu.Unlock()
 		if closeErr := e.closeReaderTempSession(session); closeErr != nil {
 			logger.Ctx(ctx).Warn("close reader temp info session for a closed provider failed",
 				zap.String("readerName", readerName), zap.Int64("logId", logId), zap.Error(closeErr))
@@ -1414,7 +1440,7 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 		return nil, werr.ErrMetadataWrite.WithCauseErrMsg("metadata provider is closed")
 	}
 	e.readerTempSessions.Store(readerSession, struct{}{})
-	e.Unlock()
+	e.stateMu.Unlock()
 
 	logger.Ctx(ctx).Debug("Created reader temporary information with session lease",
 		zap.String("readerName", readerName),
@@ -1708,7 +1734,7 @@ func (e *metadataProviderEtcd) CheckSessionLockAlive(ctx context.Context, sessio
 
 // Close shuts the provider down in three stages, deliberately ordered.
 //
-// First, under e.Lock(), it marks the provider closed and drains both session
+// First, under stateMu, it marks the provider closed and drains both session
 // registries. Marking closed is what stops CreateReaderTempInfo from
 // registering a session this scan would miss: a session registered after the
 // drain is tracked by nothing, and its keepalive runs on the etcd client's own
@@ -1727,9 +1753,9 @@ func (e *metadataProviderEtcd) CheckSessionLockAlive(ctx context.Context, sessio
 func (e *metadataProviderEtcd) Close() error {
 	startTime := time.Now()
 
-	e.Lock()
+	e.stateMu.Lock()
 	if e.closed {
-		e.Unlock()
+		e.stateMu.Unlock()
 		return nil
 	}
 	e.closed = true
@@ -1750,7 +1776,7 @@ func (e *metadataProviderEtcd) Close() error {
 		e.readerTempSessions.Delete(key)
 		return true
 	})
-	e.Unlock()
+	e.stateMu.Unlock()
 
 	// Stage two: stop every keepalive. Non-blocking, and enough on its own.
 	for _, entry := range readerSessions {
@@ -2347,14 +2373,13 @@ func (e *metadataProviderEtcd) DeleteLogMetadata(ctx context.Context, logName st
 	defer sp.End()
 	startTime := time.Now()
 
-	e.Lock()
-	defer e.Unlock()
 	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Read the active log key RAW so we can distinguish "absent" (idempotent no-op)
 	// from a genuine read error, and capture ModRevision + logId for CAS/scoping.
-	// (We hold e.Lock() throughout; do NOT call locking helpers like GetLogMeta here.)
+	// The ModRevision compare below is what makes this safe against a concurrent
+	// delete, or a delete and recreate of the same name, in this process or another.
 	logResp, err := e.client.Get(ctx1, e.keyBuilder.BuildLogKey(logName))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "delete_log_metadata", "error").Inc()
@@ -2466,7 +2491,13 @@ func (e *metadataProviderEtcd) parkLogInBatches(ctx context.Context, logName str
 	// the same second produce distinct parked keys rather than overwriting each other.
 	ts := time.Now().UnixNano()
 
-	// Read all segment kvs raw — we already hold e.Lock().
+	// Read all segment kvs raw.
+	//
+	// A segment stored between this read and the delete below is deleted without
+	// a parked copy. No lock here closes that window and none ever did: another
+	// client process parks and deletes without consulting this one. What is lost
+	// is one archived copy of a segment created while its own log was being
+	// deleted; the delete itself stays atomic and CAS-guarded.
 	segResp, err := e.client.Get(ctx, kb.BuildSegmentInstanceKey(logName, ""), clientv3.WithPrefix())
 	if err != nil {
 		return werr.ErrMetadataRead.WithCauseErr(err)

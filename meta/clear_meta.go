@@ -69,8 +69,10 @@ import (
 // time. Nothing reads it for behaviour; it exists as an "initialised" marker and for legacy
 // prefix detection.
 func (e *metadataProviderEtcd) ClearMeta(ctx context.Context, clearLogIdGen bool) error {
-	e.Lock()
-	defer e.Unlock()
+	// Shared with CreateLog: both write the instance-level keys, the log id
+	// generator among them.
+	e.instanceMu.Lock()
+	defer e.instanceMu.Unlock()
 	start := time.Now()
 	log := logger.Ctx(ctx)
 
