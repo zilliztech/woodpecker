@@ -123,6 +123,21 @@ tests/monitor/
 | `woodpecker_client_segment_handle_pending_append_ops` | Gauge | log_id | Pending append operations | Write backpressure observation |
 | `woodpecker_client_writer_bytes_written` | Counter | log_id | Writer bytes written | Per-writer throughput |
 
+### Progress Frontiers Module
+
+Four positions along one log, plotted together so the gaps between them are the
+signal. `read_frontier` is per reader; the other three describe the log itself.
+Entry ids restart at every segment, so compare entry values only within the same
+segment — the `Reader Segment Lag` panel exists because segment distance stays
+meaningful across boundaries.
+
+| Metric Name | Type | Labels | Description | Key Design Metric |
+|---|---|---|---|---|
+| `woodpecker_client_write_frontier_{segment,entry}` | Gauge | log_id | Highest position acknowledged for writes | How far the writer has committed |
+| `woodpecker_client_read_frontier_{segment,entry}` | Gauge | log_id, reader_name | Highest position delivered to the caller | Whether a reader is behind, or the log is simply idle |
+| `woodpecker_client_compaction_frontier_{segment,entry}` | Gauge | log_id | Highest position sealed by compaction | Compaction keeping up with writes |
+| `woodpecker_client_truncation_frontier_{segment,entry}` | Gauge | log_id | Current truncation point | Retention progress |
+
 ### Client Replica Placement Module
 
 `az_scope` is where the peer replica sits relative to the client: `local`,

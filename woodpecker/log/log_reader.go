@@ -166,6 +166,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
 			metrics.WpClientReadEntriesTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
 			metrics.WpLogReaderBytesRead.WithLabelValues(l.logNs, l.logIdStr, l.readerName).Add(float64(len(readEntryData.Values)))
+			metrics.SetReadFrontier(l.logNs, l.logIdStr, l.readerName, readEntryData.SegId, readEntryData.EntryId)
 			metrics.WpClientReadLatency.WithLabelValues(l.logNs, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return logMsg, nil
@@ -269,6 +270,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// update metrics
 		metrics.WpClientReadEntriesTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
 		metrics.WpLogReaderBytesRead.WithLabelValues(l.logNs, l.logIdStr, l.readerName).Add(float64(len(oneEntry.Values)))
+		metrics.SetReadFrontier(l.logNs, l.logIdStr, l.readerName, oneEntry.SegId, oneEntry.EntryId)
 		metrics.WpClientReadLatency.WithLabelValues(l.logNs, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return logMsg, nil
@@ -279,6 +281,11 @@ func (l *logBatchReaderImpl) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ReaderScopeName, "Close")
 	defer sp.End()
 	start := time.Now()
+
+	// Drop this reader's frontier series unconditionally: the reader is being
+	// discarded either way, and reader_name is unique per reader, so leaving it
+	// behind would add a permanently frozen series on every scanner restart.
+	metrics.ClearReadFrontier(l.logNs, l.logIdStr, l.readerName)
 
 	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.readerTempSession)
 	status := "success"
