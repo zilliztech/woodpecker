@@ -29,6 +29,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -102,6 +103,23 @@ type woodpeckerClient struct {
 	closeState atomic.Bool
 }
 
+// warnIfPlacementUnknown reports a client that cannot determine its own region
+// and availability zone. Such a client classifies every peer as ScopeUnknown no
+// matter how well the servers are configured, so all of its cross-AZ traffic
+// accounting is blind — and without this line nothing says so. Placement is
+// optional, so this is a warning rather than a startup failure.
+func warnIfPlacementUnknown(ctx context.Context) {
+	region, az, configured := topology.CurrentPlacement()
+	if configured {
+		return
+	}
+	logger.Ctx(ctx).Warn("client placement is unknown: every replica will be classified as scope unknown",
+		zap.String("regionEnv", topology.RegionEnvKey),
+		zap.String("azEnv", topology.AvailabilityZoneEnvKey),
+		zap.String("region", topology.LabelOrUnknown(region)),
+		zap.String("az", topology.LabelOrUnknown(az)))
+}
+
 func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clientv3.Client, managed bool) (Client, error) {
 	// Re-validate the object-storage section at the consumption point (the config may have
 	// been mutated after load); the client builds object-storage keys and RPC rootPath values
@@ -110,6 +128,7 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 		return nil, err
 	}
 	logger.InitLogger(cfg)
+	warnIfPlacementUnknown(ctx)
 	initTraceErr := tracer.InitTracer(cfg, "woodpecker", 1001)
 	if initTraceErr != nil {
 		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
