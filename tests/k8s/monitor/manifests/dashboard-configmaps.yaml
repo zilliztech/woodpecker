@@ -4196,6 +4196,11 @@ data:
               "expr": "woodpecker_client_truncation_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
               "legendFormat": "logID={{log_id}} truncated",
               "refId": "C"
+            },
+            {
+              "expr": "woodpecker_client_read_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
+              "legendFormat": "logID={{log_id}} reader={{reader_name}} read",
+              "refId": "D"
             }
           ],
           "title": "Segment Frontiers",
@@ -4257,6 +4262,11 @@ data:
               "expr": "woodpecker_client_truncation_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
               "legendFormat": "logID={{log_id}} truncated",
               "refId": "C"
+            },
+            {
+              "expr": "woodpecker_client_read_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
+              "legendFormat": "logID={{log_id}} reader={{reader_name}} read",
+              "refId": "D"
             }
           ],
           "title": "Entry Frontiers",
@@ -4311,6 +4321,58 @@ data:
             }
           ],
           "title": "Compaction Failure Rate by Reason",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "description": "How many segments each reader is behind the write frontier. Entry ids restart at every segment, so an entry-level difference across a segment boundary is meaningless; segment lag is not.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 50
+          },
+          "id": 115,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "woodpecker_client_write_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"} - on(log_ns, log_id) group_right() woodpecker_client_read_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
+              "legendFormat": "logID={{log_id}} reader={{reader_name}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Reader Segment Lag",
           "type": "timeseries"
         },
         {
