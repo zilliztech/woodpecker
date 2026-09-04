@@ -20,6 +20,8 @@ import (
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/zilliztech/woodpecker/common/topology"
 )
 
 // Client metrics are initialized at package level so they are always safe to use.
@@ -398,7 +400,7 @@ func setMonotonicFrontier(frontiers map[string]progressFrontier, segmentGauge, e
 
 // ActiveSegmentNode is one replica of a log's current writable segment: the
 // node's endpoint and the availability zone it sits in (empty when the quorum
-// metadata carries no placement for it).
+// metadata carries no placement for it, which reaches the metric as "unknown").
 type ActiveSegmentNode struct {
 	Node string
 	AZ   string
@@ -406,9 +408,16 @@ type ActiveSegmentNode struct {
 
 // SetActiveSegmentNodes marks each node of an active (writable) segment's quorum
 // with a value of 1 (one series per node). Call when a segment becomes writable.
+//
+// The az label goes through topology.LabelOrUnknown, at the metric boundary
+// rather than at each caller: an unset AZ arrives here from two directions —
+// a server that registered with no placement, and a quorum entry with no
+// placement recorded for that node at all — and `az=""` looks identical to a
+// real value on a dashboard. Normalising here means no future caller can
+// reintroduce the blank label by forgetting to.
 func SetActiveSegmentNodes(logNs, logId, segmentId string, nodes []ActiveSegmentNode) {
 	for _, node := range nodes {
-		WpActiveSegmentNode.WithLabelValues(logNs, logId, segmentId, node.Node, node.AZ).Set(1)
+		WpActiveSegmentNode.WithLabelValues(logNs, logId, segmentId, node.Node, topology.LabelOrUnknown(node.AZ)).Set(1)
 	}
 }
 

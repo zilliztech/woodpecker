@@ -95,6 +95,21 @@ type NodeStatus struct {
 
 // NewServer creates a new server instance with same bind/advertise ip/port
 func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, gossipSeeds []string) (*Server, error) {
+	// Placement is optional — a single-AZ deployment legitimately sets neither
+	// — but it is registered into gossip and persisted into every QuorumInfo
+	// this node joins, so an unset value is not a local matter. Said once here
+	// rather than left to be inferred from a dashboard full of "unknown".
+	if missing := topology.MissingPlacementEnv(); len(missing) > 0 {
+		logger.Ctx(ctx).Warn("topology placement is not configured; this node registers with no region/az and cannot classify peers as local or remote",
+			zap.Strings("unset", missing),
+			zap.String("clusterName", topology.GetCurrentClusterName()))
+	} else {
+		logger.Ctx(ctx).Info("topology placement",
+			zap.String("clusterName", topology.GetCurrentClusterName()),
+			zap.String("region", topology.GetCurrentRegion()),
+			zap.String("az", topology.GetCurrentAvailabilityZone()))
+	}
+
 	return NewServerWithConfig(ctx, configuration, &membership.ServerConfig{
 		NodeID:               "", // Will be set in Prepare()
 		BindPort:             bindPort,
