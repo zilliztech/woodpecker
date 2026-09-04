@@ -95,6 +95,8 @@ func TestAll(t *testing.T) {
 	t.Run("test store segment meta", testStoreSegmentMeta)
 	t.Run("test update segment meta", testUpdateSegmentMeta)
 	t.Run("test delete segment meta", testDeleteSegmentMeta)
+	t.Run("test segment metadata writes take no provider lock", testSegmentMetadataWritesTakeNoProviderLock)
+	t.Run("test concurrent segment metadata writes across logs", testConcurrentSegmentMetadataWritesAcrossLogs)
 	t.Run("test log writer lock", testLogWriterLock)
 	t.Run("test update log meta for truncation", testUpdateLogMetaForTruncation)
 	t.Run("test clear meta preserves counter", testClearMetaPreservesCounterAndIsRepeatable)
