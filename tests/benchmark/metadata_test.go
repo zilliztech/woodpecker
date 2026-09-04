@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 func testMetaCfg() *config.Configuration {
@@ -144,6 +146,84 @@ func TestClear(t *testing.T) {
 		t.Fatalf("fatal %v", err)
 	}
 	t.Logf("clear finished")
+}
+
+// TestSegmentMetadataWriteScaling measures whether segment metadata writes for
+// different logs proceed in parallel.
+//
+// One metadata provider is shared by every log a client hosts. While it held a
+// provider-wide mutex across the etcd round-trip, these writes could not
+// pipeline: total throughput was one write at a time no matter how many logs
+// were writing, and a single slow etcd write stalled every log rather than the
+// one that issued it. With no such lock the wall time for N logs should stay
+// close to the wall time for one, and throughput should rise roughly with N
+// until etcd itself is the limit.
+//
+// Manual: needs an etcd at localhost:2379. Read the writes/sec column across
+// rows — flat means something is serializing again.
+func TestSegmentMetadataWriteScaling(t *testing.T) {
+	t.Skipf("for manual measurement against a real etcd")
+
+	const writesPerLog = 200
+	concurrencies := []int{1, 2, 4, 8, 16, 32}
+
+	etcdCli, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{"localhost:2379"},
+		DialTimeout: 5 * time.Second,
+	})
+	assert.NoError(t, err)
+	defer etcdCli.Close()
+
+	ctx := context.Background()
+	_, err = etcdCli.Delete(ctx, meta.LegacyServicePrefix, clientv3.WithPrefix())
+	assert.NoError(t, err)
+
+	metaProvider := meta.NewMetadataProvider(ctx, etcdCli, testMetaCfg())
+	defer metaProvider.Close()
+	assert.NoError(t, metaProvider.InitIfNecessary(ctx))
+
+	t.Logf("=== Segment Metadata Write Scaling (%d writes per log) ===", writesPerLog)
+	t.Logf("%8s %12s %14s", "logs", "elapsed", "writes/sec")
+
+	for _, logCount := range concurrencies {
+		names := make([]string, logCount)
+		logIds := make([]int64, logCount)
+		for i := 0; i < logCount; i++ {
+			names[i] = fmt.Sprintf("scaling_%d_%d_%d", logCount, i, time.Now().UnixNano())
+			assert.NoError(t, metaProvider.CreateLog(ctx, names[i]))
+			logMeta, getErr := metaProvider.GetLogMeta(ctx, names[i])
+			assert.NoError(t, getErr)
+			logIds[i] = logMeta.Metadata.LogId
+		}
+
+		start := time.Now()
+		var wg sync.WaitGroup
+		for i := 0; i < logCount; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				for segNo := 0; segNo < writesPerLog; segNo++ {
+					segmentMeta := &meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
+						SegNo: int64(segNo),
+						State: proto.SegmentState_Active,
+					}}
+					if storeErr := metaProvider.StoreSegmentMetadata(ctx, names[i], logIds[i], segmentMeta); storeErr != nil {
+						t.Errorf("log %s segment %d: %v", names[i], segNo, storeErr)
+						return
+					}
+				}
+			}(i)
+		}
+		wg.Wait()
+		elapsed := time.Since(start)
+
+		total := logCount * writesPerLog
+		t.Logf("%8d %12v %14.1f", logCount, elapsed.Round(time.Millisecond), float64(total)/elapsed.Seconds())
+
+		for _, name := range names {
+			assert.NoError(t, metaProvider.DeleteLogMetadata(ctx, name, true))
+		}
+	}
 }
 
 func TestAcquireLogWriterLockPerformance(t *testing.T) {
