@@ -2620,3 +2620,52 @@ func TestMonitorSession_CheckAlive_Success(t *testing.T) {
 		t.Fatal("monitorSession did not exit after writerClose")
 	}
 }
+
+// The writable segment handle is perishable: another writer can roll the segment
+// as soon as GetOrCreateWritableSegmentHandle releases the log handle lock, and
+// AppendAsync on a rolled handle is rejected with ErrSegmentHandleSegmentRolling.
+// Marshalling the payload while holding one stretches that window from a function
+// call to a multi-megabyte proto.Marshal, so appends get rejected for no reason.
+//
+// A message that cannot be marshalled pins the ordering down without racing
+// anything: if the handle is acquired first, the mock records the call even
+// though the write can never proceed. Both WriteAsync paths already marshal
+// first; this keeps the synchronous ones aligned with them.
+func TestWrite_MarshalsBeforeAcquiringWritableHandle(t *testing.T) {
+	// ValidateMsg rejects a message whose Properties and Payload are both empty.
+	invalid := &WriteMessage{}
+
+	newMockHandle := func() *testLogHandleMock {
+		m := &testLogHandleMock{}
+		m.Test(t)
+		m.On("GetName").Return("test-log").Maybe()
+		m.On("GetId").Return(int64(1)).Maybe()
+		// Allowed but not required, so a regression fails on the assertion below
+		// rather than panicking on an unstubbed call.
+		m.On("GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything).
+			Return(mocks_segment_handle.NewSegmentHandle(t), nil).Maybe()
+		return m
+	}
+
+	t.Run("internalLogWriter", func(t *testing.T) {
+		mockLogHandle := newMockHandle()
+		w := createTestInternalWriter(t, mockLogHandle, nil)
+
+		result := w.Write(context.Background(), invalid)
+
+		require.NotNil(t, result)
+		assert.Error(t, result.Err)
+		mockLogHandle.AssertNotCalled(t, "GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything)
+	})
+
+	t.Run("logWriter", func(t *testing.T) {
+		mockLogHandle := newMockHandle()
+		w := createTestSessionWriter(t, mockLogHandle, nil, meta.NewSessionLockForTest(nil))
+
+		result := w.Write(context.Background(), invalid)
+
+		require.NotNil(t, result)
+		assert.Error(t, result.Err)
+		mockLogHandle.AssertNotCalled(t, "GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything)
+	})
+}
