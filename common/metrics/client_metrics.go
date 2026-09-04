@@ -31,6 +31,9 @@ var (
 	writeFrontiers       = make(map[string]progressFrontier)
 	compactionFrontiers  = make(map[string]progressFrontier)
 	truncationFrontiers  = make(map[string]progressFrontier)
+	// Keyed by reader as well as by log: several readers may follow one log at
+	// different positions, and one must not clamp another.
+	readFrontiers = make(map[string]progressFrontier)
 
 	// Log name-id mapping
 	// WARNING: In large-scale deployments with many logs, the "log_name" label
@@ -86,6 +89,18 @@ var (
 		Name:      "truncation_frontier_entry",
 		Help:      "Current truncated entry id per log",
 	}, []string{"log_ns", "log_id"})
+	WpClientReadFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_frontier_segment",
+		Help:      "Highest segment id delivered to the caller per reader",
+	}, []string{"log_ns", "log_id", "reader_name"})
+	WpClientReadFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_frontier_entry",
+		Help:      "Highest entry id delivered to the caller in the read frontier segment per reader",
+	}, []string{"log_ns", "log_id", "reader_name"})
 
 	// client append data to log
 	WpClientAppendRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -321,6 +336,8 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpClientCompactionFrontierEntry)
 		registerer.MustRegister(WpClientTruncationFrontierSegment)
 		registerer.MustRegister(WpClientTruncationFrontierEntry)
+		registerer.MustRegister(WpClientReadFrontierSegment)
+		registerer.MustRegister(WpClientReadFrontierEntry)
 
 		// Client append metrics
 		registerer.MustRegister(WpClientAppendRequestsTotal)
@@ -382,8 +399,41 @@ func SetTruncationFrontier(logNs, logId string, segmentId, entryId int64) {
 	setMonotonicFrontier(truncationFrontiers, WpClientTruncationFrontierSegment, WpClientTruncationFrontierEntry, logNs, logId, segmentId, entryId)
 }
 
+// SetReadFrontier records how far a reader has delivered to its caller. Unlike
+// the write-side frontiers this is keyed by reader as well as by log: a log can
+// have several readers at different positions, and sharing one monotonic guard
+// would let them clamp each other. Keying by reader also gives the right
+// behaviour for free when a reader is reopened at an earlier position -- it is a
+// different reader_name, so it is a different series and legitimately starts
+// lower.
+func SetReadFrontier(logNs, logId, readerName string, segmentId, entryId int64) {
+	setMonotonicFrontierKeyed(readFrontiers, WpClientReadFrontierSegment, WpClientReadFrontierEntry,
+		readFrontierKey(logNs, logId, readerName), []string{logNs, logId, readerName}, segmentId, entryId)
+}
+
+// ClearReadFrontier drops a reader's series when it closes. reader_name carries a
+// unique id, so without this every reader ever opened would leave a series behind
+// with a frozen value -- readers are rebuilt on every scanner restart. Already
+// scraped samples stay in Prometheus, so nothing historical is lost; the series
+// simply stops appearing in instant queries.
+func ClearReadFrontier(logNs, logId, readerName string) {
+	labels := prometheus.Labels{"log_ns": logNs, "log_id": logId, "reader_name": readerName}
+	WpClientReadFrontierSegment.Delete(labels)
+	WpClientReadFrontierEntry.Delete(labels)
+	frontierMu.Lock()
+	delete(readFrontiers, readFrontierKey(logNs, logId, readerName))
+	frontierMu.Unlock()
+}
+
+func readFrontierKey(logNs, logId, readerName string) string {
+	return logNs + "\x00" + logId + "\x00" + readerName
+}
+
 func setMonotonicFrontier(frontiers map[string]progressFrontier, segmentGauge, entryGauge *prometheus.GaugeVec, logNs, logId string, segmentId, entryId int64) {
-	key := logNs + "\x00" + logId
+	setMonotonicFrontierKeyed(frontiers, segmentGauge, entryGauge, logNs+"\x00"+logId, []string{logNs, logId}, segmentId, entryId)
+}
+
+func setMonotonicFrontierKeyed(frontiers map[string]progressFrontier, segmentGauge, entryGauge *prometheus.GaugeVec, key string, labels []string, segmentId, entryId int64) {
 	frontierMu.Lock()
 	current := frontiers[key]
 	if current.initialized && (segmentId < current.segmentID || (segmentId == current.segmentID && entryId < current.entryID)) {
@@ -391,8 +441,8 @@ func setMonotonicFrontier(frontiers map[string]progressFrontier, segmentGauge, e
 		return
 	}
 	frontiers[key] = progressFrontier{segmentID: segmentId, entryID: entryId, initialized: true}
-	segmentGauge.WithLabelValues(logNs, logId).Set(float64(segmentId))
-	entryGauge.WithLabelValues(logNs, logId).Set(float64(entryId))
+	segmentGauge.WithLabelValues(labels...).Set(float64(segmentId))
+	entryGauge.WithLabelValues(labels...).Set(float64(entryId))
 	frontierMu.Unlock()
 }
 
