@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/zilliztech/woodpecker/proto"
@@ -424,6 +425,75 @@ func TestRemoteResultChannel_ReadResult_ViaStream_Synced(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, int64(100), result.SyncedId)
 	assert.NoError(t, result.Err)
+}
+
+// TestRemoteResultChannel_ReadResult_ViaStream_HonoursCallerDeadline pins the
+// bound on the async ack read.
+//
+// Recv observes only the stream's own context, which carries no deadline, so
+// before this the ctx passed here was decorative on the stream path: a peer that
+// accepted the entry and then went silent blocked the read until the connection
+// died. That went unnoticed because FastSuccess used to cancel the stream at
+// quorum — which is exactly the cancellation being removed.
+func TestRemoteResultChannel_ReadResult_ViaStream_HonoursCallerDeadline(t *testing.T) {
+	resultChannel := NewRemoteResultChannel("test-read-stream-budget")
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+
+	// A replica that accepted the entry and never sends its durability ack.
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			<-streamCtx.Done()
+			return nil, streamCtx.Err()
+		},
+	}
+	resultChannel.InitResponseStream(stream, streamCtx, streamCancel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	type readOutcome struct {
+		result *AppendResult
+		err    error
+	}
+	done := make(chan readOutcome, 1)
+	go func() {
+		result, err := resultChannel.ReadResult(ctx)
+		done <- readOutcome{result: result, err: err}
+	}()
+
+	select {
+	case outcome := <-done:
+		assert.Error(t, outcome.err, "a read that ran out of budget must report it")
+		assert.Nil(t, outcome.result)
+	case <-time.After(10 * time.Second):
+		t.Fatal("ReadResult ignored the caller's deadline: a silent peer blocks it indefinitely")
+	}
+}
+
+// TestRemoteResultChannel_ReadResult_ViaStream_DeadlineNotReached checks the
+// budget only fires when it is actually exhausted: an ack that arrives in time
+// is returned, and the stream it came on is left alone.
+func TestRemoteResultChannel_ReadResult_ViaStream_DeadlineNotReached(t *testing.T) {
+	resultChannel := NewRemoteResultChannel("test-read-stream-in-budget")
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			return &proto.AddEntryResponse{EntryId: 42, State: proto.AddEntryState_Synced}, nil
+		},
+	}
+	resultChannel.InitResponseStream(stream, streamCtx, streamCancel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := resultChannel.ReadResult(ctx)
+	assert.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, int64(42), result.SyncedId)
+	assert.NoError(t, streamCtx.Err(), "an in-budget read must not cancel the stream")
 }
 
 func TestRemoteResultChannel_ReadResult_ViaStream_Failed(t *testing.T) {
