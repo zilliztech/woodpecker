@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/proto"
@@ -144,6 +146,18 @@ func (b *BatchAppendOp) sendBatchToNode(ctx context.Context, entries []*proto.Lo
 	// per op. For a batch of N entries this is 1 goroutine per node instead of N.
 	go func() {
 		defer streamCancel()
+		// This goroutine is the only reader of these channels, so it owns retiring
+		// them - the same rule the single-entry path follows. Without an owner a
+		// late send from the client's demux lands in a one-slot buffer nobody will
+		// drain; with one it takes the closed path instead.
+		defer func() {
+			for _, resultCh := range resultChs {
+				if closeErr := resultCh.Close(ctx); closeErr != nil {
+					logger.Ctx(ctx).Warn("failed to close batch result channel",
+						zap.String("serverAddr", serverAddr), zap.Error(closeErr))
+				}
+			}
+		}()
 		for i, op := range b.ops {
 			// Per-entry deadline: a slow early entry must not shrink a later
 			// (still-arriving) entry's budget into a false timeout.
