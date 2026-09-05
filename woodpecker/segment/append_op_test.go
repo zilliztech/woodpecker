@@ -533,25 +533,16 @@ func TestAppendOp_FastSuccess(t *testing.T) {
 	// Execute FastSuccess
 	op.FastSuccess(context.Background())
 
-	// Verify channels received success signal
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel1()
-	result1, err1 := rc1.ReadResult(ctx1)
-	assert.NoError(t, err1)
-	assert.Equal(t, int64(3), result1.SyncedId)
-
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-	result2, err2 := rc2.ReadResult(ctx2)
-	assert.NoError(t, err2)
-	assert.Equal(t, int64(3), result2.SyncedId)
-
-	// Channels must stay OPEN. Quorum is satisfied, but the replicas outside it
-	// are still answering, and closing a RemoteResultChannel cancels the
-	// replica's stream mid-answer. Each channel is closed by its own
-	// receivedAckCallback once that replica has actually answered.
+	// FastSuccess leaves every replica channel exactly as it found it: open, and
+	// carrying nothing. The replicas outside the quorum are still answering, and
+	// a synthetic success would be read instead of the real answer - or, on the
+	// batch path, fill the one-slot buffer so the real ack is dropped.
 	assert.False(t, rc1.IsClosed(), "FastSuccess must not close a replica's channel")
 	assert.False(t, rc2.IsClosed(), "FastSuccess must not close a replica's channel")
+	_, ok1 := rc1.TryReadResult()
+	_, ok2 := rc2.TryReadResult()
+	assert.False(t, ok1, "FastSuccess must not write into a replica's channel")
+	assert.False(t, ok2, "FastSuccess must not write into a replica's channel")
 
 	// Verify fastCalled flag is set
 	assert.True(t, op.fastCalled.Load())
@@ -567,15 +558,11 @@ func TestAppendOp_FastSuccess_Idempotent(t *testing.T) {
 	op.FastSuccess(context.Background())
 	op.FastSuccess(context.Background()) // Should be no-op
 
-	// Verify only one signal was sent
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	result, err := rc.ReadResult(ctx)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(3), result.SyncedId)
-
-	// Still open: FastSuccess never closes, however many times it is called.
+	assert.True(t, op.fastCalled.Load())
+	// Untouched, however many times it is called.
 	assert.False(t, rc.IsClosed())
+	_, ok := rc.TryReadResult()
+	assert.False(t, ok)
 }
 
 func TestAppendOp_FastFail_WithClosedChannel(t *testing.T) {
@@ -644,21 +631,16 @@ func TestAppendOp_ConcurrentFastCalls(t *testing.T) {
 	assert.True(t, op.fastCalled.Load())
 	assert.Equal(t, 10, callCount) // All calls completed
 
-	// Verify channel received exactly one signal
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	result, err := rc.ReadResult(ctx)
-	assert.NoError(t, err)
-	assert.True(t, result.SyncedId == -1 || result.SyncedId == 3) // Either success or failure
-
 	// Exactly one of the ten calls won the CAS, and the two endings differ on
-	// purpose: FastFail closes so the waiters stop at once, FastSuccess leaves
-	// the channel for the replica's own ack goroutine to close. The close state
-	// must therefore agree with whichever result landed.
-	if result.SyncedId == -1 {
+	// purpose: FastFail stops the waiters at once, with the reason; FastSuccess
+	// leaves the channel entirely to the replica's own ack goroutine. So either
+	// the channel is closed and carries the failure, or it is untouched.
+	result, ok := rc.TryReadResult()
+	if ok {
+		assert.Equal(t, int64(-1), result.SyncedId, "only FastFail writes a result")
 		assert.True(t, rc.IsClosed(), "FastFail won the race: it closes the channel")
 	} else {
-		assert.False(t, rc.IsClosed(), "FastSuccess won the race: it leaves the channel open")
+		assert.False(t, rc.IsClosed(), "FastSuccess won the race: it leaves the channel alone")
 	}
 }
 

@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -464,8 +465,17 @@ func TestRemoteResultChannel_ReadResult_ViaStream_HonoursCallerDeadline(t *testi
 
 	select {
 	case outcome := <-done:
-		assert.Error(t, outcome.err, "a read that ran out of budget must report it")
+		require.Error(t, outcome.err, "a read that ran out of budget must report it")
 		assert.Nil(t, outcome.result)
+
+		// Recv reports the cancellation as a bare gRPC status, which nothing
+		// downstream can classify: the caller would record a terminal failure and
+		// spend none of its retries on what is only a timeout. Both of the
+		// classifications the append path actually performs must match.
+		assert.True(t, werr.IsRetryableErr(outcome.err),
+			"a timed-out read must be retryable, not terminal")
+		assert.ErrorIs(t, outcome.err, context.DeadlineExceeded,
+			"the append path's read-timeout branch tests for this")
 	case <-time.After(10 * time.Second):
 		t.Fatal("ReadResult ignored the caller's deadline: a silent peer blocks it indefinitely")
 	}

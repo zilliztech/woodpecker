@@ -18,6 +18,7 @@ package segment
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -153,4 +154,104 @@ func TestAppendOp_receivedAckCallback_ClosesItsOwnChannel(t *testing.T) {
 
 		assert.True(t, rc.IsClosed(), "the close must cover every exit path, not just the happy one")
 	})
+}
+
+// recordingResultChannel wraps a real channel and records every SendResult that
+// reached it. It is how these tests state "FastSuccess must not write here" as an
+// assertion rather than as an absent log line.
+type recordingResultChannel struct {
+	channel.ResultChannel
+	mu    sync.Mutex
+	sends []error
+}
+
+func newRecordingChannel(identifier string) *recordingResultChannel {
+	return &recordingResultChannel{ResultChannel: channel.NewLocalResultChannel(identifier)}
+}
+
+func (r *recordingResultChannel) SendResult(ctx context.Context, result *channel.AppendResult) error {
+	sendErr := r.ResultChannel.SendResult(ctx, result)
+	r.mu.Lock()
+	r.sends = append(r.sends, sendErr)
+	r.mu.Unlock()
+	return sendErr
+}
+
+// seed delivers a result the way a replica would, without counting as a send
+// made by the code under test.
+func (r *recordingResultChannel) seed(t *testing.T, result *channel.AppendResult) {
+	t.Helper()
+	require.NoError(t, r.ResultChannel.SendResult(context.Background(), result))
+}
+
+func (r *recordingResultChannel) sendCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sends)
+}
+
+// TestAppendOp_QuorumSuccess_WritesNothingIntoRetiredChannels pins the ordering
+// that decides whether this change actually removes log volume or just moves it.
+//
+// Once the reading goroutine owns its channel, it retires the channel BEFORE the
+// quorum bookkeeping that follows - and that bookkeeping runs FastSuccess
+// synchronously in the same goroutine. So by the time FastSuccess iterates the
+// replica channels, every replica that answered has already closed its own. A
+// FastSuccess that still wrote into them would fail and warn once per acking
+// replica on EVERY successful append, which is exactly the cost this change
+// exists to remove.
+func TestAppendOp_QuorumSuccess_WritesNothingIntoRetiredChannels(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	quorumInfo := &proto.QuorumInfo{Wq: 3, Aq: 2, Es: 3, Nodes: []string{"n1", "n2", "n3"}}
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+		func(int64, int64, error) {}, nil, mockHandle, quorumInfo, nil)
+
+	channels := make([]*recordingResultChannel, 3)
+	op.resultChannels = make([]channel.ResultChannel, 3)
+	for i := range channels {
+		channels[i] = newRecordingChannel(op.Identifier())
+		op.resultChannels[i] = channels[i]
+	}
+
+	// The real FastSuccess, driven exactly as production drives it: synchronously
+	// from inside the acking goroutine the moment the quorum is reached.
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).
+		Run(func(ctx context.Context, _ int64) { op.FastSuccess(ctx) }).Return().Once()
+
+	// Two of the three replicas answer; the third is still in flight.
+	for i := 0; i < 2; i++ {
+		channels[i].seed(t, &channel.AppendResult{SyncedId: 3})
+		op.receivedAckCallback(context.Background(), time.Now(), 3, channels[i], nil, i, quorumInfo.Nodes[i])
+	}
+
+	require.True(t, op.fastCalled.Load(), "the quorum must have triggered FastSuccess")
+	assert.True(t, channels[0].IsClosed(), "an answering replica retires its own channel")
+	assert.True(t, channels[1].IsClosed(), "an answering replica retires its own channel")
+	assert.False(t, channels[2].IsClosed(), "the in-flight replica must be left alone")
+
+	for i, resultChan := range channels {
+		assert.Equal(t, 0, resultChan.sendCount(),
+			"FastSuccess wrote into replica %d's channel: retired ones only produce a warning, "+
+				"and an in-flight one would return the synthetic result instead of the replica's real answer", i)
+	}
+}
+
+// TestAppendOp_FastFail_SkipsChannelsTheirReaderRetired is the same ordering seen
+// from the failure side: HandleAppendRequestFailure is also called after the
+// reader retired its channel, and drives FastFail synchronously.
+func TestAppendOp_FastFail_SkipsChannelsTheirReaderRetired(t *testing.T) {
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+		func(int64, int64, error) {}, nil, nil,
+		&proto.QuorumInfo{Wq: 2, Aq: 2, Es: 2, Nodes: []string{"n1", "n2"}}, nil)
+
+	retired := newRecordingChannel("retired")
+	require.NoError(t, retired.ResultChannel.Close(context.Background()))
+	live := newRecordingChannel("live")
+	op.resultChannels = []channel.ResultChannel{retired, live}
+
+	op.FastFail(context.Background(), werr.ErrSegmentFenced)
+
+	assert.Equal(t, 0, retired.sendCount(), "a retired channel has no waiter left to wake")
+	assert.Equal(t, 1, live.sendCount(), "a live waiter must still be stopped, and told why")
+	assert.True(t, live.IsClosed(), "FastFail still closes what it woke")
 }

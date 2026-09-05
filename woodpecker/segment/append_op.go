@@ -385,6 +385,12 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 			continue
 		}
+		if ch.IsClosed() {
+			// Its reader has already finished with it and retired it: there is
+			// nobody left to wake, and both SendResult and Close on a closed
+			// channel would only produce a warning.
+			continue
+		}
 		sendErr := ch.SendResult(ctx, &channel.AppendResult{
 			SyncedId: -1,
 			Err:      err,
@@ -413,26 +419,20 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 		return // Already called
 	}
 
-	for index, ch := range op.resultChannels {
-		if ch == nil {
-			logger.Ctx(ctx).Debug("FastSuccess channel is nil, skipping",
-				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
-			continue
-		}
-		sendErr := ch.SendResult(ctx, &channel.AppendResult{
-			SyncedId: op.entryId,
-			Err:      nil,
-		})
-		if sendErr != nil {
-			logger.Ctx(ctx).Warn("send FastSuccess result to channel failed",
-				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(sendErr))
-		}
-		// Deliberately not closed here, unlike FastFail. Quorum is satisfied but
-		// the replicas outside it are still answering, and closing a
-		// RemoteResultChannel cancels the replica's stream mid-answer. Each
-		// channel is closed by its own receivedAckCallback once that replica has
-		// actually answered - see the comment there.
-	}
+	// FastSuccess deliberately touches no result channel, unlike FastFail.
+	//
+	// Quorum is satisfied, so there is nothing left to hurry. The replicas that
+	// answered have already retired their own channels, and writing into those
+	// only fails and logs - once per replica per entry, on every successful
+	// append, which is the very cost this change exists to remove. The replicas
+	// still answering are the whole point: a synthetic success written to one of
+	// them would be read INSTEAD of that replica's real answer, and on the batch
+	// path it would land in a one-slot buffer, so the drain would consume the
+	// synthetic result while the replica's actual ack was dropped as
+	// "channel is full".
+	//
+	// Closing is likewise left to each channel's reader; for a
+	// RemoteResultChannel, Close cancels the replica's stream mid-answer.
 
 	op.callback(op.segmentId, op.entryId, nil)
 	logger.Ctx(ctx).Debug("FastSuccess completed",
