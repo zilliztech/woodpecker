@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -127,10 +128,39 @@ func (r *RemoteResultChannel) ReadResult(ctx context.Context) (*AppendResult, er
 	// If gRPC stream is available, read from it
 	r.mu.RLock()
 	ch := r.ch
+	cancel := r.cancel
 	r.mu.RUnlock()
+
+	// Recv observes only the stream's own context, which carries no deadline, so
+	// the caller's budget has to be enforced by cancelling that stream when it
+	// runs out - the same device AppendEntry already uses to bound the first
+	// response. Without this ctx is decorative on this path: a peer that accepts
+	// the entry and then goes silent blocks the read for as long as the
+	// connection survives.
+	budgetExpired := &atomic.Bool{}
+	if deadline, ok := ctx.Deadline(); ok && cancel != nil {
+		budgetTimer := time.AfterFunc(time.Until(deadline), func() {
+			budgetExpired.Store(true)
+			cancel()
+		})
+		defer budgetTimer.Stop()
+	}
 
 	resultResponse, readErr := ch.Recv()
 	if readErr != nil {
+		if budgetExpired.Load() {
+			// The read ran out of its own budget. Recv reports that as a bare gRPC
+			// status, which nothing downstream can classify: errors.Is against
+			// context.DeadlineExceeded does not match it, and werr.IsRetryableErr
+			// extracts a woodpeckerError and so returns false - so the caller would
+			// treat a timeout as a terminal failure and spend none of its retries
+			// on it. Report the timeout as what it is, and keep the transport
+			// detail in the log.
+			logger.Ctx(ctx).Warn("append result read exceeded its budget",
+				zap.String("identifier", r.identifier),
+				zap.Error(readErr))
+			return nil, werr.ErrAppendOpTimeout.WithCauseErr(context.DeadlineExceeded)
+		}
 		logger.Ctx(ctx).Warn("failed to read result from remote channel",
 			zap.String("identifier", r.identifier),
 			zap.Error(readErr))

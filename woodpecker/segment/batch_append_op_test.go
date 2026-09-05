@@ -244,6 +244,19 @@ func TestBatchAppendOp_InstallsLocalResultChannelInOpSlot(t *testing.T) {
 		_, isLocal := op.resultChannels[0].(*channel.LocalResultChannel)
 		assert.True(t, isLocal, "op %d slot should hold a LocalResultChannel after batch send", i)
 	}
+
+	// The drain goroutine is the only reader of these channels, so it owns
+	// retiring them - the same rule the single-entry path follows. Without an
+	// owner, a late send from the client's demux lands in a one-slot buffer that
+	// nobody will ever drain.
+	assert.Eventually(t, func() bool {
+		for _, op := range ops {
+			if !op.resultChannels[0].IsClosed() {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 5*time.Millisecond, "the batch drain must retire the channels it read")
 }
 
 // TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure covers the send-side

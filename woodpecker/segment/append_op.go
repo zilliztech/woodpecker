@@ -192,18 +192,26 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 	startRequestTime := time.Now()
 
 	if len(op.resultChannels) > serverIndex {
-		// (Re)create the result channel when the slot is empty or holds a channel
-		// whose type doesn't match the client. The batch path installs a
-		// LocalResultChannel here; a remote client's single-entry AppendEntry
-		// requires a RemoteResultChannel and rejects a LocalResultChannel with
-		// ErrInternalError. A matching channel is reused (retry idempotency).
-		_, isRemoteChannel := op.resultChannels[serverIndex].(*channel.RemoteResultChannel)
-		if op.resultChannels[serverIndex] == nil || isRemoteChannel != cli.IsRemoteClient() {
-			if cli.IsRemoteClient() {
-				op.resultChannels[serverIndex] = channel.NewRemoteResultChannel(op.Identifier())
-			} else {
-				op.resultChannels[serverIndex] = channel.NewLocalResultChannel(op.Identifier())
-			}
+		// A fresh result channel per attempt, never a reused one.
+		//
+		// The goroutine spawned below owns the channel it is handed and closes it
+		// on the way out, and that close runs outside op.mu. Reusing the slot would
+		// let the previous attempt's close land on THIS attempt's channel and cancel
+		// the stream it just opened - which fails this attempt, spends another retry,
+		// and can repeat until the budget is gone.
+		//
+		// Nothing worth carrying over survives an attempt anyway. Every attempt opens
+		// its own stream, context and cancel; InitResponseStream overwrites all three
+		// without cancelling the previous ones, and leaves any result already recorded
+		// in place for the next read to return instead of the new stream's.
+		//
+		// Building it fresh also picks the type the client requires, which is what the
+		// type check here existed for: a remote client's single-entry AppendEntry
+		// rejects the LocalResultChannel the batch path leaves in this slot.
+		if cli.IsRemoteClient() {
+			op.resultChannels[serverIndex] = channel.NewRemoteResultChannel(op.Identifier())
+		} else {
+			op.resultChannels[serverIndex] = channel.NewLocalResultChannel(op.Identifier())
 		}
 	}
 
@@ -219,8 +227,43 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, resultChan channel.ResultChannel, err error, serverIndex int, serverAddr string) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, "AppendOp", "receivedAckCallback")
 	defer sp.End()
+
+	// This goroutine is the only reader of resultChan and the last user of the
+	// stream behind it, so it owns retiring both.
+	//
+	// Retiring them HERE rather than in FastSuccess is the point. FastSuccess runs
+	// the moment the ack quorum is reached, while the replica outside that quorum
+	// is still answering perfectly normally; for a RemoteResultChannel, Close()
+	// cancels that replica's gRPC stream, so its normal completion came back as
+	// "rpc error: code = Canceled" and was logged as a failure once per entry.
+	//
+	// The deferred call guarantees it happens on every exit path; the explicit
+	// calls below make it happen as soon as the replica's answer is in, so the
+	// stream is not held across the segment-handle bookkeeping that follows -
+	// which takes that handle's lock.
+	//
+	// FastFail still closes early, deliberately: there the entry is abandoned and
+	// the waiters should stop at once rather than sit out their read budget.
+	// Close is idempotent, so an early close and this one cannot conflict.
+	channelRetired := false
+	retireResultChannel := func() {
+		if channelRetired || resultChan == nil {
+			return
+		}
+		channelRetired = true
+		if closeErr := resultChan.Close(ctx); closeErr != nil {
+			logger.Ctx(ctx).Warn("failed to close append result channel",
+				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId),
+				zap.Int64("entryId", op.entryId), zap.String("serverAddr", serverAddr), zap.Error(closeErr))
+		}
+	}
+	defer retireResultChannel()
+
 	// sync call error, return directly
 	if err != nil {
+		// The send never got far enough for an ack to arrive, so nothing is
+		// waiting on this channel any more.
+		retireResultChannel()
 		// Skip further processing if operation already completed via FastFail/FastSuccess
 		if op.fastCalled.Load() {
 			return
@@ -235,6 +278,8 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	defer cancel()
 	syncedResult, readChanErr := resultChan.ReadResult(subCtx)
 	sp.AddEvent("wait callback", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex), attribute.String("serverAddr", serverAddr)))
+	// The read was the last use of this channel and of the stream behind it.
+	retireResultChannel()
 
 	// If operation already completed via FastFail/FastSuccess, skip further processing
 	if op.fastCalled.Load() {
@@ -340,6 +385,12 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 			continue
 		}
+		if ch.IsClosed() {
+			// Its reader has already finished with it and retired it: there is
+			// nobody left to wake, and both SendResult and Close on a closed
+			// channel would only produce a warning.
+			continue
+		}
 		sendErr := ch.SendResult(ctx, &channel.AppendResult{
 			SyncedId: -1,
 			Err:      err,
@@ -368,26 +419,20 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 		return // Already called
 	}
 
-	for index, ch := range op.resultChannels {
-		if ch == nil {
-			logger.Ctx(ctx).Debug("FastSuccess channel is nil, skipping",
-				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
-			continue
-		}
-		sendErr := ch.SendResult(ctx, &channel.AppendResult{
-			SyncedId: op.entryId,
-			Err:      nil,
-		})
-		if sendErr != nil {
-			logger.Ctx(ctx).Warn("send FastSuccess result to channel failed",
-				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(sendErr))
-		}
-		closeErr := ch.Close(ctx)
-		if closeErr != nil {
-			logger.Ctx(ctx).Warn("failed to close channel in FastSuccess",
-				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(closeErr))
-		}
-	}
+	// FastSuccess deliberately touches no result channel, unlike FastFail.
+	//
+	// Quorum is satisfied, so there is nothing left to hurry. The replicas that
+	// answered have already retired their own channels, and writing into those
+	// only fails and logs - once per replica per entry, on every successful
+	// append, which is the very cost this change exists to remove. The replicas
+	// still answering are the whole point: a synthetic success written to one of
+	// them would be read INSTEAD of that replica's real answer, and on the batch
+	// path it would land in a one-slot buffer, so the drain would consume the
+	// synthetic result while the replica's actual ack was dropped as
+	// "channel is full".
+	//
+	// Closing is likewise left to each channel's reader; for a
+	// RemoteResultChannel, Close cancels the replica's stream mid-answer.
 
 	op.callback(op.segmentId, op.entryId, nil)
 	logger.Ctx(ctx).Debug("FastSuccess completed",
