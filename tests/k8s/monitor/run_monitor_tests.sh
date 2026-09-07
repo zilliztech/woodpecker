@@ -76,6 +76,7 @@ install_monitoring() {
   kubectl apply -f "$SCRIPT_DIR/manifests/podmonitor-server.yaml"
   kubectl apply -f "$SCRIPT_DIR/manifests/podmonitor-client.yaml"
   kubectl apply -f "$SCRIPT_DIR/manifests/dashboard-configmaps.yaml"
+  kubectl apply -f "$SCRIPT_DIR/manifests/prometheusrule-placement.yaml"
 }
 
 start_loadgen() {

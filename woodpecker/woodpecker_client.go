@@ -103,6 +103,29 @@ type woodpeckerClient struct {
 	closeState atomic.Bool
 }
 
+// reportClientPlacement says once, at startup, whether this client knows where
+// it is.
+//
+// The client reads its own REGION/AVAILABILITY_ZONE to work out how far each
+// replica sits from it. Unset, every peer classifies as ScopeUnknown, so the
+// per-replica traffic metrics stop distinguishing local from cross-region while
+// still looking well-formed. Reported separately from the server: the two are
+// configured independently and either can be the one that is wrong.
+//
+// It lives here rather than inline because a client is built by two independent
+// constructors - NewClient and NewEmbedClient - and an embedded deployment is no
+// better placed to notice the gap from a dashboard than a service one.
+func reportClientPlacement(ctx context.Context) {
+	if missing := topology.MissingPlacementEnv(); len(missing) > 0 {
+		logger.Ctx(ctx).Warn("topology placement is not configured; this client cannot classify replicas as local, cross-az or cross-region",
+			zap.Strings("unset", missing))
+		return
+	}
+	logger.Ctx(ctx).Info("topology placement",
+		zap.String("region", topology.GetCurrentRegion()),
+		zap.String("az", topology.GetCurrentAvailabilityZone()))
+}
+
 func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clientv3.Client, managed bool) (Client, error) {
 	// Re-validate the object-storage section at the consumption point (the config may have
 	// been mutated after load); the client builds object-storage keys and RPC rootPath values
@@ -115,19 +138,7 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 	if initTraceErr != nil {
 		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
 	}
-	// The client reads its own REGION/AVAILABILITY_ZONE to work out how far each
-	// replica sits from it. Unset, every peer classifies as ScopeUnknown, so the
-	// per-replica traffic metrics stop distinguishing local from cross-region
-	// while still looking well-formed. Warned separately from the server: the
-	// two are configured independently and either can be the one that is wrong.
-	if missing := topology.MissingPlacementEnv(); len(missing) > 0 {
-		logger.Ctx(ctx).Warn("topology placement is not configured; this client cannot classify replicas as local, cross-az or cross-region",
-			zap.Strings("unset", missing))
-	} else {
-		logger.Ctx(ctx).Info("topology placement",
-			zap.String("region", topology.GetCurrentRegion()),
-			zap.String("az", topology.GetCurrentAvailabilityZone()))
-	}
+	reportClientPlacement(ctx)
 	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
 	c := &woodpeckerClient{
 		cfg:        cfg,

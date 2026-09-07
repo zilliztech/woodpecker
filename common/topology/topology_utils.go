@@ -19,12 +19,27 @@ const (
 	ScopeUnknown     = "unknown"
 )
 
+// IsUnknown reports whether a placement value carries no information.
+//
+// It accepts the rendered form as well as the empty string, and that is what
+// makes it total. Rewriting a placement to ScopeUnknown before classifying it is
+// the obvious simplification once LabelOrUnknown exists, and it is a trap: two
+// unplaced processes would compare equal on both region and AZ and be
+// classified ScopeLocal, so every byte between them would be reported as
+// node-local traffic. Recognising the rendered form here means that mistake
+// yields ScopeUnknown instead of a silent lie, and the boundary is held by this
+// function rather than by a comment on LabelOrUnknown telling callers where not
+// to use it.
+func IsUnknown(v string) bool {
+	return v == "" || v == ScopeUnknown
+}
+
 // Scope classifies a peer's placement relative to a local placement. Either
 // side may be unset — REGION/AVAILABILITY_ZONE are optional, and a process
 // without them cannot tell local from remote at all — which yields
 // ScopeUnknown rather than a guess.
 func Scope(localRegion, localAZ, peerRegion, peerAZ string) string {
-	if localRegion == "" || localAZ == "" || peerRegion == "" || peerAZ == "" {
+	if IsUnknown(localRegion) || IsUnknown(localAZ) || IsUnknown(peerRegion) || IsUnknown(peerAZ) {
 		return ScopeUnknown
 	}
 	if localRegion != peerRegion {
