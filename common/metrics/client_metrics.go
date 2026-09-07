@@ -381,27 +381,15 @@ func UpdateSegmentState(logNs, logId, oldState, newState string) {
 	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Inc()
 }
 
-// The frontier setters below record a position and nothing else: no guard, no
-// shared state, no lock. A position is written where it is reached, by whoever
-// reached it.
+// The frontier setters record a position and nothing else, from wherever it is
+// reached. They rely on convergence rather than ordering: each publisher owns the
+// transition it reports, so the last write is the right one, and the write
+// frontier settles again on the next ack. Metrics are per-process, so two writers
+// export two series that never touch.
 //
-// A monotonic guard used to sit in front of them so a graph line could never
-// step back. It cost a process-wide mutex on the append-ack path and, once the
-// read frontier arrived, on every delivered entry - and it could not deliver
-// what it looked like it was delivering. The segment and entry halves are two
-// separately registered collectors, so Gather walks them one after the other and
-// a publisher can run in between: the pair is never atomic with respect to a
-// scrape, lock or no lock. Nor was the value the guard preferred more truthful.
-// During a roll it admitted (N+1, -1), the seed for a segment with nothing in it
-// yet, over (N, lac), the position actually acknowledged - and then rejected the
-// correction, because the guard had already moved on.
-//
-// What is left is convergence, which is enough here. Within one process the
-// races are narrow and self-healing: the write frontier settles on the next ack,
-// and truncation and compaction are published by the code that owns those
-// transitions, so the last write is the right one. Across processes there is no
-// race at all - metrics are per-process, and two of them export two series that
-// never touch.
+// The two halves are separately registered collectors, so a scrape can land
+// between them and see a position torn across a roll. Entry ids restart at zero
+// in every segment, which is also why lag is measured in segments.
 
 func SetWriteFrontier(logNs, logId string, segmentId, entryId int64) {
 	WpClientWriteFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))

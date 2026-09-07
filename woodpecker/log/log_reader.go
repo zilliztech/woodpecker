@@ -95,34 +95,23 @@ type logBatchReaderImpl struct {
 	lastReported int64
 }
 
-// publishReadFrontierMetric records where this reader has got to. It is
-// observability only: nothing in the read path reads it back, and a reader whose
-// metric is missing behaves exactly the same. The Metric suffix is there so a
-// call site in the middle of ReadNext reads as bookkeeping rather than as part
-// of delivering an entry.
+// publishReadFrontierMetric records where this reader has got to. Observability
+// only: nothing in the read path reads it back.
 func (l *logBatchReaderImpl) publishReadFrontierMetric(segmentId, entryId int64) {
-	// The Latest sentinel is a request ("start at the tail"), not a position, and
-	// publishing MaxInt64 would show a reader sitting at ~9.2e18 until it
-	// delivered something - which a tail reader on an idle log never does.
-	// Refused here rather than at each caller so a future call site cannot
-	// reintroduce it.
+	// Latest asks to start at the tail; it is not a position. Publishing it would
+	// show the reader sitting at ~9.2e18 until it delivered something, which a
+	// tail reader on an idle log never does.
 	if segmentId == LatestLogMessageID().SegmentId {
 		return
 	}
 	metrics.SetReadFrontier(l.logNs, l.logIdStr, l.readerName, segmentId, entryId)
 }
 
-// retireReadFrontierMetric drops this reader's series. Observability only - it
-// frees a series, not a resource the reader needs.
+// retireReadFrontierMetric drops this reader's series. reader_name is unique per
+// open, so a series left behind is a gauge nothing will ever update or remove
+// again, reporting a closed reader as one sitting permanently behind.
 //
-// It has to happen: reader_name is unique per open, so a series left behind is a
-// gauge nothing will ever update or remove again, reporting a reader that is
-// gone as though it were sitting there permanently behind.
-//
-// Like every other method here it expects the caller's own serialization; the
-// reader holds no lock of its own. A Close racing a delivery would republish
-// what it just removed, which is why ReadNext takes a context - cancel it, let
-// the read return, then close.
+// Not safe against a concurrent ReadNext, like the rest of the reader.
 func (l *logBatchReaderImpl) retireReadFrontierMetric() {
 	metrics.ClearReadFrontier(l.logNs, l.logIdStr, l.readerName)
 }
@@ -151,15 +140,10 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		lastRead:             now,
 		lastReported:         now,
 	}
-	// Publish the position the reader opens at, before it has delivered anything.
-	// Without it a reader that never delivers a first entry - waiting out
-	// ErrSegmentNotFound, or parked at the tail of an idle log - has no series at
-	// all, and the lag panel drops the row entirely: "stuck where it started" and
-	// "no reader running" look identical, which is half the question this metric
-	// exists to answer.
-	//
-	// A reader opened at Latest has no position yet, so this is a no-op for it;
-	// it gets one from the tail read that resolves the sentinel.
+	// Publish where the reader opens, so one that never delivers a first entry -
+	// waiting out ErrSegmentNotFound, or parked at the tail of an idle log - is
+	// still distinguishable from no reader at all. A reader opened at Latest has
+	// no position yet and gets one from the tail read instead.
 	reader.publishReadFrontierMetric(from.SegmentId, from.EntryId)
 	return reader, nil
 }

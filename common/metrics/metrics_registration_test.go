@@ -234,14 +234,9 @@ func TestUpdateSegmentState_MultipleTransitions(t *testing.T) {
 	assert.Equal(t, float64(1), sealedMetric.GetGauge().GetValue())
 }
 
-// A frontier setter records the position it is given, both halves together, and
-// keeps no state of its own. It used to hold a monotonic guard so a graph line
-// could never step back; that guard could not make the two halves atomic against
-// a scrape - they are separately registered collectors - and during a roll it
-// preferred a new segment's empty seed over the position actually acknowledged,
-// then rejected the correction. What the callers rely on instead is convergence:
-// each publisher owns the transition it reports, so the last write is the right
-// one.
+// A frontier setter records the position it is given, both halves, and keeps no
+// state of its own: callers rely on convergence, since each publisher owns the
+// transition it reports.
 func TestSetFrontierRecordsThePositionGiven(t *testing.T) {
 	logNs := "frontier-test"
 	logId := "100"
