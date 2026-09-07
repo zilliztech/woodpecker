@@ -52,11 +52,11 @@ func newLockingTestProvider(t *testing.T) (MetadataProvider, *metadataProviderEt
 // testSegmentMetadataWritesTakeNoProviderLock holds every mutex the provider has
 // and requires each per-log metadata write to complete anyway.
 //
-// The struct has exactly two, so holding both is an exhaustive statement: no
+// The struct has exactly one, so holding it is an exhaustive statement: no
 // per-log write sits behind provider-level state. That is what makes a
 // regression detectable here — re-introducing a shared lock on any of these four
-// methods, whichever mutex it reached for, deadlocks this test rather than
-// quietly restoring the old blast radius.
+// methods deadlocks this test rather than quietly restoring the old blast
+// radius.
 func testSegmentMetadataWritesTakeNoProviderLock(t *testing.T) {
 	provider, e := newLockingTestProvider(t)
 	ctx := context.Background()
@@ -72,12 +72,8 @@ func testSegmentMetadataWritesTakeNoProviderLock(t *testing.T) {
 	existing := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}}
 	require.NoError(t, provider.StoreSegmentMetadata(ctx, logName, logId, existing))
 
-	e.stateMu.Lock()
 	e.instanceMu.Lock()
-	defer func() {
-		e.instanceMu.Unlock()
-		e.stateMu.Unlock()
-	}()
+	defer e.instanceMu.Unlock()
 
 	mustFinish := func(name string, fn func() error) {
 		t.Helper()

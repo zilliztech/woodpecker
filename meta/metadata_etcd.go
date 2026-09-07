@@ -110,12 +110,6 @@ func (sl *SessionLock) GetSession() *concurrency.Session {
 //
 // The two locks that remain each carry their reason at the field.
 type metadataProviderEtcd struct {
-	// stateMu guards closed, the only mutable field this struct has - every
-	// other field is set once in the constructor or is a sync.Map. It is never
-	// held across an etcd round-trip, so Close() and reader open never queue
-	// behind somebody else's request.
-	stateMu sync.Mutex
-
 	// instanceMu serializes the two operations that write instance-level keys
 	// shared by every log: CreateLog, which allocates from the log id
 	// generator, and ClearMeta, which wipes and re-seeds it. Both are rare and
@@ -139,17 +133,6 @@ type metadataProviderEtcd struct {
 	// But some open-source or self-hosted object storage may not support it, requiring distributed locks as fallback
 	// Using sync.Map for fine-grained locking: each logName has its own lock, avoiding blocking other metadata operations
 	logWriterLocks sync.Map // map[string]*SessionLock
-
-	// Live reader temp info sessions. Each one is owned by the reader that
-	// CreateReaderTempInfo handed it to; this is only a registry so provider
-	// Close() can stop every keepalive that would otherwise outlive it.
-	readerTempSessions sync.Map // map[*readerTempSession]struct{}
-
-	// closed is set by Close() under stateMu. It is what makes Close() and
-	// CreateReaderTempInfo mutually exclusive: the registry alone cannot
-	// express "this session was created too late to be retired", so every
-	// registration is gated on this flag under the same lock.
-	closed bool
 }
 
 func NewMetadataProvider(ctx context.Context, client *clientv3.Client, cfg *config.Configuration) MetadataProvider {
@@ -1317,22 +1300,21 @@ func (e *metadataProviderEtcd) closeReaderTempSession(session *concurrency.Sessi
 	return nil
 }
 
-// retireReaderTempSession marks a session closed, stops its keepalive and drops
-// it from the registry. Idempotent, so a reader closing while the provider
-// closes cannot revoke the same lease twice.
+// retireReaderTempSession marks a session closed and stops its keepalive.
+// Idempotent, so retiring a session twice cannot revoke the same lease twice.
 func (e *metadataProviderEtcd) retireReaderTempSession(ctx context.Context, entry *readerTempSession) {
 	entry.Lock()
-	if !entry.closed {
-		entry.closed = true
-		if closeErr := e.closeReaderTempSession(entry.session); closeErr != nil {
-			logger.Ctx(ctx).Warn("close reader temp info session failed",
-				zap.String("readerName", entry.readerName),
-				zap.Int64("logId", entry.logId),
-				zap.Error(closeErr))
-		}
+	defer entry.Unlock()
+	if entry.closed {
+		return
 	}
-	entry.Unlock()
-	e.readerTempSessions.Delete(entry)
+	entry.closed = true
+	if closeErr := e.closeReaderTempSession(entry.session); closeErr != nil {
+		logger.Ctx(ctx).Warn("close reader temp info session failed",
+			zap.String("readerName", entry.readerName),
+			zap.Int64("logId", entry.logId),
+			zap.Error(closeErr))
+	}
 }
 
 // CreateReaderTempInfo registers one open reader and returns the session that
@@ -1348,19 +1330,6 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CreateReaderTempInfo")
 	defer sp.End()
 	startTime := time.Now()
-
-	// Fast path: don't grant a lease and write a key we would only have to
-	// revoke again. The authoritative check is at registration time below.
-	e.stateMu.Lock()
-	alreadyClosed := e.closed
-	e.stateMu.Unlock()
-	if alreadyClosed {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_reader_temp_info", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		logger.Ctx(ctx).Warn("create reader temp info on a closed metadata provider",
-			zap.String("readerName", readerName), zap.Int64("logId", logId))
-		return nil, werr.ErrMetadataWrite.WithCauseErrMsg("metadata provider is closed")
-	}
 
 	// Create a key path for the reader temporary information
 	readerKey := e.keyBuilder.BuildLogReaderTempInfoKey(logId, readerName)
@@ -1420,27 +1389,6 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 		openSegmentId: fromSegmentId,
 		openEntryId:   fromEntryId,
 	}
-
-	// Register under the provider mutex, gated on the same closed flag Close()
-	// sets there. Either this Store lands before Close() drains the registry
-	// and Close() retires the session, or Close() got there first and this
-	// create must undo itself - there is no third outcome where a live
-	// keepalive ends up tracked by nothing.
-	e.stateMu.Lock()
-	if e.closed {
-		e.stateMu.Unlock()
-		if closeErr := e.closeReaderTempSession(session); closeErr != nil {
-			logger.Ctx(ctx).Warn("close reader temp info session for a closed provider failed",
-				zap.String("readerName", readerName), zap.Int64("logId", logId), zap.Error(closeErr))
-		}
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "create_reader_temp_info", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "create_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		logger.Ctx(ctx).Warn("create reader temp info on a closed metadata provider",
-			zap.String("readerName", readerName), zap.Int64("logId", logId))
-		return nil, werr.ErrMetadataWrite.WithCauseErrMsg("metadata provider is closed")
-	}
-	e.readerTempSessions.Store(readerSession, struct{}{})
-	e.stateMu.Unlock()
 
 	logger.Ctx(ctx).Debug("Created reader temporary information with session lease",
 		zap.String("readerName", readerName),
@@ -1732,33 +1680,24 @@ func (e *metadataProviderEtcd) CheckSessionLockAlive(ctx context.Context, sessio
 	return ttlResp.TTL > 0, nil
 }
 
-// Close shuts the provider down in three stages, deliberately ordered.
+// Close releases the writer locks this provider holds.
 //
-// First, under stateMu, it marks the provider closed and drains both session
-// registries. Marking closed is what stops CreateReaderTempInfo from
-// registering a session this scan would miss: a session registered after the
-// drain is tracked by nothing, and its keepalive runs on the etcd client's own
-// context (which this method does not cancel), so it would renew until the
-// process exits and pin the truncated-segment cleanup low-watermark forever.
+// It releases only those. A writer lock is the provider's because a caller asks
+// for it by log name and gives it back by log name; a reader temp info session
+// is not, because CreateReaderTempInfo hands it to a reader that then owns it
+// for its lifetime and retires it on its own Close. A reader that is never
+// closed leaks its session, and that is a bug where the reader is, not something
+// to absorb here - absorbing it would only clean up at shutdown anyway, leaving
+// the low-watermark pinned for as long as the process runs.
 //
-// Second, outside the lock, it stops every keepalive. This is the only stage
-// with a correctness dependency: once nothing renews, every lease expires
-// within one TTL even if every revocation below fails.
-//
-// Third, it revokes concurrently under a single shared deadline. Revocation
-// only makes the keys disappear sooner than the TTL, so it must never be
-// allowed to hold shutdown hostage - serial revocations against a partitioned
+// Stopping the keepalives is the stage with the correctness dependency: once
+// nothing renews, every lease expires within one TTL even if every revocation
+// below fails. Revocation only makes the keys disappear sooner than that, so it
+// must never hold shutdown hostage - serial revocations against a partitioned
 // etcd cost one request timeout each, which on a SIGTERM path exceeds any
-// container termination grace period well before the sessions run out.
+// container termination grace period.
 func (e *metadataProviderEtcd) Close() error {
 	startTime := time.Now()
-
-	e.stateMu.Lock()
-	if e.closed {
-		e.stateMu.Unlock()
-		return nil
-	}
-	e.closed = true
 
 	writerLocks := make(map[string]*SessionLock)
 	e.logWriterLocks.Range(func(key, value interface{}) bool {
@@ -1770,23 +1709,7 @@ func (e *metadataProviderEtcd) Close() error {
 		return true
 	})
 
-	readerSessions := make([]*readerTempSession, 0)
-	e.readerTempSessions.Range(func(key, value interface{}) bool {
-		readerSessions = append(readerSessions, key.(*readerTempSession))
-		e.readerTempSessions.Delete(key)
-		return true
-	})
-	e.stateMu.Unlock()
-
-	// Stage two: stop every keepalive. Non-blocking, and enough on its own.
-	for _, entry := range readerSessions {
-		entry.Lock()
-		if !entry.closed {
-			entry.closed = true
-			entry.session.Orphan()
-		}
-		entry.Unlock()
-	}
+	// Stop every keepalive first; the revocations below are the best-effort half.
 	for logName, sessionLock := range writerLocks {
 		sessionLock.MarkInvalid()
 		leaseId := int64(-1)
@@ -1799,22 +1722,10 @@ func (e *metadataProviderEtcd) Close() error {
 		logger.Ctx(context.Background()).Info("Closed writer lock for log", zap.String("logName", logName), zap.Int64("leaseID", leaseId))
 	}
 
-	// Stage three: best-effort cleanup, all of it inside one request timeout.
+	// Best-effort cleanup, all of it inside one request timeout.
 	ctx, cancel := e.getContextWithTimeout(context.Background())
 	defer cancel()
 	var wg sync.WaitGroup
-	for _, entry := range readerSessions {
-		wg.Add(1)
-		go func(entry *readerTempSession) {
-			defer wg.Done()
-			if _, err := e.client.Revoke(ctx, entry.session.Lease()); err != nil && rpctypes.Error(err) != rpctypes.ErrLeaseNotFound {
-				logger.Ctx(ctx).Warn("revoke reader temp info lease during close failed",
-					zap.String("readerName", entry.readerName),
-					zap.Int64("logId", entry.logId),
-					zap.Error(err))
-			}
-		}(entry)
-	}
 	for logName, sessionLock := range writerLocks {
 		wg.Add(1)
 		go func(logName string, sessionLock *SessionLock) {
