@@ -234,25 +234,34 @@ func TestUpdateSegmentState_MultipleTransitions(t *testing.T) {
 	assert.Equal(t, float64(1), sealedMetric.GetGauge().GetValue())
 }
 
-func TestSetFrontierMonotonic(t *testing.T) {
+// A frontier setter records the position it is given, both halves together, and
+// keeps no state of its own. It used to hold a monotonic guard so a graph line
+// could never step back; that guard could not make the two halves atomic against
+// a scrape - they are separately registered collectors - and during a roll it
+// preferred a new segment's empty seed over the position actually acknowledged,
+// then rejected the correction. What the callers rely on instead is convergence:
+// each publisher owns the transition it reports, so the last write is the right
+// one.
+func TestSetFrontierRecordsThePositionGiven(t *testing.T) {
 	logNs := "frontier-test"
 	logId := "100"
 
 	SetCompactionFrontier(logNs, logId, 10, 5)
-	SetCompactionFrontier(logNs, logId, 9, 99)
+	assert.Equal(t, float64(10), gaugeValue(t, WpClientCompactionFrontierSegment, logNs, logId))
+	assert.Equal(t, float64(5), gaugeValue(t, WpClientCompactionFrontierEntry, logNs, logId))
 
-	segmentMetric := &dto.Metric{}
-	WpClientCompactionFrontierSegment.WithLabelValues(logNs, logId).Write(segmentMetric)
-	assert.Equal(t, float64(10), segmentMetric.GetGauge().GetValue())
+	// Entry ids restart at zero in every segment, so the entry half moving down
+	// while the segment half moves up is the ordinary case.
+	SetCompactionFrontier(logNs, logId, 11, 0)
+	assert.Equal(t, float64(11), gaugeValue(t, WpClientCompactionFrontierSegment, logNs, logId))
+	assert.Equal(t, float64(0), gaugeValue(t, WpClientCompactionFrontierEntry, logNs, logId))
+}
 
-	entryMetric := &dto.Metric{}
-	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Write(entryMetric)
-	assert.Equal(t, float64(5), entryMetric.GetGauge().GetValue())
-
-	SetCompactionFrontier(logNs, logId, 10, 6)
-	entryMetric = &dto.Metric{}
-	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Write(entryMetric)
-	assert.Equal(t, float64(6), entryMetric.GetGauge().GetValue())
+func gaugeValue(t *testing.T, vec *prometheus.GaugeVec, labels ...string) float64 {
+	t.Helper()
+	metric := &dto.Metric{}
+	assert.NoError(t, vec.WithLabelValues(labels...).Write(metric))
+	return metric.GetGauge().GetValue()
 }
 
 // TestMetrics_UseLogNsLabel guards the rename of the application namespace

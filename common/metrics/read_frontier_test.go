@@ -33,15 +33,11 @@ func readFrontier(t *testing.T, logNs, logId, reader string) (float64, float64) 
 func resetReadFrontier() {
 	WpClientReadFrontierSegment.Reset()
 	WpClientReadFrontierEntry.Reset()
-	frontierMu.Lock()
-	readFrontiers = make(map[string]progressFrontier)
-	frontierMu.Unlock()
 }
 
 // A log can have several readers at different positions — a recovery reader and
-// a normal one, or two consumers. They must not share a monotonic guard: with a
-// single per-log key the reader that is further ahead would silently clamp every
-// update from the one behind it, and the lagging reader would look caught up.
+// a normal one, or two consumers. reader_name is what keeps them apart: they are
+// separate series, so neither can overwrite or clamp the other.
 func TestSetReadFrontier_ReadersAreIndependent(t *testing.T) {
 	resetReadFrontier()
 	reg := prometheus.NewRegistry()
@@ -64,12 +60,19 @@ func TestSetReadFrontier_ReadersAreIndependent(t *testing.T) {
 	assert.Equal(t, 2, count, "one series per reader")
 }
 
-func TestSetReadFrontier_DoesNotGoBackwards(t *testing.T) {
+// The setter records what it is given and nothing else - it holds no state to
+// reason about ordering with, and does not need any: a reader publishes from its
+// own goroutine, in order, and each publisher of the write-side frontiers owns
+// the transition it reports. Convergence is what is relied on, so the last value
+// written is the one that shows.
+//
+// The entry id dropping while the segment id advances is the ordinary case, not
+// an anomaly: entry ids restart at zero in every segment.
+func TestSetReadFrontier_RecordsTheLastPositionWritten(t *testing.T) {
 	resetReadFrontier()
 	ns, logId, reader := "bucket/root", "42", "reader-a"
 
 	SetReadFrontier(ns, logId, reader, 7, 100)
-	SetReadFrontier(ns, logId, reader, 7, 99) // stale update from a slower path
 	seg, entry := readFrontier(t, ns, logId, reader)
 	assert.Equal(t, float64(7), seg)
 	assert.Equal(t, float64(100), entry)
@@ -80,11 +83,10 @@ func TestSetReadFrontier_DoesNotGoBackwards(t *testing.T) {
 	assert.Equal(t, float64(0), entry)
 }
 
-// Clearing must drop the guard entry as well as the series. Leaving it behind
-// would be invisible until a reader name recurred, at which point the new
-// reader's genuinely lower position would be clamped to the dead one's and its
-// frontier would look stuck.
-func TestClearReadFrontier_DropsSeriesAndGuard(t *testing.T) {
+// A closed reader must leave nothing behind. reader_name is unique per open, so
+// a surviving series would be a frozen value that nothing ever updates or
+// removes again.
+func TestClearReadFrontier_DropsTheSeries(t *testing.T) {
 	resetReadFrontier()
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(WpClientReadFrontierSegment, WpClientReadFrontierEntry)
@@ -108,7 +110,7 @@ func TestClearReadFrontier_DropsSeriesAndGuard(t *testing.T) {
 	// A reader reusing the name starts from wherever it actually is.
 	SetReadFrontier(ns, logId, reader, 1, 1)
 	seg, entry := readFrontier(t, ns, logId, reader)
-	assert.Equal(t, float64(1), seg, "a cleared reader is not clamped by the dead one's position")
+	assert.Equal(t, float64(1), seg, "a cleared reader is not held to the dead one's position")
 	assert.Equal(t, float64(1), entry)
 }
 
@@ -129,9 +131,4 @@ func TestReadFrontier_NoSeriesLeakAcrossReaderChurn(t *testing.T) {
 	count, err := testutil.GatherAndCount(reg, "woodpecker_client_read_frontier_segment")
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count, "no series survives a closed reader")
-
-	frontierMu.Lock()
-	guards := len(readFrontiers)
-	frontierMu.Unlock()
-	assert.Equal(t, 0, guards, "no monotonic guard entry survives either")
 }

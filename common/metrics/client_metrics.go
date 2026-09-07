@@ -29,13 +29,6 @@ import (
 // without registration they silently collect data that goes nowhere.
 var (
 	WpClientRegisterOnce sync.Once
-	frontierMu           sync.Mutex
-	writeFrontiers       = make(map[string]progressFrontier)
-	compactionFrontiers  = make(map[string]progressFrontier)
-	truncationFrontiers  = make(map[string]progressFrontier)
-	// Keyed by reader as well as by log: several readers may follow one log at
-	// different positions, and one must not clamp another.
-	readFrontiers = make(map[string]progressFrontier)
 
 	// Log name-id mapping
 	// WARNING: In large-scale deployments with many logs, the "log_name" label
@@ -323,18 +316,6 @@ var (
 	}, []string{"log_ns", "operation", "status"})
 )
 
-type progressFrontier struct {
-	segmentID   int64
-	entryID     int64
-	initialized bool
-	// The gauge children for this key, resolved on first publish. Holding them
-	// keeps WithLabelValues - which hashes the label values and takes the
-	// vector's own lock - off a path the read frontier walks once per delivered
-	// entry, without having to set the gauges outside the guard.
-	segmentGauge prometheus.Gauge
-	entryGauge   prometheus.Gauge
-}
-
 // RegisterClientMetricsWithRegisterer registers all client-side metrics with the given registerer.
 // Without calling this, metrics still work but are not scraped by any registry.
 func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
@@ -400,28 +381,50 @@ func UpdateSegmentState(logNs, logId, oldState, newState string) {
 	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Inc()
 }
 
+// The frontier setters below record a position and nothing else: no guard, no
+// shared state, no lock. A position is written where it is reached, by whoever
+// reached it.
+//
+// A monotonic guard used to sit in front of them so a graph line could never
+// step back. It cost a process-wide mutex on the append-ack path and, once the
+// read frontier arrived, on every delivered entry - and it could not deliver
+// what it looked like it was delivering. The segment and entry halves are two
+// separately registered collectors, so Gather walks them one after the other and
+// a publisher can run in between: the pair is never atomic with respect to a
+// scrape, lock or no lock. Nor was the value the guard preferred more truthful.
+// During a roll it admitted (N+1, -1), the seed for a segment with nothing in it
+// yet, over (N, lac), the position actually acknowledged - and then rejected the
+// correction, because the guard had already moved on.
+//
+// What is left is convergence, which is enough here. Within one process the
+// races are narrow and self-healing: the write frontier settles on the next ack,
+// and truncation and compaction are published by the code that owns those
+// transitions, so the last write is the right one. Across processes there is no
+// race at all - metrics are per-process, and two of them export two series that
+// never touch.
+
 func SetWriteFrontier(logNs, logId string, segmentId, entryId int64) {
-	setMonotonicFrontier(writeFrontiers, WpClientWriteFrontierSegment, WpClientWriteFrontierEntry, logNs, logId, segmentId, entryId)
+	WpClientWriteFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientWriteFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
 }
 
 func SetCompactionFrontier(logNs, logId string, segmentId, entryId int64) {
-	setMonotonicFrontier(compactionFrontiers, WpClientCompactionFrontierSegment, WpClientCompactionFrontierEntry, logNs, logId, segmentId, entryId)
+	WpClientCompactionFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
 }
 
 func SetTruncationFrontier(logNs, logId string, segmentId, entryId int64) {
-	setMonotonicFrontier(truncationFrontiers, WpClientTruncationFrontierSegment, WpClientTruncationFrontierEntry, logNs, logId, segmentId, entryId)
+	WpClientTruncationFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientTruncationFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
 }
 
-// SetReadFrontier records how far a reader has delivered to its caller. Unlike
-// the write-side frontiers this is keyed by reader as well as by log: a log can
-// have several readers at different positions, and sharing one monotonic guard
-// would let them clamp each other. Keying by reader also gives the right
-// behaviour for free when a reader is reopened at an earlier position -- it is a
-// different reader_name, so it is a different series and legitimately starts
-// lower.
+// SetReadFrontier records where one reader has got to. It carries reader_name as
+// well, because a log can have several readers at different positions and they
+// are different series - a reader reopened at an earlier position is a different
+// reader_name and legitimately starts lower.
 func SetReadFrontier(logNs, logId, readerName string, segmentId, entryId int64) {
-	setMonotonicFrontierKeyed(readFrontiers, WpClientReadFrontierSegment, WpClientReadFrontierEntry,
-		readFrontierKey(logNs, logId, readerName), []string{logNs, logId, readerName}, segmentId, entryId)
+	WpClientReadFrontierSegment.WithLabelValues(logNs, logId, readerName).Set(float64(segmentId))
+	WpClientReadFrontierEntry.WithLabelValues(logNs, logId, readerName).Set(float64(entryId))
 }
 
 // ClearReadFrontier drops a reader's series when it closes. reader_name carries a
@@ -431,48 +434,8 @@ func SetReadFrontier(logNs, logId, readerName string, segmentId, entryId int64) 
 // simply stops appearing in instant queries.
 func ClearReadFrontier(logNs, logId, readerName string) {
 	labels := prometheus.Labels{"log_ns": logNs, "log_id": logId, "reader_name": readerName}
-	// Series and guard entry go together, under the same lock: dropping one
-	// without the other leaves either a frozen series with no guard or a guard
-	// with no series, and reader_name is unique per open, so whatever is left
-	// behind is never revisited.
-	frontierMu.Lock()
 	WpClientReadFrontierSegment.Delete(labels)
 	WpClientReadFrontierEntry.Delete(labels)
-	delete(readFrontiers, readFrontierKey(logNs, logId, readerName))
-	frontierMu.Unlock()
-}
-
-func readFrontierKey(logNs, logId, readerName string) string {
-	return logNs + "\x00" + logId + "\x00" + readerName
-}
-
-func setMonotonicFrontier(frontiers map[string]progressFrontier, segmentGauge, entryGauge *prometheus.GaugeVec, logNs, logId string, segmentId, entryId int64) {
-	setMonotonicFrontierKeyed(frontiers, segmentGauge, entryGauge, logNs+"\x00"+logId, []string{logNs, logId}, segmentId, entryId)
-}
-
-func setMonotonicFrontierKeyed(frontiers map[string]progressFrontier, segmentGauge, entryGauge *prometheus.GaugeVec, key string, labels []string, segmentId, entryId int64) {
-	frontierMu.Lock()
-	defer frontierMu.Unlock()
-
-	current := frontiers[key]
-	if current.initialized && (segmentId < current.segmentID || (segmentId == current.segmentID && entryId < current.entryID)) {
-		return
-	}
-	if current.segmentGauge == nil {
-		current.segmentGauge = segmentGauge.WithLabelValues(labels...)
-		current.entryGauge = entryGauge.WithLabelValues(labels...)
-	}
-	current.segmentID, current.entryID, current.initialized = segmentId, entryId, true
-	frontiers[key] = current
-
-	// Set under the same lock that decided the order. One log's write frontier
-	// has three publishers - a segment handle becoming writable, the append-ack
-	// path, and the fence path - so setting outside would let a guard that
-	// admitted the newer position see the older Set land last, leaving the gauge
-	// behind the guard and the guard rejecting every correction after that. The
-	// expensive part, resolving the children, already happened once per key.
-	current.segmentGauge.Set(float64(segmentId))
-	current.entryGauge.Set(float64(entryId))
 }
 
 // ActiveSegmentNode is one replica of a log's current writable segment: the
