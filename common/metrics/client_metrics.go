@@ -121,7 +121,12 @@ var (
 		Subsystem: clientRole,
 		Name:      "log_handle_operation_latency",
 		Help:      "Latency of log handle operations",
-		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		// 1ms to 512ms. The third argument is the bucket COUNT, not an exponent:
+		// the first bucket's upper bound is `start` itself, so ten buckets run
+		// 1, 2, 4 ... 2^9 = 512 - reaching 1024 would take eleven. Slower samples
+		// land in the implicit +Inf bucket, and a quantile that falls there reads
+		// as a flat 512 however slow the operation actually was.
+		Buckets: prometheus.ExponentialBuckets(1, 2, 10),
 	}, []string{"log_ns", "log_id", "operation", "status"})
 
 	// Client read metrics
