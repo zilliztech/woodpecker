@@ -161,8 +161,10 @@ func TestAppendOp_receivedAckCallback_ClosesItsOwnChannel(t *testing.T) {
 // assertion rather than as an absent log line.
 type recordingResultChannel struct {
 	channel.ResultChannel
-	mu    sync.Mutex
-	sends []error
+	mu       sync.Mutex
+	sends    []error
+	closeErr error
+	closes   int
 }
 
 func newRecordingChannel(identifier string) *recordingResultChannel {
@@ -182,6 +184,27 @@ func (r *recordingResultChannel) SendResult(ctx context.Context, result *channel
 func (r *recordingResultChannel) seed(t *testing.T, result *channel.AppendResult) {
 	t.Helper()
 	require.NoError(t, r.ResultChannel.SendResult(context.Background(), result))
+}
+
+// Close reports closeErr when one is set, standing in for a ResultChannel
+// implementation whose close can fail. Neither of the two in the repo can, so
+// this is the only way to reach the handling of that error.
+func (r *recordingResultChannel) Close(ctx context.Context) error {
+	r.mu.Lock()
+	r.closes++
+	forced := r.closeErr
+	r.mu.Unlock()
+	closeErr := r.ResultChannel.Close(ctx)
+	if forced != nil {
+		return forced
+	}
+	return closeErr
+}
+
+func (r *recordingResultChannel) closeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closes
 }
 
 func (r *recordingResultChannel) sendCount() int {
@@ -254,4 +277,26 @@ func TestAppendOp_FastFail_SkipsChannelsTheirReaderRetired(t *testing.T) {
 	assert.Equal(t, 0, retired.sendCount(), "a retired channel has no waiter left to wake")
 	assert.Equal(t, 1, live.sendCount(), "a live waiter must still be stopped, and told why")
 	assert.True(t, live.IsClosed(), "FastFail still closes what it woke")
+}
+
+// TestAppendOp_receivedAckCallback_CloseFailureDoesNotStopTheAck pins that
+// retiring the channel is best-effort: a close that fails is logged and the
+// replica's ack still reaches the quorum bookkeeping. Nothing in the repo has a
+// Close that can fail, so a double is the only way to exercise the handling.
+func TestAppendOp_receivedAckCallback_CloseFailureDoesNotStopTheAck(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Return().Once()
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+		func(int64, int64, error) {}, nil, mockHandle,
+		&proto.QuorumInfo{Wq: 1, Aq: 1, Es: 1, Nodes: []string{"n1"}}, nil)
+
+	resultChan := newRecordingChannel(op.Identifier())
+	resultChan.closeErr = werr.ErrInternalError
+	resultChan.seed(t, &channel.AppendResult{SyncedId: 3})
+	op.resultChannels = []channel.ResultChannel{resultChan}
+
+	op.receivedAckCallback(context.Background(), time.Now(), 3, resultChan, nil, 0, "n1")
+
+	assert.True(t, op.completed.Load(), "a failed close must not stop the ack from reaching quorum")
+	assert.Equal(t, 1, resultChan.closeCount(), "the retire is attempted exactly once, not retried")
 }

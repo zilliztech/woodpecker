@@ -19,6 +19,7 @@ package channel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -591,4 +592,43 @@ func TestRemoteResultChannel_ReadResult_DirectResultAlreadySet(t *testing.T) {
 	result, err := channel.ReadResult(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(77), result.SyncedId)
+}
+
+// TestRemoteResultChannel_StringIsWhatFmtUses pins the property the Stringer was
+// added for. A result channel is handed to LogStoreClient.AppendEntry, so it is
+// retained and printed by code this package does not control - testify formats
+// every recorded call argument with %v when it asserts expectations. fmt's
+// default rendering walks the struct's fields with no lock, which races a
+// concurrent Close; consulting Stringer instead is what makes that safe, so the
+// test asserts fmt actually takes that path rather than just that the method
+// exists.
+func TestRemoteResultChannel_StringIsWhatFmtUses(t *testing.T) {
+	resultChannel := NewRemoteResultChannel("test-stringer")
+
+	rendered := fmt.Sprintf("%v", resultChannel)
+	assert.Equal(t, resultChannel.String(), rendered, "fmt must render via Stringer, not by reflecting over the fields")
+	assert.Contains(t, rendered, "test-stringer")
+	assert.Contains(t, rendered, "closed:false")
+	assert.NotContains(t, rendered, "mu:", "reflected field output would mean fmt is reading the fields directly")
+
+	assert.NoError(t, resultChannel.Close(context.Background()))
+	assert.Contains(t, fmt.Sprintf("%v", resultChannel), "closed:true")
+}
+
+// TestRemoteResultChannel_StringIsSafeWhileClosing is the race the Stringer
+// exists to remove: rendering concurrently with the Close that the reading
+// goroutine performs. It only proves anything under -race.
+func TestRemoteResultChannel_StringIsSafeWhileClosing(t *testing.T) {
+	resultChannel := NewRemoteResultChannel("test-stringer-race")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(2 * time.Millisecond)
+		_ = resultChannel.Close(context.Background())
+	}()
+	for i := 0; i < 200; i++ {
+		_ = fmt.Sprintf("%v", resultChannel)
+	}
+	<-done
 }

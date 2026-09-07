@@ -680,3 +680,19 @@ func TestLocalResultChannel_TryReadResult(t *testing.T) {
 	assert.False(t, ok)
 	assert.Nil(t, r)
 }
+
+// TestLocalResultChannel_StringIsWhatFmtUses mirrors the remote case: the batch
+// path hands these to a mocked AppendEntries, so they are formatted by code this
+// package does not control while the drain goroutine is closing them.
+func TestLocalResultChannel_StringIsWhatFmtUses(t *testing.T) {
+	resultChannel := NewLocalResultChannel("test-local-stringer")
+
+	rendered := fmt.Sprintf("%v", resultChannel)
+	assert.Equal(t, resultChannel.String(), rendered, "fmt must render via Stringer, not by reflecting over the fields")
+	assert.Contains(t, rendered, "test-local-stringer")
+	assert.Contains(t, rendered, "closed:false")
+	assert.NotContains(t, rendered, "mu:", "reflected field output would mean fmt is reading the fields directly")
+
+	assert.NoError(t, resultChannel.Close(context.Background()))
+	assert.Contains(t, fmt.Sprintf("%v", resultChannel), "closed:true")
+}
