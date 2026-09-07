@@ -95,13 +95,13 @@ var (
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "read_frontier_segment",
-		Help:      "Highest segment id delivered to the caller per reader",
+		Help:      "Read position of each reader: the segment it last delivered from, or the one it opened at",
 	}, []string{"log_ns", "log_id", "reader_name"})
 	WpClientReadFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "read_frontier_entry",
-		Help:      "Highest entry id delivered to the caller in the read frontier segment per reader",
+		Help:      "Read position of each reader within read_frontier_segment: the entry it last delivered, or the one it opened at",
 	}, []string{"log_ns", "log_id", "reader_name"})
 
 	// client append data to log
@@ -425,9 +425,13 @@ func SetReadFrontier(logNs, logId, readerName string, segmentId, entryId int64) 
 // simply stops appearing in instant queries.
 func ClearReadFrontier(logNs, logId, readerName string) {
 	labels := prometheus.Labels{"log_ns": logNs, "log_id": logId, "reader_name": readerName}
+	// Series and guard entry go together, under the same lock: dropping one
+	// without the other leaves either a frozen series with no guard or a guard
+	// with no series, and reader_name is unique per open, so whatever is left
+	// behind is never revisited.
+	frontierMu.Lock()
 	WpClientReadFrontierSegment.Delete(labels)
 	WpClientReadFrontierEntry.Delete(labels)
-	frontierMu.Lock()
 	delete(readFrontiers, readFrontierKey(logNs, logId, readerName))
 	frontierMu.Unlock()
 }
@@ -448,9 +452,17 @@ func setMonotonicFrontierKeyed(frontiers map[string]progressFrontier, segmentGau
 		return
 	}
 	frontiers[key] = progressFrontier{segmentID: segmentId, entryID: entryId, initialized: true}
+	frontierMu.Unlock()
+
+	// The gauge writes stay outside the critical section. frontierMu is shared by
+	// every log's frontier in the process, and the read frontier is published once
+	// per delivered entry, so doing a label lookup under it would put every reader
+	// and writer in the process behind one another. Each key has a single
+	// publisher - one reader goroutine, or the ordered append-ack path for a log -
+	// so the guard above still decides the order and these two writes cannot be
+	// overtaken by a competing update to the same key.
 	segmentGauge.WithLabelValues(labels...).Set(float64(segmentId))
 	entryGauge.WithLabelValues(labels...).Set(float64(entryId))
-	frontierMu.Unlock()
 }
 
 // ActiveSegmentNode is one replica of a log's current writable segment: the

@@ -101,6 +101,7 @@ func TestRegisterCompactedCleanupAndFrontierMetrics(t *testing.T) {
 		SetWriteFrontier("bucket/root", "1", 10, 99)
 		SetCompactionFrontier("bucket/root", "1", 9, 88)
 		SetTruncationFrontier("bucket/root", "1", 3, 7)
+		SetReadFrontier("bucket/root", "1", "registration-reader", 2, 4)
 		WpSegmentCompactionFailuresTotal.WithLabelValues("bucket/root", "1", "data_behind").Inc()
 
 		names := gatheredMetricNames(t, registry)
@@ -110,6 +111,10 @@ func TestRegisterCompactedCleanupAndFrontierMetrics(t *testing.T) {
 		assert.True(t, names["woodpecker_client_compaction_frontier_entry"])
 		assert.True(t, names["woodpecker_client_truncation_frontier_segment"])
 		assert.True(t, names["woodpecker_client_truncation_frontier_entry"])
+		// Registration is what puts a metric on /metrics; a dropped MustRegister or
+		// a misspelled name would otherwise fail nothing and simply be absent.
+		assert.True(t, names["woodpecker_client_read_frontier_segment"])
+		assert.True(t, names["woodpecker_client_read_frontier_entry"])
 		assert.True(t, names["woodpecker_client_segment_compaction_failures_total"])
 	})
 

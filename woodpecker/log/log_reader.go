@@ -20,6 +20,7 @@ import (
 	"context"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -93,6 +94,38 @@ type logBatchReaderImpl struct {
 	// never advances it, so gating the periodic report on lastRead would re-write
 	// an unchanged position on every poll.
 	lastReported int64
+
+	// frontierMu orders this reader's frontier metric against its own Close.
+	// ReadNext and Close have no other mutual exclusion, so an application closing
+	// a reader from one goroutine while another is still delivering can otherwise
+	// re-create the series and its guard entry after the clear - and nothing
+	// removes them again, because there is no second Close. reader_name is unique
+	// per open, so every occurrence would leave one more frozen series behind.
+	frontierMu     sync.Mutex
+	frontierClosed bool
+}
+
+// publishReadFrontier records where this reader has got to, unless it has
+// already been closed.
+func (l *logBatchReaderImpl) publishReadFrontier(segmentId, entryId int64) {
+	l.frontierMu.Lock()
+	defer l.frontierMu.Unlock()
+	if l.frontierClosed {
+		return
+	}
+	metrics.SetReadFrontier(l.logNs, l.logIdStr, l.readerName, segmentId, entryId)
+}
+
+// retireReadFrontier drops this reader's series and refuses any later
+// publication from a delivery still in flight.
+func (l *logBatchReaderImpl) retireReadFrontier() {
+	l.frontierMu.Lock()
+	defer l.frontierMu.Unlock()
+	if l.frontierClosed {
+		return
+	}
+	l.frontierClosed = true
+	metrics.ClearReadFrontier(l.logNs, l.logIdStr, l.readerName)
 }
 
 func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string, readerTempSession meta.ReaderTempInfoSession, cfg *config.Configuration) (LogReader, error) {
@@ -102,7 +135,7 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		return nil, werr.ErrLogReaderTempInfoError.WithCauseErrMsg("reader temp info session is required")
 	}
 	now := time.Now().UnixMilli()
-	return &logBatchReaderImpl{
+	reader := &logBatchReaderImpl{
 		logName:              logHandle.GetName(),
 		logId:                logHandle.GetId(),
 		logIdStr:             strconv.FormatInt(logHandle.GetId(), 10),
@@ -118,7 +151,15 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		next:                 0,
 		lastRead:             now,
 		lastReported:         now,
-	}, nil
+	}
+	// Publish the position the reader opens at, before it has delivered anything.
+	// Without it a reader that never delivers a first entry - waiting out
+	// ErrSegmentNotFound, or parked at the tail of an idle log - has no series at
+	// all, and the lag panel drops the row entirely: "stuck where it started" and
+	// "no reader running" look identical, which is half the question this metric
+	// exists to answer.
+	reader.publishReadFrontier(from.SegmentId, from.EntryId)
+	return reader, nil
 }
 
 // ReadNext reads the next log message from the log, blocking until a message is returned.
@@ -166,7 +207,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
 			metrics.WpClientReadEntriesTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
 			metrics.WpLogReaderBytesRead.WithLabelValues(l.logNs, l.logIdStr).Add(float64(len(readEntryData.Values)))
-			metrics.SetReadFrontier(l.logNs, l.logIdStr, l.readerName, readEntryData.SegId, readEntryData.EntryId)
+			l.publishReadFrontier(readEntryData.SegId, readEntryData.EntryId)
 			metrics.WpClientReadLatency.WithLabelValues(l.logNs, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return logMsg, nil
@@ -270,7 +311,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// update metrics
 		metrics.WpClientReadEntriesTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
 		metrics.WpLogReaderBytesRead.WithLabelValues(l.logNs, l.logIdStr).Add(float64(len(oneEntry.Values)))
-		metrics.SetReadFrontier(l.logNs, l.logIdStr, l.readerName, oneEntry.SegId, oneEntry.EntryId)
+		l.publishReadFrontier(oneEntry.SegId, oneEntry.EntryId)
 		metrics.WpClientReadLatency.WithLabelValues(l.logNs, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return logMsg, nil
@@ -285,7 +326,7 @@ func (l *logBatchReaderImpl) Close(ctx context.Context) error {
 	// Drop this reader's frontier series unconditionally: the reader is being
 	// discarded either way, and reader_name is unique per reader, so leaving it
 	// behind would add a permanently frozen series on every scanner restart.
-	metrics.ClearReadFrontier(l.logNs, l.logIdStr, l.readerName)
+	l.retireReadFrontier()
 
 	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.readerTempSession)
 	status := "success"

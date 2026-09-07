@@ -859,7 +859,7 @@
         "type": "prometheus",
         "uid": "${prometheus}"
       },
-      "description": "How many segments each reader is behind the write frontier. Entry ids restart at every segment, so an entry-level difference across a segment boundary is meaningless; segment lag is not.",
+      "description": "How many segments each reader is behind the write frontier. Entry ids restart at every segment, so an entry-level difference across a segment boundary is meaningless; segment lag is not. The write frontier is aggregated with max because every process that opens a log publishes one, readers included: without it the match group holds one series per process and the query fails.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -898,7 +898,7 @@
       },
       "targets": [
         {
-          "expr": "woodpecker_client_write_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"} - on(log_ns, log_id) group_right() woodpecker_client_read_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
+          "expr": "max by (namespace, woodpecker_id, log_ns, log_id) (woodpecker_client_write_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}) - on(namespace, woodpecker_id, log_ns, log_id) group_right() woodpecker_client_read_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
           "legendFormat": "logID={{log_id}} reader={{reader_name}}",
           "refId": "A"
         }
