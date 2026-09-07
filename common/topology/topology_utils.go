@@ -54,3 +54,38 @@ func GetCurrentRegion() string {
 func GetCurrentAvailabilityZone() string {
 	return envOrDefault(AvailabilityZoneEnvKey, "")
 }
+
+// LabelOrUnknown renders a placement value for use as a metric label.
+//
+// The empty string is never emitted. A series carrying `az=""` is structurally
+// indistinguishable from one whose placement is genuinely recorded, so a
+// misconfigured deployment produced dashboards that looked fine and said
+// nothing — for 49 days, in the case that prompted this. `unknown` is the same
+// word Scope already uses for the same condition, so the two agree.
+//
+// This is a rendering decision, not a validation one: placement stays optional,
+// and MissingPlacementEnv is what says so out loud at startup.
+func LabelOrUnknown(value string) string {
+	if value == "" {
+		return ScopeUnknown
+	}
+	return value
+}
+
+// MissingPlacementEnv returns the placement environment variables that are
+// unset, in a stable order, so a caller can name them in a startup warning.
+//
+// Deliberately not an error. Placement is genuinely optional for a single-AZ
+// deployment, and refusing to start would break those — but a process that
+// cannot tell local from remote should say so once, loudly, rather than
+// reporting `unknown` forever and leaving somebody to notice from a dashboard.
+func MissingPlacementEnv() []string {
+	var missing []string
+	if os.Getenv(RegionEnvKey) == "" {
+		missing = append(missing, RegionEnvKey)
+	}
+	if os.Getenv(AvailabilityZoneEnvKey) == "" {
+		missing = append(missing, AvailabilityZoneEnvKey)
+	}
+	return missing
+}

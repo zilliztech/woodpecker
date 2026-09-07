@@ -29,6 +29,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -113,6 +114,19 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 	initTraceErr := tracer.InitTracer(cfg, "woodpecker", 1001)
 	if initTraceErr != nil {
 		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
+	}
+	// The client reads its own REGION/AVAILABILITY_ZONE to work out how far each
+	// replica sits from it. Unset, every peer classifies as ScopeUnknown, so the
+	// per-replica traffic metrics stop distinguishing local from cross-region
+	// while still looking well-formed. Warned separately from the server: the
+	// two are configured independently and either can be the one that is wrong.
+	if missing := topology.MissingPlacementEnv(); len(missing) > 0 {
+		logger.Ctx(ctx).Warn("topology placement is not configured; this client cannot classify replicas as local, cross-az or cross-region",
+			zap.Strings("unset", missing))
+	} else {
+		logger.Ctx(ctx).Info("topology placement",
+			zap.String("region", topology.GetCurrentRegion()),
+			zap.String("az", topology.GetCurrentAvailabilityZone()))
 	}
 	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
 	c := &woodpeckerClient{
