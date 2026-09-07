@@ -20,7 +20,6 @@ import (
 	"context"
 	"math"
 	"strconv"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -94,15 +93,6 @@ type logBatchReaderImpl struct {
 	// never advances it, so gating the periodic report on lastRead would re-write
 	// an unchanged position on every poll.
 	lastReported int64
-
-	// frontierMetricMu orders this reader's frontier metric against its own Close.
-	// ReadNext and Close have no other mutual exclusion, so an application closing
-	// a reader from one goroutine while another is still delivering can otherwise
-	// re-create the series and its guard entry after the clear - and nothing
-	// removes them again, because there is no second Close. reader_name is unique
-	// per open, so every occurrence would leave one more frozen series behind.
-	frontierMetricMu      sync.Mutex
-	frontierMetricRetired bool
 }
 
 // publishReadFrontierMetric records where this reader has got to. It is
@@ -111,33 +101,29 @@ type logBatchReaderImpl struct {
 // call site in the middle of ReadNext reads as bookkeeping rather than as part
 // of delivering an entry.
 func (l *logBatchReaderImpl) publishReadFrontierMetric(segmentId, entryId int64) {
-	// The Latest sentinel is a request ("start at the tail"), not a position.
-	// Publishing it would seed the monotonic guard with MaxInt64, and every real
-	// position afterwards would be rejected as going backwards - pinning the
-	// gauge at ~9.2e18 for the reader's whole life and making the lag panel read
-	// about -9.2e18. Refused here rather than at each caller so a future call
-	// site cannot reintroduce it.
+	// The Latest sentinel is a request ("start at the tail"), not a position, and
+	// publishing MaxInt64 would show a reader sitting at ~9.2e18 until it
+	// delivered something - which a tail reader on an idle log never does.
+	// Refused here rather than at each caller so a future call site cannot
+	// reintroduce it.
 	if segmentId == LatestLogMessageID().SegmentId {
-		return
-	}
-	l.frontierMetricMu.Lock()
-	defer l.frontierMetricMu.Unlock()
-	if l.frontierMetricRetired {
 		return
 	}
 	metrics.SetReadFrontier(l.logNs, l.logIdStr, l.readerName, segmentId, entryId)
 }
 
-// retireReadFrontierMetric drops this reader's series and refuses any later
-// publication from a delivery still in flight. Also observability only - it
+// retireReadFrontierMetric drops this reader's series. Observability only - it
 // frees a series, not a resource the reader needs.
+//
+// It has to happen: reader_name is unique per open, so a series left behind is a
+// gauge nothing will ever update or remove again, reporting a reader that is
+// gone as though it were sitting there permanently behind.
+//
+// Like every other method here it expects the caller's own serialization; the
+// reader holds no lock of its own. A Close racing a delivery would republish
+// what it just removed, which is why ReadNext takes a context - cancel it, let
+// the read return, then close.
 func (l *logBatchReaderImpl) retireReadFrontierMetric() {
-	l.frontierMetricMu.Lock()
-	defer l.frontierMetricMu.Unlock()
-	if l.frontierMetricRetired {
-		return
-	}
-	l.frontierMetricRetired = true
 	metrics.ClearReadFrontier(l.logNs, l.logIdStr, l.readerName)
 }
 

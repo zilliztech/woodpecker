@@ -72,13 +72,10 @@ func TestLogReader_PublishesItsOpeningPosition(t *testing.T) {
 	assert.Equal(t, before, readFrontierSeriesCount())
 }
 
-// TestLogReader_RetiredFrontierIsNotRepublished covers an application closing a
-// reader from one goroutine while another is still inside ReadNext. The two have
-// no mutual exclusion of their own, so without the reader's own ordering a
-// delivery landing after the clear re-creates the series and its guard entry -
-// and nothing removes them again, because there is no second Close. reader_name
-// is unique per open, so each occurrence would leave one more frozen series.
-func TestLogReader_RetiredFrontierIsNotRepublished(t *testing.T) {
+// A closed reader must leave nothing behind. reader_name is unique per open, so
+// a surviving series is a gauge nothing will ever update or remove again,
+// reporting a reader that is gone as though it were permanently behind.
+func TestLogReader_CloseRetiresTheFrontier(t *testing.T) {
 	readerName := fmt.Sprintf("retired-reader-%d", time.Now().UnixNano())
 	reader := &logBatchReaderImpl{
 		logNs:      "bucket/root",
@@ -91,14 +88,9 @@ func TestLogReader_RetiredFrontierIsNotRepublished(t *testing.T) {
 	require.Equal(t, before+1, readFrontierSeriesCount())
 
 	reader.retireReadFrontierMetric()
-	require.Equal(t, before, readFrontierSeriesCount(), "Close must drop the reader's series")
+	assert.Equal(t, before, readFrontierSeriesCount(), "Close must drop the reader's series")
 
-	// A delivery that was already in flight when Close ran.
-	reader.publishReadFrontierMetric(3, 9)
-	assert.Equal(t, before, readFrontierSeriesCount(),
-		"a delivery racing Close must not resurrect a series nobody will clean up")
-
-	// Retiring twice is harmless.
+	// Retiring twice is harmless, so Close need not be guarded against a repeat.
 	reader.retireReadFrontierMetric()
 	assert.Equal(t, before, readFrontierSeriesCount())
 }
