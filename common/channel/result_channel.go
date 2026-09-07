@@ -18,6 +18,9 @@ package channel
 
 import (
 	"context"
+	"errors"
+
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 // ResultChannel is an abstract interface for handling asynchronous result notifications.
@@ -38,4 +41,23 @@ type ResultChannel interface {
 type AppendResult struct {
 	SyncedId int64
 	Err      error
+}
+
+// readBudgetExhausted renders a read that ended because its caller's context did.
+//
+// A deadline means the ack ran late, and every ReadResult has to report that the
+// same way, because what consumes it decides an entry's fate: the append path
+// asks werr.IsRetryableErr, which extracts a woodpeckerError and so answers
+// false for a bare context error. An entry whose ack merely ran late would then
+// go terminal with none of its retries spent. Wrapping keeps errors.Is working,
+// which is what the read-timeout log branch tests for.
+//
+// A cancellation is the caller's own decision - the server reads on the gRPC
+// stream's context and sees one whenever a client goes away - so it is passed
+// through as itself rather than relabelled a timeout.
+func readBudgetExhausted(cause error) error {
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return werr.ErrAppendOpTimeout.WithCauseErr(cause)
+	}
+	return cause
 }

@@ -108,7 +108,7 @@ func (r *RemoteResultChannel) ReadResult(ctx context.Context) (*AppendResult, er
 		for {
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, readBudgetExhausted(ctx.Err())
 			case <-ticker.C:
 				r.mu.RLock()
 				if r.closed {
@@ -159,7 +159,7 @@ func (r *RemoteResultChannel) ReadResult(ctx context.Context) (*AppendResult, er
 			logger.Ctx(ctx).Warn("append result read exceeded its budget",
 				zap.String("identifier", r.identifier),
 				zap.Error(readErr))
-			return nil, werr.ErrAppendOpTimeout.WithCauseErr(context.DeadlineExceeded)
+			return nil, readBudgetExhausted(context.DeadlineExceeded)
 		}
 		logger.Ctx(ctx).Warn("failed to read result from remote channel",
 			zap.String("identifier", r.identifier),

@@ -92,7 +92,7 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 		)
 		return r, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, readBudgetExhausted(ctx.Err())
 	}
 }
 

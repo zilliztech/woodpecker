@@ -156,7 +156,7 @@ func TestRemoteResultChannel_ReadResult_NotInitialized(t *testing.T) {
 	result, err := channel.ReadResult(ctx)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestRemoteResultChannel_ReadResult_Closed(t *testing.T) {
@@ -272,7 +272,7 @@ func TestRemoteResultChannel_ReadResult_ContextCancellation(t *testing.T) {
 	result, err := channel.ReadResult(ctx)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 // Test the workflow that simulates real usage in append operations

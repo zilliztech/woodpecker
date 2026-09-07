@@ -46,6 +46,16 @@ type Operation interface {
 	Execute()
 }
 
+// appendAckReadTimeout bounds how long a replica's durability ack is waited for
+// on the single-entry path. Package var so tests can shrink it, matching
+// batchAckReadTimeout on the batch path. TODO make configurable.
+//
+// It is also the retry unit: an unresponsive replica costs one of these per
+// attempt, so a peer that accepts an entry and never answers takes
+// appendAckReadTimeout x MaxRetries before the entry is given up on, and the
+// entries queued behind it wait that long too because acks are ordered.
+var appendAckReadTimeout = 30 * time.Second
+
 var _ Operation = (*AppendOp)(nil)
 
 // AppendOp represents an operation to append data to a log segment.
@@ -317,7 +327,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		return
 	}
 	// async call error, wait until syncedCh closed
-	subCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // TODO configurable
+	subCtx, cancel := context.WithTimeout(context.Background(), appendAckReadTimeout)
 	defer cancel()
 	syncedResult, readChanErr := resultChan.ReadResult(subCtx)
 	sp.AddEvent("wait callback", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex), attribute.String("serverAddr", serverAddr)))

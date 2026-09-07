@@ -1242,6 +1242,16 @@ func TestServer_AddEntry_ReadResultContextError(t *testing.T) {
 	_ = err
 	require.GreaterOrEqual(t, len(stream.responses), 1)
 	assert.Equal(t, proto.AddEntryState_Buffered, stream.responses[0].State)
+
+	// And never the durability ack. The server waits for it on the stream's own
+	// context, so a client that cancels the stream ends that wait: the entry is
+	// still buffered and will still be flushed, but this side never gets to say
+	// so. That is what a client cancelling a replica it had stopped waiting for
+	// used to do to every append.
+	for i, resp := range stream.responses {
+		assert.NotEqual(t, proto.AddEntryState_Synced, resp.State,
+			"response %d: a cancelled stream cannot carry the ack", i)
+	}
 }
 
 // === SelectNodes with actual ServerNode ===

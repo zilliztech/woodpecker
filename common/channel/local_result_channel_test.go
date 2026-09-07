@@ -97,7 +97,7 @@ func TestLocalResultChannel_ReadTimeout(t *testing.T) {
 	// Try to read from empty channel with timeout
 	_, err := rc.ReadResult(ctx)
 	assert.Error(t, err)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestLocalResultChannel_SendTimeout(t *testing.T) {
@@ -304,7 +304,7 @@ func TestLocalResultChannel_ReadResultTimeout(t *testing.T) {
 	duration := time.Since(start)
 
 	assert.Error(t, err)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	// Should timeout around 100ms, not much longer
 	assert.True(t, duration < 200*time.Millisecond, "ReadResult took too long: %v", duration)
 }
@@ -415,7 +415,7 @@ func TestLocalResultChannel_ConcurrentReads(t *testing.T) {
 
 	for _, err := range errors {
 		// The other reader should get a context timeout (channel empty, no more data)
-		assert.Equal(t, context.DeadlineExceeded, err, "non-winning reader should timeout")
+		assert.ErrorIs(t, err, context.DeadlineExceeded, "non-winning reader should timeout")
 	}
 }
 
@@ -567,7 +567,7 @@ func TestLocalResultChannel_MultipleReadersOneMessage(t *testing.T) {
 
 	for _, err := range errors {
 		// The other readers should get a context timeout (channel empty, no more data)
-		assert.Equal(t, context.DeadlineExceeded, err, "non-winning reader should timeout")
+		assert.ErrorIs(t, err, context.DeadlineExceeded, "non-winning reader should timeout")
 	}
 }
 
