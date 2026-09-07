@@ -18,17 +18,21 @@ package segment
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
@@ -299,4 +303,123 @@ func TestAppendOp_receivedAckCallback_CloseFailureDoesNotStopTheAck(t *testing.T
 
 	assert.True(t, op.completed.Load(), "a failed close must not stop the ack from reaching quorum")
 	assert.Equal(t, 1, resultChan.closeCount(), "the retire is attempted exactly once, not retried")
+}
+
+// replicaOutcomeCount reads the per-replica counter for one op's log. The tests
+// below use a distinct logId each so they do not see one another's counts.
+func replicaOutcomeCount(op *AppendOp, status string) float64 {
+	return testutil.ToFloat64(metrics.WpClientReplicaAppendTotal.WithLabelValues(
+		op.logNs, strconv.FormatInt(op.logId, 10), topology.ScopeUnknown, status))
+}
+
+// answeringOp builds an op whose replicas all have an answer waiting, and a
+// handle that runs the real FastSuccess the moment the quorum is reached - the
+// way SendAppendSuccessCallbacks drives it in production.
+func answeringOp(t *testing.T, logId int64, replicas int32, ackQuorum int32) (*AppendOp, []channel.ResultChannel) {
+	t.Helper()
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	nodes := make([]string, replicas)
+	for i := range nodes {
+		nodes[i] = "n" + strconv.Itoa(i)
+	}
+	op := NewAppendOp("a-bucket", "files", logId, 2, 3, []byte("0123456789"),
+		func(int64, int64, error) {}, nil, mockHandle,
+		&proto.QuorumInfo{Wq: replicas, Aq: ackQuorum, Es: replicas, Nodes: nodes}, nil)
+
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).
+		Run(func(ctx context.Context, _ int64) { op.FastSuccess(ctx) }).Return().Maybe()
+
+	channels := make([]channel.ResultChannel, replicas)
+	for i := range channels {
+		local := channel.NewLocalResultChannel(op.Identifier())
+		require.NoError(t, local.SendResult(context.Background(), &channel.AppendResult{SyncedId: 3}))
+		channels[i] = local
+	}
+	op.resultChannels = channels
+	return op, channels
+}
+
+// TestAppendOp_ReplicaAnsweringAfterQuorumIsStillCounted pins what the
+// per-replica counters measure. With Es=3/Aq=2 the third replica answers after
+// the quorum has already completed the op, and its answer used to be dropped by
+// the fast-completed guard - so a cluster writing three copies reported about
+// two outcomes per entry, and replica_append_bytes_total understated cross-AZ
+// write traffic by the same proportion.
+func TestAppendOp_ReplicaAnsweringAfterQuorumIsStillCounted(t *testing.T) {
+	op, channels := answeringOp(t, 909001, 3, 2)
+	before := replicaOutcomeCount(op, "success")
+
+	for i, resultChan := range channels {
+		op.receivedAckCallback(context.Background(), time.Now(), 3, resultChan, nil, i, "n"+strconv.Itoa(i))
+	}
+
+	require.True(t, op.fastCalled.Load(), "the quorum must have completed the op")
+	assert.Equal(t, float64(3), replicaOutcomeCount(op, "success")-before,
+		"every replica that answered must be counted, not just the ack quorum")
+}
+
+// TestApplyNodeAck_ReplicaAnsweringAfterQuorumIsStillCounted is the same
+// property on the batch drain, which applies acks through applyNodeAck.
+func TestApplyNodeAck_ReplicaAnsweringAfterQuorumIsStillCounted(t *testing.T) {
+	op, _ := answeringOp(t, 909002, 3, 2)
+	before := replicaOutcomeCount(op, "success")
+
+	for i := 0; i < 3; i++ {
+		op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, i, "n"+strconv.Itoa(i))
+	}
+
+	require.True(t, op.fastCalled.Load(), "the quorum must have completed the op")
+	assert.Equal(t, float64(3), replicaOutcomeCount(op, "success")-before,
+		"every replica that answered must be counted, not just the ack quorum")
+}
+
+// TestAppendOp_ReplicaFailingAfterCompletionIsNotCounted is the other half of
+// the rule. Once the op has completed, a read that FAILED may be our own doing -
+// FastFail cancels every replica still in flight - so it must not land in the
+// error series. Only an answer counts.
+func TestAppendOp_ReplicaFailingAfterCompletionIsNotCounted(t *testing.T) {
+	op, _ := answeringOp(t, 909003, 3, 3)
+	op.fastCalled.Store(true) // as FastFail leaves it
+	beforeErr := replicaOutcomeCount(op, "error")
+	beforeOK := replicaOutcomeCount(op, "success")
+
+	// A replica that had not answered when FastFail closed its channel: the read
+	// fails, and the failure is the close we performed.
+	cancelled := channel.NewLocalResultChannel(op.Identifier())
+	require.NoError(t, cancelled.Close(context.Background()))
+	op.resultChannels[0] = cancelled
+	op.receivedAckCallback(context.Background(), time.Now(), 3, cancelled, nil, 0, "n0")
+
+	assert.Equal(t, float64(0), replicaOutcomeCount(op, "error")-beforeErr,
+		"a cancellation we caused is not the replica's failure")
+	assert.Equal(t, float64(0), replicaOutcomeCount(op, "success")-beforeOK)
+}
+
+// TestAppendOp_ReplicaAnsweringWithAnErrorAfterQuorumIsCounted keeps the
+// post-quorum classification honest: an answer that reports a failure is a real
+// failure and belongs in the error series, unlike the cancellation above.
+func TestAppendOp_ReplicaAnsweringWithAnErrorAfterQuorumIsCounted(t *testing.T) {
+	op, _ := answeringOp(t, 909004, 3, 3)
+	op.fastCalled.Store(true)
+	before := replicaOutcomeCount(op, "error")
+
+	op.applyNodeAck(context.Background(), time.Now(),
+		&channel.AppendResult{SyncedId: -1, Err: werr.ErrFileWriterSyncFailed}, nil, 0, "n0")
+
+	assert.Equal(t, float64(1), replicaOutcomeCount(op, "error")-before,
+		"a replica that answered with a failure is a real failure")
+}
+
+// TestReplicaOutcome_ClassifiesTheSameWayTheAckPathsDo guards the one duplication
+// left: replicaOutcome mirrors the branches receivedAckCallback and applyNodeAck
+// take when the op has NOT completed, and the two must not drift.
+func TestReplicaOutcome_ClassifiesTheSameWayTheAckPathsDo(t *testing.T) {
+	const entryId = int64(7)
+	assert.Equal(t, "success", replicaOutcome(&channel.AppendResult{SyncedId: entryId}, entryId))
+	assert.Equal(t, "success", replicaOutcome(&channel.AppendResult{SyncedId: entryId + 1}, entryId))
+	assert.Equal(t, "error", replicaOutcome(&channel.AppendResult{SyncedId: -1}, entryId))
+	assert.Equal(t, "error", replicaOutcome(&channel.AppendResult{SyncedId: entryId, Err: werr.ErrFileWriterSyncFailed}, entryId))
+	assert.Equal(t, "error", replicaOutcome(nil, entryId))
+	assert.Equal(t, "", replicaOutcome(&channel.AppendResult{SyncedId: entryId - 1}, entryId),
+		"a replica still catching up has not answered for this entry")
 }

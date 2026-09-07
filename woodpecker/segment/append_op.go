@@ -109,6 +109,42 @@ func (op *AppendOp) Identifier() string {
 	return fmt.Sprintf("%d/%d/%d", op.logId, op.segmentId, op.entryId)
 }
 
+// replicaOutcome classifies one replica's answer to this entry.
+//
+// It is the only place that decides what success means for the per-replica
+// counters, so the single-entry ack path, the batch drain, and the post-quorum
+// recording in both cannot drift apart. An empty result means the answer says
+// nothing about THIS entry: a replica still catching up reports a lower
+// SyncedId, and that is neither a success nor a failure to write down.
+func replicaOutcome(result *channel.AppendResult, entryId int64) string {
+	if result == nil || result.SyncedId == -1 || result.Err != nil {
+		return "error"
+	}
+	if result.SyncedId < entryId {
+		return ""
+	}
+	return "success"
+}
+
+// recordReplicaAnswer counts a replica's answer when it says something about
+// this entry.
+//
+// It exists for the paths that run after the op has already been completed
+// elsewhere. A replica outside the ack quorum still answers, and its answer is
+// as real as the ones that made the quorum - dropping it is why
+// replica_append_total read about two outcomes per entry on a cluster writing
+// three copies, understating cross-AZ write traffic by the same proportion.
+//
+// Only an answer is counted there. A failure observed after the op completed may
+// be our own doing - FastFail cancels every replica still in flight - and
+// counting that would put self-inflicted cancellations into the error series,
+// which is the same mistake this change removes from the logs.
+func (op *AppendOp) recordReplicaAnswer(serverIndex int, result *channel.AppendResult) {
+	if status := replicaOutcome(result, op.entryId); status != "" {
+		op.recordReplicaResult(serverIndex, status)
+	}
+}
+
 // recordReplicaResult counts one replica's outcome for this entry, labelled by
 // how far that replica sits from this client. A quorum append writes to every
 // replica, so this is where cross-AZ write traffic becomes visible.
@@ -283,6 +319,9 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 
 	// If operation already completed via FastFail/FastSuccess, skip further processing
 	if op.fastCalled.Load() {
+		if readChanErr == nil {
+			op.recordReplicaAnswer(serverIndex, syncedResult)
+		}
 		logger.Ctx(ctx).Debug("received ack but already fast completed",
 			zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.String("serverAddr", serverAddr))
 		return
@@ -342,6 +381,9 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 // entry-id order) instead of spawning a goroutine per op.
 func (op *AppendOp) applyNodeAck(ctx context.Context, startRequestTime time.Time, result *channel.AppendResult, readErr error, serverIndex int, serverAddr string) {
 	if op.fastCalled.Load() {
+		if readErr == nil {
+			op.recordReplicaAnswer(serverIndex, result)
+		}
 		return
 	}
 	if readErr != nil {
