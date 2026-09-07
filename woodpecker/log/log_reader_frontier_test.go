@@ -68,7 +68,7 @@ func TestLogReader_PublishesItsOpeningPosition(t *testing.T) {
 	assert.Equal(t, float64(12),
 		testutil.ToFloat64(metrics.WpClientReadFrontierEntry.WithLabelValues(logNs, "77", readerName)))
 
-	reader.(*logBatchReaderImpl).retireReadFrontier()
+	reader.(*logBatchReaderImpl).retireReadFrontierMetric()
 	assert.Equal(t, before, readFrontierSeriesCount())
 }
 
@@ -87,18 +87,18 @@ func TestLogReader_RetiredFrontierIsNotRepublished(t *testing.T) {
 	}
 
 	before := readFrontierSeriesCount()
-	reader.publishReadFrontier(2, 5)
+	reader.publishReadFrontierMetric(2, 5)
 	require.Equal(t, before+1, readFrontierSeriesCount())
 
-	reader.retireReadFrontier()
+	reader.retireReadFrontierMetric()
 	require.Equal(t, before, readFrontierSeriesCount(), "Close must drop the reader's series")
 
 	// A delivery that was already in flight when Close ran.
-	reader.publishReadFrontier(3, 9)
+	reader.publishReadFrontierMetric(3, 9)
 	assert.Equal(t, before, readFrontierSeriesCount(),
 		"a delivery racing Close must not resurrect a series nobody will clean up")
 
 	// Retiring twice is harmless.
-	reader.retireReadFrontier()
+	reader.retireReadFrontierMetric()
 	assert.Equal(t, before, readFrontierSeriesCount())
 }
