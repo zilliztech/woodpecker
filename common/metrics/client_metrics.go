@@ -327,6 +327,12 @@ type progressFrontier struct {
 	segmentID   int64
 	entryID     int64
 	initialized bool
+	// The gauge children for this key, resolved on first publish. Holding them
+	// keeps WithLabelValues - which hashes the label values and takes the
+	// vector's own lock - off a path the read frontier walks once per delivered
+	// entry, without having to set the gauges outside the guard.
+	segmentGauge prometheus.Gauge
+	entryGauge   prometheus.Gauge
 }
 
 // RegisterClientMetricsWithRegisterer registers all client-side metrics with the given registerer.
@@ -446,23 +452,27 @@ func setMonotonicFrontier(frontiers map[string]progressFrontier, segmentGauge, e
 
 func setMonotonicFrontierKeyed(frontiers map[string]progressFrontier, segmentGauge, entryGauge *prometheus.GaugeVec, key string, labels []string, segmentId, entryId int64) {
 	frontierMu.Lock()
+	defer frontierMu.Unlock()
+
 	current := frontiers[key]
 	if current.initialized && (segmentId < current.segmentID || (segmentId == current.segmentID && entryId < current.entryID)) {
-		frontierMu.Unlock()
 		return
 	}
-	frontiers[key] = progressFrontier{segmentID: segmentId, entryID: entryId, initialized: true}
-	frontierMu.Unlock()
+	if current.segmentGauge == nil {
+		current.segmentGauge = segmentGauge.WithLabelValues(labels...)
+		current.entryGauge = entryGauge.WithLabelValues(labels...)
+	}
+	current.segmentID, current.entryID, current.initialized = segmentId, entryId, true
+	frontiers[key] = current
 
-	// The gauge writes stay outside the critical section. frontierMu is shared by
-	// every log's frontier in the process, and the read frontier is published once
-	// per delivered entry, so doing a label lookup under it would put every reader
-	// and writer in the process behind one another. Each key has a single
-	// publisher - one reader goroutine, or the ordered append-ack path for a log -
-	// so the guard above still decides the order and these two writes cannot be
-	// overtaken by a competing update to the same key.
-	segmentGauge.WithLabelValues(labels...).Set(float64(segmentId))
-	entryGauge.WithLabelValues(labels...).Set(float64(entryId))
+	// Set under the same lock that decided the order. One log's write frontier
+	// has three publishers - a segment handle becoming writable, the append-ack
+	// path, and the fence path - so setting outside would let a guard that
+	// admitted the newer position see the older Set land last, leaving the gauge
+	// behind the guard and the guard rejecting every correction after that. The
+	// expensive part, resolving the children, already happened once per key.
+	current.segmentGauge.Set(float64(segmentId))
+	current.entryGauge.Set(float64(entryId))
 }
 
 // ActiveSegmentNode is one replica of a log's current writable segment: the

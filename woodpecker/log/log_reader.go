@@ -111,6 +111,15 @@ type logBatchReaderImpl struct {
 // call site in the middle of ReadNext reads as bookkeeping rather than as part
 // of delivering an entry.
 func (l *logBatchReaderImpl) publishReadFrontierMetric(segmentId, entryId int64) {
+	// The Latest sentinel is a request ("start at the tail"), not a position.
+	// Publishing it would seed the monotonic guard with MaxInt64, and every real
+	// position afterwards would be rejected as going backwards - pinning the
+	// gauge at ~9.2e18 for the reader's whole life and making the lag panel read
+	// about -9.2e18. Refused here rather than at each caller so a future call
+	// site cannot reintroduce it.
+	if segmentId == LatestLogMessageID().SegmentId {
+		return
+	}
 	l.frontierMetricMu.Lock()
 	defer l.frontierMetricMu.Unlock()
 	if l.frontierMetricRetired {
@@ -162,6 +171,9 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 	// all, and the lag panel drops the row entirely: "stuck where it started" and
 	// "no reader running" look identical, which is half the question this metric
 	// exists to answer.
+	//
+	// A reader opened at Latest has no position yet, so this is a no-op for it;
+	// it gets one from the tail read that resolves the sentinel.
 	reader.publishReadFrontierMetric(from.SegmentId, from.EntryId)
 	return reader, nil
 }
@@ -363,7 +375,14 @@ func (l *logBatchReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segmen
 
 	// Case 1: Tail read - if pending segment ID is the latest and the first time to read
 	if l.pendingReadSegmentId == LatestLogMessageID().SegmentId {
-		return l.handleTailRead(ctx, latestSegmentId)
+		segHandle, segmentId, entryId, tailErr := l.handleTailRead(ctx, latestSegmentId)
+		// handleTailRead turns the sentinel into a real position - the tail of the
+		// last segment, or the start of one that does not exist yet. This is where
+		// a tail reader gets a frontier at all, since the position it was opened
+		// with was not one; on the paths that leave the sentinel in place the
+		// publish below is a no-op.
+		l.publishReadFrontierMetric(l.pendingReadSegmentId, l.pendingReadEntryId)
+		return segHandle, segmentId, entryId, tailErr
 	}
 
 	// Case 2: Check if current exists segment handle contains the target entry

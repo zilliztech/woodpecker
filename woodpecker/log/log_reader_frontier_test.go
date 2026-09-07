@@ -102,3 +102,50 @@ func TestLogReader_RetiredFrontierIsNotRepublished(t *testing.T) {
 	reader.retireReadFrontierMetric()
 	assert.Equal(t, before, readFrontierSeriesCount())
 }
+
+// TestLogReader_OpeningAtLatestDoesNotPoisonTheFrontier covers a tail reader.
+//
+// LatestLogMessageID is math.MaxInt64 in both halves - a request to start at the
+// tail, not a position. Seeding the monotonic guard with it makes every real
+// position afterwards look like it goes backwards, so the guard rejects them all
+// and the gauge stays pinned at ~9.2e18 for the reader's whole life, with the lag
+// panel reading about -9.2e18. That is the opposite of what publishing the
+// opening position is for.
+func TestLogReader_OpeningAtLatestDoesNotPoisonTheFrontier(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	logHandle := &testLogHandleMock{}
+	logHandle.Test(t)
+	logHandle.On("GetName").Return("frontier-tail-log").Maybe()
+	logHandle.On("GetId").Return(int64(78)).Maybe()
+
+	readerName := fmt.Sprintf("tail-reader-%d", time.Now().UnixNano())
+	from := LatestLogMessageID()
+
+	before := readFrontierSeriesCount()
+	reader, err := NewLogBatchReader(context.Background(), logHandle, nil, &from, readerName,
+		&fakeReaderTempSession{logId: 78, readerName: readerName}, cfg)
+	require.NoError(t, err)
+	tailReader := reader.(*logBatchReaderImpl)
+	t.Cleanup(tailReader.retireReadFrontierMetric)
+
+	assert.Equal(t, before, readFrontierSeriesCount(),
+		"the Latest sentinel is not a position and must not create a series")
+
+	// What handleTailRead publishes once it has resolved the sentinel against the
+	// real tail. Before the fix the guard already held MaxInt64 and dropped this.
+	tailReader.publishReadFrontierMetric(9, 41)
+
+	logNs := metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath)
+	require.Equal(t, before+1, readFrontierSeriesCount(), "the resolved tail position must be published")
+	assert.Equal(t, float64(9),
+		testutil.ToFloat64(metrics.WpClientReadFrontierSegment.WithLabelValues(logNs, "78", readerName)))
+	assert.Equal(t, float64(41),
+		testutil.ToFloat64(metrics.WpClientReadFrontierEntry.WithLabelValues(logNs, "78", readerName)))
+
+	// And delivery keeps advancing it, rather than being rejected as a step back.
+	tailReader.publishReadFrontierMetric(9, 42)
+	assert.Equal(t, float64(42),
+		testutil.ToFloat64(metrics.WpClientReadFrontierEntry.WithLabelValues(logNs, "78", readerName)))
+}
