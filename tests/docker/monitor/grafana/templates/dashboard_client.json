@@ -686,7 +686,8 @@
             "showPoints": "auto",
             "spanNulls": false
           },
-          "unit": "short"
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -735,7 +736,8 @@
         }
       ],
       "title": "Segment Frontiers",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Which segment each position is in. A position is a (segment, entry) pair, split across this panel and Entry Frontiers because a Prometheus gauge holds one number - read the two together. write = highest acknowledged; compacted / truncated = how far cleanup has got; read = one series per reader."
     },
     {
       "datasource": {
@@ -752,7 +754,8 @@
             "showPoints": "auto",
             "spanNulls": false
           },
-          "unit": "short"
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -801,7 +804,8 @@
         }
       ],
       "title": "Entry Frontiers",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "How far into its segment each position is - the entry half of the (segment, entry) pair whose segment half is in Segment Frontiers. Entry ids restart at 0 in every new segment, so these curves saw-tooth: a drop to zero is a segment roll, not a reset. For the same reason, lag is measured in segments rather than entries."
     },
     {
       "datasource": {
