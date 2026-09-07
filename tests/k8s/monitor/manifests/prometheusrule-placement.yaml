@@ -1,0 +1,38 @@
+# A cluster that cannot determine its own placement should say so without anyone
+# opening a dashboard. An unset REGION/AVAILABILITY_ZONE is not an outage, but it
+# silently disables every cross-AZ traffic metric, and the startup warning that
+# reports it is only seen by whoever is reading that pod's log at the time.
+#
+# Lives in $NAMESPACE alongside the PodMonitors rather than with Prometheus:
+# kube-prometheus-values.yaml sets ruleSelectorNilUsesHelmValues: false and
+# leaves ruleNamespaceSelector at its default, so the operator adopts rules from
+# any namespace - the same cross-namespace discovery the PodMonitors here already
+# rely on. Alertmanager is disabled in this suite, which stops notification but
+# not evaluation: the rule still fires into ALERTS and shows in the Prometheus UI.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: woodpecker-placement
+  namespace: woodpecker
+  labels:
+    app.kubernetes.io/name: woodpecker
+    app.kubernetes.io/component: client
+spec:
+  groups:
+    - name: woodpecker-placement
+      rules:
+        - alert: WoodpeckerPlacementUnknown
+          # Held for 10m so a rolling restart, during which a node briefly
+          # re-registers, does not trip it.
+          expr: count(woodpecker_client_active_segment_node{az="unknown"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Woodpecker replicas report an unknown availability zone
+            description: >-
+              {{ $value }} active-segment replicas carry az="unknown", so cross-AZ
+              traffic accounting is unavailable for them. Either the logstore
+              nodes or the client are missing REGION / AVAILABILITY_ZONE; the
+              startup log of whichever is misconfigured says which variable, in a
+              "topology placement is not configured" warning.

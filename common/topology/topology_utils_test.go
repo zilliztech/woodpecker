@@ -41,6 +41,8 @@ func TestScope(t *testing.T) {
 		{"local az unset", "r1", "", "r1", "a1", ScopeUnknown},
 		{"peer placement unset", "r1", "a1", "", "", ScopeUnknown},
 		{"peer az unset", "r1", "a1", "r1", "", ScopeUnknown},
+		{"local placement already rendered", ScopeUnknown, ScopeUnknown, "r1", "a1", ScopeUnknown},
+		{"peer placement already rendered", "r1", "a1", ScopeUnknown, ScopeUnknown, ScopeUnknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,4 +98,36 @@ func TestMissingPlacementEnv(t *testing.T) {
 		assert.Empty(t, MissingPlacementEnv())
 		assert.Equal(t, DefaultClusterNameValue, GetCurrentClusterName())
 	})
+}
+
+// IsUnknown decides "never configured", and it has to hold for both forms: the
+// empty string a placement is carried as, and the ScopeUnknown a metric label
+// spells it out as.
+func TestIsUnknown(t *testing.T) {
+	assert.True(t, IsUnknown(""), "the carried form of an unset placement")
+	assert.True(t, IsUnknown(ScopeUnknown), "the rendered form must not be mistaken for a real region")
+	assert.False(t, IsUnknown("us-west-2"))
+	assert.False(t, IsUnknown("us-west-2c"))
+	// Deliberately not tolerated: placement values are compared as given, so a
+	// value differing only in case or padding is a real misconfiguration between
+	// two deployment templates and must not be folded away into "unset".
+	assert.False(t, IsUnknown("Unknown"))
+	assert.False(t, IsUnknown(" "))
+}
+
+// Two unplaced processes must never be reported as co-located. Compared as
+// ordinary strings they match on both region and AZ, so every byte between them
+// would be counted as node-local traffic - a silent lie, and worse than
+// reporting the pair as unknown. Scope excludes unset placements before it
+// compares anything, through IsUnknown, so this holds for the carried form and
+// for a value that was rendered by LabelOrUnknown before reaching it.
+func TestScope_UnknownNeverBecomesLocal(t *testing.T) {
+	assert.Equal(t, ScopeUnknown, Scope("", "", "", ""),
+		"two unplaced processes are unknown to each other")
+	assert.Equal(t, ScopeUnknown, Scope(LabelOrUnknown(""), LabelOrUnknown(""), LabelOrUnknown(""), LabelOrUnknown("")),
+		"a placement rendered before classifying must not compare equal into ScopeLocal")
+	assert.Equal(t, ScopeUnknown, Scope(ScopeUnknown, ScopeUnknown, "r1", "a1"),
+		"a rendered local placement is still an unset one")
+	assert.Equal(t, ScopeUnknown, Scope("r1", "a1", ScopeUnknown, ScopeUnknown),
+		"a rendered peer placement is still an unset one")
 }
