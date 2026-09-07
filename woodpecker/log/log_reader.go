@@ -95,6 +95,27 @@ type logBatchReaderImpl struct {
 	lastReported int64
 }
 
+// publishReadFrontierMetric records where this reader has got to. Observability
+// only: nothing in the read path reads it back.
+func (l *logBatchReaderImpl) publishReadFrontierMetric(segmentId, entryId int64) {
+	// Latest asks to start at the tail; it is not a position. Publishing it would
+	// show the reader sitting at ~9.2e18 until it delivered something, which a
+	// tail reader on an idle log never does.
+	if segmentId == LatestLogMessageID().SegmentId {
+		return
+	}
+	metrics.SetReadFrontier(l.logNs, l.logIdStr, l.readerName, segmentId, entryId)
+}
+
+// retireReadFrontierMetric drops this reader's series. reader_name is unique per
+// open, so a series left behind is a gauge nothing will ever update or remove
+// again, reporting a closed reader as one sitting permanently behind.
+//
+// Not safe against a concurrent ReadNext, like the rest of the reader.
+func (l *logBatchReaderImpl) retireReadFrontierMetric() {
+	metrics.ClearReadFrontier(l.logNs, l.logIdStr, l.readerName)
+}
+
 func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string, readerTempSession meta.ReaderTempInfoSession, cfg *config.Configuration) (LogReader, error) {
 	if readerTempSession == nil {
 		// A reader without a session would silently stop reporting its read
@@ -102,7 +123,7 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		return nil, werr.ErrLogReaderTempInfoError.WithCauseErrMsg("reader temp info session is required")
 	}
 	now := time.Now().UnixMilli()
-	return &logBatchReaderImpl{
+	reader := &logBatchReaderImpl{
 		logName:              logHandle.GetName(),
 		logId:                logHandle.GetId(),
 		logIdStr:             strconv.FormatInt(logHandle.GetId(), 10),
@@ -118,7 +139,13 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		next:                 0,
 		lastRead:             now,
 		lastReported:         now,
-	}, nil
+	}
+	// Publish where the reader opens, so one that never delivers a first entry -
+	// waiting out ErrSegmentNotFound, or parked at the tail of an idle log - is
+	// still distinguishable from no reader at all. A reader opened at Latest has
+	// no position yet and gets one from the tail read instead.
+	reader.publishReadFrontierMetric(from.SegmentId, from.EntryId)
+	return reader, nil
 }
 
 // ReadNext reads the next log message from the log, blocking until a message is returned.
@@ -166,6 +193,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
 			metrics.WpClientReadEntriesTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
 			metrics.WpLogReaderBytesRead.WithLabelValues(l.logNs, l.logIdStr).Add(float64(len(readEntryData.Values)))
+			l.publishReadFrontierMetric(readEntryData.SegId, readEntryData.EntryId)
 			metrics.WpClientReadLatency.WithLabelValues(l.logNs, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return logMsg, nil
@@ -269,6 +297,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// update metrics
 		metrics.WpClientReadEntriesTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
 		metrics.WpLogReaderBytesRead.WithLabelValues(l.logNs, l.logIdStr).Add(float64(len(oneEntry.Values)))
+		l.publishReadFrontierMetric(oneEntry.SegId, oneEntry.EntryId)
 		metrics.WpClientReadLatency.WithLabelValues(l.logNs, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return logMsg, nil
@@ -279,6 +308,11 @@ func (l *logBatchReaderImpl) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ReaderScopeName, "Close")
 	defer sp.End()
 	start := time.Now()
+
+	// Drop this reader's frontier series unconditionally: the reader is being
+	// discarded either way, and reader_name is unique per reader, so leaving it
+	// behind would add a permanently frozen series on every scanner restart.
+	l.retireReadFrontierMetric()
 
 	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.readerTempSession)
 	status := "success"
@@ -311,7 +345,14 @@ func (l *logBatchReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segmen
 
 	// Case 1: Tail read - if pending segment ID is the latest and the first time to read
 	if l.pendingReadSegmentId == LatestLogMessageID().SegmentId {
-		return l.handleTailRead(ctx, latestSegmentId)
+		segHandle, segmentId, entryId, tailErr := l.handleTailRead(ctx, latestSegmentId)
+		// handleTailRead turns the sentinel into a real position - the tail of the
+		// last segment, or the start of one that does not exist yet. This is where
+		// a tail reader gets a frontier at all, since the position it was opened
+		// with was not one; on the paths that leave the sentinel in place the
+		// publish below is a no-op.
+		l.publishReadFrontierMetric(l.pendingReadSegmentId, l.pendingReadEntryId)
+		return segHandle, segmentId, entryId, tailErr
 	}
 
 	// Case 2: Check if current exists segment handle contains the target entry

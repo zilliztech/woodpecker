@@ -101,6 +101,7 @@ func TestRegisterCompactedCleanupAndFrontierMetrics(t *testing.T) {
 		SetWriteFrontier("bucket/root", "1", 10, 99)
 		SetCompactionFrontier("bucket/root", "1", 9, 88)
 		SetTruncationFrontier("bucket/root", "1", 3, 7)
+		SetReadFrontier("bucket/root", "1", "registration-reader", 2, 4)
 		WpSegmentCompactionFailuresTotal.WithLabelValues("bucket/root", "1", "data_behind").Inc()
 
 		names := gatheredMetricNames(t, registry)
@@ -110,6 +111,10 @@ func TestRegisterCompactedCleanupAndFrontierMetrics(t *testing.T) {
 		assert.True(t, names["woodpecker_client_compaction_frontier_entry"])
 		assert.True(t, names["woodpecker_client_truncation_frontier_segment"])
 		assert.True(t, names["woodpecker_client_truncation_frontier_entry"])
+		// Registration is what puts a metric on /metrics; a dropped MustRegister or
+		// a misspelled name would otherwise fail nothing and simply be absent.
+		assert.True(t, names["woodpecker_client_read_frontier_segment"])
+		assert.True(t, names["woodpecker_client_read_frontier_entry"])
 		assert.True(t, names["woodpecker_client_segment_compaction_failures_total"])
 	})
 
@@ -229,25 +234,29 @@ func TestUpdateSegmentState_MultipleTransitions(t *testing.T) {
 	assert.Equal(t, float64(1), sealedMetric.GetGauge().GetValue())
 }
 
-func TestSetFrontierMonotonic(t *testing.T) {
+// A frontier setter records the position it is given, both halves, and keeps no
+// state of its own: callers rely on convergence, since each publisher owns the
+// transition it reports.
+func TestSetFrontierRecordsThePositionGiven(t *testing.T) {
 	logNs := "frontier-test"
 	logId := "100"
 
 	SetCompactionFrontier(logNs, logId, 10, 5)
-	SetCompactionFrontier(logNs, logId, 9, 99)
+	assert.Equal(t, float64(10), gaugeValue(t, WpClientCompactionFrontierSegment, logNs, logId))
+	assert.Equal(t, float64(5), gaugeValue(t, WpClientCompactionFrontierEntry, logNs, logId))
 
-	segmentMetric := &dto.Metric{}
-	WpClientCompactionFrontierSegment.WithLabelValues(logNs, logId).Write(segmentMetric)
-	assert.Equal(t, float64(10), segmentMetric.GetGauge().GetValue())
+	// Entry ids restart at zero in every segment, so the entry half moving down
+	// while the segment half moves up is the ordinary case.
+	SetCompactionFrontier(logNs, logId, 11, 0)
+	assert.Equal(t, float64(11), gaugeValue(t, WpClientCompactionFrontierSegment, logNs, logId))
+	assert.Equal(t, float64(0), gaugeValue(t, WpClientCompactionFrontierEntry, logNs, logId))
+}
 
-	entryMetric := &dto.Metric{}
-	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Write(entryMetric)
-	assert.Equal(t, float64(5), entryMetric.GetGauge().GetValue())
-
-	SetCompactionFrontier(logNs, logId, 10, 6)
-	entryMetric = &dto.Metric{}
-	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Write(entryMetric)
-	assert.Equal(t, float64(6), entryMetric.GetGauge().GetValue())
+func gaugeValue(t *testing.T, vec *prometheus.GaugeVec, labels ...string) float64 {
+	t.Helper()
+	metric := &dto.Metric{}
+	assert.NoError(t, vec.WithLabelValues(labels...).Write(metric))
+	return metric.GetGauge().GetValue()
 }
 
 // TestMetrics_UseLogNsLabel guards the rename of the application namespace

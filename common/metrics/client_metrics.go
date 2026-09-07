@@ -29,10 +29,6 @@ import (
 // without registration they silently collect data that goes nowhere.
 var (
 	WpClientRegisterOnce sync.Once
-	frontierMu           sync.Mutex
-	writeFrontiers       = make(map[string]progressFrontier)
-	compactionFrontiers  = make(map[string]progressFrontier)
-	truncationFrontiers  = make(map[string]progressFrontier)
 
 	// Log name-id mapping
 	// WARNING: In large-scale deployments with many logs, the "log_name" label
@@ -88,6 +84,18 @@ var (
 		Name:      "truncation_frontier_entry",
 		Help:      "Current truncated entry id per log",
 	}, []string{"log_ns", "log_id"})
+	WpClientReadFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_frontier_segment",
+		Help:      "Read position of each reader: the segment it last delivered from, or the one it opened at",
+	}, []string{"log_ns", "log_id", "reader_name"})
+	WpClientReadFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_frontier_entry",
+		Help:      "Read position of each reader within read_frontier_segment: the entry it last delivered, or the one it opened at",
+	}, []string{"log_ns", "log_id", "reader_name"})
 
 	// client append data to log
 	WpClientAppendRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -308,12 +316,6 @@ var (
 	}, []string{"log_ns", "operation", "status"})
 )
 
-type progressFrontier struct {
-	segmentID   int64
-	entryID     int64
-	initialized bool
-}
-
 // RegisterClientMetricsWithRegisterer registers all client-side metrics with the given registerer.
 // Without calling this, metrics still work but are not scraped by any registry.
 func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
@@ -328,6 +330,8 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpClientCompactionFrontierEntry)
 		registerer.MustRegister(WpClientTruncationFrontierSegment)
 		registerer.MustRegister(WpClientTruncationFrontierEntry)
+		registerer.MustRegister(WpClientReadFrontierSegment)
+		registerer.MustRegister(WpClientReadFrontierEntry)
 
 		// Client append metrics
 		registerer.MustRegister(WpClientAppendRequestsTotal)
@@ -377,30 +381,49 @@ func UpdateSegmentState(logNs, logId, oldState, newState string) {
 	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Inc()
 }
 
+// The frontier setters record a position and nothing else, from wherever it is
+// reached. They rely on convergence rather than ordering: each publisher owns the
+// transition it reports, so the last write is the right one, and the write
+// frontier settles again on the next ack. Metrics are per-process, so two writers
+// export two series that never touch.
+//
+// The two halves are separately registered collectors, so a scrape can land
+// between them and see a position torn across a roll. Entry ids restart at zero
+// in every segment, which is also why lag is measured in segments.
+
 func SetWriteFrontier(logNs, logId string, segmentId, entryId int64) {
-	setMonotonicFrontier(writeFrontiers, WpClientWriteFrontierSegment, WpClientWriteFrontierEntry, logNs, logId, segmentId, entryId)
+	WpClientWriteFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientWriteFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
 }
 
 func SetCompactionFrontier(logNs, logId string, segmentId, entryId int64) {
-	setMonotonicFrontier(compactionFrontiers, WpClientCompactionFrontierSegment, WpClientCompactionFrontierEntry, logNs, logId, segmentId, entryId)
+	WpClientCompactionFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
 }
 
 func SetTruncationFrontier(logNs, logId string, segmentId, entryId int64) {
-	setMonotonicFrontier(truncationFrontiers, WpClientTruncationFrontierSegment, WpClientTruncationFrontierEntry, logNs, logId, segmentId, entryId)
+	WpClientTruncationFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientTruncationFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
 }
 
-func setMonotonicFrontier(frontiers map[string]progressFrontier, segmentGauge, entryGauge *prometheus.GaugeVec, logNs, logId string, segmentId, entryId int64) {
-	key := logNs + "\x00" + logId
-	frontierMu.Lock()
-	current := frontiers[key]
-	if current.initialized && (segmentId < current.segmentID || (segmentId == current.segmentID && entryId < current.entryID)) {
-		frontierMu.Unlock()
-		return
-	}
-	frontiers[key] = progressFrontier{segmentID: segmentId, entryID: entryId, initialized: true}
-	segmentGauge.WithLabelValues(logNs, logId).Set(float64(segmentId))
-	entryGauge.WithLabelValues(logNs, logId).Set(float64(entryId))
-	frontierMu.Unlock()
+// SetReadFrontier records where one reader has got to. It carries reader_name as
+// well, because a log can have several readers at different positions and they
+// are different series - a reader reopened at an earlier position is a different
+// reader_name and legitimately starts lower.
+func SetReadFrontier(logNs, logId, readerName string, segmentId, entryId int64) {
+	WpClientReadFrontierSegment.WithLabelValues(logNs, logId, readerName).Set(float64(segmentId))
+	WpClientReadFrontierEntry.WithLabelValues(logNs, logId, readerName).Set(float64(entryId))
+}
+
+// ClearReadFrontier drops a reader's series when it closes. reader_name carries a
+// unique id, so without this every reader ever opened would leave a series behind
+// with a frozen value -- readers are rebuilt on every scanner restart. Already
+// scraped samples stay in Prometheus, so nothing historical is lost; the series
+// simply stops appearing in instant queries.
+func ClearReadFrontier(logNs, logId, readerName string) {
+	labels := prometheus.Labels{"log_ns": logNs, "log_id": logId, "reader_name": readerName}
+	WpClientReadFrontierSegment.Delete(labels)
+	WpClientReadFrontierEntry.Delete(labels)
 }
 
 // ActiveSegmentNode is one replica of a log's current writable segment: the

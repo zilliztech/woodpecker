@@ -686,7 +686,8 @@
             "showPoints": "auto",
             "spanNulls": false
           },
-          "unit": "short"
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -727,10 +728,16 @@
           "expr": "woodpecker_client_truncation_frontier_segment{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
           "legendFormat": "logID={{log_id}} truncated",
           "refId": "C"
+        },
+        {
+          "expr": "woodpecker_client_read_frontier_segment{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
+          "legendFormat": "logID={{log_id}} reader={{reader_name}} read",
+          "refId": "D"
         }
       ],
       "title": "Segment Frontiers",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Which segment each position is in. A position is a (segment, entry) pair, split across this panel and Entry Frontiers because a Prometheus gauge holds one number - read the two together. write = highest acknowledged; compacted / truncated = how far cleanup has got; read = one series per reader."
     },
     {
       "datasource": {
@@ -747,7 +754,8 @@
             "showPoints": "auto",
             "spanNulls": false
           },
-          "unit": "short"
+          "unit": "none",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -788,10 +796,16 @@
           "expr": "woodpecker_client_truncation_frontier_entry{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
           "legendFormat": "logID={{log_id}} truncated",
           "refId": "C"
+        },
+        {
+          "expr": "woodpecker_client_read_frontier_entry{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
+          "legendFormat": "logID={{log_id}} reader={{reader_name}} read",
+          "refId": "D"
         }
       ],
       "title": "Entry Frontiers",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "How far into its segment each position is - the entry half of the (segment, entry) pair whose segment half is in Segment Frontiers. Entry ids restart at 0 in every new segment, so these curves saw-tooth: a drop to zero is a segment roll, not a reset. For the same reason, lag is measured in segments rather than entries."
     },
     {
       "datasource": {
@@ -842,6 +856,58 @@
         }
       ],
       "title": "Compaction Failure Rate by Reason",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "description": "How many segments each reader is behind the write frontier. Entry ids restart at every segment, so an entry-level difference across a segment boundary is meaningless; segment lag is not. The write frontier is aggregated with max because every process that opens a log publishes one, readers included: without it the match group holds one series per process and the query fails.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "id": 115,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (woodpecker_id, log_ns, log_id) (woodpecker_client_write_frontier_segment{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}) - on(woodpecker_id, log_ns, log_id) group_right() woodpecker_client_read_frontier_segment{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}",
+          "legendFormat": "logID={{log_id}} reader={{reader_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Reader Segment Lag",
       "type": "timeseries"
     },
     {
