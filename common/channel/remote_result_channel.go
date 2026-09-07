@@ -207,6 +207,21 @@ func (r *RemoteResultChannel) Close(ctx context.Context) error {
 	return nil
 }
 
+// String renders the channel without exposing its fields to reflection.
+//
+// This type is mutable and mutex-guarded, so anything that renders it by walking
+// its fields - fmt's default struct formatting, and through it testify's
+// argument diffing - reads `closed` and `ch` with no lock and races a concurrent
+// Close. A result channel is handed to LogStoreClient.AppendEntry and is
+// therefore held, and printed, by code this package does not control, so
+// controlling the rendering here is what makes that safe.
+func (r *RemoteResultChannel) String() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return fmt.Sprintf("RemoteResultChannel{identifier:%s closed:%v streamed:%v}",
+		r.identifier, r.closed, r.ch != nil)
+}
+
 func (r *RemoteResultChannel) IsClosed() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -126,6 +126,15 @@ func (l *LocalResultChannel) Close(ctx context.Context) error {
 	return nil
 }
 
+// String renders the channel without exposing its fields to reflection; see the
+// comment on RemoteResultChannel.String for why a mutex-guarded type has to
+// control how it is printed.
+func (l *LocalResultChannel) String() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return fmt.Sprintf("LocalResultChannel{identifier:%s closed:%v}", l.identifier, l.closed)
+}
+
 func (l *LocalResultChannel) IsClosed() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
