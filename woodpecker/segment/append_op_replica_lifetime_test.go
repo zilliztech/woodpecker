@@ -423,3 +423,55 @@ func TestReplicaOutcome_ClassifiesTheSameWayTheAckPathsDo(t *testing.T) {
 	assert.Equal(t, "", replicaOutcome(&channel.AppendResult{SyncedId: entryId - 1}, entryId),
 		"a replica still catching up has not answered for this entry")
 }
+
+// remoteAnswerChannel is a RemoteResultChannel whose stream answers "sync
+// failed" - the shape a server-reported write failure actually reaches the
+// client in on the service-mode path, where ReadResult returns a non-nil result
+// AND a non-nil error. A local channel reports the same answer with no error, so
+// keying the post-quorum recording on the error rather than the result would
+// count it in embedded mode and drop it in service mode.
+func remoteAnswerChannel(t *testing.T, identifier string, entryId int64) *channel.RemoteResultChannel {
+	t.Helper()
+	resultChan := channel.NewRemoteResultChannel(identifier)
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	t.Cleanup(streamCancel)
+	resultChan.InitResponseStream(&failedAckStream{
+		streamCtx: streamCtx,
+		response: &proto.AddEntryResponse{
+			EntryId: entryId,
+			State:   proto.AddEntryState_Failed,
+			Status:  &proto.Status{Code: 500},
+		},
+	}, streamCtx, streamCancel)
+	return resultChan
+}
+
+type failedAckStream struct {
+	streamCtx context.Context
+	response  *proto.AddEntryResponse
+}
+
+func (s *failedAckStream) Recv() (*proto.AddEntryResponse, error) { return s.response, nil }
+func (s *failedAckStream) CloseSend() error                       { return nil }
+func (s *failedAckStream) Header() (metadata.MD, error)           { return nil, nil }
+func (s *failedAckStream) Trailer() metadata.MD                   { return nil }
+func (s *failedAckStream) Context() context.Context               { return s.streamCtx }
+func (s *failedAckStream) SendMsg(m any) error                    { return nil }
+func (s *failedAckStream) RecvMsg(m any) error                    { return nil }
+
+// TestAppendOp_RemoteReplicaAnsweringWithAFailureAfterQuorumIsCounted is the
+// service-mode form of the post-quorum rule: a replica that answered is counted
+// even though its answer arrives alongside an error.
+func TestAppendOp_RemoteReplicaAnsweringWithAFailureAfterQuorumIsCounted(t *testing.T) {
+	op, _ := answeringOp(t, 909005, 3, 3)
+	op.fastCalled.Store(true)
+	before := replicaOutcomeCount(op, "error")
+
+	answered := remoteAnswerChannel(t, op.Identifier(), 3)
+	op.resultChannels[0] = answered
+	op.receivedAckCallback(context.Background(), time.Now(), 3, answered, nil, 0, "n0")
+
+	assert.Equal(t, float64(1), replicaOutcomeCount(op, "error")-before,
+		"a remote replica that answered with a write failure is a real failure, "+
+			"even though ReadResult reports it as an error as well as a result")
+}

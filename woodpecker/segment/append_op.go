@@ -135,10 +135,17 @@ func replicaOutcome(result *channel.AppendResult, entryId int64) string {
 // replica_append_total read about two outcomes per entry on a cluster writing
 // three copies, understating cross-AZ write traffic by the same proportion.
 //
-// Only an answer is counted there. A failure observed after the op completed may
-// be our own doing - FastFail cancels every replica still in flight - and
-// counting that would put self-inflicted cancellations into the error series,
-// which is the same mistake this change removes from the logs.
+// Only an answer is counted there, and a non-nil result is what an answer looks
+// like. A read that produced none may have failed for our own reasons - FastFail
+// cancels every replica still in flight - and counting that would put
+// self-inflicted cancellations into the error series, which is the same mistake
+// this change removes from the logs.
+//
+// The result, not the error, is what decides that. A remote channel reports a
+// server that answered "sync failed" as a non-nil result AND a non-nil error,
+// while a local one reports the same answer with no error at all; keying on the
+// error would drop a genuinely failing replica on the service-mode path and keep
+// it on the embedded one.
 func (op *AppendOp) recordReplicaAnswer(serverIndex int, result *channel.AppendResult) {
 	if status := replicaOutcome(result, op.entryId); status != "" {
 		op.recordReplicaResult(serverIndex, status)
@@ -319,7 +326,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 
 	// If operation already completed via FastFail/FastSuccess, skip further processing
 	if op.fastCalled.Load() {
-		if readChanErr == nil {
+		if syncedResult != nil {
 			op.recordReplicaAnswer(serverIndex, syncedResult)
 		}
 		logger.Ctx(ctx).Debug("received ack but already fast completed",
@@ -381,7 +388,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 // entry-id order) instead of spawning a goroutine per op.
 func (op *AppendOp) applyNodeAck(ctx context.Context, startRequestTime time.Time, result *channel.AppendResult, readErr error, serverIndex int, serverAddr string) {
 	if op.fastCalled.Load() {
-		if readErr == nil {
+		if result != nil {
 			op.recordReplicaAnswer(serverIndex, result)
 		}
 		return
