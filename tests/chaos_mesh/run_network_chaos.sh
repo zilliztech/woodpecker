@@ -8,12 +8,12 @@ export CLUSTER_NAME="wp-chaos"
 export CR_NAME="my-woodpecker"
 export NAMESPACE="default"
 export REPLICAS=3
-# Default to minikube's docker runtime: it uses built-in bridge networking and needs no
-# external CNI image. The containerd runtime forces a kindnet CNI whose image
-# (kindest/kindnetd:<ver>) frequently cannot be pulled on constrained/offline hosts, leaving
-# the cluster with no pod networking ("failed to find network info for sandbox"). Chaos Mesh
-# supports the docker runtime, and the injection smoke-check guards correctness either way.
-# Override with MK_RUNTIME=containerd only where the kindnet image is reachable.
+# Empty MK_RUNTIME leaves the choice to minikube's default, which is NOT a fixed value: it was
+# docker up to minikube v1.38.1 and is containerd from v1.39.0 on. Chaos Mesh supports both, and
+# install_chaos_mesh() reads the node's actual runtime rather than assuming one, so either is fine.
+# Pin MK_RUNTIME=docker on constrained/offline hosts: the containerd runtime forces a kindnet CNI
+# whose image (kindest/kindnetd:<ver>) frequently cannot be pulled there, leaving the cluster with
+# no pod networking ("failed to find network info for sandbox").
 export MK_CPUS="${MK_CPUS:-6}" MK_MEMORY="${MK_MEMORY:-8192}" MK_RUNTIME="${MK_RUNTIME:-}"
 export WP_IMG="zilliztech/woodpecker:v0.1.26"
 export CLIENT_POD="wp-client-test"
@@ -51,15 +51,22 @@ bringup() {
 }
 
 install_chaos_mesh() {
-  # chaos-daemon must point at the SAME container runtime minikube uses, else injection is a
-  # silent no-op (caught by injection_smoke_check). Empty MK_RUNTIME = minikube's docker runtime.
-  local daemon_runtime daemon_socket
-  if [ "${MK_RUNTIME:-}" = "containerd" ]; then
-    daemon_runtime=containerd; daemon_socket=/run/containerd/containerd.sock
-  else
-    daemon_runtime=docker; daemon_socket=/var/run/docker.sock
-  fi
-  log "installing chaos-mesh (chaosDaemon.runtime=$daemon_runtime socket=$daemon_socket)"
+  # chaos-daemon must point at the SAME container runtime the node actually runs: it bypasses the
+  # Kubernetes API and resolves container IDs through that socket to enter a pod's netns. Point it
+  # at the wrong one and injection fails ("unable to flush ip sets for pod ...") or is a silent
+  # no-op. Ask the node instead of deriving it from MK_RUNTIME — MK_RUNTIME is empty by default,
+  # which means "whatever minikube defaults to", and that default flipped from docker to containerd
+  # in minikube v1.39.0 and left this suite red on every nightly (#304).
+  local runtime_ver daemon_runtime daemon_socket
+  runtime_ver=$(kubectl get node "$CLUSTER_NAME" -o jsonpath='{.status.nodeInfo.containerRuntimeVersion}')
+  case "$runtime_ver" in
+    containerd://*) daemon_runtime=containerd; daemon_socket=/run/containerd/containerd.sock ;;
+    docker://*)     daemon_runtime=docker;     daemon_socket=/var/run/docker.sock ;;
+    # Guessing a socket here buys nothing: a wrong one fails 5 minutes later with a message that
+    # points at chaos, not at the runtime. Say what we actually saw.
+    *) fail "unrecognized node container runtime '$runtime_ver' — cannot configure chaos-daemon" ;;
+  esac
+  log "installing chaos-mesh (node runtime=$runtime_ver -> chaosDaemon.runtime=$daemon_runtime socket=$daemon_socket)"
   helm repo add chaos-mesh https://charts.chaos-mesh.org 2>/dev/null || true
   helm repo update
   # Preload chaos-mesh images: the node can't reach ghcr.io through the host's loopback proxy.
