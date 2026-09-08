@@ -2207,107 +2207,37 @@ func (w *StagedFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fi
 		zap.Uint32("indexLength", footerRecord.IndexLength),
 		zap.Int32("totalBlocks", footerRecord.TotalBlocks))
 
-	if footerRecord.IndexLength == 0 {
-		// empty index length, no data blocks at all, fast return
-		w.blockIndexes = make([]*codec.IndexRecord, 0, footerRecord.TotalBlocks)
-		w.recoveredFooter = footerRecord
-		w.recovered.Store(true)
-		logger.Ctx(ctx).Info("Recovered no blocks from footer")
-		return nil
-	}
-
-	// Read index section from file
-	indexData := make([]byte, footerRecord.IndexLength)
-	_, err := file.ReadAt(indexData, int64(footerRecord.IndexOffset))
+	// The footer validation and index parsing are shared with the other
+	// local-file backend (codec.ReadIndexSection), so a segment that was
+	// finalized with zero blocks is accepted the same way everywhere.
+	blockIndexes, err := codec.ReadIndexSection(file, footerRecord)
 	if err != nil {
-		return fmt.Errorf("failed to read index section: %w", err)
+		return err
 	}
-
-	logger.Ctx(ctx).Debug("Read index section",
-		zap.Int("indexDataLength", len(indexData)),
-		zap.Uint64("indexOffset", footerRecord.IndexOffset))
-
-	// Parse index records sequentially
-	offset := 0
-	blockIndexes := make([]*codec.IndexRecord, 0, footerRecord.TotalBlocks)
-
-	for offset < len(indexData) {
-		if offset+codec.RecordHeaderSize > len(indexData) {
-			logger.Ctx(ctx).Warn("Not enough data for complete record header",
-				zap.Int("offset", offset),
-				zap.Int("remaining", len(indexData)-offset))
-			break
-		}
-
-		// Decode the record
-		record, err := codec.DecodeRecord(indexData[offset:])
-		if err != nil {
-			logger.Ctx(ctx).Warn("Failed to decode index record",
-				zap.Int("offset", offset),
-				zap.Error(err))
-			return fmt.Errorf("failed to decode index record at offset %d: %w", offset, err)
-		}
-
-		// Verify it's an index record
-		if record.Type() != codec.IndexRecordType {
-			logger.Ctx(ctx).Warn("Unexpected record type in index section",
-				zap.Int("offset", offset),
-				zap.Uint8("expectedType", codec.IndexRecordType),
-				zap.Uint8("actualType", record.Type()))
-			return fmt.Errorf("expected index record type %d, got %d at offset %d",
-				codec.IndexRecordType, record.Type(), offset)
-		}
-
-		indexRecord := record.(*codec.IndexRecord)
-		blockIndexes = append(blockIndexes, indexRecord)
-
-		logger.Ctx(ctx).Debug("Parsed index record",
-			zap.Int32("blockNumber", indexRecord.BlockNumber),
-			zap.Int64("startOffset", indexRecord.StartOffset),
-			zap.Int64("firstEntryID", indexRecord.FirstEntryID),
-			zap.Int64("lastEntryID", indexRecord.LastEntryID))
-
-		// Move to next record (header + IndexRecord payload size)
-		recordSize := codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
-		offset += recordSize
-	}
-
-	// Validate recovered blocks count
 	if len(blockIndexes) != int(footerRecord.TotalBlocks) {
-		logger.Ctx(ctx).Warn("Block count mismatch",
-			zap.Int("recoveredBlocks", len(blockIndexes)),
-			zap.Int32("expectedBlocks", footerRecord.TotalBlocks))
-		// Continue anyway, use what we recovered
+		logger.Ctx(ctx).Warn("Recovered index record count differs from footer, using recovered records",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int("recovered", len(blockIndexes)),
+			zap.Int32("footerTotalBlocks", footerRecord.TotalBlocks))
 	}
 
-	// Update writer state
 	w.blockIndexes = blockIndexes
 	w.recoveredFooter = footerRecord
-
-	// Update entry ID tracking
 	if len(blockIndexes) > 0 {
 		firstBlock := blockIndexes[0]
 		lastBlock := blockIndexes[len(blockIndexes)-1]
-
 		w.firstEntryID.Store(firstBlock.FirstEntryID)
 		w.lastEntryID.Store(lastBlock.LastEntryID)
 		w.currentBlockNumber.Store(int64(len(blockIndexes))) // Next block number
-
-		logger.Ctx(ctx).Info("Updated entry ID tracking from recovered blocks",
-			zap.Int64("firstEntryID", firstBlock.FirstEntryID),
-			zap.Int64("lastEntryID", lastBlock.LastEntryID),
-			zap.Int64("nextBlockNumber", int64(len(blockIndexes))))
 	}
 
-	logger.Ctx(ctx).Info("Successfully recovered blocks from footer",
+	logger.Ctx(ctx).Info("Recovered blocks from footer",
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.Int("recoveredBlocks", len(blockIndexes)),
 		zap.Int64("firstEntryID", w.firstEntryID.Load()),
 		zap.Int64("lastEntryID", w.lastEntryID.Load()))
-
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "recover_footer", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "recover_footer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
 	w.recovered.Store(true)
 	return nil
 }
