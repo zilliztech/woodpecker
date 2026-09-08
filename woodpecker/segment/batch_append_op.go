@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/proto"
@@ -147,15 +145,14 @@ func (b *BatchAppendOp) sendBatchToNode(ctx context.Context, entries []*proto.Lo
 	go func() {
 		defer streamCancel()
 		// This goroutine is the only reader of these channels, so it owns retiring
-		// them - the same rule the single-entry path follows. Without an owner a
-		// late send from the client's demux lands in a one-slot buffer nobody will
-		// drain; with one it takes the closed path instead.
+		// them - the same rule the single-entry path follows, through the same
+		// helper. Without an owner a late send from the client's demux lands in a
+		// one-slot buffer nobody will drain; with one it takes the closed path
+		// instead. Entries the drain gives up on are retired here too: it abandons
+		// them without reading, so nothing else ever will.
 		defer func() {
-			for _, resultCh := range resultChs {
-				if closeErr := resultCh.Close(ctx); closeErr != nil {
-					logger.Ctx(ctx).Warn("failed to close batch result channel",
-						zap.String("serverAddr", serverAddr), zap.Error(closeErr))
-				}
+			for i, op := range b.ops {
+				op.retireResultChannel(ctx, resultChs[i], serverAddr)
 			}
 		}()
 		for i, op := range b.ops {
@@ -185,6 +182,25 @@ func (b *BatchAppendOp) failNode(ctx context.Context, nodeIdx int, serverAddr st
 	for _, op := range b.ops {
 		op.channelErrors[nodeIdx] = err
 		op.recordReplicaResult(nodeIdx, "error")
-		go op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, nodeIdx, serverAddr)
 	}
+	// Report off this goroutine, and in entry order.
+	//
+	// Off, because Execute waits for sendBatchToNode while AppendAsync holds the
+	// segment handle's lock across a Submit that blocks on a full queue: taking
+	// that lock here would deadlock the executor. sendWriteRequestRetry reports
+	// asynchronously for the same reason.
+	//
+	// In order, because HandleAppendRequestFailure sweeps out every queued entry
+	// above the one that failed. Reporting the batch out of order lets an entry be
+	// resubmitted for retry and then swept by a sibling's later report, so the
+	// retry is sent for an entry that is already abandoned.
+	//
+	// One goroutine for the batch, not one per entry: a full batch failing on
+	// every replica would otherwise spawn MaxBatchEntries x Es goroutines onto one
+	// lock, at the moment the system is least able to absorb it.
+	go func() {
+		for _, op := range b.ops {
+			op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, nodeIdx, serverAddr)
+		}
+	}()
 }

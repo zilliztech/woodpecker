@@ -298,25 +298,23 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	// FastFail still closes early, deliberately: there the entry is abandoned and
 	// the waiters should stop at once rather than sit out their read budget.
 	// Close is idempotent, so an early close and this one cannot conflict.
-	channelRetired := false
-	retireResultChannel := func() {
-		if channelRetired || resultChan == nil {
+	// The guard keeps the retire to a single attempt: a Close that fails is not
+	// worth retrying on the next exit path, and the ack must not depend on it.
+	retired := false
+	retire := func() {
+		if retired {
 			return
 		}
-		channelRetired = true
-		if closeErr := resultChan.Close(ctx); closeErr != nil {
-			logger.Ctx(ctx).Warn("failed to close append result channel",
-				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId),
-				zap.Int64("entryId", op.entryId), zap.String("serverAddr", serverAddr), zap.Error(closeErr))
-		}
+		retired = true
+		op.retireResultChannel(ctx, resultChan, serverAddr)
 	}
-	defer retireResultChannel()
+	defer retire()
 
 	// sync call error, return directly
 	if err != nil {
 		// The send never got far enough for an ack to arrive, so nothing is
 		// waiting on this channel any more.
-		retireResultChannel()
+		retire()
 		// Skip further processing if operation already completed via FastFail/FastSuccess
 		if op.fastCalled.Load() {
 			return
@@ -332,7 +330,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	syncedResult, readChanErr := resultChan.ReadResult(subCtx)
 	sp.AddEvent("wait callback", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex), attribute.String("serverAddr", serverAddr)))
 	// The read was the last use of this channel and of the stream behind it.
-	retireResultChannel()
+	retire()
 
 	// If operation already completed via FastFail/FastSuccess, skip further processing
 	if op.fastCalled.Load() {
@@ -389,6 +387,21 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 
 	logger.Ctx(ctx).Debug("synced received, keep async waiting",
 		zap.Int64("syncedId", syncedResult.SyncedId), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.String("serverAddr", serverAddr))
+}
+
+// retireResultChannel closes a result channel this op's reader owns. Only the
+// reader can know that a channel will never be read again, so retiring it is the
+// reader's job on both the single-entry and the batch path. Close is idempotent,
+// so an early retire and the deferred one cannot conflict.
+func (op *AppendOp) retireResultChannel(ctx context.Context, resultChan channel.ResultChannel, serverAddr string) {
+	if resultChan == nil {
+		return
+	}
+	if closeErr := resultChan.Close(ctx); closeErr != nil {
+		logger.Ctx(ctx).Warn("failed to close append result channel",
+			zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId),
+			zap.Int64("entryId", op.entryId), zap.String("serverAddr", serverAddr), zap.Error(closeErr))
+	}
 }
 
 // applyNodeAck processes a single node's durability result for this op: quorum

@@ -269,7 +269,9 @@ func TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure(t *testing.T) {
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
 
-	const batchN = 3
+	// Deliberately wider than the other batch tests: the order assertion below is
+	// only as strong as the number of ways the batch could come back out of order.
+	const batchN = 8
 	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo)
 
 	clientErr := errors.New("no client available")
@@ -277,9 +279,16 @@ func TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(batchN)
+	var reportedMu sync.Mutex
+	reported := make([]int64, 0, batchN)
 	mockHandle.EXPECT().
 		HandleAppendRequestFailure(mock.Anything, mock.Anything, clientErr, 0, "node1").
-		Run(func(context.Context, int64, error, int, string) { wg.Done() }).Return().Times(batchN)
+		Run(func(_ context.Context, entryId int64, _ error, _ int, _ string) {
+			reportedMu.Lock()
+			reported = append(reported, entryId)
+			reportedMu.Unlock()
+			wg.Done()
+		}).Return().Times(batchN)
 
 	NewBatchAppendOp(ops).Execute()
 	waitWG(t, &wg, 5*time.Second)
@@ -287,6 +296,17 @@ func TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure(t *testing.T) {
 	for i, op := range ops {
 		assert.Equal(t, clientErr, op.channelErrors[0], "op %d should record the client error", i)
 	}
+	// In entry order, not arbitrary. HandleAppendRequestFailure sweeps out every
+	// queued entry above the one that failed, so reporting a batch out of order lets
+	// an entry be resubmitted for retry and then swept by a sibling's later report -
+	// a retry sent for an entry that is already abandoned.
+	reportedMu.Lock()
+	defer reportedMu.Unlock()
+	expected := make([]int64, batchN)
+	for i := range expected {
+		expected[i] = int64(10 + i)
+	}
+	assert.Equal(t, expected, reported, "a whole-batch failure must be reported in entry order")
 }
 
 // TestBatchAppendOp_AppendEntriesError_AllOpsRoutedToFailure covers the batch RPC
