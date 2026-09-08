@@ -97,7 +97,14 @@ func TestLocalResultChannel_ReadTimeout(t *testing.T) {
 	// Try to read from empty channel with timeout
 	_, err := rc.ReadResult(ctx)
 	assert.Error(t, err)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	// Both classifications the append paths perform must match. This is the channel
+	// the batch drain reads, and a bare DeadlineExceeded is not classifiable
+	// downstream: the entry would take a terminal failure and spend none of its
+	// retries on what is only a timeout.
+	assert.True(t, werr.IsRetryableErr(err),
+		"a timed-out read must be retryable, not terminal")
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"the append path's read-timeout branch tests for this")
 }
 
 func TestLocalResultChannel_SendTimeout(t *testing.T) {
@@ -304,7 +311,7 @@ func TestLocalResultChannel_ReadResultTimeout(t *testing.T) {
 	duration := time.Since(start)
 
 	assert.Error(t, err)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	// Should timeout around 100ms, not much longer
 	assert.True(t, duration < 200*time.Millisecond, "ReadResult took too long: %v", duration)
 }
@@ -415,7 +422,7 @@ func TestLocalResultChannel_ConcurrentReads(t *testing.T) {
 
 	for _, err := range errors {
 		// The other reader should get a context timeout (channel empty, no more data)
-		assert.Equal(t, context.DeadlineExceeded, err, "non-winning reader should timeout")
+		assert.ErrorIs(t, err, context.DeadlineExceeded, "non-winning reader should timeout")
 	}
 }
 
@@ -567,7 +574,7 @@ func TestLocalResultChannel_MultipleReadersOneMessage(t *testing.T) {
 
 	for _, err := range errors {
 		// The other readers should get a context timeout (channel empty, no more data)
-		assert.Equal(t, context.DeadlineExceeded, err, "non-winning reader should timeout")
+		assert.ErrorIs(t, err, context.DeadlineExceeded, "non-winning reader should timeout")
 	}
 }
 
@@ -679,4 +686,20 @@ func TestLocalResultChannel_TryReadResult(t *testing.T) {
 	r, ok = ch.TryReadResult()
 	assert.False(t, ok)
 	assert.Nil(t, r)
+}
+
+// TestLocalResultChannel_StringIsWhatFmtUses mirrors the remote case: the batch
+// path hands these to a mocked AppendEntries, so they are formatted by code this
+// package does not control while the drain goroutine is closing them.
+func TestLocalResultChannel_StringIsWhatFmtUses(t *testing.T) {
+	resultChannel := NewLocalResultChannel("test-local-stringer")
+
+	rendered := fmt.Sprintf("%v", resultChannel)
+	assert.Equal(t, resultChannel.String(), rendered, "fmt must render via Stringer, not by reflecting over the fields")
+	assert.Contains(t, rendered, "test-local-stringer")
+	assert.Contains(t, rendered, "closed:false")
+	assert.NotContains(t, rendered, "mu:", "reflected field output would mean fmt is reading the fields directly")
+
+	assert.NoError(t, resultChannel.Close(context.Background()))
+	assert.Contains(t, fmt.Sprintf("%v", resultChannel), "closed:true")
 }

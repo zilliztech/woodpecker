@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
@@ -244,6 +245,19 @@ func TestBatchAppendOp_InstallsLocalResultChannelInOpSlot(t *testing.T) {
 		_, isLocal := op.resultChannels[0].(*channel.LocalResultChannel)
 		assert.True(t, isLocal, "op %d slot should hold a LocalResultChannel after batch send", i)
 	}
+
+	// The drain goroutine is the only reader of these channels, so it owns
+	// retiring them - the same rule the single-entry path follows. Without an
+	// owner, a late send from the client's demux lands in a one-slot buffer that
+	// nobody will ever drain.
+	assert.Eventually(t, func() bool {
+		for _, op := range ops {
+			if !op.resultChannels[0].IsClosed() {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 5*time.Millisecond, "the batch drain must retire the channels it read")
 }
 
 // TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure covers the send-side
@@ -255,7 +269,9 @@ func TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure(t *testing.T) {
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
 
-	const batchN = 3
+	// Deliberately wider than the other batch tests: the order assertion below is
+	// only as strong as the number of ways the batch could come back out of order.
+	const batchN = 8
 	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo)
 
 	clientErr := errors.New("no client available")
@@ -263,9 +279,16 @@ func TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(batchN)
+	var reportedMu sync.Mutex
+	reported := make([]int64, 0, batchN)
 	mockHandle.EXPECT().
 		HandleAppendRequestFailure(mock.Anything, mock.Anything, clientErr, 0, "node1").
-		Run(func(context.Context, int64, error, int, string) { wg.Done() }).Return().Times(batchN)
+		Run(func(_ context.Context, entryId int64, _ error, _ int, _ string) {
+			reportedMu.Lock()
+			reported = append(reported, entryId)
+			reportedMu.Unlock()
+			wg.Done()
+		}).Return().Times(batchN)
 
 	NewBatchAppendOp(ops).Execute()
 	waitWG(t, &wg, 5*time.Second)
@@ -273,6 +296,17 @@ func TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure(t *testing.T) {
 	for i, op := range ops {
 		assert.Equal(t, clientErr, op.channelErrors[0], "op %d should record the client error", i)
 	}
+	// In entry order, not arbitrary. HandleAppendRequestFailure sweeps out every
+	// queued entry above the one that failed, so reporting a batch out of order lets
+	// an entry be resubmitted for retry and then swept by a sibling's later report -
+	// a retry sent for an entry that is already abandoned.
+	reportedMu.Lock()
+	defer reportedMu.Unlock()
+	expected := make([]int64, batchN)
+	for i := range expected {
+		expected[i] = int64(10 + i)
+	}
+	assert.Equal(t, expected, reported, "a whole-batch failure must be reported in entry order")
 }
 
 // TestBatchAppendOp_AppendEntriesError_AllOpsRoutedToFailure covers the batch RPC
@@ -345,8 +379,14 @@ func TestBatchAppendOp_StalledNode_FailsRemainingAndCancelsStream(t *testing.T) 
 	failures.Add(2) // entries 11 and 12
 	mockHandle.EXPECT().
 		HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, 0, "node1").
-		Run(func(_ context.Context, entryId int64, _ error, _ int, _ string) {
+		Run(func(_ context.Context, entryId int64, failure error, _ int, _ string) {
 			if entryId == 11 || entryId == 12 {
+				// The drain read a LocalResultChannel that ran out of its budget. A
+				// stalled peer is a timeout, not a terminal failure: reported as a bare
+				// context.DeadlineExceeded the entry is unclassifiable downstream and
+				// gives up without spending any of its retries.
+				assert.True(t, werr.IsRetryableErr(failure),
+					"entry %d: a stalled node must be reported as retryable", entryId)
 				failures.Done()
 			}
 		}).Return().Times(2)
@@ -357,6 +397,19 @@ func TestBatchAppendOp_StalledNode_FailsRemainingAndCancelsStream(t *testing.T) 
 	assert.Eventually(t, func() bool { return capturedCtx != nil && capturedCtx.Err() != nil },
 		2*time.Second, 10*time.Millisecond,
 		"stream context should be cancelled after the drain gives up on the stalled node")
+
+	// The drain abandons the entries after the stall without ever reading their
+	// channels, so those channels have no other owner: it must retire all of them,
+	// not only the ones it read. Otherwise a late send from the client's demux lands
+	// in a one-slot buffer nobody will drain.
+	assert.Eventually(t, func() bool {
+		for _, op := range ops {
+			if !op.resultChannels[0].IsClosed() {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 5*time.Millisecond, "channels the drain abandoned must still be retired")
 }
 
 // TestBatchAppendOp_PerEntryTimeout_NoFalseFailOnSlowEarlyEntry is a regression
@@ -418,4 +471,205 @@ func TestBatchAppendOp_PerEntryTimeout_NoFalseFailOnSlowEarlyEntry(t *testing.T)
 	for i, op := range ops {
 		assert.True(t, op.completed.Load(), "op %d should be acknowledged, not false-failed", i)
 	}
+}
+
+// TestBatchAppendOp_OneReplicaSendFails_QuorumStillCompletes pins the invariant the
+// other failure tests structurally cannot see: they all run at Es=1/Aq=1, where "this
+// replica failed" and "this entry failed" are the same event, so they cannot tell a
+// per-replica failure route apart from one that fails the whole op. Here one replica
+// never yields a client while the other two ack, so the entries must still complete on
+// quorum - with the failed replica's entries routed to the retry path all the same, and
+// the error recorded against that replica's slot only.
+func TestBatchAppendOp_OneReplicaSendFails_QuorumStillCompletes(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	healthy := mocks_logstore_client.NewLogStoreClient(t)
+	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 3, Aq: 2, Es: 3, Nodes: []string{"node1", "node2", "node3"}}
+
+	const batchN = 3
+	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo) // entryIds 10, 11, 12
+
+	// The failing replica is node2 (index 1), not index 0, so a slot index that is
+	// hardcoded rather than derived from the replica cannot pass unnoticed.
+	clientErr := errors.New("no client available")
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(healthy, nil)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(nil, clientErr)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(healthy, nil)
+
+	healthy.EXPECT().
+		AppendEntries(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ int64, entries []*proto.LogEntry, chs []channel.ResultChannel) ([]int64, error) {
+			ids := make([]int64, len(entries))
+			for i, e := range entries {
+				ids[i] = e.EntryId
+				ch, eid := chs[i], e.EntryId
+				go func() { _ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: eid}) }()
+			}
+			return ids, nil
+		})
+
+	var acked sync.WaitGroup
+	acked.Add(batchN)
+	for i := 0; i < batchN; i++ {
+		mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(10+i)).
+			Run(func(context.Context, int64) { acked.Done() }).Return().Once()
+	}
+	var routed sync.WaitGroup
+	routed.Add(batchN)
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, clientErr, 1, "node2").
+		Run(func(context.Context, int64, error, int, string) { routed.Done() }).Return().Times(batchN)
+
+	NewBatchAppendOp(ops).Execute()
+	waitWG(t, &acked, 5*time.Second)
+	waitWG(t, &routed, 5*time.Second)
+
+	for i, op := range ops {
+		assert.True(t, op.completed.Load(), "op %d must reach quorum on the two healthy replicas", i)
+		assert.Equal(t, clientErr, op.channelErrors[1], "op %d must record the failure against node2", i)
+		assert.NoError(t, op.channelErrors[0], "op %d must not record an error against node1", i)
+		assert.NoError(t, op.channelErrors[2], "op %d must not record an error against node3", i)
+	}
+}
+
+// TestBatchAppendOp_OneReplicaStalls_QuorumStillCompletes is the ack-side half of the
+// test above: one replica acks the first entry and then goes silent while the other two
+// ack everything. The stalled replica's drain must fail only its own entries on its own
+// slot - the entries themselves are already durable on quorum and must not be dragged
+// down with it.
+func TestBatchAppendOp_OneReplicaStalls_QuorumStillCompletes(t *testing.T) {
+	oldTimeout := batchAckReadTimeout
+	batchAckReadTimeout = 200 * time.Millisecond
+	defer func() { batchAckReadTimeout = oldTimeout }()
+
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	healthy := mocks_logstore_client.NewLogStoreClient(t)
+	stalling := mocks_logstore_client.NewLogStoreClient(t)
+	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 3, Aq: 2, Es: 3, Nodes: []string{"node1", "node2", "node3"}}
+
+	const batchN = 3
+	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo) // entryIds 10, 11, 12
+
+	// The stalled replica is node2 (index 1), not index 0, so a slot index that is
+	// hardcoded rather than derived from the replica cannot pass unnoticed.
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(healthy, nil)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(stalling, nil)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(healthy, nil)
+
+	stalling.EXPECT().
+		AppendEntries(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ int64, entries []*proto.LogEntry, chs []channel.ResultChannel) ([]int64, error) {
+			ids := make([]int64, len(entries))
+			for i, e := range entries {
+				ids[i] = e.EntryId
+			}
+			// Acks the first entry, then stalls: entries 11 and 12 never get an answer.
+			_ = chs[0].SendResult(context.Background(), &channel.AppendResult{SyncedId: entries[0].EntryId})
+			return ids, nil
+		})
+	healthy.EXPECT().
+		AppendEntries(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ int64, entries []*proto.LogEntry, chs []channel.ResultChannel) ([]int64, error) {
+			ids := make([]int64, len(entries))
+			for i, e := range entries {
+				ids[i] = e.EntryId
+				ch, eid := chs[i], e.EntryId
+				go func() { _ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: eid}) }()
+			}
+			return ids, nil
+		})
+
+	var acked sync.WaitGroup
+	acked.Add(batchN)
+	for i := 0; i < batchN; i++ {
+		mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(10+i)).
+			Run(func(context.Context, int64) { acked.Done() }).Return().Once()
+	}
+	var routed sync.WaitGroup
+	routed.Add(2) // entries 11 and 12, on node2 only
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, 1, "node2").
+		Run(func(_ context.Context, entryId int64, failure error, _ int, _ string) {
+			assert.True(t, werr.IsRetryableErr(failure),
+				"entry %d: a stalled replica is a timeout, not a terminal failure", entryId)
+			routed.Done()
+		}).Return().Times(2)
+
+	NewBatchAppendOp(ops).Execute()
+	waitWG(t, &acked, 5*time.Second)
+	waitWG(t, &routed, 5*time.Second)
+
+	for i, op := range ops {
+		assert.True(t, op.completed.Load(), "op %d must reach quorum on the two healthy replicas", i)
+		assert.NoError(t, op.channelErrors[0], "op %d must not record an error against node1", i)
+		assert.NoError(t, op.channelErrors[2], "op %d must not record an error against node3", i)
+	}
+	assert.NoError(t, ops[0].channelErrors[1], "entry 10 was acked before the replica went silent")
+	assert.Error(t, ops[1].channelErrors[1], "entry 11 must record node2's timeout")
+	assert.Error(t, ops[2].channelErrors[1], "entry 12 must record node2's timeout")
+}
+
+// TestBatchAppendOp_EntryFails_PrefixAckedSuffixRoutedToRetry covers the shape a real
+// mid-batch failure takes on the wire. Per AddEntriesResponse (proto/logstore.proto:132)
+// a Failed frame names "the single entry that failed (fails the whole RPC)", so it is
+// never an isolated event: the entries before it are already Synced, and the entries
+// after it never get an answer of their own - the stream ends and the client demux hands
+// every still-waiting sink the Recv error. This exercises BatchAppendOp's central claim,
+// that partial success falls out of the existing ordered-LAC machinery with no
+// out-of-order bookkeeping of its own. Single replica keeps the focus on the response
+// shape; quorum across replicas is covered by the two tests above.
+func TestBatchAppendOp_EntryFails_PrefixAckedSuffixRoutedToRetry(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
+
+	const batchN = 4
+	ops := newBatchOps(t, batchN, mockPool, mockHandle, quorumInfo) // entryIds 10, 11, 12, 13
+
+	entryErr := errors.New("entry rejected by the server")
+	streamErr := errors.New("stream ended after the failure")
+
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().
+		AppendEntries(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ int64, entries []*proto.LogEntry, chs []channel.ResultChannel) ([]int64, error) {
+			ids := make([]int64, len(entries))
+			for i, e := range entries {
+				ids[i] = e.EntryId
+			}
+			_ = chs[0].SendResult(context.Background(), &channel.AppendResult{SyncedId: entries[0].EntryId})
+			_ = chs[1].SendResult(context.Background(), &channel.AppendResult{SyncedId: -1, Err: entryErr})
+			for _, ch := range chs[2:] {
+				_ = ch.SendResult(context.Background(), &channel.AppendResult{SyncedId: -1, Err: streamErr})
+			}
+			return ids, nil
+		})
+
+	var acked sync.WaitGroup
+	acked.Add(1)
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(10)).
+		Run(func(context.Context, int64) { acked.Done() }).Return().Once()
+
+	var routed sync.WaitGroup
+	routed.Add(3)
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, int64(11), entryErr, 0, "node1").
+		Run(func(context.Context, int64, error, int, string) { routed.Done() }).Return().Once()
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, streamErr, 0, "node1").
+		Run(func(context.Context, int64, error, int, string) { routed.Done() }).Return().Times(2)
+
+	NewBatchAppendOp(ops).Execute()
+	waitWG(t, &acked, 5*time.Second)
+	waitWG(t, &routed, 5*time.Second)
+
+	assert.True(t, ops[0].completed.Load(), "the committed prefix must still be acknowledged")
+	for i := 1; i < batchN; i++ {
+		assert.False(t, ops[i].completed.Load(), "entry %d must not be acknowledged", 10+i)
+	}
+	assert.Equal(t, entryErr, ops[1].channelErrors[0], "the failed entry keeps the server's reason")
+	assert.Equal(t, streamErr, ops[2].channelErrors[0], "the suffix keeps the stream's reason")
+	assert.Equal(t, streamErr, ops[3].channelErrors[0], "the suffix keeps the stream's reason")
 }

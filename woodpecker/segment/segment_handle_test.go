@@ -430,11 +430,14 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 
 	// Entry 2 will succeed with AppendEntry but we won't send result to channel (timeout simulation)
 	// This will cause multiple retries due to timeout - expect initial attempt + 2 retries = 3 total
+	// Entry 2 is accepted and never answered, so it costs one ack budget per
+	// attempt and spends its whole retry allowance: MaxRetries below is 2, and
+	// the retry test is attempts+1 < MaxRetries, so two attempts in total.
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), &proto.LogEntry{
 		SegId:   1,
 		EntryId: int64(2),
 		Values:  []byte("test_2"),
-	}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(2), nil).Times(1)
+	}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(2), nil).Times(2)
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -575,11 +578,10 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 
 	// Wait long enough for the complete timeout and retry cycle:
 	// 1. Entries 0,1 to complete successfully (immediate)
-	// 2. Entry 2 first attempt: 30s timeout
-	// 3. Entry 2 retry 1: 30s timeout
-	// 4. Entry 2 retry 2: 30s timeout
-	// 5. Final FastFail callback with bug (nil error)
-	// Total: ~90 seconds for 3 attempts, we wait 2 minutes to be safe
+	// 2. Entry 2 first attempt: 30s ack budget, no answer
+	// 3. Entry 2 retry: another 30s, no answer, retries now spent
+	// 4. Final FastFail callback carrying the timeout
+	// Total: ~60 seconds for 2 attempts, we wait 2 minutes to be safe
 	t.Logf("Waiting 2 minutes for complete timeout and retry cycle...")
 	t.Logf("This will demonstrate the real-world timeout behavior")
 	time.Sleep(2 * time.Minute)

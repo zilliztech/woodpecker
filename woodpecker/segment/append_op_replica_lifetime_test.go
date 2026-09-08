@@ -1,0 +1,477 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package segment
+
+import (
+	"context"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/metadata"
+
+	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/topology"
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
+	"github.com/zilliztech/woodpecker/proto"
+)
+
+// An append is acknowledged to the caller as soon as Aq replicas have answered,
+// which with Es=3,Aq=2 normally leaves exactly one replica still answering. What
+// happens to that replica is what these tests pin: it must be left to finish and
+// then retired by whoever was reading it, never cancelled by the completion of
+// the quorum it was not part of.
+
+// silentAckStream stands in for a replica that accepted the entry and has not
+// sent its durability ack yet: Recv blocks until the stream's own context ends,
+// exactly as a real gRPC stream does.
+type silentAckStream struct {
+	streamCtx context.Context
+}
+
+func (s *silentAckStream) Recv() (*proto.AddEntryResponse, error) {
+	<-s.streamCtx.Done()
+	return nil, s.streamCtx.Err()
+}
+
+func (s *silentAckStream) CloseSend() error             { return nil }
+func (s *silentAckStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *silentAckStream) Trailer() metadata.MD         { return nil }
+func (s *silentAckStream) Context() context.Context     { return s.streamCtx }
+func (s *silentAckStream) SendMsg(m any) error          { return nil }
+func (s *silentAckStream) RecvMsg(m any) error          { return nil }
+
+// inFlightReplicas installs n RemoteResultChannels on the op, each holding a
+// stream that has not answered yet, and reports which of their cancels have
+// fired.
+func inFlightReplicas(t *testing.T, op *AppendOp, n int) ([]*channel.RemoteResultChannel, []*atomic.Bool) {
+	t.Helper()
+	channels := make([]*channel.RemoteResultChannel, n)
+	cancelled := make([]*atomic.Bool, n)
+	op.resultChannels = make([]channel.ResultChannel, n)
+	for i := 0; i < n; i++ {
+		flag := &atomic.Bool{}
+		streamCtx, streamCancel := context.WithCancel(context.Background())
+		rc := channel.NewRemoteResultChannel(op.Identifier())
+		rc.InitResponseStream(&silentAckStream{streamCtx: streamCtx}, streamCtx, func() {
+			flag.Store(true)
+			streamCancel()
+		})
+		channels[i] = rc
+		cancelled[i] = flag
+		op.resultChannels[i] = rc
+		t.Cleanup(streamCancel)
+	}
+	return channels, cancelled
+}
+
+// TestAppendOp_FastSuccess_DoesNotCancelInFlightReplicaStreams is the regression
+// test for the defect itself. FastSuccess used to close every result channel,
+// and for a RemoteResultChannel Close cancels the replica's gRPC stream — so the
+// replica outside the quorum had its normal completion turned into
+// "rpc error: code = Canceled", logged as a failure once per entry.
+func TestAppendOp_FastSuccess_DoesNotCancelInFlightReplicaStreams(t *testing.T) {
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+		func(int64, int64, error) {}, nil, nil,
+		&proto.QuorumInfo{Wq: 3, Aq: 2, Es: 3, Nodes: []string{"n1", "n2", "n3"}}, nil)
+	channels, cancelled := inFlightReplicas(t, op, 3)
+
+	op.FastSuccess(context.Background())
+
+	for i := range channels {
+		assert.False(t, channels[i].IsClosed(), "replica %d: FastSuccess must not close the channel", i)
+		assert.False(t, cancelled[i].Load(), "replica %d: FastSuccess must not cancel the stream", i)
+	}
+}
+
+// TestAppendOp_FastFail_CancelsInFlightReplicaStreams is the deliberate contrast.
+// The entry is abandoned there, so every waiter should stop at once rather than
+// sit out its read budget.
+func TestAppendOp_FastFail_CancelsInFlightReplicaStreams(t *testing.T) {
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+		func(int64, int64, error) {}, nil, nil,
+		&proto.QuorumInfo{Wq: 3, Aq: 2, Es: 3, Nodes: []string{"n1", "n2", "n3"}}, nil)
+	channels, cancelled := inFlightReplicas(t, op, 3)
+
+	op.FastFail(context.Background(), werr.ErrSegmentFenced)
+
+	for i := range channels {
+		assert.True(t, channels[i].IsClosed(), "replica %d: FastFail must close the channel", i)
+		assert.True(t, cancelled[i].Load(), "replica %d: FastFail must cancel the stream", i)
+	}
+}
+
+// TestAppendOp_receivedAckCallback_ClosesItsOwnChannel pins the other half of the
+// exchange: with FastSuccess no longer closing, the reading goroutine must, or
+// the stream and the goroutine behind it are never released.
+func TestAppendOp_receivedAckCallback_ClosesItsOwnChannel(t *testing.T) {
+	t.Run("after a normal ack", func(t *testing.T) {
+		mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+		mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Return().Once()
+		op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+			func(int64, int64, error) {}, nil, mockHandle,
+			&proto.QuorumInfo{Wq: 1, Aq: 1, Es: 1, Nodes: []string{"n1"}}, nil)
+
+		rc := channel.NewLocalResultChannel(op.Identifier())
+		require.NoError(t, rc.SendResult(context.Background(), &channel.AppendResult{SyncedId: 3}))
+		op.resultChannels = []channel.ResultChannel{rc}
+
+		op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0, "n1")
+
+		assert.True(t, rc.IsClosed(), "the reader owns the channel and must close it on the success path")
+	})
+
+	t.Run("after a send error", func(t *testing.T) {
+		op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+			func(int64, int64, error) {}, nil, nil,
+			&proto.QuorumInfo{Wq: 1, Aq: 1, Es: 1, Nodes: []string{"n1"}}, nil)
+		// fastCalled short-circuits the failure handling, so this exercises the
+		// earliest return in the function — the close must still happen.
+		op.fastCalled.Store(true)
+
+		rc := channel.NewLocalResultChannel(op.Identifier())
+		op.resultChannels = []channel.ResultChannel{rc}
+
+		op.receivedAckCallback(context.Background(), time.Now(), 3, rc, werr.ErrInternalError, 0, "n1")
+
+		assert.True(t, rc.IsClosed(), "the close must cover every exit path, not just the happy one")
+	})
+}
+
+// recordingResultChannel wraps a real channel and records every SendResult that
+// reached it. It is how these tests state "FastSuccess must not write here" as an
+// assertion rather than as an absent log line.
+type recordingResultChannel struct {
+	channel.ResultChannel
+	mu       sync.Mutex
+	sends    []error
+	closeErr error
+	closes   int
+}
+
+func newRecordingChannel(identifier string) *recordingResultChannel {
+	return &recordingResultChannel{ResultChannel: channel.NewLocalResultChannel(identifier)}
+}
+
+func (r *recordingResultChannel) SendResult(ctx context.Context, result *channel.AppendResult) error {
+	sendErr := r.ResultChannel.SendResult(ctx, result)
+	r.mu.Lock()
+	r.sends = append(r.sends, sendErr)
+	r.mu.Unlock()
+	return sendErr
+}
+
+// seed delivers a result the way a replica would, without counting as a send
+// made by the code under test.
+func (r *recordingResultChannel) seed(t *testing.T, result *channel.AppendResult) {
+	t.Helper()
+	require.NoError(t, r.ResultChannel.SendResult(context.Background(), result))
+}
+
+// Close reports closeErr when one is set, standing in for a ResultChannel
+// implementation whose close can fail. Neither of the two in the repo can, so
+// this is the only way to reach the handling of that error.
+func (r *recordingResultChannel) Close(ctx context.Context) error {
+	r.mu.Lock()
+	r.closes++
+	forced := r.closeErr
+	r.mu.Unlock()
+	closeErr := r.ResultChannel.Close(ctx)
+	if forced != nil {
+		return forced
+	}
+	return closeErr
+}
+
+func (r *recordingResultChannel) closeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closes
+}
+
+func (r *recordingResultChannel) sendCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sends)
+}
+
+// TestAppendOp_QuorumSuccess_WritesNothingIntoRetiredChannels pins the ordering
+// that decides whether this change actually removes log volume or just moves it.
+//
+// Once the reading goroutine owns its channel, it retires the channel BEFORE the
+// quorum bookkeeping that follows - and that bookkeeping runs FastSuccess
+// synchronously in the same goroutine. So by the time FastSuccess iterates the
+// replica channels, every replica that answered has already closed its own. A
+// FastSuccess that still wrote into them would fail and warn once per acking
+// replica on EVERY successful append, which is exactly the cost this change
+// exists to remove.
+func TestAppendOp_QuorumSuccess_WritesNothingIntoRetiredChannels(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	quorumInfo := &proto.QuorumInfo{Wq: 3, Aq: 2, Es: 3, Nodes: []string{"n1", "n2", "n3"}}
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+		func(int64, int64, error) {}, nil, mockHandle, quorumInfo, nil)
+
+	channels := make([]*recordingResultChannel, 3)
+	op.resultChannels = make([]channel.ResultChannel, 3)
+	for i := range channels {
+		channels[i] = newRecordingChannel(op.Identifier())
+		op.resultChannels[i] = channels[i]
+	}
+
+	// The real FastSuccess, driven exactly as production drives it: synchronously
+	// from inside the acking goroutine the moment the quorum is reached.
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).
+		Run(func(ctx context.Context, _ int64) { op.FastSuccess(ctx) }).Return().Once()
+
+	// Two of the three replicas answer; the third is still in flight.
+	for i := 0; i < 2; i++ {
+		channels[i].seed(t, &channel.AppendResult{SyncedId: 3})
+		op.receivedAckCallback(context.Background(), time.Now(), 3, channels[i], nil, i, quorumInfo.Nodes[i])
+	}
+
+	require.True(t, op.fastCalled.Load(), "the quorum must have triggered FastSuccess")
+	assert.True(t, channels[0].IsClosed(), "an answering replica retires its own channel")
+	assert.True(t, channels[1].IsClosed(), "an answering replica retires its own channel")
+	assert.False(t, channels[2].IsClosed(), "the in-flight replica must be left alone")
+
+	for i, resultChan := range channels {
+		assert.Equal(t, 0, resultChan.sendCount(),
+			"FastSuccess wrote into replica %d's channel: retired ones only produce a warning, "+
+				"and an in-flight one would return the synthetic result instead of the replica's real answer", i)
+	}
+}
+
+// TestAppendOp_FastFail_SkipsChannelsTheirReaderRetired is the same ordering seen
+// from the failure side: HandleAppendRequestFailure is also called after the
+// reader retired its channel, and drives FastFail synchronously.
+func TestAppendOp_FastFail_SkipsChannelsTheirReaderRetired(t *testing.T) {
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+		func(int64, int64, error) {}, nil, nil,
+		&proto.QuorumInfo{Wq: 2, Aq: 2, Es: 2, Nodes: []string{"n1", "n2"}}, nil)
+
+	retired := newRecordingChannel("retired")
+	require.NoError(t, retired.ResultChannel.Close(context.Background()))
+	live := newRecordingChannel("live")
+	op.resultChannels = []channel.ResultChannel{retired, live}
+
+	op.FastFail(context.Background(), werr.ErrSegmentFenced)
+
+	assert.Equal(t, 0, retired.sendCount(), "a retired channel has no waiter left to wake")
+	assert.Equal(t, 1, live.sendCount(), "a live waiter must still be stopped, and told why")
+	assert.True(t, live.IsClosed(), "FastFail still closes what it woke")
+}
+
+// TestAppendOp_receivedAckCallback_CloseFailureDoesNotStopTheAck pins that
+// retiring the channel is best-effort: a close that fails is logged and the
+// replica's ack still reaches the quorum bookkeeping. Nothing in the repo has a
+// Close that can fail, so a double is the only way to exercise the handling.
+func TestAppendOp_receivedAckCallback_CloseFailureDoesNotStopTheAck(t *testing.T) {
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Return().Once()
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
+		func(int64, int64, error) {}, nil, mockHandle,
+		&proto.QuorumInfo{Wq: 1, Aq: 1, Es: 1, Nodes: []string{"n1"}}, nil)
+
+	resultChan := newRecordingChannel(op.Identifier())
+	resultChan.closeErr = werr.ErrInternalError
+	resultChan.seed(t, &channel.AppendResult{SyncedId: 3})
+	op.resultChannels = []channel.ResultChannel{resultChan}
+
+	op.receivedAckCallback(context.Background(), time.Now(), 3, resultChan, nil, 0, "n1")
+
+	assert.True(t, op.completed.Load(), "a failed close must not stop the ack from reaching quorum")
+	assert.Equal(t, 1, resultChan.closeCount(), "the retire is attempted exactly once, not retried")
+}
+
+// replicaOutcomeCount reads the per-replica counter for one op's log. The tests
+// below use a distinct logId each so they do not see one another's counts.
+func replicaOutcomeCount(op *AppendOp, status string) float64 {
+	return testutil.ToFloat64(metrics.WpClientReplicaAppendTotal.WithLabelValues(
+		op.logNs, strconv.FormatInt(op.logId, 10), topology.ScopeUnknown, status))
+}
+
+// answeringOp builds an op whose replicas all have an answer waiting, and a
+// handle that runs the real FastSuccess the moment the quorum is reached - the
+// way SendAppendSuccessCallbacks drives it in production.
+func answeringOp(t *testing.T, logId int64, replicas int32, ackQuorum int32) (*AppendOp, []channel.ResultChannel) {
+	t.Helper()
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	nodes := make([]string, replicas)
+	for i := range nodes {
+		nodes[i] = "n" + strconv.Itoa(i)
+	}
+	op := NewAppendOp("a-bucket", "files", logId, 2, 3, []byte("0123456789"),
+		func(int64, int64, error) {}, nil, mockHandle,
+		&proto.QuorumInfo{Wq: replicas, Aq: ackQuorum, Es: replicas, Nodes: nodes}, nil)
+
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).
+		Run(func(ctx context.Context, _ int64) { op.FastSuccess(ctx) }).Return().Maybe()
+
+	channels := make([]channel.ResultChannel, replicas)
+	for i := range channels {
+		local := channel.NewLocalResultChannel(op.Identifier())
+		require.NoError(t, local.SendResult(context.Background(), &channel.AppendResult{SyncedId: 3}))
+		channels[i] = local
+	}
+	op.resultChannels = channels
+	return op, channels
+}
+
+// TestAppendOp_ReplicaAnsweringAfterQuorumIsStillCounted pins what the
+// per-replica counters measure. With Es=3/Aq=2 the third replica answers after
+// the quorum has already completed the op, and its answer used to be dropped by
+// the fast-completed guard - so a cluster writing three copies reported about
+// two outcomes per entry, and replica_append_bytes_total understated cross-AZ
+// write traffic by the same proportion.
+func TestAppendOp_ReplicaAnsweringAfterQuorumIsStillCounted(t *testing.T) {
+	op, channels := answeringOp(t, 909001, 3, 2)
+	before := replicaOutcomeCount(op, "success")
+
+	for i, resultChan := range channels {
+		op.receivedAckCallback(context.Background(), time.Now(), 3, resultChan, nil, i, "n"+strconv.Itoa(i))
+	}
+
+	require.True(t, op.fastCalled.Load(), "the quorum must have completed the op")
+	assert.Equal(t, float64(3), replicaOutcomeCount(op, "success")-before,
+		"every replica that answered must be counted, not just the ack quorum")
+}
+
+// TestApplyNodeAck_ReplicaAnsweringAfterQuorumIsStillCounted is the same
+// property on the batch drain, which applies acks through applyNodeAck.
+func TestApplyNodeAck_ReplicaAnsweringAfterQuorumIsStillCounted(t *testing.T) {
+	op, _ := answeringOp(t, 909002, 3, 2)
+	before := replicaOutcomeCount(op, "success")
+
+	for i := 0; i < 3; i++ {
+		op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, i, "n"+strconv.Itoa(i))
+	}
+
+	require.True(t, op.fastCalled.Load(), "the quorum must have completed the op")
+	assert.Equal(t, float64(3), replicaOutcomeCount(op, "success")-before,
+		"every replica that answered must be counted, not just the ack quorum")
+}
+
+// TestAppendOp_ReplicaFailingAfterCompletionIsNotCounted is the other half of
+// the rule. Once the op has completed, a read that FAILED may be our own doing -
+// FastFail cancels every replica still in flight - so it must not land in the
+// error series. Only an answer counts.
+func TestAppendOp_ReplicaFailingAfterCompletionIsNotCounted(t *testing.T) {
+	op, _ := answeringOp(t, 909003, 3, 3)
+	op.fastCalled.Store(true) // as FastFail leaves it
+	beforeErr := replicaOutcomeCount(op, "error")
+	beforeOK := replicaOutcomeCount(op, "success")
+
+	// A replica that had not answered when FastFail closed its channel: the read
+	// fails, and the failure is the close we performed.
+	cancelled := channel.NewLocalResultChannel(op.Identifier())
+	require.NoError(t, cancelled.Close(context.Background()))
+	op.resultChannels[0] = cancelled
+	op.receivedAckCallback(context.Background(), time.Now(), 3, cancelled, nil, 0, "n0")
+
+	assert.Equal(t, float64(0), replicaOutcomeCount(op, "error")-beforeErr,
+		"a cancellation we caused is not the replica's failure")
+	assert.Equal(t, float64(0), replicaOutcomeCount(op, "success")-beforeOK)
+}
+
+// TestAppendOp_ReplicaAnsweringWithAnErrorAfterQuorumIsCounted keeps the
+// post-quorum classification honest: an answer that reports a failure is a real
+// failure and belongs in the error series, unlike the cancellation above.
+func TestAppendOp_ReplicaAnsweringWithAnErrorAfterQuorumIsCounted(t *testing.T) {
+	op, _ := answeringOp(t, 909004, 3, 3)
+	op.fastCalled.Store(true)
+	before := replicaOutcomeCount(op, "error")
+
+	op.applyNodeAck(context.Background(), time.Now(),
+		&channel.AppendResult{SyncedId: -1, Err: werr.ErrFileWriterSyncFailed}, nil, 0, "n0")
+
+	assert.Equal(t, float64(1), replicaOutcomeCount(op, "error")-before,
+		"a replica that answered with a failure is a real failure")
+}
+
+// TestReplicaOutcome_ClassifiesTheSameWayTheAckPathsDo guards the one duplication
+// left: replicaOutcome mirrors the branches receivedAckCallback and applyNodeAck
+// take when the op has NOT completed, and the two must not drift.
+func TestReplicaOutcome_ClassifiesTheSameWayTheAckPathsDo(t *testing.T) {
+	const entryId = int64(7)
+	assert.Equal(t, "success", replicaOutcome(&channel.AppendResult{SyncedId: entryId}, entryId))
+	assert.Equal(t, "success", replicaOutcome(&channel.AppendResult{SyncedId: entryId + 1}, entryId))
+	assert.Equal(t, "error", replicaOutcome(&channel.AppendResult{SyncedId: -1}, entryId))
+	assert.Equal(t, "error", replicaOutcome(&channel.AppendResult{SyncedId: entryId, Err: werr.ErrFileWriterSyncFailed}, entryId))
+	assert.Equal(t, "error", replicaOutcome(nil, entryId))
+	assert.Equal(t, "", replicaOutcome(&channel.AppendResult{SyncedId: entryId - 1}, entryId),
+		"a replica still catching up has not answered for this entry")
+}
+
+// remoteAnswerChannel is a RemoteResultChannel whose stream answers "sync
+// failed" - the shape a server-reported write failure actually reaches the
+// client in on the service-mode path, where ReadResult returns a non-nil result
+// AND a non-nil error. A local channel reports the same answer with no error, so
+// keying the post-quorum recording on the error rather than the result would
+// count it in embedded mode and drop it in service mode.
+func remoteAnswerChannel(t *testing.T, identifier string, entryId int64) *channel.RemoteResultChannel {
+	t.Helper()
+	resultChan := channel.NewRemoteResultChannel(identifier)
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	t.Cleanup(streamCancel)
+	resultChan.InitResponseStream(&failedAckStream{
+		streamCtx: streamCtx,
+		response: &proto.AddEntryResponse{
+			EntryId: entryId,
+			State:   proto.AddEntryState_Failed,
+			Status:  &proto.Status{Code: 500},
+		},
+	}, streamCtx, streamCancel)
+	return resultChan
+}
+
+type failedAckStream struct {
+	streamCtx context.Context
+	response  *proto.AddEntryResponse
+}
+
+func (s *failedAckStream) Recv() (*proto.AddEntryResponse, error) { return s.response, nil }
+func (s *failedAckStream) CloseSend() error                       { return nil }
+func (s *failedAckStream) Header() (metadata.MD, error)           { return nil, nil }
+func (s *failedAckStream) Trailer() metadata.MD                   { return nil }
+func (s *failedAckStream) Context() context.Context               { return s.streamCtx }
+func (s *failedAckStream) SendMsg(m any) error                    { return nil }
+func (s *failedAckStream) RecvMsg(m any) error                    { return nil }
+
+// TestAppendOp_RemoteReplicaAnsweringWithAFailureAfterQuorumIsCounted is the
+// service-mode form of the post-quorum rule: a replica that answered is counted
+// even though its answer arrives alongside an error.
+func TestAppendOp_RemoteReplicaAnsweringWithAFailureAfterQuorumIsCounted(t *testing.T) {
+	op, _ := answeringOp(t, 909005, 3, 3)
+	op.fastCalled.Store(true)
+	before := replicaOutcomeCount(op, "error")
+
+	answered := remoteAnswerChannel(t, op.Identifier(), 3)
+	op.resultChannels[0] = answered
+	op.receivedAckCallback(context.Background(), time.Now(), 3, answered, nil, 0, "n0")
+
+	assert.Equal(t, float64(1), replicaOutcomeCount(op, "error")-before,
+		"a remote replica that answered with a write failure is a real failure, "+
+			"even though ReadResult reports it as an error as well as a result")
+}

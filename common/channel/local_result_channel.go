@@ -92,7 +92,7 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 		)
 		return r, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, readBudgetExhausted(ctx.Err())
 	}
 }
 
@@ -124,6 +124,15 @@ func (l *LocalResultChannel) Close(ctx context.Context) error {
 		zap.String("identifier", l.identifier),
 		zap.String("ch", fmt.Sprintf("%p", l)))
 	return nil
+}
+
+// String renders the channel without exposing its fields to reflection; see the
+// comment on RemoteResultChannel.String for why a mutex-guarded type has to
+// control how it is printed.
+func (l *LocalResultChannel) String() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return fmt.Sprintf("LocalResultChannel{identifier:%s closed:%v}", l.identifier, l.closed)
 }
 
 func (l *LocalResultChannel) IsClosed() bool {

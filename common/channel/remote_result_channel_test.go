@@ -19,12 +19,15 @@ package channel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -153,7 +156,7 @@ func TestRemoteResultChannel_ReadResult_NotInitialized(t *testing.T) {
 	result, err := channel.ReadResult(ctx)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestRemoteResultChannel_ReadResult_Closed(t *testing.T) {
@@ -269,7 +272,12 @@ func TestRemoteResultChannel_ReadResult_ContextCancellation(t *testing.T) {
 	result, err := channel.ReadResult(ctx)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	// No stream is installed, so this is the polling exit rather than the stream
+	// one; it must classify the same way.
+	assert.True(t, werr.IsRetryableErr(err),
+		"a timed-out read must be retryable, not terminal")
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"the append path's read-timeout branch tests for this")
 }
 
 // Test the workflow that simulates real usage in append operations
@@ -426,6 +434,84 @@ func TestRemoteResultChannel_ReadResult_ViaStream_Synced(t *testing.T) {
 	assert.NoError(t, result.Err)
 }
 
+// TestRemoteResultChannel_ReadResult_ViaStream_HonoursCallerDeadline pins the
+// bound on the async ack read.
+//
+// Recv observes only the stream's own context, which carries no deadline, so
+// before this the ctx passed here was decorative on the stream path: a peer that
+// accepted the entry and then went silent blocked the read until the connection
+// died. That went unnoticed because FastSuccess used to cancel the stream at
+// quorum — which is exactly the cancellation being removed.
+func TestRemoteResultChannel_ReadResult_ViaStream_HonoursCallerDeadline(t *testing.T) {
+	resultChannel := NewRemoteResultChannel("test-read-stream-budget")
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+
+	// A replica that accepted the entry and never sends its durability ack.
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			<-streamCtx.Done()
+			return nil, streamCtx.Err()
+		},
+	}
+	resultChannel.InitResponseStream(stream, streamCtx, streamCancel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	type readOutcome struct {
+		result *AppendResult
+		err    error
+	}
+	done := make(chan readOutcome, 1)
+	go func() {
+		result, err := resultChannel.ReadResult(ctx)
+		done <- readOutcome{result: result, err: err}
+	}()
+
+	select {
+	case outcome := <-done:
+		require.Error(t, outcome.err, "a read that ran out of budget must report it")
+		assert.Nil(t, outcome.result)
+
+		// Recv reports the cancellation as a bare gRPC status, which nothing
+		// downstream can classify: the caller would record a terminal failure and
+		// spend none of its retries on what is only a timeout. Both of the
+		// classifications the append path actually performs must match.
+		assert.True(t, werr.IsRetryableErr(outcome.err),
+			"a timed-out read must be retryable, not terminal")
+		assert.ErrorIs(t, outcome.err, context.DeadlineExceeded,
+			"the append path's read-timeout branch tests for this")
+	case <-time.After(10 * time.Second):
+		t.Fatal("ReadResult ignored the caller's deadline: a silent peer blocks it indefinitely")
+	}
+}
+
+// TestRemoteResultChannel_ReadResult_ViaStream_DeadlineNotReached checks the
+// budget only fires when it is actually exhausted: an ack that arrives in time
+// is returned, and the stream it came on is left alone.
+func TestRemoteResultChannel_ReadResult_ViaStream_DeadlineNotReached(t *testing.T) {
+	resultChannel := NewRemoteResultChannel("test-read-stream-in-budget")
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			return &proto.AddEntryResponse{EntryId: 42, State: proto.AddEntryState_Synced}, nil
+		},
+	}
+	resultChannel.InitResponseStream(stream, streamCtx, streamCancel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := resultChannel.ReadResult(ctx)
+	assert.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, int64(42), result.SyncedId)
+	assert.NoError(t, streamCtx.Err(), "an in-budget read must not cancel the stream")
+}
+
 func TestRemoteResultChannel_ReadResult_ViaStream_Failed(t *testing.T) {
 	channel := NewRemoteResultChannel("test-read-stream-fail")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -511,4 +597,43 @@ func TestRemoteResultChannel_ReadResult_DirectResultAlreadySet(t *testing.T) {
 	result, err := channel.ReadResult(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(77), result.SyncedId)
+}
+
+// TestRemoteResultChannel_StringIsWhatFmtUses pins the property the Stringer was
+// added for. A result channel is handed to LogStoreClient.AppendEntry, so it is
+// retained and printed by code this package does not control - testify formats
+// every recorded call argument with %v when it asserts expectations. fmt's
+// default rendering walks the struct's fields with no lock, which races a
+// concurrent Close; consulting Stringer instead is what makes that safe, so the
+// test asserts fmt actually takes that path rather than just that the method
+// exists.
+func TestRemoteResultChannel_StringIsWhatFmtUses(t *testing.T) {
+	resultChannel := NewRemoteResultChannel("test-stringer")
+
+	rendered := fmt.Sprintf("%v", resultChannel)
+	assert.Equal(t, resultChannel.String(), rendered, "fmt must render via Stringer, not by reflecting over the fields")
+	assert.Contains(t, rendered, "test-stringer")
+	assert.Contains(t, rendered, "closed:false")
+	assert.NotContains(t, rendered, "mu:", "reflected field output would mean fmt is reading the fields directly")
+
+	assert.NoError(t, resultChannel.Close(context.Background()))
+	assert.Contains(t, fmt.Sprintf("%v", resultChannel), "closed:true")
+}
+
+// TestRemoteResultChannel_StringIsSafeWhileClosing is the race the Stringer
+// exists to remove: rendering concurrently with the Close that the reading
+// goroutine performs. It only proves anything under -race.
+func TestRemoteResultChannel_StringIsSafeWhileClosing(t *testing.T) {
+	resultChannel := NewRemoteResultChannel("test-stringer-race")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(2 * time.Millisecond)
+		_ = resultChannel.Close(context.Background())
+	}()
+	for i := 0; i < 200; i++ {
+		_ = fmt.Sprintf("%v", resultChannel)
+	}
+	<-done
 }
