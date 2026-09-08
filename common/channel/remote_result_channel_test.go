@@ -272,7 +272,12 @@ func TestRemoteResultChannel_ReadResult_ContextCancellation(t *testing.T) {
 	result, err := channel.ReadResult(ctx)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	// No stream is installed, so this is the polling exit rather than the stream
+	// one; it must classify the same way.
+	assert.True(t, werr.IsRetryableErr(err),
+		"a timed-out read must be retryable, not terminal")
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"the append path's read-timeout branch tests for this")
 }
 
 // Test the workflow that simulates real usage in append operations

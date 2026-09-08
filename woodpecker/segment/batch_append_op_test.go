@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
@@ -358,8 +359,14 @@ func TestBatchAppendOp_StalledNode_FailsRemainingAndCancelsStream(t *testing.T) 
 	failures.Add(2) // entries 11 and 12
 	mockHandle.EXPECT().
 		HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, 0, "node1").
-		Run(func(_ context.Context, entryId int64, _ error, _ int, _ string) {
+		Run(func(_ context.Context, entryId int64, failure error, _ int, _ string) {
 			if entryId == 11 || entryId == 12 {
+				// The drain read a LocalResultChannel that ran out of its budget. A
+				// stalled peer is a timeout, not a terminal failure: reported as a bare
+				// context.DeadlineExceeded the entry is unclassifiable downstream and
+				// gives up without spending any of its retries.
+				assert.True(t, werr.IsRetryableErr(failure),
+					"entry %d: a stalled node must be reported as retryable", entryId)
 				failures.Done()
 			}
 		}).Return().Times(2)

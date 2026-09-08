@@ -97,7 +97,14 @@ func TestLocalResultChannel_ReadTimeout(t *testing.T) {
 	// Try to read from empty channel with timeout
 	_, err := rc.ReadResult(ctx)
 	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	// Both classifications the append paths perform must match. This is the channel
+	// the batch drain reads, and a bare DeadlineExceeded is not classifiable
+	// downstream: the entry would take a terminal failure and spend none of its
+	// retries on what is only a timeout.
+	assert.True(t, werr.IsRetryableErr(err),
+		"a timed-out read must be retryable, not terminal")
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"the append path's read-timeout branch tests for this")
 }
 
 func TestLocalResultChannel_SendTimeout(t *testing.T) {
