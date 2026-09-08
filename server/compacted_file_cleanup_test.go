@@ -755,8 +755,12 @@ func TestCompactedFileCleanup_StartupWalkSeedsStoredGauges(t *testing.T) {
 	task := newCompactedFileCleanupTask(store) // startTime = now: oldDir predates it
 
 	// Created AFTER the task started: this process's writer accounted for it (create
-	// branch), so the mtime guard must skip it.
-	makeSegmentDir(t, root, bucket, rp, freshLogId, 22)
+	// branch), so the mtime guard must skip it. Stamp the mtime forward instead of
+	// relying on creation order: a file's mtime comes from the kernel's coarse clock,
+	// which on Linux lags the time.Now() behind startTime by up to a timer tick, so a
+	// file created here can otherwise carry an mtime that predates the task.
+	freshDir := makeSegmentDir(t, root, bucket, rp, freshLogId, 22)
+	ageDataLog(t, freshDir, -time.Second)
 
 	logNs := bucket + "/" + rp
 	oldBytesBefore := testutil.ToFloat64(metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, logNs, "29"))
