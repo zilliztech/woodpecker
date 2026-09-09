@@ -1,0 +1,108 @@
+# Applies the `ci-passed` label to pull requests.
+#
+# This runs on `workflow_run` rather than inside each test workflow on purpose.
+# A `pull_request` workflow raised from a fork always receives a read-only
+# GITHUB_TOKEN -- no `permissions:` block or repository setting can change that,
+# because such a workflow executes code the PR author controls. Labelling
+# therefore failed with 403 on every fork PR (see #308).
+#
+# `workflow_run` is loaded from the default branch, so a PR cannot modify what
+# runs here and the job gets a normal writable token. In exchange this job is
+# privileged: it must never check out the PR head, execute artifacts produced by
+# the triggering run, or interpolate PR-controlled strings into `run:`.
+#
+# Rerun instructions are posted once per PR by `pr-ci-guide.yaml`, so a failing
+# check does not comment about itself.
+name: PR CI Label
+
+on:
+  workflow_run:
+    workflows:
+      - Code Checker
+      - Unit Test
+      - E2E Local
+      - E2E Object Storage
+      - E2E Service
+      - Component Integration Test
+      - Chaos Test
+      - Operator Test
+      - Upgrade Compat Local
+      - Upgrade Compat Object Storage
+      - Upgrade Compat Service
+    types: [completed]
+
+permissions:
+  pull-requests: write
+  contents: read
+  actions: read
+
+concurrency:
+  group: pr-ci-label-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  Label:
+    name: PR CI Label
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Update ci-passed label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+
+          # `workflow_run.pull_requests` is empty for pull requests from forks,
+          # so resolve the PR from the head SHA instead.
+          PR=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" --jq '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            echo "No pull request found for ${HEAD_SHA}; nothing to do."
+            exit 0
+          fi
+          echo "Resolved PR #${PR} for ${HEAD_SHA} (triggering run ${RUN_ID}, ${RUN_CONCLUSION})."
+
+          # Job results of the run that triggered us. These are authoritative:
+          # the checks API may not have caught up with this run yet.
+          JOBS=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" --paginate \
+                   --jq '[.jobs[] | {name, conclusion}]')
+
+          # Recompute ci-passed from the full set of required checks. Every
+          # workflow completion re-runs this, so a run that finishes while others
+          # are still pending simply does nothing and the last one settles it.
+          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
+          CHECKS=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket 2>/dev/null || echo "[]")
+
+          ALL_PASSED=true
+          for check in "${REQUIRED_CHECKS[@]}"; do
+            # Prefer this run's own result over the possibly stale checks API.
+            own=$(echo "$JOBS" | jq -r --arg n "$check" '.[] | select(.name == $n) | .conclusion' | head -1)
+            if [ -n "$own" ]; then
+              if [ "$own" != "success" ]; then
+                echo "required check '${check}' is '${own}' in this run"
+                ALL_PASSED=false
+                break
+              fi
+              continue
+            fi
+            bucket=$(echo "$CHECKS" | jq -r --arg n "$check" '.[] | select(.name == $n) | .bucket' | head -1)
+            # Skip checks not triggered for this PR (filtered out by `paths`);
+            # only block on checks that actually ran.
+            [ -z "$bucket" ] && continue
+            if [ "$bucket" != "pass" ]; then
+              echo "required check '${check}' is '${bucket}'"
+              ALL_PASSED=false
+              break
+            fi
+          done
+
+          if [ "$ALL_PASSED" = true ]; then
+            echo "All required checks passed; adding ci-passed."
+            gh pr edit "$PR" --repo "$REPO" --add-label "ci-passed"
+          else
+            echo "Not all required checks passed; ensuring ci-passed is absent."
+            gh pr edit "$PR" --repo "$REPO" --remove-label "ci-passed" 2>/dev/null || true
+          fi
