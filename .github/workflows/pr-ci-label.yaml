@@ -57,8 +57,16 @@ jobs:
           set -euo pipefail
 
           # `workflow_run.pull_requests` is empty for pull requests from forks,
-          # so resolve the PR from the head SHA instead.
+          # so the PR has to be resolved from the head SHA. `commits/{sha}/pulls`
+          # only covers commits that live in this repository, which a fork's head
+          # commit does not, so fall back to matching the SHA against open PRs.
           PR=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" --jq '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            # shellcheck disable=SC2016  # $ENV.HEAD_SHA is jq, not shell
+            MATCHES=$(gh api "repos/${REPO}/pulls?state=open&per_page=100" --paginate \
+                        --jq '.[] | select(.head.sha == $ENV.HEAD_SHA) | .number')
+            PR=$(printf '%s\n' "$MATCHES" | head -n 1)
+          fi
           if [ -z "$PR" ]; then
             echo "No pull request found for ${HEAD_SHA}; nothing to do."
             exit 0
