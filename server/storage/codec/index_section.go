@@ -1,18 +1,19 @@
-// Licensed to the LF AI & Data foundation under one
-// or more contributor license agreements. See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership. The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License. You may obtain a copy of the License at
+// Copyright (C) 2025 Zilliz. All rights reserved.
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
 //
 // Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
+// distributed under these licenses is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
 
 package codec
 
@@ -22,8 +23,17 @@ import (
 )
 
 // ValidateIndexSection checks that a parsed footer describes a readable index
-// section. It is the single definition of which footers are acceptable, shared
-// by every storage backend that recovers a finalized segment from its footer.
+// section of a segment file that stores its index inline -- the local-file
+// backends, disk and stagedstorage, whose data.log is
+// header | blocks | index records | footer.
+//
+// It is NOT valid for footers whose index lives in a separate object. In
+// objectstorage, and for stagedstorage's compacted footer, the index records
+// start at offset 0 of footer.blk, so those footers carry IndexOffset = 0 as
+// their normal value and the readers never consult IndexOffset at all
+// (objectstorage.recoverFromFooter and stagedstorage's parseIndexDataUnsafe
+// slice the object instead). Routing them through this function would reject
+// every object-storage segment as corrupt.
 //
 // A segment that was finalized with zero blocks is valid: Finalize writes the
 // header and the footer with nothing in between, so IndexOffset equals the
@@ -35,8 +45,9 @@ func ValidateIndexSection(footer *FooterRecord) error {
 		return fmt.Errorf("invalid footer record: nil")
 	}
 	if footer.IndexOffset == 0 {
-		// Every finalized file starts with a header record, so the index
-		// section can never begin at offset 0.
+		// An inline index always follows the header record, so it can never
+		// begin at offset 0. (A footer describing a separate index object may
+		// legitimately say 0 -- such footers do not belong here, see above.)
 		return fmt.Errorf("invalid footer record: IndexOffset=%d, IndexLength=%d",
 			footer.IndexOffset, footer.IndexLength)
 	}
