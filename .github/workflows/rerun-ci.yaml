@@ -22,10 +22,18 @@ jobs:
       - name: Rerun workflows
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A ${{ }} expression is substituted into the script before bash parses
+          # it, so anything interpolated straight into `run:` is executed as shell
+          # source. A comment body is written by whoever comments -- it has to
+          # arrive as an environment variable, which bash reads as data. Only the
+          # first word of it is ever a command; the rest is prose.
+          # (issue.number and github.repository below are supplied by GitHub, not
+          # by the commenter, so they are not attacker-controlled.)
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           PR=${{ github.event.issue.number }}
           REPO=${{ github.repository }}
-          COMMENT="${{ github.event.comment.body }}"
+          COMMENT="$COMMENT_BODY"
 
           # Map comment keywords to workflow file names
           declare -A WORKFLOW_MAP
