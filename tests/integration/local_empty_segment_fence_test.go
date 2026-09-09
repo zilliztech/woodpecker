@@ -105,6 +105,16 @@ func TestLocalReopenFencesFinalizedEmptySegment(t *testing.T) {
 
 	writer, err := lh2.OpenLogWriter(ctx)
 	require.NoError(t, err, "fencing a finalized empty segment on reopen must succeed")
+
+	// The fence has to have landed on the file this test wrote. disk.Fence drops
+	// a write.fence flag next to data.log, so its presence proves the log store
+	// resolved the same path the test guessed. Without this the test would still
+	// pass if that layout ever drifted: the finalized empty file would sit where
+	// nobody looks, recoverFromExistingFileUnsafe would take its os.IsNotExist
+	// fast path, and the fence would trivially succeed with the bug intact.
+	require.FileExists(t, path.Join(baseDir, fmt.Sprintf("%d/%d/write.fence", logId, segId)),
+		"fence flag must sit beside the segment file this test finalized")
+
 	res := writer.Write(ctx, &log.WriteMessage{Payload: []byte("first write after reopen")})
 	require.NoError(t, res.Err)
 	require.NoError(t, writer.Close(ctx))
