@@ -262,8 +262,7 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 }
 
 func (l *internalLogWriterImpl) runAuditor() {
-	ticker := time.NewTicker(time.Duration(l.auditorMaxInterval * int(time.Second)))
-	defer ticker.Stop()
+	interval := time.Duration(l.auditorMaxInterval) * time.Second
 
 	// Storage mode is fixed for the writer's lifetime; read it once here rather than per
 	// segment. localMode disables the compaction pass (see compactCompletedSegments), so
@@ -276,10 +275,26 @@ func (l *internalLogWriterImpl) runAuditor() {
 		zap.Int("intervalSeconds", l.auditorMaxInterval),
 		zap.Bool("localStorageCompactionDisabled", localMode))
 
+	// The first tick is jittered so writers created together do not tick in lockstep; the
+	// ticker takes over at the full interval from there. See auditorFirstTickDelay.
+	firstTick := time.NewTimer(auditorFirstTickDelay(interval))
+	defer firstTick.Stop()
+	tickC := firstTick.C
+	var ticker *time.Ticker
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+
 	auditCycle := uint64(0)
 	for {
 		select {
-		case <-ticker.C:
+		case <-tickC:
+			if ticker == nil {
+				ticker = time.NewTicker(interval)
+				tickC = ticker.C
+			}
 			if l.maintenanceCtx.Err() != nil || !l.isWriterValid.Load() {
 				l.stopMaintenance()
 				return
@@ -346,6 +361,7 @@ func (l *internalLogWriterImpl) runAuditor() {
 				zap.Int("segmentsProcessed", cs.processed),
 				zap.Int("segmentsCompacted", cs.compacted),
 				zap.Int("segmentsFailed", cs.failed),
+				zap.Int("segmentsDeferred", cs.deferred),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))
 
 			// Clean up truncated segments (object-storage data + local files + tombstones).

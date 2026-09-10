@@ -459,3 +459,82 @@ func TestSweepOrphanedCleanupRecords(t *testing.T) {
 	assert.Equal(t, []int64{5, math.MaxInt64}, cm.sweepBounds)
 	assert.Equal(t, []int64{5, math.MaxInt64}, nm.sweepBoundsSnapshot())
 }
+
+// TestCompactCompletedSegments_BoundedPerCycle verifies one cycle compacts at most
+// maxCompactedPerCycle segments and reports the rest as deferred, so a backlog cannot swamp a
+// single cycle -- the exposure being a recovery stampede, where compaction has been failing, the
+// Completed set has grown, and every log tries to drain it the moment storage comes back.
+func TestCompactCompletedSegments_BoundedPerCycle(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+	// Every lookup fails: the pass still counts the segment as processed, which is what the
+	// bound is being measured against, and no segment handle is needed.
+	lh.On("GetRecoverableSegmentHandle", mock.Anything, mock.Anything).Return(nil, errors.New("boom"))
+
+	const total = maxCompactedPerCycle + 25
+	segs := map[int64]*meta.SegmentMeta{}
+	for i := int64(1); i <= total; i++ {
+		segs[i] = segMeta(i, proto.SegmentState_Completed)
+	}
+
+	st := compactCompletedSegments(context.Background(), lh, segs, false)
+	assert.Equal(t, maxCompactedPerCycle, st.processed)
+	assert.Equal(t, total-maxCompactedPerCycle, st.deferred)
+}
+
+// TestCompactCompletedSegments_OldestFirst verifies the bounded pass drains in ascending segment
+// order. Ranging a map is randomly ordered; unbounded that was harmless because every Completed
+// segment was visited, but under a bound it would let a segment be skipped cycle after cycle by
+// chance while its local data.log stayed on disk.
+func TestCompactCompletedSegments_OldestFirst(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+
+	var mu sync.Mutex
+	var seen []int64
+	lh.On("GetRecoverableSegmentHandle", mock.Anything, mock.Anything).
+		Return(nil, errors.New("boom")).
+		Run(func(args mock.Arguments) {
+			mu.Lock()
+			defer mu.Unlock()
+			seen = append(seen, args.Get(1).(int64))
+		})
+
+	// Insert high segment numbers first so a map-order pass would be unlikely to come out sorted.
+	segs := map[int64]*meta.SegmentMeta{}
+	for i := int64(maxCompactedPerCycle * 2); i >= 1; i-- {
+		segs[i] = segMeta(i, proto.SegmentState_Completed)
+	}
+
+	compactCompletedSegments(context.Background(), lh, segs, false)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, seen, maxCompactedPerCycle)
+	for i, segNo := range seen {
+		require.Equal(t, int64(i+1), segNo, "expected the oldest %d segments in order", maxCompactedPerCycle)
+	}
+}
+
+// TestAuditorFirstTickDelay covers the phase spreading that keeps writers created together from
+// ticking in lockstep, and the two properties the loop depends on: the delay never exceeds the
+// interval (so no first cycle is postponed relative to the unjittered ticker), and a non-positive
+// interval yields no delay at all.
+func TestAuditorFirstTickDelay(t *testing.T) {
+	const interval = time.Minute
+	buckets := map[int]int{}
+	for range 2000 {
+		d := auditorFirstTickDelay(interval)
+		require.GreaterOrEqual(t, d, time.Duration(0))
+		require.Less(t, d, interval, "the jittered first tick must not fire later than the plain ticker would")
+		buckets[int(d*8/interval)]++
+	}
+	// A fixed phase would put every sample in one bucket; spreading across the interval is the
+	// whole point of the change.
+	assert.Len(t, buckets, 8, "first-tick delay should spread across the interval, got %v", buckets)
+
+	assert.Zero(t, auditorFirstTickDelay(0))
+	assert.Zero(t, auditorFirstTickDelay(-time.Second))
+}

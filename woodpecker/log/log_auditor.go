@@ -20,6 +20,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand/v2"
+	"sort"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -42,11 +45,41 @@ import (
 // RPC fanouts. The remainder is picked up on subsequent cycles.
 const maxCompactedNotifyPerCycle = 64
 
+// maxCompactedPerCycle bounds how many Completed segments one auditor cycle compacts. The
+// remainder is picked up on subsequent cycles, mirroring maxCompactedNotifyPerCycle above.
+//
+// Compaction is the more expensive of the two passes by a wide margin -- a merge plus
+// object-storage uploads, against one etcd write -- so a backlog swamps a cycle harder here. The
+// exposure is worst exactly while recovering: whenever compaction has been failing (object storage
+// unwritable, wrong credentials, a version mismatch) Completed segments pile up, and the moment it
+// recovers every log tries to drain its whole backlog at once.
+const maxCompactedPerCycle = 64
+
+// auditorFirstTickDelay returns a random delay in [0, interval) for an auditor's first tick.
+//
+// Every log writer runs its own auditor on a fixed period whose phase is set by when the writer was
+// created, so anything that opens many writers at once -- a node restart, a WAL failover, a channel
+// rebalance -- aligns their tickers, and periodic tickers never drift back apart. At a few thousand
+// logs that is a few thousand auditors waking in the same millisecond every interval, each fanning
+// compaction RPCs at the same nodes. segmentRollingPolicy.maxInterval is a fixed period too, so
+// logs opened together also seal segments together and the two alignments compound: a synchronised
+// wave of segments enters Completed, and the next synchronised tick tries to compact all of them.
+//
+// Jittering only the first tick decorrelates the writers once, for the process lifetime, and the
+// delay is shorter than the interval the first tick used to wait, so no cycle is postponed.
+func auditorFirstTickDelay(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(interval)))
+}
+
 // compactStats summarizes one compactCompletedSegments pass for the auditor cycle log.
 type compactStats struct {
 	processed int
 	compacted int
 	failed    int
+	deferred  int // Completed segments left for a later cycle by maxCompactedPerCycle
 }
 
 // compactCompletedSegments compacts every Completed segment in the snapshot, sequentially by
@@ -64,22 +97,36 @@ func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map
 	if localMode {
 		return st
 	}
+	// Oldest first, then bounded. Ranging a map is randomly ordered, which was harmless while
+	// every Completed segment was visited each cycle; under a bound it would let a segment be
+	// skipped cycle after cycle by chance, holding its local data.log for as long as that lasts.
+	// Ascending segment number drains the oldest backlog first, which is also the data that has
+	// been occupying local disk the longest.
+	completed := make([]int64, 0, len(segs))
 	for _, seg := range segs {
+		if seg.Metadata.State == proto.SegmentState_Completed {
+			completed = append(completed, seg.Metadata.SegNo)
+		}
+	}
+	sort.Slice(completed, func(i, j int) bool { return completed[i] < completed[j] })
+	if len(completed) > maxCompactedPerCycle {
+		st.deferred = len(completed) - maxCompactedPerCycle
+		completed = completed[:maxCompactedPerCycle]
+	}
+
+	for _, segNo := range completed {
 		if ctx.Err() != nil {
 			break
 		}
-		if seg.Metadata.State != proto.SegmentState_Completed {
-			continue
-		}
 		st.processed++
-		recoverySegmentHandle, err := logHandle.GetRecoverableSegmentHandle(ctx, seg.Metadata.SegNo)
+		recoverySegmentHandle, err := logHandle.GetRecoverableSegmentHandle(ctx, segNo)
 		if err != nil {
-			logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(err))
+			logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("segId", segNo), zap.Error(err))
 			st.failed++
 			continue
 		}
 		if err := recoverySegmentHandle.Compact(ctx); err != nil {
-			logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(err))
+			logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("segId", segNo), zap.Error(err))
 			st.failed++
 			continue
 		}
@@ -90,7 +137,7 @@ func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map
 		logger.Ctx(ctx).Debug("Successfully compacted segment",
 			zap.String("logName", logHandle.GetName()),
 			zap.Int64("logId", logHandle.GetId()),
-			zap.Int64("segmentId", seg.Metadata.SegNo))
+			zap.Int64("segmentId", segNo))
 	}
 	return st
 }
