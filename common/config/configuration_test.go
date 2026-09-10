@@ -75,6 +75,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
+	assert.Equal(t, 300, config.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, 259200, config.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
@@ -92,6 +93,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 1800, config.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
+	assert.Equal(t, 1024, config.Woodpecker.Runtime.OpRegistry.Capacity)
+	assert.Equal(t, 30, config.Woodpecker.Runtime.OpRegistry.WarnAge.Seconds())
 	assert.Equal(t, "info", config.Log.Level)
 	assert.Equal(t, "text", config.Log.Format)
 	assert.True(t, config.Log.Stdout)
@@ -178,6 +181,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(32000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
+	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, 259200, defaultConfig.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
@@ -195,6 +199,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 1800, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
+	assert.Equal(t, 1024, defaultConfig.Woodpecker.Runtime.OpRegistry.Capacity)
+	assert.Equal(t, 30, defaultConfig.Woodpecker.Runtime.OpRegistry.WarnAge.Seconds())
 	assert.Equal(t, "info", defaultConfig.Log.Level)
 	assert.Equal(t, "text", defaultConfig.Log.Format)
 	assert.True(t, defaultConfig.Log.Stdout)

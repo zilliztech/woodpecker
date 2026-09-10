@@ -29,7 +29,7 @@ woodpecker:
       maxBatchEntries: 1000 # Client-side group commit: max consecutive appends coalesced into one AddEntries request. Opportunistic (only batches already-queued ops, adds no latency at low load). Set to 1 to disable batching.
       maxBatchBytes: 2000000 # Max total payload (bytes) of a coalesced batch, default 2MB; whichever of maxBatchEntries/maxBatchBytes is hit first bounds the batch. Ignored when maxBatchEntries <= 1.
     segmentRollingPolicy:
-      maxSize: 256000000 # Maximum segment size in bytes, default is 2GB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
+      maxSize: 256000000 # Maximum segment size in bytes, default is 256MB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
       maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
@@ -103,6 +103,7 @@ woodpecker:
       maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4
       maxParallelReads: 8 # Maximum number of parallel read threads for compaction, default is 8
+      timeout: 300 # Deadline for compacting one segment in seconds, default is 300s. Covers the whole read/merge/upload pass; on expiry the compaction is aborted and the auditor retries it on a later cycle.
     segmentReadPolicy:
       maxBatchSize: 2000000 # Maximum size of a batch in bytes, default is 2MB
       maxFetchThreads: 32 # Maximum number of threads to fetch data, default is 32
@@ -145,6 +146,12 @@ woodpecker:
     # Valid values: [default, minio, local, service]
     type: minio
     rootPath: /var/lib/woodpecker # Root path to the log data files.
+  # Configuration of Woodpecker runtime subsystems.
+  runtime:
+    # In-flight operation registry backing `wp ops stats` and the operation metrics.
+    opRegistry:
+      capacity: 1024 # Maximum number of in-flight operations tracked, default is 1024
+      warnAge: 30 # Seconds after which a still-running operation is reported as stalled, default is 30s
 
 # Configures the system log output.
 log:
