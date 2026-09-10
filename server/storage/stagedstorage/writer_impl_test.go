@@ -1050,9 +1050,9 @@ func TestStagedFileWriter_ValidateLACAlignment_LACExceedsData(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- readBlockDataFromLocalFile ---
+// --- readMergeTaskBlocks ---
 
-func TestStagedFileWriter_ReadBlockDataFromLocalFile_Success(t *testing.T) {
+func TestStagedFileWriter_ReadMergeTaskBlocks_Success(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
 	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
@@ -1073,13 +1073,23 @@ func TestStagedFileWriter_ReadBlockDataFromLocalFile_Success(t *testing.T) {
 
 	require.NotEmpty(t, writer.blockIndexes)
 
-	result := writer.readBlockDataFromLocalFile(context.Background(), writer.blockIndexes[0])
-	assert.Nil(t, result.error)
-	assert.NotEmpty(t, result.blockData)
-	assert.Equal(t, writer.blockIndexes[0], result.blockIndex)
+	task := &mergeBlockTask{blocks: writer.blockIndexes}
+	views, err := writer.readMergeTaskBlocks(context.Background(), task)
+	require.NoError(t, err)
+	require.Len(t, views, len(writer.blockIndexes))
+
+	// Every view must be exactly the bytes the index describes, which is what the previous
+	// one-ReadAt-per-block path returned. Compare against an independent read of the file.
+	raw, err := os.ReadFile(writer.segmentFilePath)
+	require.NoError(t, err)
+	for i, blockIndex := range writer.blockIndexes {
+		assert.Len(t, views[i], int(blockIndex.BlockSize))
+		expected := raw[blockIndex.StartOffset : blockIndex.StartOffset+int64(blockIndex.BlockSize)]
+		assert.Equal(t, expected, views[i], "block %d view differs from the file contents", i)
+	}
 }
 
-func TestStagedFileWriter_ReadBlockDataFromLocalFile_FileNotFound(t *testing.T) {
+func TestStagedFileWriter_ReadMergeTaskBlocks_FileNotFound(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
 	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
@@ -1089,15 +1099,26 @@ func TestStagedFileWriter_ReadBlockDataFromLocalFile_FileNotFound(t *testing.T) 
 	// Remove the segment file to cause read failure
 	os.Remove(writer.segmentFilePath)
 
-	blockIndex := &codec.IndexRecord{
+	task := &mergeBlockTask{blocks: []*codec.IndexRecord{{
 		BlockNumber:  0,
 		StartOffset:  0,
 		BlockSize:    100,
 		FirstEntryID: 0,
 		LastEntryID:  9,
-	}
-	result := writer.readBlockDataFromLocalFile(context.Background(), blockIndex)
-	assert.NotNil(t, result.error)
+	}}}
+	_, err = writer.readMergeTaskBlocks(context.Background(), task)
+	assert.Error(t, err)
+}
+
+// TestCompactedBlockHeaderWidthsAreFixed pins the assumption processMergeTask relies on when it
+// reserves space for the leading records before merging the payload into the same buffer: both
+// record types encode to a fixed width. A codec change that broke this would otherwise leave a
+// gap of zero bytes between the headers and the data.
+func TestCompactedBlockHeaderWidthsAreFixed(t *testing.T) {
+	assert.Equal(t, codec.RecordHeaderSize+codec.HeaderRecordSize,
+		len(codec.EncodeRecord(&codec.HeaderRecord{Version: codec.FormatVersion, FirstEntryID: 7})))
+	assert.Equal(t, codec.RecordHeaderSize+codec.BlockHeaderRecordSize,
+		len(codec.EncodeRecord(&codec.BlockHeaderRecord{BlockNumber: 3, FirstEntryID: 1, LastEntryID: 9, BlockLength: 42, BlockCrc: 1234})))
 }
 
 // --- determineIfNeedRecoveryMode ---

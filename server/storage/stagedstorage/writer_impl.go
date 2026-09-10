@@ -1599,13 +1599,6 @@ type mergeBlockTask struct {
 	nextEntryID int64                // Next entry ID after this merge block
 }
 
-// blockReadResult represents the result of reading a block from local file
-type blockReadResult struct {
-	blockIndex *codec.IndexRecord
-	blockData  []byte
-	error      error
-}
-
 // mergedBlockUploadResult represents the result of uploading a merged block
 type mergedBlockUploadResult struct {
 	blockIndex *codec.IndexRecord
@@ -1748,28 +1741,14 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		zap.Int64("mergedBlockID", mergedBlockID),
 		zap.Int("originalBlocks", len(task.blocks)))
 
-	// Create pool for concurrent block reading
-	maxConcurrentReads := w.compactPolicyConfig.MaxParallelReads
-	if maxConcurrentReads <= 0 {
-		maxConcurrentReads = min(8, len(task.blocks)) // Default to min(8, block count)
-	}
-
-	readPool := conc.NewPool[*blockReadResult](maxConcurrentReads, conc.WithPreAlloc(true))
-	defer readPool.Release()
-
-	// Submit all block read tasks to the pool
-	var readFutures []*conc.Future[*blockReadResult]
-	for _, blockIndex := range task.blocks {
-		if ctx.Err() != nil {
-			return &mergedBlockUploadResult{error: ctx.Err()}
-		}
-		// Capture variable for closure
-		blockIndexCopy := blockIndex
-
-		future := readPool.Submit(func() (*blockReadResult, error) {
-			return w.readBlockDataFromLocalFile(ctx, blockIndexCopy), nil
-		})
-		readFutures = append(readFutures, future)
+	// A merge task is planned from a consecutive run of blockIndexes, so its blocks occupy one
+	// contiguous range of the local file. Read that range once and view each block inside it,
+	// rather than issuing one ReadAt per block through a pool: the blocks are adjacent, the data
+	// was written by this same writer moments ago and is normally still in page cache, so the
+	// parallelism only fragmented a sequential read.
+	blockData, readErr := w.readMergeTaskBlocks(ctx, task)
+	if readErr != nil {
+		return &mergedBlockUploadResult{error: readErr}
 	}
 
 	// Collect block data and extract only DataRecords from each block
@@ -1781,21 +1760,15 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	firstEntryID := int64(-1)
 	lastEntryID := int64(-1)
 
-	for _, future := range readFutures {
+	for i, blockIndex := range task.blocks {
 		if ctx.Err() != nil {
 			return &mergedBlockUploadResult{error: ctx.Err()}
 		}
-		result := future.Value()
-		if result.error != nil {
-			return &mergedBlockUploadResult{
-				error: fmt.Errorf("failed to read block data: %w", result.error),
-			}
-		}
 
-		dataRecords, blockLastEntryID, extractErr := w.extractCompactedDataRecords(result.blockIndex, result.blockData, expectedLastEntryId)
+		dataRecords, blockLastEntryID, extractErr := w.extractCompactedDataRecords(blockIndex, blockData[i], expectedLastEntryId)
 		if extractErr != nil {
 			return &mergedBlockUploadResult{
-				error: fmt.Errorf("failed to extract data records from block %d: %w", result.blockIndex.BlockNumber, extractErr),
+				error: fmt.Errorf("failed to extract data records from block %d: %w", blockIndex.BlockNumber, extractErr),
 			}
 		}
 		if len(dataRecords) == 0 {
@@ -1803,13 +1776,13 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		}
 
 		allBlocks = append(allBlocks, extractedBlockData{
-			blockIndex:  result.blockIndex,
+			blockIndex:  blockIndex,
 			dataRecords: dataRecords,
 		})
 
 		// Track entry ID range
-		if firstEntryID == -1 || result.blockIndex.FirstEntryID < firstEntryID {
-			firstEntryID = result.blockIndex.FirstEntryID
+		if firstEntryID == -1 || blockIndex.FirstEntryID < firstEntryID {
+			firstEntryID = blockIndex.FirstEntryID
 		}
 		if lastEntryID == -1 || blockLastEntryID > lastEntryID {
 			lastEntryID = blockLastEntryID
@@ -1824,27 +1797,40 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		return allBlocks[i].blockIndex.BlockNumber < allBlocks[j].blockIndex.BlockNumber
 	})
 
-	// Merge all data records
-	var mergedDataRecords []byte
-	for _, blk := range allBlocks {
-		mergedDataRecords = append(mergedDataRecords, blk.dataRecords...)
-	}
-
 	// Build the complete merged block:
 	// Format: [HeaderRecord (if first)] + [BlockHeaderRecord] + [DataRecords]
 	// This matches objectstorage compaction format — one BlockHeader per merged block.
-	blockLength := uint32(len(mergedDataRecords))
-	blockCrc := crc32.ChecksumIEEE(mergedDataRecords)
+	//
+	// Both leading records are fixed width, so their space is reserved up front and the data
+	// records are merged straight into the same buffer. That keeps one copy of the payload
+	// rather than merging into an intermediate slice and concatenating again, while still
+	// handing PutObject a seekable reader so the object-storage client can retry a failed
+	// transfer without re-running the whole merge.
+	prefixLen := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+	if mergedBlockID == 0 {
+		prefixLen += codec.RecordHeaderSize + codec.HeaderRecordSize
+	}
+	dataLen := 0
+	for _, blk := range allBlocks {
+		dataLen += len(blk.dataRecords)
+	}
+
+	completeBlockData := make([]byte, prefixLen+dataLen)
+	off := prefixLen
+	for _, blk := range allBlocks {
+		off += copy(completeBlockData[off:], blk.dataRecords)
+	}
+	mergedDataRecords := completeBlockData[prefixLen:]
 
 	blockHeaderRecord := &codec.BlockHeaderRecord{
 		BlockNumber:  int32(mergedBlockID),
 		FirstEntryID: firstEntryID,
 		LastEntryID:  lastEntryID,
-		BlockLength:  blockLength,
-		BlockCrc:     blockCrc,
+		BlockLength:  uint32(len(mergedDataRecords)),
+		BlockCrc:     crc32.ChecksumIEEE(mergedDataRecords),
 	}
 
-	var completeBlockData []byte
+	prefix := 0
 	if mergedBlockID == 0 {
 		// First merged block: prepend HeaderRecord with compacted flag, preserving existing flags
 		headerRecord := &codec.HeaderRecord{
@@ -1852,10 +1838,16 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 			Flags:        codec.SetCompacted(w.recoveredFooter.Flags),
 			FirstEntryID: firstEntryID,
 		}
-		completeBlockData = append(completeBlockData, codec.EncodeRecord(headerRecord)...)
+		prefix += copy(completeBlockData[prefix:], codec.EncodeRecord(headerRecord))
 	}
-	completeBlockData = append(completeBlockData, codec.EncodeRecord(blockHeaderRecord)...)
-	completeBlockData = append(completeBlockData, mergedDataRecords...)
+	prefix += copy(completeBlockData[prefix:], codec.EncodeRecord(blockHeaderRecord))
+	if prefix != prefixLen {
+		// The reserved width no longer matches what the codec emits; writing anyway would leave
+		// a gap of zero bytes between the headers and the payload.
+		return &mergedBlockUploadResult{
+			error: fmt.Errorf("merged block %d header width mismatch: reserved %d, encoded %d", mergedBlockID, prefixLen, prefix),
+		}
+	}
 
 	// Create block key for upload
 	blockKey := w.getCompactedBlockKey(mergedBlockID)
@@ -1991,36 +1983,48 @@ func strictDataRecordPrefix(dataRecords []byte, recordsToKeep int, requireEOF bo
 	return dataRecords[:offset], recordsToKeep, nil
 }
 
-// readBlockDataFromLocalFile reads data for a specific block from the local file
-func (w *StagedFileWriter) readBlockDataFromLocalFile(ctx context.Context, blockIndex *codec.IndexRecord) *blockReadResult {
-	_, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readBlockDataFromLocalFile")
+// readMergeTaskBlocks reads the byte range spanned by a merge task's blocks in a single ReadAt and
+// returns a view of each block inside that buffer, in task.blocks order.
+//
+// planMergeBlockTasks groups a consecutive run of blockIndexes, so the range is contiguous; the
+// span is nonetheless derived from the blocks themselves, so were a gap ever to appear it would
+// only cost a few extra bytes read and would not affect what each view contains.
+func (w *StagedFileWriter) readMergeTaskBlocks(ctx context.Context, task *mergeBlockTask) ([][]byte, error) {
+	_, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readMergeTaskBlocks")
 	defer sp.End()
 
-	// Open local file for reading
+	if len(task.blocks) == 0 {
+		return nil, nil
+	}
+
+	spanStart := task.blocks[0].StartOffset
+	spanEnd := spanStart
+	for _, blockIndex := range task.blocks {
+		if blockIndex.StartOffset < spanStart {
+			spanStart = blockIndex.StartOffset
+		}
+		if end := blockIndex.StartOffset + int64(blockIndex.BlockSize); end > spanEnd {
+			spanEnd = end
+		}
+	}
+
 	file, err := os.Open(w.segmentFilePath)
 	if err != nil {
-		return &blockReadResult{
-			blockIndex: blockIndex,
-			error:      fmt.Errorf("failed to open local file: %w", err),
-		}
+		return nil, fmt.Errorf("failed to open local file: %w", err)
 	}
 	defer file.Close()
 
-	// Read block data from file
-	blockData := make([]byte, blockIndex.BlockSize)
-	_, err = file.ReadAt(blockData, blockIndex.StartOffset)
-	if err != nil {
-		return &blockReadResult{
-			blockIndex: blockIndex,
-			error:      fmt.Errorf("failed to read block data: %w", err),
-		}
+	span := make([]byte, spanEnd-spanStart)
+	if _, err := file.ReadAt(span, spanStart); err != nil {
+		return nil, fmt.Errorf("failed to read block data: %w", err)
 	}
 
-	return &blockReadResult{
-		blockIndex: blockIndex,
-		blockData:  blockData,
-		error:      nil,
+	views := make([][]byte, len(task.blocks))
+	for i, blockIndex := range task.blocks {
+		offset := blockIndex.StartOffset - spanStart
+		views[i] = span[offset : offset+int64(blockIndex.BlockSize)]
 	}
+	return views, nil
 }
 
 // uploadCompactedFooter creates and uploads the footer for compacted segment
