@@ -251,7 +251,7 @@ func TestCompactCompletedSegments_CountsAndSkips(t *testing.T) {
 		2: segMeta(2, proto.SegmentState_Sealed),    // ignored by this pass
 		3: segMeta(3, proto.SegmentState_Truncated), // ignored by this pass
 	}
-	st := compactCompletedSegments(context.Background(), lh, segs)
+	st := compactCompletedSegments(context.Background(), lh, segs, false)
 	require.Equal(t, 1, st.processed)
 	assert.Equal(t, 0, st.compacted)
 	assert.Equal(t, 1, st.failed)
@@ -264,7 +264,25 @@ func TestCompactCompletedSegments_CanceledWriterDoesNotStartCompaction(t *testin
 
 	st := compactCompletedSegments(ctx, lh, map[int64]*meta.SegmentMeta{
 		1: segMeta(1, proto.SegmentState_Completed),
-	})
+	}, false)
+
+	assert.Equal(t, compactStats{}, st)
+	lh.AssertNotCalled(t, "GetRecoverableSegmentHandle", mock.Anything, mock.Anything)
+}
+
+// TestCompactCompletedSegments_LocalModeSkipsPass verifies the compaction pass does no per-segment
+// work on local storage: Compact() is a no-op there that never advances a segment out of Completed,
+// so running the pass would re-walk the same set every auditor cycle -- taking the log handle's
+// write lock and emitting a log line per segment -- forever.
+func TestCompactCompletedSegments_LocalModeSkipsPass(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+
+	st := compactCompletedSegments(context.Background(), lh, map[int64]*meta.SegmentMeta{
+		1: segMeta(1, proto.SegmentState_Completed),
+		2: segMeta(2, proto.SegmentState_Completed),
+	}, true)
 
 	assert.Equal(t, compactStats{}, st)
 	lh.AssertNotCalled(t, "GetRecoverableSegmentHandle", mock.Anything, mock.Anything)
