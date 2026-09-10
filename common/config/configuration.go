@@ -196,6 +196,24 @@ type SegmentCompactionPolicy struct {
 	Timeout            DurationSeconds `yaml:"timeout"`
 }
 
+// SyncSchedulerConfig stores the node-wide staged-storage sync scheduler configuration.
+type SyncSchedulerConfig struct {
+	// MaxWorkers is the number of workers in the node's shared flush pool, as a plain count.
+	//
+	// Each worker blocks in fdatasync while a flush is in flight, so this bounds how many
+	// concurrent syncs the node can have outstanding, not how much CPU it uses -- Go hands the
+	// P back for the duration of a blocking syscall, so a worker parked in fdatasync costs an
+	// OS thread rather than a core. Sizing it by CPU count therefore has no mechanical basis,
+	// and reading the host's core count (rather than the cgroup limit) made the effective value
+	// depend on which machine a pod happened to land on.
+	//
+	// Tune it from the volume's IOPS budget: workers ~= target IOPS x fsync latency. Past the
+	// point where the device saturates, more workers buy queueing rather than throughput, and
+	// shrink the per-block batching that absorbs load, so raise it toward the budget and not
+	// beyond.
+	MaxWorkers int `yaml:"maxWorkers"`
+}
+
 // RetentionPolicyConfig stores the data retention policy configuration.
 type RetentionPolicyConfig struct {
 	TTL int `yaml:"ttl"` // Time to live for truncated segments before eligible for GC
@@ -344,6 +362,7 @@ type MinioConfig struct {
 type LogstoreConfig struct {
 	SegmentSyncPolicy       SegmentSyncPolicyConfig      `yaml:"segmentSyncPolicy"`
 	SegmentCompactionPolicy SegmentCompactionPolicy      `yaml:"segmentCompactionPolicy"`
+	SyncScheduler           SyncSchedulerConfig          `yaml:"syncScheduler"`
 	SegmentReadPolicy       SegmentReadPolicyConfig      `yaml:"segmentReadPolicy"`
 	RetentionPolicy         RetentionPolicyConfig        `yaml:"retentionPolicy"`
 	FencePolicy             FencePolicyConfig            `yaml:"fencePolicy"`
@@ -800,6 +819,9 @@ func (c *Configuration) validateLogstoreConfig() error {
 	}
 
 	// Validate SegmentCompactionPolicy
+	if logstore.SyncScheduler.MaxWorkers <= 0 {
+		return fmt.Errorf("sync scheduler max workers must be positive, got %d", logstore.SyncScheduler.MaxWorkers)
+	}
 	if logstore.SegmentCompactionPolicy.MaxBytes <= 0 {
 		return fmt.Errorf("segment compaction policy max bytes must be positive, got %d", logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	}
@@ -933,6 +955,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				RetryInterval:              DurationMilliseconds{Duration: Duration{duration: 2000 * 1000000}}, // 2000ms
 				MaxFlushSize:               ByteSize(16000000),
 				MaxFlushThreads:            8,
+			},
+			SyncScheduler: SyncSchedulerConfig{
+				MaxWorkers: 32,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
 				MaxBytes:           ByteSize(32000000),

@@ -4,12 +4,12 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,7 +128,7 @@ func BenchmarkSyncSchedulerJobDispatchLatency(b *testing.B) {
 	for _, jobs := range []int{1_000, 10_000, 100_000} {
 		b.Run(fmt.Sprintf("jobs_%d", jobs), func(b *testing.B) {
 			b.ReportAllocs()
-			scheduler := NewSyncScheduler(runtime.NumCPU())
+			scheduler := NewSyncScheduler(defaultSyncSchedulerWorkers)
 			defer scheduler.Close()
 
 			latencies := make(chan time.Duration, jobs)
@@ -172,7 +172,7 @@ func BenchmarkSyncSchedulerDelayedCheckLatency(b *testing.B) {
 	for _, checks := range []int{1_000, 10_000, 100_000} {
 		b.Run(fmt.Sprintf("checks_%d", checks), func(b *testing.B) {
 			b.ReportAllocs()
-			scheduler := NewSyncScheduler(runtime.NumCPU())
+			scheduler := NewSyncScheduler(defaultSyncSchedulerWorkers)
 			defer scheduler.Close()
 
 			delay := 10 * time.Millisecond
@@ -207,4 +207,44 @@ func BenchmarkSyncSchedulerDelayedCheckLatency(b *testing.B) {
 			b.ReportMetric(float64(maxLateNs)/1e3, "max_late_us/check")
 		})
 	}
+}
+
+// TestNewSyncScheduler_WorkerCountIsExplicit verifies the pool size comes from the caller, and
+// that a non-positive value falls back to the documented default rather than to the host's core
+// count. Deriving it from runtime.NumCPU() read the machine's cores rather than the pod's cgroup
+// limit, so identically specced pods ended up with pools that differed by a factor of eight
+// depending on where they were scheduled.
+func TestNewSyncScheduler_WorkerCountIsExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   int
+		want int
+	}{
+		{"explicit count is honoured", 5, 5},
+		{"one is honoured", 1, 1},
+		{"zero falls back to the default", 0, defaultSyncSchedulerWorkers},
+		{"negative falls back to the default", -3, defaultSyncSchedulerWorkers},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSyncScheduler(tc.in)
+			defer s.Close()
+			assert.Equal(t, tc.want, s.Capacity())
+		})
+	}
+}
+
+// TestNewSyncScheduler_QueueDepthIsIndependentOfWorkers verifies the channel depth no longer
+// scales with the pool size. The queues hold pending work, which is bounded by the number of
+// writers rather than by how many are being serviced, so tying a multi-megabyte preallocation to
+// the worker count sized it by the wrong quantity.
+func TestNewSyncScheduler_QueueDepthIsIndependentOfWorkers(t *testing.T) {
+	small := NewSyncScheduler(1)
+	defer small.Close()
+	large := NewSyncScheduler(64)
+	defer large.Close()
+
+	assert.Equal(t, cap(small.scheduleCh), cap(large.scheduleCh))
+	assert.Equal(t, cap(small.jobCh), cap(large.jobCh))
+	assert.Equal(t, syncSchedulerQueueSize, cap(small.scheduleCh))
+	assert.Equal(t, syncSchedulerQueueSize, cap(small.jobCh))
 }

@@ -1624,3 +1624,23 @@ func TestLogStore_EvictSegmentWriter_AbsentKeyIsNoop(t *testing.T) {
 	store.spMu.RUnlock()
 	assert.False(t, logExists, "EvictSegmentWriter must not create a processor for an absent key")
 }
+
+// TestNewLogStore_SyncSchedulerUsesConfiguredWorkers verifies the node's shared flush pool is
+// sized from configuration rather than from the host's core count. Reading runtime.NumCPU() gave
+// the machine's cores, not the pod's cgroup limit, so identically specced pods ended up with pools
+// differing by a factor of eight depending on where they were scheduled -- and raising the pod's
+// CPU limit did not change it.
+func TestNewLogStore_SyncSchedulerUsesConfiguredWorkers(t *testing.T) {
+	for _, workers := range []int{1, 7, 48} {
+		cfg, err := config.NewConfiguration()
+		require.NoError(t, err)
+		cfg.Woodpecker.Storage.Type = "service"
+		cfg.Woodpecker.Storage.RootPath = t.TempDir()
+		cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers = workers
+
+		ls := NewLogStore(context.Background(), cfg, nil).(*logStore)
+		assert.Equal(t, workers, ls.syncScheduler.Capacity(),
+			"the shared flush pool should come from logstore.syncScheduler.maxWorkers")
+		ls.syncScheduler.Close()
+	}
+}

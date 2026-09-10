@@ -23,7 +23,6 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -142,7 +141,7 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 		ctx:               ctx,
 		cancel:            cancel,
 		storageClient:     storageClient,
-		syncScheduler:     stagedstorage.NewSyncScheduler(runtime.NumCPU() * 2),
+		syncScheduler:     stagedstorage.NewSyncScheduler(cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers),
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
 		deletingLogs:      make(map[string]struct{}),
 		deletingInstances: make(map[string]struct{}),
