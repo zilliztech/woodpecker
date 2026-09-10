@@ -52,8 +52,18 @@ type compactStats struct {
 // compactCompletedSegments compacts every Completed segment in the snapshot, sequentially by
 // design (to keep each log's background work light, since a cluster may host many logs). A
 // per-segment failure is logged and skipped; writer-lifecycle cancellation stops the pass.
-func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map[int64]*meta.SegmentMeta) compactStats {
+//
+// Gated on localMode: on local storage a segment is already a single file, so SegmentHandle.Compact
+// is a no-op that returns without advancing the segment out of Completed. Running the pass anyway
+// re-walks the same Completed set every cycle and, per segment, takes the log handle's write lock
+// (GetRecoverableSegmentHandle), opens a tracing span and emits handle metrics -- all to do nothing.
+// The set only grows with uptime, so the per-cycle cost grows with it. This mirrors the serviceMode
+// gate on distributeCompactedMarks. The mode is reported once in the "Log auditor started" line.
+func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map[int64]*meta.SegmentMeta, localMode bool) compactStats {
 	var st compactStats
+	if localMode {
+		return st
+	}
 	for _, seg := range segs {
 		if ctx.Err() != nil {
 			break
@@ -74,7 +84,10 @@ func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map
 			continue
 		}
 		st.compacted++
-		logger.Ctx(ctx).Info("Successfully compacted segment",
+		// Debug, not Info: the auditor's cycle summary already reports segmentsProcessed /
+		// segmentsCompacted / segmentsFailed, so an Info line per segment only duplicates it
+		// at O(segments) volume.
+		logger.Ctx(ctx).Debug("Successfully compacted segment",
 			zap.String("logName", logHandle.GetName()),
 			zap.Int64("logId", logHandle.GetId()),
 			zap.Int64("segmentId", seg.Metadata.SegNo))

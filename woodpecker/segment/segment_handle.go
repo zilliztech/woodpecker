@@ -1915,7 +1915,11 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	defer sp.End()
 	s.updateAccessTime()
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() {
-		logger.Ctx(ctx).Info("Local storage detected, skipping compaction (not yet implemented)",
+		// Defensive: the auditor already skips the whole compaction pass on local storage
+		// (see compactCompletedSegments), so reaching here means a caller bypassed that gate.
+		// Debug, not Info -- at Info this fires once per Completed segment per auditor cycle,
+		// which is O(segments) lines every cycle for work that does nothing.
+		logger.Ctx(ctx).Debug("Local storage detected, skipping compaction (not yet implemented)",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId))
