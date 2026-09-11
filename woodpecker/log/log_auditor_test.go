@@ -518,23 +518,50 @@ func TestCompactCompletedSegments_OldestFirst(t *testing.T) {
 	}
 }
 
-// TestAuditorFirstTickDelay covers the phase spreading that keeps writers created together from
-// ticking in lockstep, and the two properties the loop depends on: the delay never exceeds the
-// interval (so no first cycle is postponed relative to the unjittered ticker), and a non-positive
-// interval yields no delay at all.
-func TestAuditorFirstTickDelay(t *testing.T) {
-	const interval = time.Minute
-	buckets := map[int]int{}
-	for range 2000 {
-		d := auditorFirstTickDelay(interval)
-		require.GreaterOrEqual(t, d, time.Duration(0))
-		require.Less(t, d, interval, "the jittered first tick must not fire later than the plain ticker would")
-		buckets[int(d*8/interval)]++
-	}
-	// A fixed phase would put every sample in one bucket; spreading across the interval is the
-	// whole point of the change.
-	assert.Len(t, buckets, 8, "first-tick delay should spread across the interval, got %v", buckets)
+// TestWaitAuditorStartJitter covers the phase spreading that keeps writers created together from
+// ticking in lockstep, and the two shutdown signals the auditor loop itself watches: a writer
+// closed during the wait must not be held up by it.
+func TestWaitAuditorStartJitter(t *testing.T) {
+	closed := make(chan struct{})
 
-	assert.Zero(t, auditorFirstTickDelay(0))
-	assert.Zero(t, auditorFirstTickDelay(-time.Second))
+	t.Run("spreads the start across the interval", func(t *testing.T) {
+		const interval = 50 * time.Millisecond
+		buckets := map[int]int{}
+		for range 60 {
+			start := time.Now()
+			require.True(t, waitAuditorStartJitter(context.Background(), closed, interval))
+			waited := time.Since(start)
+			// Generous upper bound: the delay is under one interval by construction, the slack
+			// only absorbs scheduler wake-up latency on a loaded CI machine.
+			require.Less(t, waited, interval+100*time.Millisecond)
+			if b := int(waited * 4 / interval); b < 4 {
+				buckets[b]++ // 4 quarters of the interval
+			}
+		}
+		// A fixed phase would land every sample in one bucket; spreading is the whole point.
+		assert.GreaterOrEqual(t, len(buckets), 3, "start should spread across the interval, got %v", buckets)
+	})
+
+	t.Run("returns immediately when the writer is closing", func(t *testing.T) {
+		writerClose := make(chan struct{}, 1)
+		writerClose <- struct{}{}
+		start := time.Now()
+		assert.False(t, waitAuditorStartJitter(context.Background(), writerClose, time.Hour))
+		assert.Less(t, time.Since(start), time.Second)
+	})
+
+	t.Run("returns immediately when the writer is invalidated", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		start := time.Now()
+		assert.False(t, waitAuditorStartJitter(ctx, closed, time.Hour))
+		assert.Less(t, time.Since(start), time.Second)
+	})
+
+	t.Run("no wait when the interval is not positive", func(t *testing.T) {
+		start := time.Now()
+		assert.True(t, waitAuditorStartJitter(context.Background(), closed, 0))
+		assert.True(t, waitAuditorStartJitter(context.Background(), closed, -time.Second))
+		assert.Less(t, time.Since(start), 50*time.Millisecond)
+	})
 }

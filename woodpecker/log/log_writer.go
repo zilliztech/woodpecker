@@ -352,26 +352,18 @@ func (l *logWriterImpl) runAuditor() {
 		zap.Int("intervalSeconds", l.auditorMaxInterval),
 		zap.Bool("localStorageCompactionDisabled", localMode))
 
-	// The first tick is jittered so writers created together do not tick in lockstep; the
-	// ticker takes over at the full interval from there. See auditorFirstTickDelay.
-	firstTick := time.NewTimer(auditorFirstTickDelay(interval))
-	defer firstTick.Stop()
-	tickC := firstTick.C
-	var ticker *time.Ticker
-	defer func() {
-		if ticker != nil {
-			ticker.Stop()
-		}
-	}()
+	// Spread the start so writers created together do not tick in lockstep.
+	if !waitAuditorStartJitter(l.maintenanceCtx, l.writerClose, interval) {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	auditCycle := uint64(0)
 	for {
 		select {
-		case <-tickC:
-			if ticker == nil {
-				ticker = time.NewTicker(interval)
-				tickC = ticker.C
-			}
+		case <-ticker.C:
 			if l.maintenanceCtx.Err() != nil || l.sessionLock == nil || !l.sessionLock.IsValid() {
 				l.stopMaintenance()
 				return

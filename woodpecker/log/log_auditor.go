@@ -55,7 +55,8 @@ const maxCompactedNotifyPerCycle = 64
 // recovers every log tries to drain its whole backlog at once.
 const maxCompactedPerCycle = 64
 
-// auditorFirstTickDelay returns a random delay in [0, interval) for an auditor's first tick.
+// waitAuditorStartJitter delays an auditor's start by a random fraction of its interval, returning
+// false if the writer shut down while waiting.
 //
 // Every log writer runs its own auditor on a fixed period whose phase is set by when the writer was
 // created, so anything that opens many writers at once -- a node restart, a WAL failover, a channel
@@ -65,13 +66,24 @@ const maxCompactedPerCycle = 64
 // logs opened together also seal segments together and the two alignments compound: a synchronised
 // wave of segments enters Completed, and the next synchronised tick tries to compact all of them.
 //
-// Jittering only the first tick decorrelates the writers once, for the process lifetime, and the
-// delay is shorter than the interval the first tick used to wait, so no cycle is postponed.
-func auditorFirstTickDelay(interval time.Duration) time.Duration {
+// Spreading the start decorrelates the writers once, for the process lifetime. It postpones the
+// first cycle by up to one interval, which is of no consequence for background maintenance on a
+// writer that has only just opened. The wait watches the same two shutdown signals as the auditor
+// loop, so a writer closed during it is not held up.
+func waitAuditorStartJitter(ctx context.Context, writerClose <-chan struct{}, interval time.Duration) bool {
 	if interval <= 0 {
-		return 0
+		return true
 	}
-	return time.Duration(rand.Int64N(int64(interval)))
+	timer := time.NewTimer(time.Duration(rand.Int64N(int64(interval))))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-writerClose:
+		return false
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // compactStats summarizes one compactCompletedSegments pass for the auditor cycle log.

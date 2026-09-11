@@ -1621,7 +1621,9 @@ func TestInternalLogWriter_RunAuditor_FullCycle_NoSegments(t *testing.T) {
 	go w.runAuditor()
 
 	// Wait for at least one tick
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 
 	// Stop auditor
 	w.writerClose <- struct{}{}
@@ -1644,7 +1646,9 @@ func TestInternalLogWriter_RunAuditor_CheckTruncatedError(t *testing.T) {
 	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(werr.ErrInternalError)
 
 	go w.runAuditor()
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 	w.writerClose <- struct{}{}
 
 	mockLogHandle.AssertCalled(t, "CheckAndSetSegmentTruncatedIfNeed", mock.Anything)
@@ -1665,7 +1669,9 @@ func TestInternalLogWriter_RunAuditor_GetSegmentsError(t *testing.T) {
 	mockLogHandle.On("GetSegments", mock.Anything).Return(nil, werr.ErrInternalError)
 
 	go w.runAuditor()
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 	w.writerClose <- struct{}{}
 
 	mockLogHandle.AssertCalled(t, "GetSegments", mock.Anything)
@@ -1692,7 +1698,9 @@ func TestInternalLogWriter_RunAuditor_CompactCompletedSegments(t *testing.T) {
 	mockSegHandle.EXPECT().Compact(mock.Anything).Return(nil)
 
 	go w.runAuditor()
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 	w.writerClose <- struct{}{}
 
 	mockLogHandle.AssertCalled(t, "GetRecoverableSegmentHandle", mock.Anything, int64(1))
@@ -1718,7 +1726,9 @@ func TestInternalLogWriter_RunAuditor_CompactError(t *testing.T) {
 	mockSegHandle.EXPECT().Compact(mock.Anything).Return(werr.ErrInternalError)
 
 	go w.runAuditor()
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 	w.writerClose <- struct{}{}
 
 	mockSegHandle.AssertCalled(t, "Compact", mock.Anything)
@@ -1741,7 +1751,9 @@ func TestInternalLogWriter_RunAuditor_GetRecoverableError(t *testing.T) {
 	mockLogHandle.On("GetRecoverableSegmentHandle", mock.Anything, int64(1)).Return(nil, werr.ErrSegmentNotFound)
 
 	go w.runAuditor()
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 	w.writerClose <- struct{}{}
 
 	mockLogHandle.AssertCalled(t, "GetRecoverableSegmentHandle", mock.Anything, int64(1))
@@ -1773,7 +1785,9 @@ func TestInternalLogWriter_RunAuditor_TruncatedSegmentsCleanup(t *testing.T) {
 	cleanupMgr.On("CleanupSegment", mock.Anything, "test-log", int64(1), int64(1)).Return(nil)
 
 	go w.runAuditor()
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 	w.writerClose <- struct{}{}
 
 	cleanupMgr.AssertCalled(t, "CleanupSegment", mock.Anything, "test-log", int64(1), int64(1))
@@ -1793,7 +1807,9 @@ func TestLogWriter_RunAuditor_FullCycle(t *testing.T) {
 	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{}, nil)
 
 	go w.runAuditor()
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 	w.writerClose <- struct{}{}
 
 	mockLogHandle.AssertCalled(t, "CheckAndSetSegmentTruncatedIfNeed", mock.Anything)
@@ -1832,7 +1848,9 @@ func TestLogWriter_RunAuditor_WithCompletedAndTruncated(t *testing.T) {
 	cleanupMgr.On("CleanupSegment", mock.Anything, "test-log", int64(1), int64(2)).Return(nil)
 
 	go w.runAuditor()
-	time.Sleep(1500 * time.Millisecond)
+	// The auditor jitters its start by up to one interval before the ticker takes over, so a
+	// cycle has certainly run only after twice the interval.
+	time.Sleep(2500 * time.Millisecond)
 	w.writerClose <- struct{}{}
 
 	mockSegHandle.AssertCalled(t, "Compact", mock.Anything)
