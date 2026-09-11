@@ -335,6 +335,46 @@ var (
 		Help:      "Worker capacity of the staged-writer sync scheduler",
 	}, []string{"node_id"})
 
+	WpCompactionAdmissionRunning = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_running",
+		Help:      "Number of segment compactions holding a slot on this node",
+	}, []string{"node_id"})
+	WpCompactionAdmissionMaxInflightBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_max_inflight_bytes",
+		Help:      "Memory this node will reserve for concurrent segment compactions, 0 when unbounded",
+	}, []string{"node_id"})
+	WpCompactionAdmissionReservedBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_reserved_bytes",
+		Help:      "Estimated memory currently reserved by running segment compactions",
+	}, []string{"node_id"})
+	// WpCompactionAdmissionPeakReservedBytes is what says whether the budget is close to binding. The
+	// budget and the instantaneous in-flight value do not: a scrape every 15s misses the peaks.
+	WpCompactionAdmissionPeakReservedBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_peak_reserved_bytes",
+		Help:      "Highest reserved compaction memory seen on this node since start",
+	}, []string{"node_id"})
+	// WpCompactionAdmissionRejectedTotal counts compactions this node declined, by which gate
+	// declined them. A refusal is not a failure -- the caller tries another replica, or the
+	// auditor retries next cycle -- so a nonzero rate means the node is at capacity, not broken.
+	//
+	// The reason is the actionable part and the two call for different responses: "reservation"
+	// means compaction itself is at its ceiling and more of it would not fit, "memory_pressure"
+	// means the node is near its limit for reasons that may have nothing to do with compaction.
+	WpCompactionAdmissionRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_rejected_total",
+		Help:      "Segment compactions this node declined, by the gate that declined them",
+	}, []string{"node_id", "reason"})
+
 	// WpQuorumSelectionSkew counts node-selection outcomes by mode, to observe
 	// how often load actually changed the selection (issue #114).
 	// mode: "weighted" (load-ranked), "random_no_load" (no fresh load data,
@@ -400,6 +440,11 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSyncSchedulerRunning)
 		registerer.MustRegister(WpSyncSchedulerWaiting)
 		registerer.MustRegister(WpSyncSchedulerCapacity)
+		registerer.MustRegister(WpCompactionAdmissionRunning)
+		registerer.MustRegister(WpCompactionAdmissionMaxInflightBytes)
+		registerer.MustRegister(WpCompactionAdmissionReservedBytes)
+		registerer.MustRegister(WpCompactionAdmissionPeakReservedBytes)
+		registerer.MustRegister(WpCompactionAdmissionRejectedTotal)
 		// Quorum selection skew (load-aware node selection, issue #114)
 		registerer.MustRegister(WpQuorumSelectionSkew)
 	})
@@ -421,3 +466,11 @@ func boolGauge(v bool) float64 {
 	}
 	return 0
 }
+
+// Reasons for WpCompactionAdmissionRejectedTotal. They are separate because the responses differ:
+// a reservation refusal says compaction is at its own ceiling, a pressure refusal says the node is
+// near its memory limit for reasons that may have nothing to do with compaction.
+const (
+	CompactionRejectReservation    = "reservation"
+	CompactionRejectMemoryPressure = "memory_pressure"
+)

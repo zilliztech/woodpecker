@@ -214,6 +214,12 @@ type SegmentCompactionPolicy struct {
 	MaxParallelUploads int             `yaml:"maxParallelUploads"`
 	MaxParallelReads   int             `yaml:"maxParallelReads"`
 	Timeout            DurationSeconds `yaml:"timeout"`
+	// MaxInflightMemory caps the memory this node reserves for the compactions it is running,
+	// across every log it serves.
+	MaxInflightMemory ByteSize `yaml:"maxInflightMemory"`
+	// MemoryHighWatermark stops this node taking on new compactions once its memory usage passes
+	// this fraction of its limit. Applies only where a container limit can be read.
+	MemoryHighWatermark float64 `yaml:"memoryHighWatermark"`
 }
 
 // SyncSchedulerConfig stores the node-wide staged-storage sync scheduler configuration.
@@ -851,6 +857,12 @@ func (c *Configuration) validateLogstoreConfig() error {
 	if logstore.SegmentCompactionPolicy.MaxBytes <= 0 {
 		return fmt.Errorf("segment compaction policy max bytes must be positive, got %d", logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	}
+	if logstore.SegmentCompactionPolicy.MaxInflightMemory <= 0 {
+		return fmt.Errorf("segment compaction policy max inflight memory must be positive, got %d", logstore.SegmentCompactionPolicy.MaxInflightMemory.Int64())
+	}
+	if w := logstore.SegmentCompactionPolicy.MemoryHighWatermark; w <= 0 || w > 1 {
+		return fmt.Errorf("segment compaction policy memory high watermark must be in (0,1], got %v", w)
+	}
 	if logstore.SegmentCompactionPolicy.MaxParallelUploads <= 0 {
 		return fmt.Errorf("segment compaction policy max parallel uploads must be positive, got %d", logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	}
@@ -988,10 +1000,12 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxWorkers: 32,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
-				MaxBytes:           ByteSize(32000000),
-				MaxParallelUploads: 4,
-				MaxParallelReads:   8,
-				Timeout:            NewDurationSecondsFromInt(300),
+				MaxBytes:            ByteSize(32000000),
+				MaxParallelUploads:  4,
+				MaxParallelReads:    8,
+				Timeout:             NewDurationSecondsFromInt(300),
+				MaxInflightMemory:   ByteSize(1000000000),
+				MemoryHighWatermark: 0.7,
 			},
 			SegmentReadPolicy: SegmentReadPolicyConfig{
 				MaxBatchSize:    ByteSize(16000000),

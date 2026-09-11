@@ -99,6 +99,8 @@ type logStore struct {
 	storageClient storageclient.ObjectStorage
 	address       string
 	syncScheduler *stagedstorage.SyncScheduler
+	// compactionAdmission decides whether this node takes on another segment compaction.
+	compactionAdmission *processor.MemoryAdmission
 
 	spMu              sync.RWMutex
 	segmentProcessors map[string]map[int64]processor.SegmentProcessor // bucketName/rootPath/logId,segmentId -> segmentProcessor
@@ -137,11 +139,13 @@ func (l *logStore) admitAppend() bool {
 func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient storageclient.ObjectStorage) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
 	logStore := &logStore{
-		cfg:               cfg,
-		ctx:               ctx,
-		cancel:            cancel,
-		storageClient:     storageClient,
-		syncScheduler:     stagedstorage.NewSyncScheduler(cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers),
+		cfg:           cfg,
+		ctx:           ctx,
+		cancel:        cancel,
+		storageClient: storageClient,
+		syncScheduler: stagedstorage.NewSyncScheduler(cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers),
+		compactionAdmission: processor.NewMemoryAdmissionFromPolicy(
+			ctx, &cfg.Woodpecker.Logstore.SegmentCompactionPolicy),
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
 		deletingLogs:      make(map[string]struct{}),
 		deletingInstances: make(map[string]struct{}),
@@ -370,7 +374,9 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 		zap.Int64("segmentId", segmentId),
 		zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
 
-	s := processor.NewSegmentProcessor(ctx, l.cfg, bucketName, rootPath, logId, segmentId, l.storageClient, l.syncScheduler)
+	s := processor.NewSegmentProcessor(ctx, l.cfg, bucketName, rootPath, logId, segmentId, l.storageClient,
+		processor.WithSyncScheduler(l.syncScheduler),
+		processor.WithCompactionAdmission(l.compactionAdmission))
 
 	// Initialize log map if not exists
 	if _, exists := l.segmentProcessors[logKey]; !exists {
@@ -1173,5 +1179,12 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 		metrics.WpSyncSchedulerRunning.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Running()))
 		metrics.WpSyncSchedulerWaiting.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Waiting()))
 		metrics.WpSyncSchedulerCapacity.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Capacity()))
+	}
+
+	if l.compactionAdmission != nil {
+		metrics.WpCompactionAdmissionRunning.WithLabelValues(metrics.NodeID).Set(float64(l.compactionAdmission.Running()))
+		metrics.WpCompactionAdmissionMaxInflightBytes.WithLabelValues(metrics.NodeID).Set(float64(l.compactionAdmission.MaxInflightBytes()))
+		metrics.WpCompactionAdmissionReservedBytes.WithLabelValues(metrics.NodeID).Set(float64(l.compactionAdmission.ReservedBytes()))
+		metrics.WpCompactionAdmissionPeakReservedBytes.WithLabelValues(metrics.NodeID).Set(float64(l.compactionAdmission.PeakReservedBytes()))
 	}
 }

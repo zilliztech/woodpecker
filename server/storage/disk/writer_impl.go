@@ -1107,6 +1107,12 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	return lastEntryId, nil
 }
 
+// CompactionMemoryEstimate is zero: local storage keeps a segment as one file already, so Compact
+// merges nothing and holds nothing.
+func (w *LocalFileWriter) CompactionMemoryEstimate(_ int64) int64 {
+	return 0
+}
+
 // Compact performs compaction (placeholder for future implementation)
 func (w *LocalFileWriter) Compact(ctx context.Context, _ int64) (int64, error) {
 	// Purpose: merge small blocks into larger blocks for more efficient indexing.

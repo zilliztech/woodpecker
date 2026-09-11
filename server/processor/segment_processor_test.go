@@ -540,6 +540,7 @@ func TestSegmentProcessor_GetBlocksCount_NoWriter(t *testing.T) {
 func TestSegmentProcessor_Compact_Success(t *testing.T) {
 	sp := newTestProcessor(t)
 	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).Return(int64(1024), nil)
 	sp.currentSegmentWriter = mockWriter
 
@@ -554,6 +555,7 @@ func TestSegmentProcessor_Compact_Success(t *testing.T) {
 func TestSegmentProcessor_Compact_MergeError(t *testing.T) {
 	sp := newTestProcessor(t)
 	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).Return(int64(0), fmt.Errorf("compact failed"))
 	sp.currentSegmentWriter = mockWriter
 
@@ -570,6 +572,7 @@ func TestSegmentProcessor_Compact_Timeout(t *testing.T) {
 	impl := sp.(*segmentProcessor)
 
 	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ int64) (int64, error) {
 		// Block until the context is cancelled (should happen after 1s timeout)
 		<-ctx.Done()
@@ -594,6 +597,7 @@ func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 	started := make(chan struct{})
 	proceed := make(chan struct{})
 	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ int64) (int64, error) {
 		close(started) // signal that first compact is running
 		<-proceed      // block until test releases
@@ -629,6 +633,7 @@ func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 
 	// After first completes, a new Compact should succeed again
 	mockWriter2 := mocks_storage.NewWriter(t)
+	mockWriter2.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 	mockWriter2.EXPECT().Compact(mock.Anything, mock.Anything).Return(int64(512), nil)
 	sp.currentSegmentWriter = mockWriter2
 
@@ -644,6 +649,7 @@ func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 func TestSegmentProcessor_Compact_ForwardsExpectedLastEntryId(t *testing.T) {
 	sp := newTestProcessor(t)
 	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 	mockWriter.EXPECT().Compact(mock.Anything, int64(7)).Return(int64(2048), nil)
 	sp.currentSegmentWriter = mockWriter
 
@@ -660,6 +666,7 @@ func TestSegmentProcessor_Compact_ForwardsExpectedLastEntryId(t *testing.T) {
 func TestSegmentProcessor_Compact_PropagatesDataBehind(t *testing.T) {
 	sp := newTestProcessor(t)
 	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 	mockWriter.EXPECT().Compact(mock.Anything, int64(1)).Return(int64(-1), werr.ErrSegmentCompactionDataBehind)
 	sp.currentSegmentWriter = mockWriter
 
@@ -1146,6 +1153,7 @@ func TestSegmentProcessor_Compact_HonoursTheCallerDeadline(t *testing.T) {
 
 		var seen time.Duration
 		mockWriter := mocks_storage.NewWriter(t)
+		mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 		mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ int64) (int64, error) {
 			deadline, ok := ctx.Deadline()
 			require.True(t, ok, "the compaction must run under a deadline")
@@ -1168,6 +1176,7 @@ func TestSegmentProcessor_Compact_HonoursTheCallerDeadline(t *testing.T) {
 
 		var seen time.Duration
 		mockWriter := mocks_storage.NewWriter(t)
+		mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
 		mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ int64) (int64, error) {
 			deadline, ok := ctx.Deadline()
 			require.True(t, ok, "the node bounds its own work even when the caller does not")
@@ -1183,4 +1192,93 @@ func TestSegmentProcessor_Compact_HonoursTheCallerDeadline(t *testing.T) {
 		assert.InDelta(t, nodeCeiling.Seconds(), seen.Seconds(), 5,
 			"the node ceiling is what bounds an otherwise unbounded caller")
 	})
+}
+
+// TestSegmentProcessor_Compact_RefusedWhenNodeOutOfBudget covers the node-wide bound: the work
+// runs here, the auditor's bounds are per log, and a node serves many logs, so admission has to be
+// decided on this side. A refusal is not a failure -- the client tries the next replica, and the
+// auditor retries next cycle -- so it must leave the processor exactly as it found it.
+func TestSegmentProcessor_Compact_RefusedWhenNodeOutOfBudget(t *testing.T) {
+	const estimate = int64(4 << 20)
+	sp := newTestProcessor(t)
+
+	// A budget with room for one compaction of this size, already spent by another segment.
+	admission := noPressureGate(estimate)
+	sp.compactionAdmission = admission
+	require.True(t, admission.TryAcquire(estimate))
+
+	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(estimate)
+	sp.currentSegmentWriter = mockWriter
+
+	meta, err := sp.Compact(context.Background(), -1)
+	assert.Nil(t, meta)
+	require.Error(t, err)
+	assert.True(t, werr.ErrSegmentCompactionNodeBusy.Is(err))
+
+	meta, err = sp.Compact(context.Background(), -1)
+	assert.Nil(t, meta)
+	assert.True(t, werr.ErrSegmentCompactionNodeBusy.Is(err),
+		"a refusal must not leave the per-segment guard held, which would report AlreadyCompacting forever")
+
+	// Once the node frees budget the same processor compacts normally.
+	admission.Release(estimate)
+	mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(int64(0)).Maybe()
+	mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).Return(int64(1024), nil)
+	meta, err = sp.Compact(context.Background(), -1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1024), meta.Size)
+	assert.Zero(t, admission.ReservedBytes(), "a completed compaction returns its charge")
+}
+
+// TestSegmentProcessor_Compact_SmallSegmentChargesLess is the reason the estimate comes from the
+// writer's plan rather than from a fixed worst case. A segment holding a few hundred KB must not
+// be billed like a full one: a node draining a backlog of small segments would otherwise run a
+// fraction of the compactions its memory could actually carry.
+func TestSegmentProcessor_Compact_SmallSegmentChargesLess(t *testing.T) {
+	const budget = int64(4 << 20)
+	const tiny = int64(200 << 10)
+
+	admission := noPressureGate(budget)
+	inFlight := make([]int64, 0, 3)
+
+	for range 3 {
+		sp := newTestProcessor(t)
+		sp.compactionAdmission = admission
+		mockWriter := mocks_storage.NewWriter(t)
+		mockWriter.EXPECT().CompactionMemoryEstimate(mock.Anything).Return(tiny)
+		mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(context.Context, int64) (int64, error) {
+			inFlight = append(inFlight, admission.ReservedBytes())
+			return int64(1024), nil
+		})
+		sp.currentSegmentWriter = mockWriter
+
+		_, err := sp.Compact(context.Background(), -1)
+		require.NoError(t, err)
+	}
+
+	require.Len(t, inFlight, 3)
+	for _, charged := range inFlight {
+		assert.Equal(t, tiny, charged, "each small segment is charged what its own plan holds")
+	}
+	bySize, byMem := admission.Rejected()
+	assert.Zero(t, bySize, "a ceiling this size fits many segments this small")
+	assert.Zero(t, byMem)
+}
+
+// TestNewSegmentProcessor_AdmissionOption pins the wiring: a processor built without the options
+// is unbounded, which is what every caller other than the logstore wants.
+func TestNewSegmentProcessor_AdmissionOption(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	bare := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil).(*segmentProcessor)
+	assert.Nil(t, bare.compactionAdmission)
+	assert.Nil(t, bare.syncScheduler)
+	assert.True(t, bare.compactionAdmission.TryAcquire(1<<30), "no scheduler means no bound")
+
+	admission := noPressureGate(1 << 20)
+	wired := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil,
+		WithCompactionAdmission(admission)).(*segmentProcessor)
+	assert.Same(t, admission, wired.compactionAdmission)
 }
