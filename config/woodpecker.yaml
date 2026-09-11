@@ -99,6 +99,13 @@ woodpecker:
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
       maxFlushSize: 2000000 # Maximum size of a block in bytes to flush, default is 2MB, which is the best practice for cloud storage
       maxFlushThreads: 32 # Maximum number of threads to flush data
+    syncScheduler:
+      # Workers in the node's shared flush pool, as a plain count. Each one blocks in fdatasync
+      # while a flush is in flight, so this bounds concurrent syncs, not CPU usage -- a worker
+      # parked in a blocking syscall costs an OS thread, not a core.
+      # Tune from the volume's IOPS budget: workers ~= target IOPS x fsync latency. Past the point
+      # where the device saturates, more workers buy queueing rather than throughput.
+      maxWorkers: 32
     segmentCompactionPolicy:
       maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4

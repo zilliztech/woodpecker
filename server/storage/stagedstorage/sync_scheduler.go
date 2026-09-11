@@ -3,7 +3,6 @@ package stagedstorage
 import (
 	"container/heap"
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +71,23 @@ type SyncScheduler struct {
 	closed  atomic.Bool
 }
 
+// defaultSyncSchedulerWorkers is the pool size used when no configured value is available.
+// It mirrors logstore.syncScheduler.maxWorkers so the two cannot drift.
+const defaultSyncSchedulerWorkers = 32
+
+// syncSchedulerQueueSize is the depth of both scheduler channels.
+//
+// It is deliberately independent of the worker count: the queues hold pending work, and the
+// amount of pending work is bounded by the number of writers, not by how many of them are being
+// serviced at once. Each writer can have at most one schedule request and one submitted sync job
+// outstanding (the syncScheduled and syncTaskSubmitted CAS gates), so one slot per writer is the
+// real ceiling. Sizing it as workerCount x 4096 tied a multi-megabyte preallocation to a quantity
+// that has nothing to do with it.
+//
+// The depth matters because a full scheduleCh blocks its caller, and the caller is the append
+// path: WriteDataAsync schedules the next sync check before it returns.
+const syncSchedulerQueueSize = 65536
+
 var (
 	defaultSyncSchedulerOnce sync.Once
 	defaultSyncScheduler     *SyncScheduler
@@ -79,28 +95,21 @@ var (
 
 func DefaultSyncScheduler() *SyncScheduler {
 	defaultSyncSchedulerOnce.Do(func() {
-		defaultSyncScheduler = NewSyncScheduler(runtime.NumCPU() * 2)
+		defaultSyncScheduler = NewSyncScheduler(defaultSyncSchedulerWorkers)
 	})
 	return defaultSyncScheduler
 }
 
 func NewSyncScheduler(workerCount int) *SyncScheduler {
 	if workerCount <= 0 {
-		workerCount = runtime.NumCPU() * 2
-	}
-	if workerCount <= 0 {
-		workerCount = 1
-	}
-	queueSize := workerCount * 4096
-	if queueSize < 1024 {
-		queueSize = 1024
+		workerCount = defaultSyncSchedulerWorkers
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &SyncScheduler{
 		ctx:         ctx,
 		cancel:      cancel,
-		scheduleCh:  make(chan syncScheduleRequest, queueSize),
-		jobCh:       make(chan syncJob, queueSize),
+		scheduleCh:  make(chan syncScheduleRequest, syncSchedulerQueueSize),
+		jobCh:       make(chan syncJob, syncSchedulerQueueSize),
 		workerCount: workerCount,
 	}
 	s.wg.Add(1)

@@ -72,6 +72,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 1000, config.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
+	assert.Equal(t, 32, config.Woodpecker.Logstore.SyncScheduler.MaxWorkers)
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
@@ -178,6 +179,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
+	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SyncScheduler.MaxWorkers)
 	assert.Equal(t, int64(32000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
@@ -475,6 +477,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 							MaxFlushSize:               NewByteSize(16000000),
 							MaxFlushThreads:            8,
 						},
+						SyncScheduler: SyncSchedulerConfig{
+							MaxWorkers: 32,
+						},
 						SegmentCompactionPolicy: SegmentCompactionPolicy{
 							MaxBytes:           NewByteSize(32000000),
 							MaxParallelUploads: 4,
@@ -696,6 +701,11 @@ func TestValidateClientConfig_Errors(t *testing.T) {
 		assert.ErrorContains(t, cfg.Validate(), "max blocks must be positive")
 	})
 
+	t.Run("SyncScheduler MaxWorkers<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers = 0
+		assert.ErrorContains(t, cfg.Validate(), "sync scheduler max workers must be positive")
+	})
 	t.Run("Auditor MaxInterval<=0", func(t *testing.T) {
 		cfg := newValidCfg()
 		cfg.Woodpecker.Client.Auditor.MaxInterval = NewDurationSecondsFromInt(0)
@@ -1124,6 +1134,9 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					RetryInterval:              NewDurationMillisecondsFromInt(2000),
 					MaxFlushSize:               NewByteSize(16000000),
 					MaxFlushThreads:            8,
+				},
+				SyncScheduler: SyncSchedulerConfig{
+					MaxWorkers: 32,
 				},
 				SegmentCompactionPolicy: SegmentCompactionPolicy{
 					MaxBytes:           NewByteSize(32000000),
