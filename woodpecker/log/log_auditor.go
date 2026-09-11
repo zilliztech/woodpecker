@@ -91,7 +91,7 @@ type compactStats struct {
 	processed int
 	compacted int
 	failed    int
-	deferred  int // Completed segments left for a later cycle by maxCompactedPerCycle
+	deferred  int // Completed segments left for a later cycle by maxCompactedPerCycle or the pass budget
 }
 
 // compactCompletedSegments compacts every Completed segment in the snapshot, sequentially by
@@ -104,7 +104,7 @@ type compactStats struct {
 // (GetRecoverableSegmentHandle), opens a tracing span and emits handle metrics -- all to do nothing.
 // The set only grows with uptime, so the per-cycle cost grows with it. This mirrors the serviceMode
 // gate on distributeCompactedMarks. The mode is reported once in the "Log auditor started" line.
-func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map[int64]*meta.SegmentMeta, localMode bool) compactStats {
+func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map[int64]*meta.SegmentMeta, localMode bool, budget time.Duration) compactStats {
 	var st compactStats
 	if localMode {
 		return st
@@ -126,8 +126,22 @@ func compactCompletedSegments(ctx context.Context, logHandle LogHandle, segs map
 		completed = completed[:maxCompactedPerCycle]
 	}
 
+	// The count bound above caps the work per cycle; the budget caps the time it may take. Both
+	// leave their remainder to a later cycle. The budget stops the pass starting further segments;
+	// one already in flight runs to completion, because a deadline that cancelled in flight would
+	// cut off any segment whose compaction legitimately takes longer than the budget, on every
+	// cycle, so it would never finish.
+	var deadline time.Time
+	if budget > 0 {
+		deadline = time.Now().Add(budget)
+	}
+
 	for _, segNo := range completed {
 		if ctx.Err() != nil {
+			break
+		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			st.deferred += len(completed) - st.processed
 			break
 		}
 		st.processed++

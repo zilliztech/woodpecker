@@ -75,6 +75,35 @@ type ClientConfig struct {
 
 type AuditorConfig struct {
 	MaxInterval DurationSeconds `yaml:"maxInterval"`
+	// CompactionAttemptTimeout bounds one compaction attempt against one quorum node. The
+	// deadline reaches the node over gRPC, so it also caps the server-side work at
+	// min(this, logstore.segmentCompactionPolicy.timeout).
+	//
+	// Keep it at or above the server's segmentCompactionPolicy.timeout, which validation
+	// enforces against the local copy of that setting. Below it the server's budget becomes
+	// unreachable: a compaction that legitimately needs longer than this is cut off on every
+	// replica, and nothing of the attempt is kept -- the writer restarts from the first block
+	// unless a complete compacted footer already exists -- so the segment stays Completed, the
+	// same work is repeated every cycle, and the node's local data.log is never reclaimed.
+	//
+	// Its purpose is to bound a node that stops responding altogether, which the server's own
+	// timeout cannot cover because that timeout is only enforced if the server is still running
+	// it. Hence "server budget plus RPC margin" rather than a small number.
+	CompactionAttemptTimeout DurationSeconds `yaml:"compactionAttemptTimeout"`
+	// CompactionPassBudget bounds how long one auditor cycle spends starting compactions. The
+	// auditor runs its passes in sequence, so an unbounded compaction pass stalls the rest of
+	// that log's maintenance -- truncate state, snapshot publication, orphan sweep -- for as
+	// long as it lasts.
+	//
+	// It is a budget, not a deadline: once it is spent no further segment is started, but a
+	// compaction already in flight runs to completion. Cancelling in flight would mean a
+	// segment whose compaction legitimately takes longer than the budget is cut off on every
+	// cycle and never finishes, which is the same trap as an attempt timeout set below the
+	// server's budget. Segments not started are picked up on a later cycle.
+	//
+	// A pass therefore lasts at most this budget plus one segment, and needs no relation to
+	// the attempt timeout or the quorum size.
+	CompactionPassBudget DurationSeconds `yaml:"compactionPassBudget"`
 }
 
 // SessionMonitorConfig stores the session monitor configuration for writer lock health checking.
@@ -605,6 +634,17 @@ func (c *Configuration) validateWoodpeckerConfig() error {
 		return fmt.Errorf("storage config validation failed: %w", err)
 	}
 
+	// Cross-section: the client's per-attempt deadline reaches the node over gRPC, so a value
+	// below the server's own per-segment budget makes that budget unreachable and leaves a slow
+	// compaction failing on every replica forever. In service mode the two sides are separate
+	// processes and this can only check the local copy of the server setting, but that is the
+	// value an operator raising one of them is looking at.
+	if attempt, server := c.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds(),
+		c.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds(); attempt < server {
+		return fmt.Errorf("auditor compaction attempt timeout (%ds) must be at least the segment compaction timeout (%ds), "+
+			"otherwise a compaction that needs longer is cut off on every replica and never completes", attempt, server)
+	}
+
 	return nil
 }
 
@@ -650,6 +690,12 @@ func (c *Configuration) validateClientConfig() error {
 	// Validate Auditor configuration
 	if client.Auditor.MaxInterval.Seconds() <= 0 {
 		return fmt.Errorf("auditor max interval must be positive, got %d", client.Auditor.MaxInterval.Seconds())
+	}
+	if client.Auditor.CompactionAttemptTimeout.Seconds() <= 0 {
+		return fmt.Errorf("auditor compaction attempt timeout must be positive, got %ds", client.Auditor.CompactionAttemptTimeout.Seconds())
+	}
+	if client.Auditor.CompactionPassBudget.Seconds() <= 0 {
+		return fmt.Errorf("auditor compaction pass budget must be positive, got %ds", client.Auditor.CompactionPassBudget.Seconds())
 	}
 
 	// Validate DirectRead configuration
@@ -918,7 +964,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxBlocks:   1000,
 			},
 			Auditor: AuditorConfig{
-				MaxInterval: DurationSeconds{Duration: Duration{duration: 5 * 1000000000}}, // 5s
+				MaxInterval:              DurationSeconds{Duration: Duration{duration: 5 * 1000000000}}, // 5s
+				CompactionAttemptTimeout: NewDurationSecondsFromInt(330),
+				CompactionPassBudget:     NewDurationSecondsFromInt(60),
 			},
 			Quorum: QuorumConfig{
 				BufferPools: NewDynamic([]QuorumBufferPool{
