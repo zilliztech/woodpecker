@@ -1512,24 +1512,48 @@ func (s *segmentHandleImpl) completeSegmentOnNode(ctx context.Context, node stri
 	}
 }
 
-// resolveFenceLAC picks the completion target from the fence responses: the highest
-// entry ID that at least ackQuorum responding replicas hold. Sorted ascending, that is
-// the ackQuorum-th largest element, so exactly ackQuorum replicas cover it and no
-// larger value does.
+// resolveFenceLAC picks the completion target from the fence responses: the highest entry ID that
+// cannot be shown to be below the acknowledged boundary. Sorted ascending, that is the element at
+// index writeQuorum-ackQuorum -- skipping the replies that may legitimately be missing an
+// acknowledged entry.
 //
-// Every element is a successful fence response -- failed nodes take the result.err
-// branch and never reach here -- so a -1 is an honest "I hold nothing" vote against
-// every entry ID >= 0 and must be counted. Dropping it would shrink the sample while
-// ackQuorum stays fixed, and the resulting target could exceed what any ack quorum
-// covers; completion would then retry forever, because a behind replica has no way to
-// catch up to an entry it never received.
+// The boundary is a fact about the replicas, not about the replies. An entry is acknowledged once
+// at least ackQuorum replicas hold it, so at most writeQuorum-ackQuorum of them can be without it.
+// A replica that did not answer is unknown, not empty, so the count of possibly-missing replies is
+// that same tolerance whatever the reply count -- which is why the index does not depend on it.
 //
-// Fewer than ackQuorum responses means no value can be shown to have quorum coverage,
-// which is a failure to prove rather than a reason to pick a smaller element.
-func (s *segmentHandleImpl) resolveFenceLAC(results []int64, ackQuorum int) (int64, error) {
-	if len(results) < ackQuorum {
+// Every element is a successful fence response -- failed nodes take the result.err branch and never
+// reach here -- so a -1 is an honest "I hold nothing" and must be counted like any other value.
+//
+// Fewer replies than the tolerance leaves nothing to conclude: even the highest reply could be the
+// one stale replica. That is a failure to prove rather than a reason to pick a smaller element.
+func (s *segmentHandleImpl) resolveFenceLAC(results []int64, writeQuorum, ackQuorum int) (int64, error) {
+	// The tolerance is the same one the append path spends before giving up, at Wq-Aq+1 failures.
+	//
+	// This used to index by len(results)-ackQuorum, which equals it only when every replica
+	// replied; one missing reply shifted it down a position and published a boundary below
+	// acknowledged data. With tails [0,0,-1] and Aq=2, a failed fence reply from the second
+	// replica left [0,-1] and selected -1, dropping an entry the client had been told was durable
+	// (#320).
+	//
+	// Because a missing reply is not evidence, a target chosen this way may turn out to be held by
+	// fewer than ackQuorum replicas. completeSegmentQuorum rejects that rather than lowering the
+	// boundary, and the attempt is retried once more replicas answer: failing to complete is
+	// recoverable, publishing a boundary below acknowledged data is not.
+	// A quorum where Aq exceeds Wq is not satisfiable -- no entry can ever collect more acks than
+	// the replicas it was written to -- and would make the index below negative. Config derives
+	// Aq as Wq/2+1 so this cannot arise from a valid configuration, but recovery must not panic
+	// its way through a malformed one.
+	if writeQuorum < ackQuorum || ackQuorum <= 0 {
 		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
-			fmt.Sprintf("insufficient successful fence responses: got %d, need %d", len(results), ackQuorum))
+			fmt.Sprintf("inconsistent quorum for fence resolution: writeQuorum %d, ackQuorum %d", writeQuorum, ackQuorum))
+	}
+
+	missingTolerated := writeQuorum - ackQuorum
+	if len(results) <= missingTolerated {
+		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
+			fmt.Sprintf("insufficient successful fence responses: got %d, need more than %d (writeQuorum %d - ackQuorum %d)",
+				len(results), missingTolerated, writeQuorum, ackQuorum))
 	}
 
 	// Sort a copy in ascending order, leaving the caller's slice untouched.
@@ -1539,7 +1563,7 @@ func (s *segmentHandleImpl) resolveFenceLAC(results []int64, ackQuorum int) (int
 		return sorted[i] < sorted[j]
 	})
 
-	return sorted[len(sorted)-ackQuorum], nil
+	return sorted[missingTolerated], nil
 }
 
 // fenceSegmentQuorum sends FenceSegment requests to all quorum nodes
@@ -1590,7 +1614,7 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 
 	// Resolve the completion target from the successful responses. This also enforces
 	// that enough nodes responded to prove quorum coverage in the first place.
-	lac, resolveErr := s.resolveFenceLAC(successResults, ackQuorum)
+	lac, resolveErr := s.resolveFenceLAC(successResults, int(quorumInfo.Wq), ackQuorum)
 	if resolveErr != nil {
 		logger.Ctx(ctx).Warn("Insufficient successful responses for quorum fence",
 			zap.String("logName", s.logName),
