@@ -459,3 +459,109 @@ func TestSweepOrphanedCleanupRecords(t *testing.T) {
 	assert.Equal(t, []int64{5, math.MaxInt64}, cm.sweepBounds)
 	assert.Equal(t, []int64{5, math.MaxInt64}, nm.sweepBoundsSnapshot())
 }
+
+// TestCompactCompletedSegments_BoundedPerCycle verifies one cycle compacts at most
+// maxCompactedPerCycle segments and reports the rest as deferred, so a backlog cannot swamp a
+// single cycle -- the exposure being a recovery stampede, where compaction has been failing, the
+// Completed set has grown, and every log tries to drain it the moment storage comes back.
+func TestCompactCompletedSegments_BoundedPerCycle(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+	// Every lookup fails: the pass still counts the segment as processed, which is what the
+	// bound is being measured against, and no segment handle is needed.
+	lh.On("GetRecoverableSegmentHandle", mock.Anything, mock.Anything).Return(nil, errors.New("boom"))
+
+	const total = maxCompactedPerCycle + 25
+	segs := map[int64]*meta.SegmentMeta{}
+	for i := int64(1); i <= total; i++ {
+		segs[i] = segMeta(i, proto.SegmentState_Completed)
+	}
+
+	st := compactCompletedSegments(context.Background(), lh, segs, false)
+	assert.Equal(t, maxCompactedPerCycle, st.processed)
+	assert.Equal(t, total-maxCompactedPerCycle, st.deferred)
+}
+
+// TestCompactCompletedSegments_OldestFirst verifies the bounded pass drains in ascending segment
+// order. Ranging a map is randomly ordered; unbounded that was harmless because every Completed
+// segment was visited, but under a bound it would let a segment be skipped cycle after cycle by
+// chance while its local data.log stayed on disk.
+func TestCompactCompletedSegments_OldestFirst(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+
+	var mu sync.Mutex
+	var seen []int64
+	lh.On("GetRecoverableSegmentHandle", mock.Anything, mock.Anything).
+		Return(nil, errors.New("boom")).
+		Run(func(args mock.Arguments) {
+			mu.Lock()
+			defer mu.Unlock()
+			seen = append(seen, args.Get(1).(int64))
+		})
+
+	// Insert high segment numbers first so a map-order pass would be unlikely to come out sorted.
+	segs := map[int64]*meta.SegmentMeta{}
+	for i := int64(maxCompactedPerCycle * 2); i >= 1; i-- {
+		segs[i] = segMeta(i, proto.SegmentState_Completed)
+	}
+
+	compactCompletedSegments(context.Background(), lh, segs, false)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, seen, maxCompactedPerCycle)
+	for i, segNo := range seen {
+		require.Equal(t, int64(i+1), segNo, "expected the oldest %d segments in order", maxCompactedPerCycle)
+	}
+}
+
+// TestWaitAuditorStartJitter covers the phase spreading that keeps writers created together from
+// ticking in lockstep, and the two shutdown signals the auditor loop itself watches: a writer
+// closed during the wait must not be held up by it.
+func TestWaitAuditorStartJitter(t *testing.T) {
+	closed := make(chan struct{})
+
+	t.Run("spreads the start across the interval", func(t *testing.T) {
+		const interval = 50 * time.Millisecond
+		buckets := map[int]int{}
+		for range 60 {
+			start := time.Now()
+			require.True(t, waitAuditorStartJitter(context.Background(), closed, interval))
+			waited := time.Since(start)
+			// Generous upper bound: the delay is under one interval by construction, the slack
+			// only absorbs scheduler wake-up latency on a loaded CI machine.
+			require.Less(t, waited, interval+100*time.Millisecond)
+			if b := int(waited * 4 / interval); b < 4 {
+				buckets[b]++ // 4 quarters of the interval
+			}
+		}
+		// A fixed phase would land every sample in one bucket; spreading is the whole point.
+		assert.GreaterOrEqual(t, len(buckets), 3, "start should spread across the interval, got %v", buckets)
+	})
+
+	t.Run("returns immediately when the writer is closing", func(t *testing.T) {
+		writerClose := make(chan struct{}, 1)
+		writerClose <- struct{}{}
+		start := time.Now()
+		assert.False(t, waitAuditorStartJitter(context.Background(), writerClose, time.Hour))
+		assert.Less(t, time.Since(start), time.Second)
+	})
+
+	t.Run("returns immediately when the writer is invalidated", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		start := time.Now()
+		assert.False(t, waitAuditorStartJitter(ctx, closed, time.Hour))
+		assert.Less(t, time.Since(start), time.Second)
+	})
+
+	t.Run("no wait when the interval is not positive", func(t *testing.T) {
+		start := time.Now()
+		assert.True(t, waitAuditorStartJitter(context.Background(), closed, 0))
+		assert.True(t, waitAuditorStartJitter(context.Background(), closed, -time.Second))
+		assert.Less(t, time.Since(start), 50*time.Millisecond)
+	})
+}

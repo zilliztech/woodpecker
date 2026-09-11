@@ -339,8 +339,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessage) <-cha
 }
 
 func (l *logWriterImpl) runAuditor() {
-	ticker := time.NewTicker(time.Duration(l.auditorMaxInterval * int(time.Second)))
-	defer ticker.Stop()
+	interval := time.Duration(l.auditorMaxInterval) * time.Second
 
 	// Storage mode is fixed for the writer's lifetime; read it once here rather than per
 	// segment. localMode disables the compaction pass (see compactCompletedSegments), so
@@ -352,6 +351,14 @@ func (l *logWriterImpl) runAuditor() {
 		zap.Int64("logId", l.logHandle.GetId()),
 		zap.Int("intervalSeconds", l.auditorMaxInterval),
 		zap.Bool("localStorageCompactionDisabled", localMode))
+
+	// Spread the start so writers created together do not tick in lockstep.
+	if !waitAuditorStartJitter(l.maintenanceCtx, l.writerClose, interval) {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	auditCycle := uint64(0)
 	for {
@@ -422,6 +429,7 @@ func (l *logWriterImpl) runAuditor() {
 				zap.Int("segmentsProcessed", cs.processed),
 				zap.Int("segmentsCompacted", cs.compacted),
 				zap.Int("segmentsFailed", cs.failed),
+				zap.Int("segmentsDeferred", cs.deferred),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))
 
 			// Clean up truncated segments (object-storage data + local files + tombstones).
