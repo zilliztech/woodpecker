@@ -1302,9 +1302,25 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 		}
 	}
 
-	// Check if we have enough successful responses for ack quorum
-	if len(qualifiedResults) < ackQuorum {
-		logger.Ctx(ctx).Warn("Insufficient qualified responses for quorum complete",
+	// Require the boundary to be durably recorded by an ack quorum of replicas, not to be
+	// covered by one.
+	//
+	// Aq is the threshold a write had to clear to be acknowledged. It says nothing about how the
+	// data is distributed once the writer is gone, and treating it as a requirement on coverage
+	// at recovery time is what made this check unsatisfiable: resolveFenceLAC returns the highest
+	// tail that cannot be shown to be below the acknowledged boundary, and when a fence reply is
+	// missing that tail may be held by a single replica. The entries in question were never
+	// acknowledged, so nothing is owed on them; they become durable when compaction moves the
+	// segment to object storage.
+	//
+	// What completion does have to establish is that enough replicas durably recorded this
+	// boundary, so a competing writer cannot close the segment at a different one. That is
+	// finalizedResults. qualifiedResults is kept for the operator-facing count below: a
+	// completion covered by fewer than ackQuorum replicas is worth seeing, but it is not a
+	// failure -- failing here would leave the log unable to open a writer at all, since
+	// OpenLogWriter fences and completes every active segment first.
+	if len(finalizedResults) < ackQuorum {
+		logger.Ctx(ctx).Warn("Insufficient finalized responses for quorum complete",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -1312,8 +1328,20 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 			zap.Int("qualifiedCount", len(qualifiedResults)),
 			zap.Int("requiredAckQuorum", ackQuorum))
 		return werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
-			fmt.Sprintf("insufficient qualified complete responses: qualified=%d finalized=%d required=%d lastError=%v",
-				len(qualifiedResults), len(finalizedResults), ackQuorum, lastError))
+			fmt.Sprintf("insufficient finalized complete responses: finalized=%d qualified=%d required=%d lastError=%v",
+				len(finalizedResults), len(qualifiedResults), ackQuorum, lastError))
+	}
+
+	if len(qualifiedResults) < ackQuorum {
+		logger.Ctx(ctx).Warn("Segment completed with fewer covering replicas than the ack quorum; "+
+			"the tail is durable on those replicas until compaction uploads the segment",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("targetLAC", lac),
+			zap.Int("finalizedCount", len(finalizedResults)),
+			zap.Int("qualifiedCount", len(qualifiedResults)),
+			zap.Int("ackQuorum", ackQuorum))
 	}
 
 	logger.Ctx(ctx).Info("Quorum complete responses collected",

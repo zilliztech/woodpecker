@@ -44,19 +44,32 @@ type completeNodeResponse struct {
 //
 // Each replica response belongs to exactly one class:
 //   - Q (qualified): Finalize RPC succeeds and local LastEntryId >= target LAC.
-//   - P (partial): Finalize RPC succeeds but local LastEntryId < target LAC.
-//     The replica is durably frozen for read failover, but does not count toward Aq.
-//   - E (error): client acquisition or Finalize RPC fails and does not count toward Aq.
+//   - P (partial): Finalize RPC succeeds but local LastEntryId < target LAC. The replica has
+//     durably recorded the boundary even though its own data stops short of it.
+//   - E (error): client acquisition or Finalize RPC fails, so the replica recorded nothing.
 //
-// Completion succeeds iff the number of Q responses reaches Aq. Node ordering is
-// intentionally not enumerated because responses are collected concurrently and
-// the decision depends only on the qualified count.
+// Completion succeeds iff Q+P reaches Aq: what has to be established is that an ack quorum of
+// replicas durably recorded this boundary, so a competing writer cannot close the segment at a
+// different one. Coverage is a separate question. Aq was the threshold a write had to clear to be
+// acknowledged; it is not a requirement on how the data is distributed once the writer is gone,
+// and resolveFenceLAC deliberately returns the highest tail that cannot be shown to be below the
+// acknowledged boundary -- with a fence reply missing, that tail may be held by a single replica.
+// Those entries were never acknowledged, so nothing is owed on them; they become durable when
+// compaction uploads the segment. Requiring Aq coverage here instead would fail the completion
+// after every replica had already frozen its footer at the target, leaving no target reachable on
+// any later attempt and the log unable to open a writer at all.
+//
+// Node ordering is intentionally not enumerated because responses are collected concurrently and
+// the decision depends only on the counts.
 //
 // For the canonical Es=3, Aq=2 matrix (order-independent):
 //
-//	QQQ, QQP, QQE  -> success
-//	QPP, QPE, QEE  -> failure
-//	PPP, PPE, PEE, EEE -> failure
+//	QQQ, QQP, QQE, QPP, QPE, PPE  -> success
+//	QEE, PEE, EEE                 -> failure
+//
+// PPP cannot occur. The target is always one of the fence replies, so some replica reported a tail
+// at or above it, and a replica's tail never shrinks -- that replica answers Q or fails outright as
+// E. It is covered below only to keep the function total.
 //
 // The cases below also cover Aq=1/Aq=Es boundaries, client acquisition errors,
 // the empty-segment LAC sentinel (-1), and the first valid entry ID (0).
@@ -76,23 +89,25 @@ func TestCompleteSegmentQuorum_ResponseMatrix(t *testing.T) {
 		{name: "Q ahead P succeeds", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{5, nil, nil}, {6, nil, nil}, {4, nil, nil}}},
 		{name: "Q Q E succeeds", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{5, nil, nil}, {5, nil, nil}, {-1, completeFailure, nil}}},
 		{name: "Q Q client error succeeds", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{5, nil, nil}, {5, nil, nil}, {-1, nil, clientFailure}}},
-		{name: "Q P P fails", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{5, nil, nil}, {4, nil, nil}, {3, nil, nil}}, wantErr: true},
-		{name: "Q P E fails", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{5, nil, nil}, {4, nil, nil}, {-1, completeFailure, nil}}, wantErr: true},
+		{name: "Q P P succeeds", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{5, nil, nil}, {4, nil, nil}, {3, nil, nil}}},
+		{name: "Q P E succeeds", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{5, nil, nil}, {4, nil, nil}, {-1, completeFailure, nil}}},
 		{name: "Q E E fails", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{5, nil, nil}, {-1, completeFailure, nil}, {-1, completeFailure, nil}}, wantErr: true},
-		{name: "P P P fails", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{4, nil, nil}, {3, nil, nil}, {2, nil, nil}}, wantErr: true},
-		{name: "P P E fails", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{4, nil, nil}, {3, nil, nil}, {-1, completeFailure, nil}}, wantErr: true},
+		// Unreachable in practice (see the doc comment); kept so the function stays total.
+		{name: "P P P succeeds", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{4, nil, nil}, {3, nil, nil}, {2, nil, nil}}},
+		// The reachable no-Q case: the replica holding the target is unreachable at complete time.
+		{name: "P P E succeeds", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{4, nil, nil}, {3, nil, nil}, {-1, completeFailure, nil}}},
 		{name: "P E E fails", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{4, nil, nil}, {-1, completeFailure, nil}, {-1, completeFailure, nil}}, wantErr: true},
 		{name: "E E E fails", targetLAC: 5, aq: 2, responses: []completeNodeResponse{{-1, completeFailure, nil}, {-1, completeFailure, nil}, {-1, completeFailure, nil}}, wantErr: true},
 
 		// Ack-quorum boundaries.
-		{name: "Aq one needs one qualified", targetLAC: 5, aq: 1, responses: []completeNodeResponse{{5, nil, nil}, {4, nil, nil}, {-1, completeFailure, nil}}},
+		{name: "Aq one needs one recorded boundary", targetLAC: 5, aq: 1, responses: []completeNodeResponse{{5, nil, nil}, {4, nil, nil}, {-1, completeFailure, nil}}},
 		{name: "Aq all requires every replica qualified", targetLAC: 5, aq: 3, responses: []completeNodeResponse{{5, nil, nil}, {5, nil, nil}, {5, nil, nil}}},
-		{name: "Aq all rejects one partial", targetLAC: 5, aq: 3, responses: []completeNodeResponse{{5, nil, nil}, {5, nil, nil}, {4, nil, nil}}, wantErr: true},
+		{name: "Aq all accepts one partial that recorded the boundary", targetLAC: 5, aq: 3, responses: []completeNodeResponse{{5, nil, nil}, {5, nil, nil}, {4, nil, nil}}},
 
 		// LAC sentinel and first-entry boundaries.
 		{name: "empty target minus one counts empty replicas", targetLAC: -1, aq: 2, responses: []completeNodeResponse{{-1, nil, nil}, {-1, nil, nil}, {-1, nil, nil}}},
 		{name: "entry zero target has two qualified replicas", targetLAC: 0, aq: 2, responses: []completeNodeResponse{{0, nil, nil}, {0, nil, nil}, {-1, nil, nil}}},
-		{name: "entry zero target with one qualified fails", targetLAC: 0, aq: 2, responses: []completeNodeResponse{{0, nil, nil}, {-1, nil, nil}, {-1, completeFailure, nil}}, wantErr: true},
+		{name: "entry zero target with one qualified and one partial succeeds", targetLAC: 0, aq: 2, responses: []completeNodeResponse{{0, nil, nil}, {-1, nil, nil}, {-1, completeFailure, nil}}},
 	}
 
 	for _, tt := range tests {

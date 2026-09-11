@@ -28,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
@@ -6773,4 +6774,133 @@ func TestResolveFenceLACRejectsInconsistentQuorum(t *testing.T) {
 			assert.Contains(t, err.Error(), "inconsistent quorum")
 		})
 	}
+}
+
+// TestCompleteSegmentQuorum_TargetHeldByOneReplica covers the shape recovery now produces when a
+// fence reply is missing: the target is the highest tail that cannot be shown to be below the
+// acknowledged boundary, and only one replica holds data up to it.
+//
+// Requiring an ack quorum of covering replicas here would fail the completion -- after every
+// replica had already frozen its footer at that target. No later attempt could then succeed: the
+// target itself can never gather more coverage, and a lower one is rejected by the frozen footers.
+// Since OpenLogWriter fences and completes every active segment before it returns, that would
+// leave the whole log unable to accept a writer, to avoid carrying entries that were never
+// acknowledged in the first place.
+func TestCompleteSegmentQuorum_TargetHeldByOneReplica(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Replica tails [1,0,0]: entry 1 reached a single replica and was never acknowledged.
+	// Recovery targets 1 after a fence reply went missing.
+	for node, tail := range map[string]int64{"node1": 1, "node2": 0, "node3": 0} {
+		cli := mocks_logstore_client.NewLogStoreClient(t)
+		cli.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(tail, nil)
+		mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, node).Return(cli, nil)
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
+	err := impl.completeSegmentQuorum(context.Background(), quorum, 1)
+	assert.NoError(t, err, "all three replicas recorded the boundary, so the segment must close")
+}
+
+// TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas walks the whole
+// recovery path -- fence, then complete -- against replicas that behave like
+// StagedFileWriter: Finalize burns the target LAC into a durable footer, and a
+// later Finalize at a different LAC is refused with ErrInvalidLACAlignment.
+//
+// Tails are [1,0,0] and one tail-0 replica is unreachable, so the fence sees
+// [1,0] and targets 1 -- a boundary a single replica covers. Completion has to
+// succeed on this pass. If it did not, the replicas finalized at 1 would outlive
+// it, the next fence would see every reply and target 0, and every one of those
+// footers would reject 0: the segment could never close, on this process or any
+// later one. The second half of this test runs exactly that pass to show it.
+func TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	const notFinalized = int64(-2)
+	type replica struct {
+		tail      int64
+		footer    int64
+		reachable bool
+	}
+	replicas := map[string]*replica{
+		"node1": {tail: 1, footer: notFinalized, reachable: true},
+		"node2": {tail: 0, footer: notFinalized, reachable: false}, // missed the fence
+		"node3": {tail: 0, footer: notFinalized, reachable: true},
+	}
+
+	for node, r := range replicas {
+		r := r
+		cli := mocks_logstore_client.NewLogStoreClient(t)
+		cli.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, bucket, root string, logId, segId int64) (int64, error) {
+				if !r.reachable {
+					return -1, errors.New("node unreachable")
+				}
+				return r.tail, nil
+			})
+		cli.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, bucket, root string, logId, segId, lac int64) (int64, error) {
+				if !r.reachable {
+					return -1, errors.New("node unreachable")
+				}
+				if r.footer != notFinalized && r.footer != lac {
+					return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+						fmt.Sprintf("footer already finalized at %d, refusing %d", r.footer, lac))
+				}
+				r.footer = lac
+				return r.tail, nil
+			})
+		mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, node).Return(cli, nil)
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
+	ctx := context.Background()
+
+	// Pass 1: one replica silent at fence.
+	lac, err := impl.fenceSegmentQuorum(ctx, quorum)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), lac, "a silent replica is unknown, not empty, so the target stays at 1")
+	require.NoError(t, impl.completeSegmentQuorum(ctx, quorum, lac),
+		"two replicas recorded the boundary, which is what completion needs")
+	assert.Equal(t, int64(1), replicas["node1"].footer)
+	assert.Equal(t, int64(1), replicas["node3"].footer)
+
+	// Pass 2, the counterfactual: the missing replica is back and every reply is in,
+	// so the target drops to 0 -- and the footers already burned at 1 refuse it.
+	replicas["node2"].reachable = true
+	lac, err = impl.fenceSegmentQuorum(ctx, quorum)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), lac)
+	assert.Error(t, impl.completeSegmentQuorum(ctx, quorum, lac),
+		"only the replica that never finalized can accept 0, which is below the ack quorum")
 }
