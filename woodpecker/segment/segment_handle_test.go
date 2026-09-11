@@ -29,6 +29,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
@@ -6903,4 +6905,96 @@ func TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas(t *testing.T
 	assert.Equal(t, int64(0), lac)
 	assert.Error(t, impl.completeSegmentQuorum(ctx, quorum, lac),
 		"only the replica that never finalized can accept 0, which is below the ack quorum")
+}
+
+// TestCompactSegmentQuorum_AttemptDeadlineFailsOverToNextNode verifies a node that hangs rather
+// than failing costs one attempt rather than the caller's whole budget, and that the sequential
+// walk then reaches the remaining replicas -- which is the reason the walk is sequential.
+func TestCompactSegmentQuorum_AttemptDeadlineFailsOverToNextNode(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+	cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout = config.NewDurationSecondsFromInt(1)
+
+	hung := mocks_logstore_client.NewLogStoreClient(t)
+	hung.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, _ string, _ string, _ int64, _ int64, _ int64) (*proto.SegmentMetadata, error) {
+			// The attempt must carry a deadline of its own, not merely inherit the caller's.
+			_, ok := ctx.Deadline()
+			assert.True(t, ok, "the compaction attempt should carry its own deadline")
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+
+	healthy := mocks_logstore_client.NewLogStoreClient(t)
+	healthy.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(&proto.SegmentMetadata{State: proto.SegmentState_Sealed}, nil)
+
+	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "hung-node").Return(hung, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-node").Return(healthy, nil)
+
+	s := &segmentHandleImpl{
+		logId:      1,
+		logName:    "test-log",
+		segmentId:  7,
+		ClientPool: pool,
+		cfg:        cfg,
+	}
+
+	// The caller's context has no deadline at all, exactly as the auditor's does not: the bound
+	// under test has to come from the attempt itself.
+	quorum := &proto.QuorumInfo{Nodes: []string{"hung-node", "healthy-node"}}
+	segMeta, err := s.compactSegmentQuorum(context.Background(), quorum, 9)
+	assert.NoError(t, err)
+	assert.NotNil(t, segMeta)
+}
+
+// TestCompactSegmentQuorum_CancelledCallerDoesNotBlameUntriedNodes verifies a cancelled caller
+// stops the walk and is reported as such, rather than being recorded as every replica failing.
+//
+// GetLogStoreClient returns a cached client without consulting the context, and WithTimeout on a
+// context that is already done yields an immediately-expired child, so without the check every
+// remaining node would "fail" instantly, land in nodeFailures, and be counted into
+// WpSegmentCompactionFailuresTotal and the all-nodes-failed warning -- corrupting the signal
+// operators use to identify a genuinely broken replica.
+func TestCompactSegmentQuorum_CancelledCallerDoesNotBlameUntriedNodes(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+
+	// No client expectations at all: reaching the pool would fail the test.
+	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	s := &segmentHandleImpl{
+		logId:      1,
+		logName:    "test-log",
+		segmentId:  7,
+		ClientPool: pool,
+		cfg:        cfg,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	quorum := &proto.QuorumInfo{Nodes: []string{"node-a", "node-b", "node-c"}}
+	segMeta, err := s.compactSegmentQuorum(ctx, quorum, 9)
+	assert.Nil(t, segMeta)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// TestClassifyCompactionFailureReason_GrpcDeadlineIsTransient covers the remote-mode shape of an
+// attempt deadline. gRPC surfaces it as status.Error(codes.DeadlineExceeded, ...), which does not
+// wrap context.DeadlineExceeded, is not a woodpeckerError and is not codes.Unavailable, so none of
+// errors.Is, IsRetryableErr or IsTransportError match it. Only embedded mode returns the native
+// error. Without the status check a node that stops responding is labelled "other" in exactly the
+// deployment where the per-attempt deadline is what detects it.
+func TestClassifyCompactionFailureReason_GrpcDeadlineIsTransient(t *testing.T) {
+	grpcDeadline := status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+
+	// Guard the premise: if this ever starts matching, the extra check is redundant rather than
+	// load-bearing, and this test says so.
+	assert.False(t, errors.Is(grpcDeadline, context.DeadlineExceeded),
+		"a gRPC status error does not wrap the context sentinel")
+
+	assert.Equal(t, compactionFailureReasonTransient, classifyCompactionFailureReason(grpcDeadline))
+	assert.Equal(t, compactionFailureReasonTransient, classifyCompactionFailureReason(context.DeadlineExceeded))
 }
