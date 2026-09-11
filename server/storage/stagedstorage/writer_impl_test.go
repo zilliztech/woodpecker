@@ -1050,9 +1050,9 @@ func TestStagedFileWriter_ValidateLACAlignment_LACExceedsData(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- readBlockDataFromLocalFile ---
+// --- readMergeTaskBlocks ---
 
-func TestStagedFileWriter_ReadBlockDataFromLocalFile_Success(t *testing.T) {
+func TestStagedFileWriter_ReadMergeTaskBlocks_Success(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
 	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
@@ -1073,13 +1073,23 @@ func TestStagedFileWriter_ReadBlockDataFromLocalFile_Success(t *testing.T) {
 
 	require.NotEmpty(t, writer.blockIndexes)
 
-	result := writer.readBlockDataFromLocalFile(context.Background(), writer.blockIndexes[0])
-	assert.Nil(t, result.error)
-	assert.NotEmpty(t, result.blockData)
-	assert.Equal(t, writer.blockIndexes[0], result.blockIndex)
+	task := &mergeBlockTask{blocks: writer.blockIndexes}
+	views, err := writer.readMergeTaskBlocks(context.Background(), task)
+	require.NoError(t, err)
+	require.Len(t, views, len(writer.blockIndexes))
+
+	// Every view must be exactly the bytes the index describes, which is what the previous
+	// one-ReadAt-per-block path returned. Compare against an independent read of the file.
+	raw, err := os.ReadFile(writer.segmentFilePath)
+	require.NoError(t, err)
+	for i, blockIndex := range writer.blockIndexes {
+		assert.Len(t, views[i], int(blockIndex.BlockSize))
+		expected := raw[blockIndex.StartOffset : blockIndex.StartOffset+int64(blockIndex.BlockSize)]
+		assert.Equal(t, expected, views[i], "block %d view differs from the file contents", i)
+	}
 }
 
-func TestStagedFileWriter_ReadBlockDataFromLocalFile_FileNotFound(t *testing.T) {
+func TestStagedFileWriter_ReadMergeTaskBlocks_FileNotFound(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
 	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
@@ -1089,15 +1099,120 @@ func TestStagedFileWriter_ReadBlockDataFromLocalFile_FileNotFound(t *testing.T) 
 	// Remove the segment file to cause read failure
 	os.Remove(writer.segmentFilePath)
 
-	blockIndex := &codec.IndexRecord{
+	task := &mergeBlockTask{blocks: []*codec.IndexRecord{{
 		BlockNumber:  0,
 		StartOffset:  0,
 		BlockSize:    100,
 		FirstEntryID: 0,
 		LastEntryID:  9,
+	}}}
+	_, err = writer.readMergeTaskBlocks(context.Background(), task)
+	assert.Error(t, err)
+}
+
+func TestStagedFileWriter_ReadMergeTaskBlocks_NoBlocks(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	views, err := writer.readMergeTaskBlocks(context.Background(), &mergeBlockTask{})
+	require.NoError(t, err)
+	assert.Empty(t, views)
+}
+
+func TestStagedFileWriter_ReadMergeTaskBlocks_ShortFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	// A block whose span runs past the end of the file: the single ReadAt must fail rather than
+	// hand back a short buffer that the per-block views would then slice out of range.
+	task := &mergeBlockTask{blocks: []*codec.IndexRecord{{
+		BlockNumber: 0,
+		StartOffset: 0,
+		BlockSize:   1 << 20,
+	}}}
+	_, err = writer.readMergeTaskBlocks(context.Background(), task)
+	assert.Error(t, err)
+}
+
+// TestStagedFileWriter_ReadMergeTaskBlocks_UnorderedBlocks covers the span being derived from the
+// blocks themselves rather than from the first and last of the slice. planMergeBlockTasks always
+// hands over a consecutive ascending run, so this cannot happen today; the point is that the one
+// ReadAt does not silently return the wrong bytes if that ever stops holding.
+func TestStagedFileWriter_ReadMergeTaskBlocks_UnorderedBlocks(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	// Small blocks so the segment holds several of them: reversing a single-block slice would
+	// leave the span calculation untested.
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.ByteSize(200)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+
+	const n = 40
+	for i := int64(0); i < n; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte(fmt.Sprintf("payload-%04d-abcdefghij", i)), nil)
+		require.NoError(t, err)
 	}
-	result := writer.readBlockDataFromLocalFile(context.Background(), blockIndex)
-	assert.NotNil(t, result.error)
+	require.NoError(t, writer.Sync(context.Background()))
+	time.Sleep(400 * time.Millisecond)
+	_, err = writer.Finalize(context.Background(), n-1)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+	require.Greater(t, len(writer.blockIndexes), 1, "need multiple blocks for the span to matter")
+
+	// Reverse the order the blocks are handed over in.
+	reversed := make([]*codec.IndexRecord, 0, len(writer.blockIndexes))
+	for i := len(writer.blockIndexes) - 1; i >= 0; i-- {
+		reversed = append(reversed, writer.blockIndexes[i])
+	}
+
+	views, err := writer.readMergeTaskBlocks(context.Background(), &mergeBlockTask{blocks: reversed})
+	require.NoError(t, err)
+	require.Len(t, views, len(reversed))
+
+	raw, err := os.ReadFile(writer.segmentFilePath)
+	require.NoError(t, err)
+	for i, blockIndex := range reversed {
+		expected := raw[blockIndex.StartOffset : blockIndex.StartOffset+int64(blockIndex.BlockSize)]
+		assert.Equal(t, expected, views[i], "block %d view differs from the file contents", blockIndex.BlockNumber)
+	}
+}
+
+// TestStagedFileWriter_ProcessMergeTask_ReadFailurePropagates verifies a failed span read aborts
+// the merge task rather than proceeding with a partial buffer.
+func TestStagedFileWriter_ProcessMergeTask_ReadFailurePropagates(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	// The block's span runs past the end of the (empty) segment file.
+	task := &mergeBlockTask{blocks: []*codec.IndexRecord{{
+		BlockNumber: 0,
+		StartOffset: 0,
+		BlockSize:   1 << 20,
+	}}}
+	result := writer.processMergeTask(context.Background(), task, 0, 9)
+	require.NotNil(t, result)
+	assert.Error(t, result.error)
+	assert.Nil(t, result.blockIndex)
+}
+
+// TestCompactedBlockHeaderWidthsAreFixed pins the assumption processMergeTask relies on when it
+// reserves space for the leading records before merging the payload into the same buffer: both
+// record types encode to a fixed width. A codec change that broke this would otherwise leave a
+// gap of zero bytes between the headers and the data.
+func TestCompactedBlockHeaderWidthsAreFixed(t *testing.T) {
+	assert.Equal(t, codec.RecordHeaderSize+codec.HeaderRecordSize,
+		len(codec.EncodeRecord(&codec.HeaderRecord{Version: codec.FormatVersion, FirstEntryID: 7})))
+	assert.Equal(t, codec.RecordHeaderSize+codec.BlockHeaderRecordSize,
+		len(codec.EncodeRecord(&codec.BlockHeaderRecord{BlockNumber: 3, FirstEntryID: 1, LastEntryID: 9, BlockLength: 42, BlockCrc: 1234})))
 }
 
 // --- determineIfNeedRecoveryMode ---
