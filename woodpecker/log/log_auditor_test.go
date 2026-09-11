@@ -22,6 +22,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -251,7 +253,7 @@ func TestCompactCompletedSegments_CountsAndSkips(t *testing.T) {
 		2: segMeta(2, proto.SegmentState_Sealed),    // ignored by this pass
 		3: segMeta(3, proto.SegmentState_Truncated), // ignored by this pass
 	}
-	st := compactCompletedSegments(context.Background(), lh, segs, false)
+	st := compactCompletedSegments(context.Background(), lh, segs, false, 0)
 	require.Equal(t, 1, st.processed)
 	assert.Equal(t, 0, st.compacted)
 	assert.Equal(t, 1, st.failed)
@@ -264,7 +266,7 @@ func TestCompactCompletedSegments_CanceledWriterDoesNotStartCompaction(t *testin
 
 	st := compactCompletedSegments(ctx, lh, map[int64]*meta.SegmentMeta{
 		1: segMeta(1, proto.SegmentState_Completed),
-	}, false)
+	}, false, 0)
 
 	assert.Equal(t, compactStats{}, st)
 	lh.AssertNotCalled(t, "GetRecoverableSegmentHandle", mock.Anything, mock.Anything)
@@ -282,7 +284,7 @@ func TestCompactCompletedSegments_LocalModeSkipsPass(t *testing.T) {
 	st := compactCompletedSegments(context.Background(), lh, map[int64]*meta.SegmentMeta{
 		1: segMeta(1, proto.SegmentState_Completed),
 		2: segMeta(2, proto.SegmentState_Completed),
-	}, true)
+	}, true, 0)
 
 	assert.Equal(t, compactStats{}, st)
 	lh.AssertNotCalled(t, "GetRecoverableSegmentHandle", mock.Anything, mock.Anything)
@@ -478,7 +480,7 @@ func TestCompactCompletedSegments_BoundedPerCycle(t *testing.T) {
 		segs[i] = segMeta(i, proto.SegmentState_Completed)
 	}
 
-	st := compactCompletedSegments(context.Background(), lh, segs, false)
+	st := compactCompletedSegments(context.Background(), lh, segs, false, 0)
 	assert.Equal(t, maxCompactedPerCycle, st.processed)
 	assert.Equal(t, total-maxCompactedPerCycle, st.deferred)
 }
@@ -508,7 +510,7 @@ func TestCompactCompletedSegments_OldestFirst(t *testing.T) {
 		segs[i] = segMeta(i, proto.SegmentState_Completed)
 	}
 
-	compactCompletedSegments(context.Background(), lh, segs, false)
+	compactCompletedSegments(context.Background(), lh, segs, false, 0)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -564,4 +566,110 @@ func TestWaitAuditorStartJitter(t *testing.T) {
 		assert.True(t, waitAuditorStartJitter(context.Background(), closed, -time.Second))
 		assert.Less(t, time.Since(start), 50*time.Millisecond)
 	})
+}
+
+// TestCompactCompletedSegments_BudgetStopsStartingButNeverCutsOffInFlight verifies the pass
+// budget stops the walk starting further segments while letting the one already running finish.
+//
+// A deadline that cancelled in flight would cut off any segment whose compaction legitimately takes
+// longer than the budget -- on every cycle, so it would never complete, its local data.log would
+// never be reclaimed, and the same work would be repeated forever. That is the same trap as an
+// attempt timeout set below the server's own per-segment budget.
+func TestCompactCompletedSegments_BudgetStopsStartingButNeverCutsOffInFlight(t *testing.T) {
+	const perSegment = 120 * time.Millisecond
+	const budget = 20 * time.Millisecond
+
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+
+	var cancelled atomic.Bool
+	sh := mocks_segment_handle.NewSegmentHandle(t)
+	sh.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		select {
+		case <-time.After(perSegment):
+			return nil
+		case <-ctx.Done():
+			cancelled.Store(true)
+			return ctx.Err()
+		}
+	}).Maybe()
+	lh.On("GetRecoverableSegmentHandle", mock.Anything, mock.Anything).Return(sh, nil).Maybe()
+
+	const total = 12
+	segs := map[int64]*meta.SegmentMeta{}
+	for i := int64(1); i <= total; i++ {
+		segs[i] = segMeta(i, proto.SegmentState_Completed)
+	}
+
+	start := time.Now()
+	st := compactCompletedSegments(context.Background(), lh, segs, false, budget)
+	elapsed := time.Since(start)
+
+	// The budget is spent during the first segment, so exactly one is started and the rest are
+	// left for a later cycle.
+	assert.Equal(t, 1, st.processed)
+	assert.Equal(t, 1, st.compacted, "the segment already running must finish, not be cut off")
+	assert.Equal(t, total-1, st.deferred)
+	assert.False(t, cancelled.Load(), "an in-flight compaction must not be cancelled by the budget")
+
+	// A pass lasts at most the budget plus one segment.
+	assert.Less(t, elapsed, budget+perSegment+300*time.Millisecond)
+}
+
+// TestCompactCompletedSegments_ZeroBudgetIsUnbounded covers the guard for a Configuration
+// assembled programmatically without the auditor budgets: a non-positive budget must mean
+// unbounded, not "stop before the first segment", which would silently disable compaction.
+func TestCompactCompletedSegments_ZeroBudgetIsUnbounded(t *testing.T) {
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+
+	sh := mocks_segment_handle.NewSegmentHandle(t)
+	sh.EXPECT().Compact(mock.Anything).Return(nil).Maybe()
+	lh.On("GetRecoverableSegmentHandle", mock.Anything, mock.Anything).Return(sh, nil).Maybe()
+
+	segs := map[int64]*meta.SegmentMeta{}
+	for i := int64(1); i <= 5; i++ {
+		segs[i] = segMeta(i, proto.SegmentState_Completed)
+	}
+
+	st := compactCompletedSegments(context.Background(), lh, segs, false, 0)
+	assert.Equal(t, 5, st.processed)
+	assert.Equal(t, 5, st.compacted)
+	assert.Zero(t, st.deferred)
+}
+
+// TestCompactCompletedSegments_CountBoundAndBudgetCompose verifies the two bounds add up rather
+// than one masking the other: the count bound decides how many segments a cycle may start, the
+// budget decides how long it may spend starting them, and every segment neither reached is
+// reported as deferred. Neither subsumes the other -- maxCompactedPerCycle fast segments finish
+// well inside the budget, and one slow segment exhausts the budget long before the count.
+func TestCompactCompletedSegments_CountBoundAndBudgetCompose(t *testing.T) {
+	const total = maxCompactedPerCycle + 36
+	const perSegment = 80 * time.Millisecond
+	const budget = 10 * time.Millisecond
+
+	lh := &testLogHandleMock{}
+	lh.On("GetName").Return("test-log").Maybe()
+	lh.On("GetId").Return(int64(1)).Maybe()
+
+	sh := mocks_segment_handle.NewSegmentHandle(t)
+	sh.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		time.Sleep(perSegment)
+		return nil
+	}).Maybe()
+	lh.On("GetRecoverableSegmentHandle", mock.Anything, mock.Anything).Return(sh, nil).Maybe()
+
+	segs := map[int64]*meta.SegmentMeta{}
+	for i := int64(1); i <= total; i++ {
+		segs[i] = segMeta(i, proto.SegmentState_Completed)
+	}
+
+	st := compactCompletedSegments(context.Background(), lh, segs, false, budget)
+
+	// The count bound drops everything past maxCompactedPerCycle; the budget is then spent during
+	// the first of those, leaving the rest of them for a later cycle too.
+	assert.Equal(t, 1, st.processed)
+	assert.Equal(t, total-1, st.deferred, "every segment the pass did not start must be reported")
 }

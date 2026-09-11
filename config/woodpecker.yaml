@@ -34,6 +34,8 @@ woodpecker:
       maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
+      compactionAttemptTimeout: 330 # Deadline for one compaction attempt against one quorum node, in seconds, default is 330s. Sent to the node as the gRPC deadline, so keep it at or above logstore.segmentCompactionPolicy.timeout (validated): below it the server's budget is unreachable and a slow compaction is cut off on every replica, keeping nothing, so the segment never completes and its local data.log is never reclaimed. It exists to bound a node that stops responding at all, which the server's own timeout cannot cover.
+      compactionPassBudget: 60 # How long one auditor cycle spends starting compactions, in seconds, default is 60s. Once spent no further segment is started, but a compaction already in flight runs to completion, so a pass lasts at most this budget plus one segment. Segments not started are picked up on a later cycle.
     sessionMonitor:
       checkInterval: 3 # How often to check session health in seconds, default is 3 seconds
       maxFailures: 5 # Consecutive failures before marking session invalid, default is 5

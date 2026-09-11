@@ -46,6 +46,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 600, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds())
 	assert.Equal(t, int64(1000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval.Seconds())
+	assert.Equal(t, 330, config.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds())
+	assert.Equal(t, 60, config.Woodpecker.Client.Auditor.CompactionPassBudget.Seconds())
 	assert.Equal(t, 1, len(config.Woodpecker.Client.Quorum.BufferPools.Get()))
 	assert.Equal(t, "default-region-pool", config.Woodpecker.Client.Quorum.BufferPools.Get()[0].Name)
 	assert.Equal(t, []string{}, config.Woodpecker.Client.Quorum.BufferPools.Get()[0].Seeds)
@@ -153,6 +155,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 800, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds())
 	assert.Equal(t, int64(1000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.Auditor.MaxInterval.Seconds())
+	assert.Equal(t, 330, defaultConfig.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds())
+	assert.Equal(t, 60, defaultConfig.Woodpecker.Client.Auditor.CompactionPassBudget.Seconds())
 	assert.Equal(t, 1, len(defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()))
 	assert.Equal(t, "default-pool", defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()[0].Name)
 	assert.Equal(t, []string{}, defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()[0].Seeds)
@@ -461,7 +465,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 							MaxBlocks:   1000,
 						},
 						Auditor: AuditorConfig{
-							MaxInterval: NewDurationSecondsFromInt(5),
+							MaxInterval:              NewDurationSecondsFromInt(5),
+							CompactionAttemptTimeout: NewDurationSecondsFromInt(330),
+							CompactionPassBudget:     NewDurationSecondsFromInt(60),
 						},
 						Quorum: tt.config,
 					},
@@ -710,6 +716,16 @@ func TestValidateClientConfig_Errors(t *testing.T) {
 		cfg := newValidCfg()
 		cfg.Woodpecker.Client.Auditor.MaxInterval = NewDurationSecondsFromInt(0)
 		assert.ErrorContains(t, cfg.Validate(), "auditor max interval must be positive")
+	})
+	t.Run("Auditor CompactionAttemptTimeout<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "auditor compaction attempt timeout must be positive")
+	})
+	t.Run("Auditor CompactionPassBudget<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.Auditor.CompactionPassBudget = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "auditor compaction pass budget must be positive")
 	})
 
 	t.Run("DirectRead MaxBatchSize<=0", func(t *testing.T) {
@@ -1119,7 +1135,9 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					MaxBlocks:   1000,
 				},
 				Auditor: AuditorConfig{
-					MaxInterval: NewDurationSecondsFromInt(5),
+					MaxInterval:              NewDurationSecondsFromInt(5),
+					CompactionAttemptTimeout: NewDurationSecondsFromInt(330),
+					CompactionPassBudget:     NewDurationSecondsFromInt(60),
 				},
 				Quorum: config,
 			},
@@ -1323,4 +1341,36 @@ func TestDiskWatermarkPolicyConfig_DefaultsAndValidation(t *testing.T) {
 	// disabled: validation skipped
 	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
 	assert.NoError(t, cfg.Validate())
+}
+
+// TestValidate_AttemptTimeoutMustCoverServerCompactionBudget covers the cross-section rule: the
+// client's per-attempt deadline reaches the node over gRPC, so a value below the server's own
+// per-segment budget makes that budget unreachable. A compaction that legitimately needs longer is
+// then cut off on every replica and keeps nothing, so the segment never completes and the node's
+// local data.log is never reclaimed.
+func TestValidate_AttemptTimeoutMustCoverServerCompactionBudget(t *testing.T) {
+	t.Run("below the server budget is rejected", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		assert.NoError(t, err)
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = NewDurationSecondsFromInt(300)
+		cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout = NewDurationSecondsFromInt(299)
+		assert.ErrorContains(t, cfg.Validate(), "must be at least the segment compaction timeout")
+	})
+
+	t.Run("equal to the server budget is accepted", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		assert.NoError(t, err)
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = NewDurationSecondsFromInt(300)
+		cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout = NewDurationSecondsFromInt(300)
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("the shipped defaults satisfy it", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		assert.NoError(t, err)
+		assert.GreaterOrEqual(t,
+			cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds(),
+			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
+		assert.NoError(t, cfg.Validate())
+	})
 }

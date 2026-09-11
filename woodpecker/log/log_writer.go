@@ -60,18 +60,19 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	defer sp.End()
 	maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
 	w := &logWriterImpl{
-		logIdStr:           strconv.FormatInt(logHandle.GetId(), 10),
-		logHandle:          logHandle,
-		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
-		cfg:                cfg,
-		logNs:              metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
-		writerClose:        make(chan struct{}, 1),
-		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
-		notifyManager:      segment.NewSegmentCompactedNotifyManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
-		notifySegsCh:       make(chan map[int64]*meta.SegmentMeta, 1),
-		sessionLock:        sessionLock,
-		maintenanceCtx:     maintenanceCtx,
-		maintenanceCancel:  maintenanceCancel,
+		logIdStr:             strconv.FormatInt(logHandle.GetId(), 10),
+		logHandle:            logHandle,
+		auditorMaxInterval:   cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
+		compactionPassBudget: cfg.Woodpecker.Client.Auditor.CompactionPassBudget.Duration.Duration(),
+		cfg:                  cfg,
+		logNs:                metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		writerClose:          make(chan struct{}, 1),
+		cleanupManager:       segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		notifyManager:        segment.NewSegmentCompactedNotifyManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		notifySegsCh:         make(chan map[int64]*meta.SegmentMeta, 1),
+		sessionLock:          sessionLock,
+		maintenanceCtx:       maintenanceCtx,
+		maintenanceCancel:    maintenanceCancel,
 	}
 	// Set trigger expired
 	onWriterInvalidated := func(ctx context.Context, reason string) {
@@ -106,12 +107,14 @@ type logWriterImpl struct {
 	logIdStr           string // for metrics label only
 	logHandle          LogHandle
 	auditorMaxInterval int
-	cfg                *config.Configuration
-	logNs              string
-	writerClose        chan struct{}
-	cleanupManager     segment.SegmentCleanupManager
-	notifyManager      segment.SegmentCompactedNotifyManager
-	notifySegsCh       chan map[int64]*meta.SegmentMeta // auditor -> notify distributor snapshot handoff
+	// compactionPassBudget bounds how long one cycle spends starting compactions.
+	compactionPassBudget time.Duration
+	cfg                  *config.Configuration
+	logNs                string
+	writerClose          chan struct{}
+	cleanupManager       segment.SegmentCleanupManager
+	notifyManager        segment.SegmentCompactedNotifyManager
+	notifySegsCh         chan map[int64]*meta.SegmentMeta // auditor -> notify distributor snapshot handoff
 
 	// Session related fields
 	sessionLock         *meta.SessionLock
@@ -408,7 +411,11 @@ func (l *logWriterImpl) runAuditor() {
 			markTruncatedSegmentsReaped(l.notifyManager, truncatedSegmentExists)
 			publishSegmentsSnapshot(l.notifySegsCh, segmentMetaList)
 
-			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList, localMode)
+			// Bound the pass: the auditor runs its passes in sequence, so a compaction that
+			// hangs -- an object store that stops responding rather than failing -- would hold
+			// up truncate state, snapshot publication and the orphan sweep for as long as it
+			// lasts. Segments the budget does not reach are left for a later cycle.
+			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList, localMode, l.compactionPassBudget)
 			if ctx.Err() != nil {
 				sp.End()
 				return
