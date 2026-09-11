@@ -28,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
@@ -3157,101 +3158,138 @@ func TestResolveFenceLAC(t *testing.T) {
 	s := &segmentHandleImpl{}
 
 	tests := []struct {
-		name      string
-		results   []int64
-		ackQuorum int
-		expected  int64
-		wantErr   bool
+		name        string
+		results     []int64
+		writeQuorum int
+		ackQuorum   int
+		expected    int64
+		wantErr     bool
 	}{
 		{
-			name:      "normal 3 nodes",
-			results:   []int64{4, 6, 7},
-			ackQuorum: 2,
-			expected:  6,
+			name:        "normal 3 nodes",
+			results:     []int64{4, 6, 7},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    6,
 		},
 		{
-			name:      "all same value",
-			results:   []int64{5, 5, 5},
-			ackQuorum: 2,
-			expected:  5,
+			name:        "all same value",
+			results:     []int64{5, 5, 5},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    5,
 		},
 		{
-			// Entry 0 lives on a single replica, so it was never acked and cannot
-			// become the completion target: only that one replica could ever cover it.
-			name:      "one node empty holds the target back",
-			results:   []int64{0, -1},
-			ackQuorum: 2,
-			expected:  -1,
+			// Two of three replicas answered. Entry 0 may also be on the replica that did
+			// not answer, in which case it reached ack quorum and the client was told so.
+			// A missing reply is not evidence that the entry is absent, so the target may
+			// not be lowered past it. This is the history in #320: selecting -1 here
+			// published an empty segment over an acknowledged write.
+			name:        "missing reply may not lower the target",
+			results:     []int64{0, -1},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    0,
 		},
 		{
-			// The production wedge: fence saw [0,-1,-1] and returned 0, which only one
-			// of three replicas could finalize at, so completion never reached quorum.
-			name:      "regression: fence with [0, -1, -1] ackQuorum=2",
-			results:   []int64{0, -1, -1},
-			ackQuorum: 2,
-			expected:  -1,
+			// All three replicas answered, so the evidence is complete: entry 0 really is
+			// on one replica only and was never acked. Lowering to -1 is correct, and this
+			// is the case an earlier fix was written for -- a target of 0 could only ever
+			// be finalized by one replica, so completion never reached quorum.
+			name:        "complete evidence may lower the target",
+			results:     []int64{0, -1, -1},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    -1,
 		},
 		{
-			name:      "two valid one empty",
-			results:   []int64{-1, 0, 0},
-			ackQuorum: 2,
-			expected:  0,
+			name:        "two valid one empty",
+			results:     []int64{-1, 0, 0},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    0,
 		},
 		{
-			name:      "multiple entries with one empty node",
-			results:   []int64{2, -1},
-			ackQuorum: 2,
-			expected:  -1,
+			// Same shape as the #320 case: only two replies, so entry 2 may be on the
+			// silent replica as well.
+			name:        "multiple entries with one silent replica",
+			results:     []int64{2, -1},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    2,
 		},
 		{
-			name:      "all nodes empty",
-			results:   []int64{-1, -1},
-			ackQuorum: 2,
-			expected:  -1,
+			name:        "all nodes empty",
+			results:     []int64{-1, -1},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    -1,
 		},
 		{
-			name:      "single empty node",
-			results:   []int64{-1},
-			ackQuorum: 1,
-			expected:  -1,
+			name:        "single empty node",
+			results:     []int64{-1},
+			writeQuorum: 1,
+			ackQuorum:   1,
+			expected:    -1,
 		},
 		{
-			name:      "empty results cannot prove coverage",
-			results:   []int64{},
-			ackQuorum: 2,
-			wantErr:   true,
+			name:        "empty results cannot prove coverage",
+			results:     []int64{},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			wantErr:     true,
 		},
 		{
-			name:      "single valid node",
-			results:   []int64{0},
-			ackQuorum: 1,
-			expected:  0,
+			name:        "single valid node",
+			results:     []int64{0},
+			writeQuorum: 1,
+			ackQuorum:   1,
+			expected:    0,
 		},
 		{
-			// Fewer responses than the ack quorum proves nothing; the old clamp
-			// returned 3 here, a target only one replica could ever cover.
-			name:      "fewer responses than ackQuorum cannot prove coverage",
-			results:   []int64{3},
-			ackQuorum: 2,
-			wantErr:   true,
+			// One reply out of three leaves two silent replicas, more than the one that may
+			// legitimately be missing an acknowledged entry, so nothing can be concluded.
+			name:        "too few replies to skip the tolerated missing replicas",
+			results:     []int64{3},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			wantErr:     true,
 		},
 		{
-			name:      "three valid nodes ackQuorum=2",
-			results:   []int64{10, 8, 5},
-			ackQuorum: 2,
-			expected:  8,
+			name:        "three valid nodes ackQuorum=2",
+			results:     []int64{10, 8, 5},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    8,
 		},
 		{
-			name:      "negative sentinel other than -1",
-			results:   []int64{0, -2, 3},
-			ackQuorum: 2,
-			expected:  0,
+			name:        "negative sentinel other than -1",
+			results:     []int64{0, -2, 3},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    0,
 		},
 		{
-			name:      "does not mutate input",
-			results:   []int64{7, 3, 5},
-			ackQuorum: 2,
-			expected:  5,
+			name:        "does not mutate input",
+			results:     []int64{7, 3, 5},
+			writeQuorum: 3,
+			ackQuorum:   2,
+			expected:    5,
+		},
+		{
+			// Five replicas tolerate two missing an acknowledged entry.
+			name:        "five replicas all answered",
+			results:     []int64{9, 7, 5, 3, 1},
+			writeQuorum: 5,
+			ackQuorum:   3,
+			expected:    5,
+		},
+		{
+			name:        "five replicas two silent",
+			results:     []int64{9, 7, 5},
+			writeQuorum: 5,
+			ackQuorum:   3,
+			expected:    9,
 		},
 	}
 
@@ -3261,7 +3299,7 @@ func TestResolveFenceLAC(t *testing.T) {
 			original := make([]int64, len(tt.results))
 			copy(original, tt.results)
 
-			got, err := s.resolveFenceLAC(tt.results, tt.ackQuorum)
+			got, err := s.resolveFenceLAC(tt.results, tt.writeQuorum, tt.ackQuorum)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Equal(t, int64(-1), got)
@@ -3276,55 +3314,108 @@ func TestResolveFenceLAC(t *testing.T) {
 	}
 }
 
-// TestResolveFenceLACCoverageInvariant exhaustively checks the property the completion
-// path depends on: the returned target must be covered by at least ackQuorum responding
-// replicas, and must be the largest value with that coverage. A target above the bound
-// can never be met -- a behind replica has no way to catch up to an entry it never
-// received -- so completion would retry forever and wedge the log.
-func TestResolveFenceLACCoverageInvariant(t *testing.T) {
+// TestResolveFenceLACNeverDropsAcknowledgedData exhaustively checks the property recovery exists
+// to uphold: whatever subset of replicas answers the fence, the selected target is never below the
+// boundary the client was told was durable.
+//
+// The acknowledged boundary is a fact about the replicas, not about the replies: an entry is
+// acknowledged once at least Aq replicas hold it. A replica that does not answer is unknown, not
+// empty, so at most Wq-Aq of the answers may legitimately be missing an acknowledged entry -- the
+// same tolerance the append path spends before it gives up. Indexing by that count holds for every
+// quorum shape; the previous len(results)-ackQuorum held only when every replica answered, which
+// is how #320 published an empty segment over an acknowledged write.
+//
+// Odd and even write quorums are both covered even though the config currently offers only 3 and 5,
+// because the two differ: at Wq=4 the tolerance is 1 while ackQuorum-1 would be 2.
+func TestResolveFenceLACNeverDropsAcknowledgedData(t *testing.T) {
 	s := &segmentHandleImpl{}
-	values := []int64{-1, 0, 1, 3}
+	domain := []int64{-1, 0, 1}
 
-	coveredBy := func(results []int64, v int64) int {
-		n := 0
-		for _, r := range results {
-			if r >= v {
-				n++
+	// acknowledgedBoundary is the highest entry id held by at least ackQuorum replicas.
+	acknowledgedBoundary := func(tails []int64, ackQuorum int) int64 {
+		best := int64(-1)
+		for _, candidate := range tails {
+			held := 0
+			for _, tail := range tails {
+				if tail >= candidate {
+					held++
+				}
+			}
+			if held >= ackQuorum && candidate > best {
+				best = candidate
 			}
 		}
-		return n
+		return best
 	}
 
-	var walk func(prefix []int64, depth int)
-	walk = func(prefix []int64, depth int) {
-		if depth == 0 {
-			for ackQuorum := 1; ackQuorum <= len(prefix); ackQuorum++ {
-				lac, err := s.resolveFenceLAC(prefix, ackQuorum)
-				if !assert.NoError(t, err, "results=%v ackQuorum=%d", prefix, ackQuorum) {
-					continue
+	for writeQuorum := 3; writeQuorum <= 7; writeQuorum++ {
+		ackQuorum := writeQuorum/2 + 1
+		missingTolerated := writeQuorum - ackQuorum
+
+		t.Run(fmt.Sprintf("wq_%d_aq_%d", writeQuorum, ackQuorum), func(t *testing.T) {
+			tails := make([]int64, writeQuorum)
+
+			var walk func(depth int)
+			walk = func(depth int) {
+				if depth < writeQuorum {
+					for _, v := range domain {
+						tails[depth] = v
+						walk(depth + 1)
+					}
+					return
 				}
 
-				assert.GreaterOrEqual(t, coveredBy(prefix, lac), ackQuorum,
-					"results=%v ackQuorum=%d: lac=%d is covered by too few replicas", prefix, ackQuorum, lac)
+				acked := acknowledgedBoundary(tails, ackQuorum)
 
-				// No larger candidate may reach the same coverage, i.e. lac is maximal
-				// and the fence is not truncating acked data.
-				for _, cand := range prefix {
-					if cand > lac {
-						assert.Less(t, coveredBy(prefix, cand), ackQuorum,
-							"results=%v ackQuorum=%d: lac=%d but %d also has quorum coverage", prefix, ackQuorum, lac, cand)
+				// Every subset of replicas that could have answered the fence.
+				for mask := 0; mask < 1<<writeQuorum; mask++ {
+					replies := make([]int64, 0, writeQuorum)
+					for i := 0; i < writeQuorum; i++ {
+						if mask&(1<<i) != 0 {
+							replies = append(replies, tails[i])
+						}
+					}
+
+					lac, err := s.resolveFenceLAC(replies, writeQuorum, ackQuorum)
+					if len(replies) <= missingTolerated {
+						assert.Error(t, err, "tails=%v replies=%v: too few replies must not yield a target", tails, replies)
+						continue
+					}
+					if !assert.NoError(t, err, "tails=%v replies=%v", tails, replies) {
+						continue
+					}
+
+					assert.GreaterOrEqual(t, lac, acked,
+						"tails=%v replies=%v: selected %d, below the acknowledged boundary %d", tails, replies, lac, acked)
+
+					// With every replica answering the evidence is complete, so the target is
+					// exactly the acknowledged boundary -- no lower (data loss) and no higher
+					// (a target too few replicas can finalize, which wedges completion).
+					if len(replies) == writeQuorum {
+						assert.Equal(t, acked, lac, "tails=%v: complete evidence should select the acknowledged boundary", tails)
 					}
 				}
 			}
-			return
-		}
-		for _, v := range values {
-			walk(append(prefix, v), depth-1)
-		}
+			walk(0)
+		})
 	}
+}
 
-	for n := 1; n <= 4; n++ {
-		walk(make([]int64, 0, n), n)
+// TestResolveFenceLACIssue320 is the reported history: three replicas, tails [0,0,-1] so entry 0
+// reached ack quorum and the client was told it was durable, then the fence RPC to the second
+// replica fails. The surviving replies are [0,-1].
+func TestResolveFenceLACIssue320(t *testing.T) {
+	s := &segmentHandleImpl{}
+
+	lac, err := s.resolveFenceLAC([]int64{0, -1}, 3, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), lac, "the acknowledged entry must survive a failed fence reply")
+
+	// Rotating which replica is empty and which fence reply is lost must not change that.
+	for _, replies := range [][]int64{{-1, 0}, {0, -1}} {
+		got, err := s.resolveFenceLAC(replies, 3, 2)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), got, "replies=%v", replies)
 	}
 }
 
@@ -5750,11 +5841,18 @@ func TestFenceSegmentQuorum_InsufficientResponses(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestFenceSegmentQuorum_FewerNodesThanAckQuorum covers the case where every node
-// answers successfully yet the responses still cannot prove ack-quorum coverage, so
-// there is no node error to surface. Fence must refuse rather than hand completion a
-// target only a minority of replicas holds.
-func TestFenceSegmentQuorum_FewerNodesThanAckQuorum(t *testing.T) {
+// TestFenceSegmentQuorum_PartialRepliesBelowTolerance covers the shape that is not "everything
+// failed": a valid three-replica quorum where one node answers and two do not. An acknowledged
+// entry can be missing from at most Wq-Aq = 1 replica, so a single reply leaves two unknowns --
+// more than the tolerance -- and even that reply could be the stale one. Fence must refuse rather
+// than hand completion a target derived from insufficient evidence.
+//
+// The surfaced error is the node failure, not the resolve error: with a valid quorum every result
+// is either an error or a success, so too few successes always implies at least one node error,
+// and fence prefers it as the root cause. That also means the resolve error is only reachable
+// through a malformed quorum or a cancelled collection, which is why the tolerance guard itself is
+// covered by unit tests on resolveFenceLAC rather than from here.
+func TestFenceSegmentQuorum_PartialRepliesBelowTolerance(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	cfg := &config.Configuration{
@@ -5765,10 +5863,13 @@ func TestFenceSegmentQuorum_FewerNodesThanAckQuorum(t *testing.T) {
 		},
 	}
 
+	// node1 answers; node2 and node3 do not.
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(5), nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(nil, errors.New("conn error"))
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(nil, errors.New("conn error"))
 
 	segmentMeta := &meta.SegmentMeta{
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
@@ -5777,12 +5878,11 @@ func TestFenceSegmentQuorum_FewerNodesThanAckQuorum(t *testing.T) {
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
-	// One node cannot establish coverage for an ack quorum of two.
-	quorum := &proto.QuorumInfo{Id: 1, Es: 1, Aq: 2, Wq: 1, Nodes: []string{"node1"}}
+	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
 	lastEntryId, err := impl.fenceSegmentQuorum(context.Background(), quorum)
 	assert.Error(t, err)
 	assert.Equal(t, int64(-1), lastEntryId)
-	assert.Contains(t, err.Error(), "insufficient successful fence responses")
+	assert.Contains(t, err.Error(), "conn error", "the node failure should surface as the root cause")
 }
 
 // === syncLACToQuorumAsync tests ===
@@ -6649,4 +6749,158 @@ func TestSyncLACToQuorumAsync_BoundedWhenNodeHangs(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("syncLACToQuorumAsync did not return: a hung node wedged the LAC syncer")
 	}
+}
+
+// TestResolveFenceLACRejectsInconsistentQuorum pins the guard directly: an ack quorum above the
+// write quorum makes the tolerance Wq-Aq negative, which would index before the start of the
+// sorted replies. Recovery must return an error rather than panic on a malformed quorum.
+func TestResolveFenceLACRejectsInconsistentQuorum(t *testing.T) {
+	s := &segmentHandleImpl{}
+
+	for _, tc := range []struct {
+		name        string
+		writeQuorum int
+		ackQuorum   int
+	}{
+		{"ack quorum above write quorum", 1, 2},
+		{"ack quorum far above write quorum", 3, 9},
+		{"zero ack quorum", 3, 0},
+		{"negative ack quorum", 3, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lac, err := s.resolveFenceLAC([]int64{5, 5, 5}, tc.writeQuorum, tc.ackQuorum)
+			assert.Error(t, err)
+			assert.Equal(t, int64(-1), lac)
+			assert.Contains(t, err.Error(), "inconsistent quorum")
+		})
+	}
+}
+
+// TestCompleteSegmentQuorum_TargetHeldByOneReplica covers the shape recovery now produces when a
+// fence reply is missing: the target is the highest tail that cannot be shown to be below the
+// acknowledged boundary, and only one replica holds data up to it.
+//
+// Requiring an ack quorum of covering replicas here would fail the completion -- after every
+// replica had already frozen its footer at that target. No later attempt could then succeed: the
+// target itself can never gather more coverage, and a lower one is rejected by the frozen footers.
+// Since OpenLogWriter fences and completes every active segment before it returns, that would
+// leave the whole log unable to accept a writer, to avoid carrying entries that were never
+// acknowledged in the first place.
+func TestCompleteSegmentQuorum_TargetHeldByOneReplica(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Replica tails [1,0,0]: entry 1 reached a single replica and was never acknowledged.
+	// Recovery targets 1 after a fence reply went missing.
+	for node, tail := range map[string]int64{"node1": 1, "node2": 0, "node3": 0} {
+		cli := mocks_logstore_client.NewLogStoreClient(t)
+		cli.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(tail, nil)
+		mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, node).Return(cli, nil)
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
+	err := impl.completeSegmentQuorum(context.Background(), quorum, 1)
+	assert.NoError(t, err, "all three replicas recorded the boundary, so the segment must close")
+}
+
+// TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas walks the whole
+// recovery path -- fence, then complete -- against replicas that behave like
+// StagedFileWriter: Finalize burns the target LAC into a durable footer, and a
+// later Finalize at a different LAC is refused with ErrInvalidLACAlignment.
+//
+// Tails are [1,0,0] and one tail-0 replica is unreachable, so the fence sees
+// [1,0] and targets 1 -- a boundary a single replica covers. Completion has to
+// succeed on this pass. If it did not, the replicas finalized at 1 would outlive
+// it, the next fence would see every reply and target 0, and every one of those
+// footers would reject 0: the segment could never close, on this process or any
+// later one. The second half of this test runs exactly that pass to show it.
+func TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	const notFinalized = int64(-2)
+	type replica struct {
+		tail      int64
+		footer    int64
+		reachable bool
+	}
+	replicas := map[string]*replica{
+		"node1": {tail: 1, footer: notFinalized, reachable: true},
+		"node2": {tail: 0, footer: notFinalized, reachable: false}, // missed the fence
+		"node3": {tail: 0, footer: notFinalized, reachable: true},
+	}
+
+	for node, r := range replicas {
+		r := r
+		cli := mocks_logstore_client.NewLogStoreClient(t)
+		cli.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, bucket, root string, logId, segId int64) (int64, error) {
+				if !r.reachable {
+					return -1, errors.New("node unreachable")
+				}
+				return r.tail, nil
+			})
+		cli.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, bucket, root string, logId, segId, lac int64) (int64, error) {
+				if !r.reachable {
+					return -1, errors.New("node unreachable")
+				}
+				if r.footer != notFinalized && r.footer != lac {
+					return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+						fmt.Sprintf("footer already finalized at %d, refusing %d", r.footer, lac))
+				}
+				r.footer = lac
+				return r.tail, nil
+			})
+		mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, node).Return(cli, nil)
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+	impl := sh.(*segmentHandleImpl)
+	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
+	ctx := context.Background()
+
+	// Pass 1: one replica silent at fence.
+	lac, err := impl.fenceSegmentQuorum(ctx, quorum)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), lac, "a silent replica is unknown, not empty, so the target stays at 1")
+	require.NoError(t, impl.completeSegmentQuorum(ctx, quorum, lac),
+		"two replicas recorded the boundary, which is what completion needs")
+	assert.Equal(t, int64(1), replicas["node1"].footer)
+	assert.Equal(t, int64(1), replicas["node3"].footer)
+
+	// Pass 2, the counterfactual: the missing replica is back and every reply is in,
+	// so the target drops to 0 -- and the footers already burned at 1 refuse it.
+	replicas["node2"].reachable = true
+	lac, err = impl.fenceSegmentQuorum(ctx, quorum)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), lac)
+	assert.Error(t, impl.completeSegmentQuorum(ctx, quorum, lac),
+		"only the replica that never finalized can accept 0, which is below the ack quorum")
 }

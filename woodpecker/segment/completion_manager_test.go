@@ -157,20 +157,17 @@ func TestCompletionManager_AllRetriesExhausted(t *testing.T) {
 }
 
 // TestCompletionManager_CompleteRetriesExhaustedDoesNotPublishCompleted covers
-// the case where fence establishes a target LAC but every Complete pass has too
-// few replicas whose returned local tail covers that target. The local writer is
-// stopped, while metadata must remain Active for recovery rather than advertising
-// an uncompacted Completed segment.
+// the case where fence establishes a target LAC but no replica ever finalizes at
+// it. The local writer is stopped, while metadata must remain Active for recovery
+// rather than advertising a segment no replica has closed.
 func TestCompletionManager_CompleteRetriesExhaustedDoesNotPublishCompleted(t *testing.T) {
 	seg, mockClient := newTestSegmentForCompletion(t)
 
 	const targetLAC = int64(5)
 	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
 		Return(targetLAC, nil).Once()
-	// Aq=1 in this fixture, but the only replica is a successfully finalized
-	// partial replica and therefore does not qualify.
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
-		Return(targetLAC-1, nil).Times(3)
+		Return(int64(-1), assert.AnError).Times(3)
 
 	invalidated := false
 	seg.SetWriterInvalidationNotifier(context.Background(), func(ctx context.Context, reason string) {
@@ -185,6 +182,33 @@ func TestCompletionManager_CompleteRetriesExhaustedDoesNotPublishCompleted(t *te
 	assert.Equal(t, int64(-1), seg.segmentMetaCache.Load().Metadata.LastEntryId)
 	writable, _ := seg.IsWritable(context.Background())
 	assert.False(t, writable)
+}
+
+// TestCompletionManager_PartialReplicaFinalizeStillPublishesCompleted pins the
+// contract completion switched to in #320: an ack quorum of replicas must have
+// durably recorded the target LAC, not covered it locally.
+//
+// The target comes out of the fence, so some replica reported a tail at or above
+// it. That replica can be gone by the time CompleteSegment runs, leaving only
+// replicas whose own tail is short. Those entries were never acknowledged, so
+// nothing is owed on them, and refusing to publish Completed here would be worse
+// than publishing it: the segment stays Active, and OpenLogWriter fences and
+// completes every active segment before it returns a writer, so the whole log
+// would stop accepting writes until the missing replica came back.
+func TestCompletionManager_PartialReplicaFinalizeStillPublishesCompleted(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	const targetLAC = int64(5)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Return(targetLAC, nil).Once()
+	// Finalized at the target, but the replica's own tail stops one entry short.
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
+		Return(targetLAC-1, nil).Once()
+
+	seg.completionMgr.TriggerCompletion()
+	require.NoError(t, seg.completionMgr.WaitForCompletion())
+	assert.Equal(t, proto.SegmentState_Completed, seg.segmentMetaCache.Load().Metadata.State)
+	assert.Equal(t, targetLAC, seg.segmentMetaCache.Load().Metadata.LastEntryId)
 }
 
 // TestSegmentHandle_SetRollingReady_PropagatesCompletionError verifies that when
