@@ -1244,10 +1244,11 @@ func (s *segmentHandleImpl) completePrepared(ctx context.Context, quorumInfo *pr
 	return s.completeSegmentQuorum(ctx, quorumInfo, lastAddConfirmed)
 }
 
-// completeSegmentQuorum sends CompleteSegment requests to all quorum nodes and
-// counts only finalized replicas whose returned local tail covers lac. A behind
-// replica may still finalize successfully for read failover, but cannot count
-// toward the Aq proof required before publishing Completed metadata.
+// completeSegmentQuorum sends CompleteSegment requests to all quorum nodes and requires
+// ackQuorum of them to finalize at lac before Completed metadata may be published. A
+// replica whose local tail stops below lac still counts: it has durably recorded the
+// boundary, which is what stops a competing writer from closing the segment elsewhere.
+// How many replicas locally cover lac is tracked separately and reported, not enforced.
 func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, lac int64) error {
 	nodeCount := len(quorumInfo.Nodes)
 	ackQuorum := int(quorumInfo.Aq)
@@ -1565,9 +1566,10 @@ func (s *segmentHandleImpl) resolveFenceLAC(results []int64, writeQuorum, ackQuo
 	// (#320).
 	//
 	// Because a missing reply is not evidence, a target chosen this way may turn out to be held by
-	// fewer than ackQuorum replicas. completeSegmentQuorum rejects that rather than lowering the
-	// boundary, and the attempt is retried once more replicas answer: failing to complete is
-	// recoverable, publishing a boundary below acknowledged data is not.
+	// fewer than ackQuorum replicas. That is allowed: completeSegmentQuorum requires ackQuorum
+	// replicas to finalize at the target, not to cover it, precisely so this target can be used.
+	// The entries above the covered tail were never acknowledged, so nothing is owed on them;
+	// publishing a boundary below acknowledged data, by contrast, is unrecoverable.
 	// A quorum where Aq exceeds Wq is not satisfiable -- no entry can ever collect more acks than
 	// the replicas it was written to -- and would make the index below negative. Config derives
 	// Aq as Wq/2+1 so this cannot arise from a valid configuration, but recovery must not panic

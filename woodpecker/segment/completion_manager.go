@@ -120,7 +120,7 @@ func (cm *completionManager) executeWithRetry(ctx context.Context) error {
 	}
 
 	// Phase 3 (with lock): CAS, fast-fail ops, stop executor, update metadata.
-	// Reaching this point proves Aq finalized replicas locally cover targetLAC.
+	// Reaching this point proves Aq replicas finalized at targetLAC.
 	s.Lock()
 	defer s.Unlock()
 	closeErr := s.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx, targetLAC)
@@ -147,7 +147,8 @@ func (cm *completionManager) failAndCloseWithoutMeta(ctx context.Context, target
 	s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d complete failed after retries", s.segmentId))
 
 	// Stop this local writer so it cannot accept more appends, but do not publish
-	// Completed metadata: the required Aq qualified replicas were not established.
+	// Completed metadata: fewer than Aq replicas finalized at targetLAC, so nothing
+	// establishes where the segment ends.
 	s.Lock()
 	s.doCloseWritingWithoutMetaUnsafe(ctx, targetLAC)
 	s.Unlock()
