@@ -194,6 +194,23 @@ type SegmentCompactionPolicy struct {
 	MaxParallelUploads int             `yaml:"maxParallelUploads"`
 	MaxParallelReads   int             `yaml:"maxParallelReads"`
 	Timeout            DurationSeconds `yaml:"timeout"`
+	// MaxMemoryBytes caps the memory all segment compactions running on this node may hold at
+	// once, across every log it serves.
+	//
+	// The quantity to bound is bytes, not tasks, because compactions are not the same size. Each
+	// is charged what its own plan holds: the segment's blocks grouped into merge tasks,
+	// MaxParallelUploads of them running at a time, each holding the source bytes it read plus the
+	// merged block it assembles. A full segment costs about MaxParallelUploads x 2 x MaxBytes,
+	// while one holding a few hundred KB costs twice that and nothing more.
+	//
+	// Zero means "derive from MaxMemoryRatio", which is the default. A positive value is used as
+	// given, on every node, whatever the pod is sized at.
+	MaxMemoryBytes ByteSize `yaml:"maxMemoryBytes"`
+	// MaxMemoryRatio is the fraction of the node's memory limit to spend on compaction when
+	// MaxMemoryBytes is zero. Inside a container the limit read is the cgroup limit -- the
+	// constraint that actually exists -- so the budget moves with the pod instead of being a
+	// number that happens to suit one deployment.
+	MaxMemoryRatio float64 `yaml:"maxMemoryRatio"`
 }
 
 // SyncSchedulerConfig stores the node-wide staged-storage sync scheduler configuration.
@@ -825,6 +842,15 @@ func (c *Configuration) validateLogstoreConfig() error {
 	if logstore.SegmentCompactionPolicy.MaxBytes <= 0 {
 		return fmt.Errorf("segment compaction policy max bytes must be positive, got %d", logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	}
+	if logstore.SegmentCompactionPolicy.MaxMemoryBytes < 0 {
+		return fmt.Errorf("segment compaction policy max memory bytes must not be negative, got %d", logstore.SegmentCompactionPolicy.MaxMemoryBytes.Int64())
+	}
+	// The ratio is what the budget falls back to whenever no absolute value is set, so it has to
+	// be usable even when MaxMemoryBytes is configured -- a later edit removing the absolute value
+	// must not land on an unusable ratio.
+	if r := logstore.SegmentCompactionPolicy.MaxMemoryRatio; r <= 0 || r > 1 {
+		return fmt.Errorf("segment compaction policy max memory ratio must be in (0,1], got %v", r)
+	}
 	if logstore.SegmentCompactionPolicy.MaxParallelUploads <= 0 {
 		return fmt.Errorf("segment compaction policy max parallel uploads must be positive, got %d", logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	}
@@ -964,6 +990,8 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxParallelUploads: 4,
 				MaxParallelReads:   8,
 				Timeout:            NewDurationSecondsFromInt(300),
+				MaxMemoryBytes:     ByteSize(0),
+				MaxMemoryRatio:     0.1,
 			},
 			SegmentReadPolicy: SegmentReadPolicyConfig{
 				MaxBatchSize:    ByteSize(16000000),

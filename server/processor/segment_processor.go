@@ -30,6 +30,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
@@ -77,13 +78,25 @@ type SegmentProcessor interface {
 	GetWriterSnapshotDetailed() *storage.WriterSnapshotDetailed
 }
 
-func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBucketName string, userRootPath string, logId int64, segId int64, storageClient storageclient.ObjectStorage, syncSchedulers ...*stagedstorage.SyncScheduler) SegmentProcessor {
+// SegmentProcessorOption injects one of the node-scoped schedulers a processor shares with every
+// other processor on the node. They are options rather than parameters because only the logstore
+// has them: every other caller, tests included, wants a processor with neither.
+type SegmentProcessorOption func(*segmentProcessor)
+
+// WithSyncScheduler shares the node's staged-writer flush pool with this processor.
+func WithSyncScheduler(scheduler *stagedstorage.SyncScheduler) SegmentProcessorOption {
+	return func(s *segmentProcessor) { s.syncScheduler = scheduler }
+}
+
+// WithCompactionScheduler bounds this processor's compactions against the node's limit. Without
+// it the processor compacts unbounded, which is the behaviour every caller had before.
+func WithCompactionScheduler(scheduler *CompactionScheduler) SegmentProcessorOption {
+	return func(s *segmentProcessor) { s.compactionScheduler = scheduler }
+}
+
+func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBucketName string, userRootPath string, logId int64, segId int64, storageClient storageclient.ObjectStorage, opts ...SegmentProcessorOption) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
 	logger.Ctx(ctx).Info("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
-	var syncScheduler *stagedstorage.SyncScheduler
-	if len(syncSchedulers) > 0 {
-		syncScheduler = syncSchedulers[0]
-	}
 	s := &segmentProcessor{
 		cfg:           cfg,
 		bucketName:    userBucketName,
@@ -91,8 +104,10 @@ func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBuc
 		logId:         logId,
 		segId:         segId,
 		storageClient: storageClient,
-		syncScheduler: syncScheduler,
 		createTime:    ctime,
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	s.lastAccessTime.Store(ctime)
 	return s
@@ -109,6 +124,8 @@ type segmentProcessor struct {
 	segId         int64
 	storageClient storageclient.ObjectStorage
 	syncScheduler *stagedstorage.SyncScheduler
+	// compactionScheduler bounds concurrent compactions across the whole node; nil means unbounded.
+	compactionScheduler *CompactionScheduler
 
 	createTime     int64
 	lastAccessTime atomic.Int64
@@ -658,9 +675,33 @@ func (s *segmentProcessor) Compact(ctx context.Context, expectedLastEntryId int6
 		return nil, err
 	}
 
+	// Charge this compaction against the node's memory budget, using what this segment's plan
+	// will actually hold rather than a fixed worst case -- a segment with a few small blocks
+	// would otherwise be billed like a full one, and a node draining a backlog of small segments
+	// would run a fraction of the compactions its memory could carry. The writer has to exist
+	// first, since it is what knows the block layout; opening it reads the index and footer, not
+	// the payload, and it stays cached for the next cycle if this attempt is refused.
+	//
+	// Refusing is cheap and correct: the caller walks on to the next replica, and if every replica
+	// is out of budget the auditor retries next cycle with the segment still Completed. Queuing
+	// instead would spend the caller's per-attempt deadline waiting.
+	compactionEstimate := writer.CompactionMemoryEstimate(expectedLastEntryId)
+	if !s.compactionScheduler.TryAcquire(compactionEstimate) {
+		metrics.WpCompactionSchedulerRejectedTotal.WithLabelValues(metrics.NodeID).Inc()
+		logger.Ctx(ctx).Info("node at its compaction memory budget, refusing compaction",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId),
+			zap.Int64("estimateBytes", compactionEstimate),
+			zap.Int64("inFlightBytes", s.compactionScheduler.InFlightBytes()),
+			zap.Int64("budgetBytes", s.compactionScheduler.BudgetBytes()))
+		return nil, werr.ErrSegmentCompactionNodeBusy
+	}
+	defer s.compactionScheduler.Release(compactionEstimate)
+
 	logger.Ctx(ctx).Info("Starting segment merge operation",
 		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId))
+		zap.Int64("segId", s.segId),
+		zap.Int64("compactionEstimateBytes", compactionEstimate))
 
 	// The behind/empty-replica completeness guard lives in the writer: the staged writer refuses
 	// (ErrSegmentCompactionDataBehind) when its local data is behind expectedLastEntryId, before

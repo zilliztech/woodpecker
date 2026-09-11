@@ -346,6 +346,15 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 	if src.Logstore.SegmentCompactionPolicy.MaxParallelReads > 0 {
 		dst.Logstore.SegmentCompactionPolicy.MaxParallelReads = src.Logstore.SegmentCompactionPolicy.MaxParallelReads
 	}
+	// The compaction memory budget: an absolute value pins it, a ratio follows the pod's memory
+	// limit. Both are overridable because a deployment that raises MaxBytes or MaxParallelUploads
+	// raises what one compaction costs, and needs a say in what the node as a whole may hold.
+	if src.Logstore.SegmentCompactionPolicy.MaxMemoryBytes.Int64() > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MaxMemoryBytes = src.Logstore.SegmentCompactionPolicy.MaxMemoryBytes
+	}
+	if src.Logstore.SegmentCompactionPolicy.MaxMemoryRatio > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MaxMemoryRatio = src.Logstore.SegmentCompactionPolicy.MaxMemoryRatio
+	}
 
 	// Logstore - SegmentReadPolicy
 	if src.Logstore.SegmentReadPolicy.MaxBatchSize.Int64() > 0 {

@@ -271,3 +271,21 @@ func TestErrLogStoreDiskPressure_Retryable(t *testing.T) {
 		t.Errorf("expected code 2007, got %d", st.Code)
 	}
 }
+
+// TestErrSegmentCompactionNodeBusy_Retryable pins the property the client's failure accounting
+// rests on. classifyCompactionFailureReason has no case for this error, so it falls to the
+// retryable branch and is labelled "transient" rather than "other". That is the correct reading --
+// the node refused, it did not fail -- and flipping the flag would quietly start reporting a node
+// at its compaction ceiling as an unexplained failure in WpSegmentCompactionFailuresTotal.
+func TestErrSegmentCompactionNodeBusy_Retryable(t *testing.T) {
+	if !IsRetryableErr(ErrSegmentCompactionNodeBusy) {
+		t.Error("ErrSegmentCompactionNodeBusy must be retryable: the caller has another replica to try, and the auditor has another cycle")
+	}
+	st := Status(ErrSegmentCompactionNodeBusy)
+	if !st.Retriable {
+		t.Error("Status.Retriable must be true")
+	}
+	if st.Code != 2112 {
+		t.Errorf("expected code 2112, got %d", st.Code)
+	}
+}

@@ -128,6 +128,52 @@ func (_c *Writer_Compact_Call) RunAndReturn(run func(context.Context, int64) (in
 	return _c
 }
 
+// CompactionMemoryEstimate provides a mock function with given fields: expectedLastEntryId
+func (_m *Writer) CompactionMemoryEstimate(expectedLastEntryId int64) int64 {
+	ret := _m.Called(expectedLastEntryId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CompactionMemoryEstimate")
+	}
+
+	var r0 int64
+	if rf, ok := ret.Get(0).(func(int64) int64); ok {
+		r0 = rf(expectedLastEntryId)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// Writer_CompactionMemoryEstimate_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompactionMemoryEstimate'
+type Writer_CompactionMemoryEstimate_Call struct {
+	*mock.Call
+}
+
+// CompactionMemoryEstimate is a helper method to define mock.On call
+//   - expectedLastEntryId int64
+func (_e *Writer_Expecter) CompactionMemoryEstimate(expectedLastEntryId interface{}) *Writer_CompactionMemoryEstimate_Call {
+	return &Writer_CompactionMemoryEstimate_Call{Call: _e.mock.On("CompactionMemoryEstimate", expectedLastEntryId)}
+}
+
+func (_c *Writer_CompactionMemoryEstimate_Call) Run(run func(expectedLastEntryId int64)) *Writer_CompactionMemoryEstimate_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(int64))
+	})
+	return _c
+}
+
+func (_c *Writer_CompactionMemoryEstimate_Call) Return(_a0 int64) *Writer_CompactionMemoryEstimate_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Writer_CompactionMemoryEstimate_Call) RunAndReturn(run func(int64) int64) *Writer_CompactionMemoryEstimate_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Fence provides a mock function with given fields: ctx
 func (_m *Writer) Fence(ctx context.Context) (int64, error) {
 	ret := _m.Called(ctx)
