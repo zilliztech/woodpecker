@@ -1906,6 +1906,45 @@ type mergeBlockTask struct {
 	nextEntryID int64                // Next entry ID after this merge block
 }
 
+// CompactionMemoryEstimate plans this segment's compaction and reports what running it will hold.
+//
+// Same shape as the staged backend: merge tasks planned from the block layout, maxParallelUploads
+// of them in flight, each holding the blocks it fetched and the merged block it assembles. The
+// blocks are fetched from object storage rather than read from a local file, which changes where
+// the bytes come from and not how many of them are resident.
+func (f *MinioFileWriter) CompactionMemoryEstimate(_ int64) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if len(f.blockIndexes) == 0 {
+		return 0
+	}
+	if f.footerRecord != nil && codec.IsCompacted(f.footerRecord.Flags) {
+		return 0 // already compacted: Compact cleans up and returns without merging anything
+	}
+
+	targetBlockSize := f.compactPolicyConfig.MaxBytes.Int64()
+	if targetBlockSize <= 0 {
+		targetBlockSize = 2 * 1024 * 1024
+	}
+	tasks := f.planMergeBlockTasks(targetBlockSize)
+
+	taskBytes := make([]int64, 0, len(tasks))
+	for _, task := range tasks {
+		var span int64
+		for _, blockIndex := range task.blocks {
+			span += int64(blockIndex.BlockSize)
+		}
+		taskBytes = append(taskBytes, span)
+	}
+
+	parallel := f.compactPolicyConfig.MaxParallelUploads
+	if parallel <= 0 {
+		parallel = 4
+	}
+	return storage.CompactionPeakBytes(taskBytes, parallel)
+}
+
 // planMergeBlockTasks analyzes blocks and plans how to group them into merge blocks
 func (f *MinioFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBlockTask {
 	var tasks []*mergeBlockTask

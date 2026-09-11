@@ -111,6 +111,27 @@ woodpecker:
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4
       maxParallelReads: 8 # Maximum number of parallel read threads for compaction, default is 8
       timeout: 300 # Deadline for compacting one segment in seconds, default is 300s. Covers the whole read/merge/upload pass; on expiry the compaction is aborted and the auditor retries it on a later cycle.
+      # Memory all compactions running on this node may hold at once, across every log it serves.
+      # Every other bound on compaction is per segment or per log, while the work arrives here from
+      # as many logs as the node holds -- and it arrives together after a compaction outage, when
+      # every log has a backlog to drain.
+      #
+      # Each compaction is charged what its own plan will hold, not a flat rate: the segment's
+      # blocks are grouped into merge tasks, maxParallelUploads of them run at a time, and each
+      # holds the source bytes it read plus the merged block it assembles. A full segment therefore
+      # costs about maxParallelUploads x 2 x maxBytes -- 16MB at the 2MB merged-block size above --
+      # while a segment holding a few hundred KB costs twice that, not 16MB. This is why the budget
+      # is in bytes: how many compactions fit depends on how big they are.
+      #
+      # 0 means derive the budget from maxMemoryRatio, which is the default. Set a value to pin it
+      # to an exact number on every node regardless of pod size.
+      maxMemoryBytes: 0
+      # Fraction of the node's memory limit to spend on compaction when maxMemoryBytes is 0. Inside
+      # a container this reads the cgroup limit, so the budget follows the pod: 10% of an 8GB pod is
+      # 800MB, which admits about 50 full segments at once and far more small ones. Compactions
+      # beyond the budget are refused, not queued -- the client tries the next replica, and the
+      # auditor retries on a later cycle.
+      maxMemoryRatio: 0.1
     segmentReadPolicy:
       maxBatchSize: 2000000 # Maximum size of a batch in bytes, default is 2MB
       maxFetchThreads: 32 # Maximum number of threads to fetch data, default is 32

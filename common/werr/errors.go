@@ -116,6 +116,11 @@ var (
 	ErrSegmentProcessorCleanupFailed     = newWoodpeckerError("segment processor cleanup failed", 2109, true)
 	ErrSegmentProcessorAlreadyCompacting = newWoodpeckerError("segment processor is already compacting", 2110, false)
 	ErrSegmentCompactionDataBehind       = newWoodpeckerError("segment local data is behind the expected last entry id, refusing to compact", 2111, true)
+	// ErrSegmentCompactionNodeBusy is a refusal, not a failure: the node is already running as
+	// many compactions as it is allowed to hold in memory at once. Retryable, because the caller
+	// has somewhere to go -- the next replica in the quorum walk, and failing that the next
+	// auditor cycle with the segment still Completed.
+	ErrSegmentCompactionNodeBusy = newWoodpeckerError("node is at its compaction concurrency limit, refusing to compact", 2112, true)
 
 	// file writer errors (2200-2299)
 	ErrFileWriterBufferFull           = newWoodpeckerError("writer buffer is full", 2200, true)

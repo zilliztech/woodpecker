@@ -335,6 +335,42 @@ var (
 		Help:      "Worker capacity of the staged-writer sync scheduler",
 	}, []string{"node_id"})
 
+	WpCompactionSchedulerRunning = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_scheduler_running",
+		Help:      "Number of segment compactions holding a slot on this node",
+	}, []string{"node_id"})
+	WpCompactionSchedulerBudgetBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_scheduler_budget_bytes",
+		Help:      "Memory this node allows in-flight segment compactions to hold, 0 when unbounded",
+	}, []string{"node_id"})
+	WpCompactionSchedulerInFlightBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_scheduler_inflight_bytes",
+		Help:      "Estimated memory currently charged to running segment compactions",
+	}, []string{"node_id"})
+	// WpCompactionSchedulerPeakBytes is what says whether the budget is close to binding. The
+	// budget and the instantaneous in-flight value do not: a scrape every 15s misses the peaks.
+	WpCompactionSchedulerPeakBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_scheduler_peak_bytes",
+		Help:      "Highest in-flight compaction memory seen on this node since start",
+	}, []string{"node_id"})
+	// WpCompactionSchedulerRejectedTotal counts compactions refused for want of a slot. It is a
+	// refusal rather than a failure -- the caller tries another replica, or the auditor retries
+	// next cycle -- so a nonzero rate means the node is at its compaction ceiling, not broken.
+	WpCompactionSchedulerRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_scheduler_rejected_total",
+		Help:      "Segment compactions refused because the node was at its compaction concurrency limit",
+	}, []string{"node_id"})
+
 	// WpQuorumSelectionSkew counts node-selection outcomes by mode, to observe
 	// how often load actually changed the selection (issue #114).
 	// mode: "weighted" (load-ranked), "random_no_load" (no fresh load data,
@@ -400,6 +436,11 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSyncSchedulerRunning)
 		registerer.MustRegister(WpSyncSchedulerWaiting)
 		registerer.MustRegister(WpSyncSchedulerCapacity)
+		registerer.MustRegister(WpCompactionSchedulerRunning)
+		registerer.MustRegister(WpCompactionSchedulerBudgetBytes)
+		registerer.MustRegister(WpCompactionSchedulerInFlightBytes)
+		registerer.MustRegister(WpCompactionSchedulerPeakBytes)
+		registerer.MustRegister(WpCompactionSchedulerRejectedTotal)
 		// Quorum selection skew (load-aware node selection, issue #114)
 		registerer.MustRegister(WpQuorumSelectionSkew)
 	})

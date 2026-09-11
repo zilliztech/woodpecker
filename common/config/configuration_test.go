@@ -77,6 +77,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
 	assert.Equal(t, 300, config.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
+	assert.Equal(t, int64(0), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxMemoryBytes.Int64())
+	assert.InDelta(t, 0.1, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxMemoryRatio, 1e-9)
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, 259200, config.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
@@ -184,6 +186,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
 	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
+	assert.Equal(t, int64(0), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxMemoryBytes.Int64())
+	assert.InDelta(t, 0.1, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxMemoryRatio, 1e-9)
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, 259200, defaultConfig.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
@@ -485,6 +489,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 							MaxParallelUploads: 4,
 							MaxParallelReads:   8,
 							Timeout:            NewDurationSecondsFromInt(300),
+							MaxMemoryRatio:     0.1,
 						},
 						SegmentReadPolicy: SegmentReadPolicyConfig{
 							MaxBatchSize:    NewByteSize(16000000),
@@ -705,6 +710,18 @@ func TestValidateClientConfig_Errors(t *testing.T) {
 		cfg := newValidCfg()
 		cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers = 0
 		assert.ErrorContains(t, cfg.Validate(), "sync scheduler max workers must be positive")
+	})
+	t.Run("SegmentCompactionPolicy MaxMemoryBytes<0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxMemoryBytes = NewByteSize(-1)
+		assert.ErrorContains(t, cfg.Validate(), "max memory bytes must not be negative")
+	})
+	t.Run("SegmentCompactionPolicy MaxMemoryRatio out of range", func(t *testing.T) {
+		for _, ratio := range []float64{0, -0.1, 1.5} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxMemoryRatio = ratio
+			assert.ErrorContains(t, cfg.Validate(), "max memory ratio must be in (0,1]")
+		}
 	})
 	t.Run("Auditor MaxInterval<=0", func(t *testing.T) {
 		cfg := newValidCfg()
@@ -1143,6 +1160,7 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					MaxParallelUploads: 4,
 					MaxParallelReads:   8,
 					Timeout:            NewDurationSecondsFromInt(300),
+					MaxMemoryRatio:     0.1,
 				},
 				SegmentReadPolicy: SegmentReadPolicyConfig{
 					MaxBatchSize:    NewByteSize(16000000),
