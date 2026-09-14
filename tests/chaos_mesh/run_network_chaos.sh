@@ -25,7 +25,7 @@ RECORD_FILE=/tmp/wp-chaos-acked.jsonl
 
 # External dependency images (keep etcd/minio in sync with deployments/operator/test/lib.sh).
 ETCD_IMG="quay.io/coreos/etcd:v3.5.18"
-MINIO_IMG="minio/minio:RELEASE.2024-06-13T22-53-53Z"
+MINIO_IMG="quay.io/minio/minio:RELEASE.2024-06-13T22-53-53Z"
 
 # The minikube node can't reach external registries when the host uses a loopback proxy
 # (HTTP_PROXY=127.0.0.1:xxxx — minikube logs "Local proxy ignored"). The HOST can pull (its

@@ -193,7 +193,7 @@ else
     # Object storage: a complete upgrade test must read BOTH a COMPACTED (merged
     # m_*.blk) v5 block and an UNCOMPACTED (plain N.blk) v5 block.
     echo "[ORCHESTRATOR] Phase 2.5: asserting BOTH compacted (m_*.blk) and uncompacted (.blk) blocks exist..."
-    LISTING="$(docker run --rm --network host -e MC_CONFIG_DIR=/tmp/mc --entrypoint sh minio/mc:latest -c \
+    LISTING="$(docker run --rm --network host -e MC_CONFIG_DIR=/tmp/mc --entrypoint sh quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z -c \
         "mc alias set L http://${MINIO_ENDPOINT} minioadmin minioadmin >/dev/null 2>&1 && mc ls -r L/${MINIO_BUCKET}/ 2>/dev/null" 2>/dev/null || true)"
     MERGED="$(printf '%s\n' "$LISTING" | grep -E 'm_[0-9]+\.blk' | head -1 || true)"
     PLAIN="$(printf '%s\n' "$LISTING" | grep -E '/[0-9]+\.blk' | grep -v 'footer.blk' | head -1 || true)"

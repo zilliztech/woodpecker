@@ -546,7 +546,7 @@ minikube start --cpus=4 --memory=4096
 ```bash
 # Pre-load images to avoid slow pulls inside minikube
 minikube image load quay.io/coreos/etcd:v3.5.18
-minikube image load minio/minio:RELEASE.2024-12-18T13-15-44Z
+minikube image load quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
 ```
 
 - [X] Expected: images loaded (check with `minikube image ls | grep -E "etcd|minio"`)
@@ -606,7 +606,7 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+        image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
         imagePullPolicy: IfNotPresent
         args: ["server", "/data"]
         env:
