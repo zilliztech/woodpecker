@@ -70,7 +70,7 @@ metadata:
 spec:
   containers:
     - name: minio
-      image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+      image: quay.io/minio/minio:RELEASE.2024-06-13T22-53-53Z
       command: ["minio", "server", "/data"]
       env:
         - { name: MINIO_ROOT_USER, value: minioadmin }

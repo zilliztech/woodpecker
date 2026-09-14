@@ -119,7 +119,7 @@ metadata:
 spec:
   containers:
     - name: minio
-      image: ${MINIO_IMG:-minio/minio:RELEASE.2024-12-18T13-15-44Z}
+      image: ${MINIO_IMG:-quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z}
       command: ["minio", "server", "/data"]
       env:
         - { name: MINIO_ROOT_USER, value: minioadmin }

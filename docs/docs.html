@@ -613,7 +613,7 @@ docker run -d --name etcd -p 2379:2379 \
 
 <span class="hl-cm"># Start MinIO (for object storage)</span>
 docker run -d --name minio -p 9000:9000 -p 9001:9001 \
-  minio/minio server /data --console-address ":9001"</pre></div>
+  quay.io/minio/minio server /data --console-address ":9001"</pre></div>
                 </div>
 
                 <h3>Create Client</h3>

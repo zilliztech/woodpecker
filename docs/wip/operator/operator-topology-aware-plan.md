@@ -1184,7 +1184,7 @@ choke points:
 
 1. **Operator image base `golang:1.25`** — Step 3 below uses a *host build* +
    a thin `Dockerfile.local` so we never have to pull `golang:1.25` at all.
-2. **`zilliztech/woodpecker:vX.Y.Z` and `minio/minio:...`** — Step 6 has notes
+2. **`zilliztech/woodpecker:vX.Y.Z` and `quay.io/minio/minio:...`** — Step 6 has notes
    on pulling via mirrors (`docker.m.daocloud.io`, `dockerproxy.com`, etc.) and
    then `minikube image load`-ing.
 
@@ -1299,7 +1299,7 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+        image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
         imagePullPolicy: IfNotPresent
         args: ["server", "/data"]
         env:
@@ -1326,7 +1326,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: mc
-        image: minio/mc:RELEASE.2024-11-21T17-21-54Z
+        image: quay.io/minio/mc:RELEASE.2024-11-21T17-21-54Z
         command: ["/bin/sh","-c"]
         args:
         - |
@@ -1337,8 +1337,8 @@ spec:
           mc mb -p local/woodpecker || true
           mc ls local/
 EOF
-minikube -p wp-topo image load minio/mc:RELEASE.2024-11-21T17-21-54Z
-minikube -p wp-topo image load minio/minio:RELEASE.2024-12-18T13-15-44Z
+minikube -p wp-topo image load quay.io/minio/mc:RELEASE.2024-11-21T17-21-54Z
+minikube -p wp-topo image load quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
 kubectl apply -f /tmp/minio.yaml
 
 # Wait until minio is ready and the bucket exists
