@@ -1342,35 +1342,3 @@ func TestDiskWatermarkPolicyConfig_DefaultsAndValidation(t *testing.T) {
 	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
 	assert.NoError(t, cfg.Validate())
 }
-
-// TestValidate_AttemptTimeoutMustCoverServerCompactionBudget covers the cross-section rule: the
-// client's per-attempt deadline reaches the node over gRPC, so a value below the server's own
-// per-segment budget makes that budget unreachable. A compaction that legitimately needs longer is
-// then cut off on every replica and keeps nothing, so the segment never completes and the node's
-// local data.log is never reclaimed.
-func TestValidate_AttemptTimeoutMustCoverServerCompactionBudget(t *testing.T) {
-	t.Run("below the server budget is rejected", func(t *testing.T) {
-		cfg, err := NewConfiguration()
-		assert.NoError(t, err)
-		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = NewDurationSecondsFromInt(300)
-		cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout = NewDurationSecondsFromInt(299)
-		assert.ErrorContains(t, cfg.Validate(), "must be at least the segment compaction timeout")
-	})
-
-	t.Run("equal to the server budget is accepted", func(t *testing.T) {
-		cfg, err := NewConfiguration()
-		assert.NoError(t, err)
-		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = NewDurationSecondsFromInt(300)
-		cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout = NewDurationSecondsFromInt(300)
-		assert.NoError(t, cfg.Validate())
-	})
-
-	t.Run("the shipped defaults satisfy it", func(t *testing.T) {
-		cfg, err := NewConfiguration()
-		assert.NoError(t, err)
-		assert.GreaterOrEqual(t,
-			cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds(),
-			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
-		assert.NoError(t, cfg.Validate())
-	})
-}

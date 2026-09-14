@@ -75,20 +75,27 @@ type ClientConfig struct {
 
 type AuditorConfig struct {
 	MaxInterval DurationSeconds `yaml:"maxInterval"`
-	// CompactionAttemptTimeout bounds one compaction attempt against one quorum node. The
-	// deadline reaches the node over gRPC, so it also caps the server-side work at
-	// min(this, logstore.segmentCompactionPolicy.timeout).
+	// CompactionAttemptTimeout is how long this client waits for one quorum node to answer one
+	// compaction request. It travels to the node as the gRPC deadline, so it is this side's
+	// half of the bound; the node applies its own node-wide ceiling
+	// (logstore.segmentCompactionPolicy.timeout) on top, and the shorter of the two wins.
 	//
-	// Keep it at or above the server's segmentCompactionPolicy.timeout, which validation
-	// enforces against the local copy of that setting. Below it the server's budget becomes
-	// unreachable: a compaction that legitimately needs longer than this is cut off on every
-	// replica, and nothing of the attempt is kept -- the writer restarts from the first block
-	// unless a complete compacted footer already exists -- so the segment stays Completed, the
-	// same work is repeated every cycle, and the node's local data.log is never reclaimed.
+	// The two are deliberately not derived from one another. A logstore node serves many
+	// bucket/rootPath tenants from one configuration, so its ceiling is a property of the node
+	// and cannot express what any particular tenant wants; this is what a tenant asks for, and
+	// it is the only one of the two the client actually knows.
 	//
-	// Its purpose is to bound a node that stops responding altogether, which the server's own
-	// timeout cannot cover because that timeout is only enforced if the server is still running
-	// it. Hence "server budget plus RPC margin" rather than a small number.
+	// It is also the only bound that survives a node that stops answering at all. The server's
+	// ceiling is enforced by the server, so a wedged, black-holed or GC-stalled node never
+	// reaches it, and the auditor's context carries no deadline of its own -- without this the
+	// call blocks forever, and the pass budget cannot help because it is only checked between
+	// segments. It keeps the sequential quorum walk moving too: one hung node costs one attempt
+	// instead of the segment never reaching its healthy replicas.
+	//
+	// Setting it below the node's ceiling is legal and means what it says: give up before the
+	// node would have. Be aware that nothing of an abandoned attempt is kept unless a complete
+	// compacted footer already exists, so a value below what compaction actually needs makes
+	// every attempt on every replica futile and the local data.log is never reclaimed.
 	CompactionAttemptTimeout DurationSeconds `yaml:"compactionAttemptTimeout"`
 	// CompactionPassBudget bounds how long one auditor cycle spends starting compactions. The
 	// auditor runs its passes in sequence, so an unbounded compaction pass stalls the rest of
@@ -632,17 +639,6 @@ func (c *Configuration) validateWoodpeckerConfig() error {
 	// Validate Storage configuration
 	if err := c.validateStorageConfig(); err != nil {
 		return fmt.Errorf("storage config validation failed: %w", err)
-	}
-
-	// Cross-section: the client's per-attempt deadline reaches the node over gRPC, so a value
-	// below the server's own per-segment budget makes that budget unreachable and leaves a slow
-	// compaction failing on every replica forever. In service mode the two sides are separate
-	// processes and this can only check the local copy of the server setting, but that is the
-	// value an operator raising one of them is looking at.
-	if attempt, server := c.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds(),
-		c.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds(); attempt < server {
-		return fmt.Errorf("auditor compaction attempt timeout (%ds) must be at least the segment compaction timeout (%ds), "+
-			"otherwise a compaction that needs longer is cut off on every replica and never completes", attempt, server)
 	}
 
 	return nil

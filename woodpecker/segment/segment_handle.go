@@ -1745,11 +1745,18 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 		// Try compaction on this node. The node refuses (returns ErrSegmentCompactionDataBehind)
 		// if its local data is behind expectedLastEntryId, so we fall through to the next node.
 		//
-		// The attempt carries its own deadline. gRPC sends it to the node, so the server-side
-		// work is capped at min(this, logstore.segmentCompactionPolicy.timeout); more to the
-		// point, a node that hangs rather than failing now costs one attempt instead of the
-		// caller's whole budget, and the sequential walk gets to try the remaining replicas --
-		// which is the reason it is sequential.
+		// The attempt carries this client's deadline, which gRPC sends to the node. The node
+		// applies its own ceiling (logstore.segmentCompactionPolicy.timeout) on top and the
+		// shorter wins; the two are separate because one node serves many tenants from one
+		// configuration, so its ceiling cannot express what any single tenant wants.
+		//
+		// This side is also the only bound that survives a node that stops answering at all: the
+		// node's ceiling is enforced by the node, so a wedged or black-holed one never reaches
+		// it, and the auditor's context carries no deadline of its own. The pass budget cannot
+		// stand in for it either -- that is checked between segments, and a call that never
+		// returns never gets back to the check. It keeps this sequential walk moving too: one
+		// hung node costs one attempt instead of the segment never reaching its healthy replicas.
+		//
 		// Guard against a non-positive value, which validation rejects but a Configuration
 		// assembled programmatically can still carry. It must not become WithTimeout(ctx, 0):
 		// that expires immediately and would fail every attempt on every node rather than
