@@ -73,10 +73,14 @@ jobs:
 
       - name: Create MinIO bucket
         run: |
-          wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc
-          chmod +x /usr/local/bin/mc
-          mc alias set local http://localhost:9000 minioadmin minioadmin
-          mc mb local/a-bucket --ignore-existing
+          # mc runs from a pinned image on the compose network rather than a binary fetched at
+          # run time: dl.min.io now answers 410 for it (issue #330). The tag is the one CI was
+          # already getting -- the download URL carried no version, and RELEASE.2025-08-13T08-35-41Z
+          # is the last mc MinIO published -- so this pins what was resolved, it does not move it.
+          docker run --rm --network woodpecker-ci \
+            -e MC_HOST_local=http://minioadmin:minioadmin@ci-minio:9000 \
+            quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z \
+            mb local/a-bucket --ignore-existing
 
       - name: Login to GHCR
         uses: docker/login-action@v3
