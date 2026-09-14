@@ -121,6 +121,18 @@ woodpecker:
       # Ceiling on how long one compaction may run on this node, in seconds, default is 300s. A node
       # guardrail, not a per-tenant policy: one logstore serves many tenants from this one value.
       timeout: 300
+      # Memory this node will reserve for the compactions it runs at once, across every log it
+      # serves, default is 1GB. Absolute rather than a share of the pod: useful concurrency
+      # saturates on object-storage bandwidth long before memory -- a hundred concurrent
+      # compactions is ~1.6GB here but four hundred simultaneous uploads -- so a larger pod does
+      # not need a larger allowance. Compactions beyond it are refused, not queued: the client
+      # tries the next replica and the auditor retries on a later cycle.
+      maxInflightMemory: 1000000000
+      # Stop taking on new compactions once the node's memory usage passes this fraction of its
+      # limit, whatever is using it -- the reservation above only knows about compaction. Applies
+      # only where a container memory limit can be read; on bare metal, with no limit set, or if
+      # detection fails it is skipped rather than measured against host memory.
+      memoryHighWatermark: 0.7
     segmentReadPolicy:
       maxBatchSize: 2000000 # Maximum size of a batch in bytes, default is 2MB
       maxFetchThreads: 32 # Maximum number of threads to fetch data, default is 32

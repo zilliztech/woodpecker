@@ -346,6 +346,15 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 	if src.Logstore.SegmentCompactionPolicy.MaxParallelReads > 0 {
 		dst.Logstore.SegmentCompactionPolicy.MaxParallelReads = src.Logstore.SegmentCompactionPolicy.MaxParallelReads
 	}
+	// Both admission bounds are overridable: a deployment that raises MaxBytes or
+	// MaxParallelUploads raises what one compaction costs, and needs a say in what the node as a
+	// whole will take on.
+	if src.Logstore.SegmentCompactionPolicy.MaxInflightMemory.Int64() > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MaxInflightMemory = src.Logstore.SegmentCompactionPolicy.MaxInflightMemory
+	}
+	if src.Logstore.SegmentCompactionPolicy.MemoryHighWatermark > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MemoryHighWatermark = src.Logstore.SegmentCompactionPolicy.MemoryHighWatermark
+	}
 
 	// Logstore - SegmentReadPolicy
 	if src.Logstore.SegmentReadPolicy.MaxBatchSize.Int64() > 0 {

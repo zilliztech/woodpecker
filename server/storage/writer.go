@@ -51,6 +51,20 @@ type Writer interface {
 	// Fence returns the last entry ID
 	Fence(ctx context.Context) (int64, error)
 
+	// CompactionMemoryEstimate reports the peak memory Compact will hold for this segment, so a
+	// node-wide budget can admit it before the work starts.
+	//
+	// It is planned, not assumed. Compaction groups the segment's blocks into merge tasks and runs
+	// maxParallelUploads of them at a time, each holding the source bytes it read and the merged
+	// block it assembles -- so the peak is twice the largest few task spans, and the segment's own
+	// size is the ceiling on that. Charging a fixed worst case instead would bill a segment holding
+	// a few hundred KB the same as a full one, and a node draining a backlog of small segments
+	// would run a fraction of the compactions its memory could actually carry.
+	//
+	// Zero means "nothing to charge": an empty segment, an already-compacted one, or a backend
+	// whose Compact is a no-op.
+	CompactionMemoryEstimate(expectedLastEntryId int64) int64
+
 	// Compact merges small blocks into larger ones and seals the segment in object storage.
 	// expectedLastEntryId is the exact coordinator-confirmed last entry id the compacted
 	// segment must publish. In staged mode, non-empty segments require a non-negative

@@ -1671,6 +1671,41 @@ func (w *StagedFileWriter) readLocalFileAndUploadToMinio(ctx context.Context, ta
 	return newBlockIndexes, totalSize, nil
 }
 
+// CompactionMemoryEstimate plans this segment's compaction and reports what running it will hold.
+//
+// It runs the same planner Compact does, so the answer tracks the segment's real block layout: a
+// segment with one small block is charged for that block, not for a pool's worth of full-sized
+// ones. Planning walks blockIndexes and allocates nothing but the plan itself.
+func (w *StagedFileWriter) CompactionMemoryEstimate(expectedLastEntryId int64) int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if len(w.blockIndexes) == 0 {
+		return 0
+	}
+
+	targetBlockSize := w.compactPolicyConfig.MaxBytes.Int64()
+	if targetBlockSize <= 0 {
+		targetBlockSize = 2 * 1024 * 1024
+	}
+	tasks := w.planMergeBlockTasks(targetBlockSize, expectedLastEntryId)
+
+	taskBytes := make([]int64, 0, len(tasks))
+	for _, task := range tasks {
+		var span int64
+		for _, blockIndex := range task.blocks {
+			span += int64(blockIndex.BlockSize)
+		}
+		taskBytes = append(taskBytes, span)
+	}
+
+	parallel := w.compactPolicyConfig.MaxParallelUploads
+	if parallel <= 0 {
+		parallel = 4 // the same default readLocalFileAndUploadToMinio falls back to
+	}
+	return storage.CompactionPeakBytes(taskBytes, parallel)
+}
+
 // planMergeBlockTasks plans how to group blocks for merging
 func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64, expectedLastEntryId int64) []*mergeBlockTask {
 	var tasks []*mergeBlockTask

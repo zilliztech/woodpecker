@@ -79,6 +79,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
 	assert.Equal(t, 300, config.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
+	assert.Equal(t, int64(1000000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxInflightMemory.Int64())
+	assert.InDelta(t, 0.7, config.Woodpecker.Logstore.SegmentCompactionPolicy.MemoryHighWatermark, 1e-9)
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, 259200, config.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
@@ -188,6 +190,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
 	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
+	assert.Equal(t, int64(1000000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxInflightMemory.Int64())
+	assert.InDelta(t, 0.7, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MemoryHighWatermark, 1e-9)
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, 259200, defaultConfig.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
@@ -487,10 +491,12 @@ func TestQuorumConfigValidation(t *testing.T) {
 							MaxWorkers: 32,
 						},
 						SegmentCompactionPolicy: SegmentCompactionPolicy{
-							MaxBytes:           NewByteSize(32000000),
-							MaxParallelUploads: 4,
-							MaxParallelReads:   8,
-							Timeout:            NewDurationSecondsFromInt(300),
+							MaxBytes:            NewByteSize(32000000),
+							MaxParallelUploads:  4,
+							MaxParallelReads:    8,
+							Timeout:             NewDurationSecondsFromInt(300),
+							MaxInflightMemory:   NewByteSize(1000000000),
+							MemoryHighWatermark: 0.7,
 						},
 						SegmentReadPolicy: SegmentReadPolicyConfig{
 							MaxBatchSize:    NewByteSize(16000000),
@@ -711,6 +717,20 @@ func TestValidateClientConfig_Errors(t *testing.T) {
 		cfg := newValidCfg()
 		cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers = 0
 		assert.ErrorContains(t, cfg.Validate(), "sync scheduler max workers must be positive")
+	})
+	t.Run("SegmentCompactionPolicy MaxInflightMemory<=0", func(t *testing.T) {
+		for _, bytes := range []int64{0, -1} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxInflightMemory = NewByteSize(bytes)
+			assert.ErrorContains(t, cfg.Validate(), "max inflight memory must be positive")
+		}
+	})
+	t.Run("SegmentCompactionPolicy MemoryHighWatermark out of range", func(t *testing.T) {
+		for _, w := range []float64{0, -0.1, 1.5} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MemoryHighWatermark = w
+			assert.ErrorContains(t, cfg.Validate(), "memory high watermark must be in (0,1]")
+		}
 	})
 	t.Run("Auditor MaxInterval<=0", func(t *testing.T) {
 		cfg := newValidCfg()
@@ -1157,10 +1177,12 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					MaxWorkers: 32,
 				},
 				SegmentCompactionPolicy: SegmentCompactionPolicy{
-					MaxBytes:           NewByteSize(32000000),
-					MaxParallelUploads: 4,
-					MaxParallelReads:   8,
-					Timeout:            NewDurationSecondsFromInt(300),
+					MaxBytes:            NewByteSize(32000000),
+					MaxParallelUploads:  4,
+					MaxParallelReads:    8,
+					Timeout:             NewDurationSecondsFromInt(300),
+					MaxInflightMemory:   NewByteSize(1000000000),
+					MemoryHighWatermark: 0.7,
 				},
 				SegmentReadPolicy: SegmentReadPolicyConfig{
 					MaxBatchSize:    NewByteSize(16000000),

@@ -90,6 +90,21 @@ func GetMemoryCount() uint64 {
 	return stats.Total
 }
 
+// GetHostMemoryCount returns the machine's total memory in bytes, ignoring any container limit.
+//
+// It exists so callers can tell a real container limit from the fallback: GetMemoryCount returns
+// the host total when the cgroup limit cannot be read, and returns it indistinguishably from a
+// limit that happens to equal it. Sizing anything as a fraction of memory needs to know the
+// difference -- on a small pod on a large machine the two are orders of magnitude apart.
+func GetHostMemoryCount() uint64 {
+	stats, err := mem.VirtualMemory()
+	if err != nil {
+		logger.Ctx(context.TODO()).Warn("failed to get host memory count", zap.Error(err))
+		return 0
+	}
+	return stats.Total
+}
+
 // GetFreeMemoryCount returns the free memory in bytes.
 func GetFreeMemoryCount() uint64 {
 	return GetMemoryCount() - GetUsedMemoryCount()

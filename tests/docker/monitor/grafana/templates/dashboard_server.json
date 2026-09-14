@@ -3328,6 +3328,189 @@
       ],
       "title": "Compacted Cleanup & Decommission",
       "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 111,
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "description": "What running compactions have reserved against the node's ceiling. The peak is what says whether the ceiling is close to binding -- a scrape of the current value misses the bursts. A ceiling of 0 means unbounded.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "bytes",
+              "min": 0
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 9
+          },
+          "id": 112,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(woodpecker_server_compaction_admission_reserved_bytes{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
+              "legendFormat": "reserved nodeID={{node_id}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(woodpecker_server_compaction_admission_peak_reserved_bytes{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
+              "legendFormat": "peak nodeID={{node_id}}",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(woodpecker_server_compaction_admission_max_inflight_bytes{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
+              "legendFormat": "ceiling nodeID={{node_id}}",
+              "refId": "C"
+            }
+          ],
+          "title": "Compaction Memory Reserved vs Ceiling",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "description": "Segment compactions holding a reservation on this node right now, across every log it serves.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "short",
+              "min": 0
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 9
+          },
+          "id": 113,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(woodpecker_server_compaction_admission_running{woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
+              "legendFormat": "nodeID={{node_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Compactions Running",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "description": "Compactions this node declined, by gate. A refusal is not a failure -- the client tries another replica and the auditor retries next cycle. 'reservation' means compaction is at its own ceiling; 'memory_pressure' means the node is near its memory limit for reasons that may have nothing to do with compaction.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "reqps",
+              "min": 0
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 9
+          },
+          "id": 114,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(woodpecker_server_compaction_admission_rejected_total{woodpecker_id=~\"$woodpecker_id\"}[5m])) by (node_id, reason)",
+              "legendFormat": "nodeID={{node_id}} {{reason}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Compaction Admission Rejects",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Compaction Admission",
+      "type": "row"
     }
   ],
   "refresh": "5s",
