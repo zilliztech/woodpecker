@@ -75,41 +75,25 @@ type ClientConfig struct {
 
 type AuditorConfig struct {
 	MaxInterval DurationSeconds `yaml:"maxInterval"`
-	// CompactionAttemptTimeout is how long this client waits for one quorum node to answer one
-	// compaction request. It travels to the node as the gRPC deadline, so it is this side's
-	// half of the bound; the node applies its own node-wide ceiling
-	// (logstore.segmentCompactionPolicy.timeout) on top, and the shorter of the two wins.
+	// CompactionAttemptTimeout is how long this client waits for one node to answer one
+	// compaction request. It travels as the gRPC deadline and the node caps it with its own
+	// segmentCompactionPolicy.timeout, so the shorter applies. The two are separate because a
+	// node serves many tenants from one configuration: its ceiling is the node's, this is the
+	// tenant's.
 	//
-	// The two are deliberately not derived from one another. A logstore node serves many
-	// bucket/rootPath tenants from one configuration, so its ceiling is a property of the node
-	// and cannot express what any particular tenant wants; this is what a tenant asks for, and
-	// it is the only one of the two the client actually knows.
-	//
-	// It is also the only bound that survives a node that stops answering at all. The server's
-	// ceiling is enforced by the server, so a wedged, black-holed or GC-stalled node never
-	// reaches it, and the auditor's context carries no deadline of its own -- without this the
-	// call blocks forever, and the pass budget cannot help because it is only checked between
-	// segments. It keeps the sequential quorum walk moving too: one hung node costs one attempt
-	// instead of the segment never reaching its healthy replicas.
-	//
-	// Setting it below the node's ceiling is legal and means what it says: give up before the
-	// node would have. Be aware that nothing of an abandoned attempt is kept unless a complete
-	// compacted footer already exists, so a value below what compaction actually needs makes
-	// every attempt on every replica futile and the local data.log is never reclaimed.
+	// It is the only bound that survives a node that stops answering at all -- the node's
+	// ceiling is enforced by the node, and the auditor's context carries no deadline of its own.
+	// Setting it below the node's ceiling is legal, but nothing of an abandoned attempt is kept,
+	// so a value below what compaction needs makes every attempt futile.
 	CompactionAttemptTimeout DurationSeconds `yaml:"compactionAttemptTimeout"`
 	// CompactionPassBudget bounds how long one auditor cycle spends starting compactions. The
-	// auditor runs its passes in sequence, so an unbounded compaction pass stalls the rest of
-	// that log's maintenance -- truncate state, snapshot publication, orphan sweep -- for as
-	// long as it lasts.
+	// auditor runs its passes in sequence, so an unbounded one stalls that log's truncate state,
+	// snapshot publication and orphan sweep for as long as it lasts.
 	//
-	// It is a budget, not a deadline: once it is spent no further segment is started, but a
-	// compaction already in flight runs to completion. Cancelling in flight would mean a
-	// segment whose compaction legitimately takes longer than the budget is cut off on every
-	// cycle and never finishes, which is the same trap as an attempt timeout set below the
-	// server's budget. Segments not started are picked up on a later cycle.
-	//
-	// A pass therefore lasts at most this budget plus one segment, and needs no relation to
-	// the attempt timeout or the quorum size.
+	// It is a budget, not a deadline: once spent no further segment is started, but one already
+	// in flight runs to completion, so a pass lasts at most this plus one segment. Cancelling in
+	// flight would cut off a segment that legitimately takes longer, on every cycle, so it would
+	// never finish. Segments not started are picked up on a later cycle.
 	CompactionPassBudget DurationSeconds `yaml:"compactionPassBudget"`
 }
 

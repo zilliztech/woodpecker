@@ -34,39 +34,13 @@ woodpecker:
       maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
-      # How long this client waits for one quorum node to answer one compaction request, in
-      # seconds, default is 330s. It travels to the node as the gRPC deadline; the node applies
-      # its own ceiling (logstore.segmentCompactionPolicy.timeout) on top and the shorter wins.
-      #
-      # The two are separate on purpose. A logstore node serves many tenants from one config, so
-      # its ceiling is a property of the node; this is what a tenant asks for. It is also the only
-      # bound that survives a node that stops answering at all -- the node's own ceiling is
-      # enforced by the node, so a wedged or black-holed one never reaches it, and without this
-      # the call blocks forever.
-      #
-      # Setting it below the node's ceiling is legal and means "give up before the node would".
-      # Note that nothing of an abandoned attempt is kept unless a complete compacted footer
-      # already exists, so a value below what compaction actually needs makes every attempt on
-      # every replica futile and the local data.log is never reclaimed.
+      # Deadline for one compaction request to one replica, in seconds, default is 330s. Travels to
+      # the node as the gRPC deadline and is capped there by logstore.segmentCompactionPolicy.timeout,
+      # so the shorter of the two applies. This is what bounds a node that stops answering at all.
       compactionAttemptTimeout: 330
-      # How long one auditor cycle keeps STARTING compactions, in seconds, default is 60s. It is a
-      # start deadline, not a cap on the cycle: once spent no further segment is begun, but one
-      # already running finishes, so a cycle lasts at most this plus one segment. A segment takes
-      # up to quorum-size x min(compactionAttemptTimeout, the node's ceiling) when every replica
-      # hangs -- about 900s for three replicas on the defaults -- so the real worst case here is
-      # minutes, not 60 seconds. Cutting the running one off instead would be worse: a compaction
-      # that legitimately needs longer than the budget would be killed every cycle and never
-      # finish, and its local data.log would never be reclaimed.
-      #
-      # What it protects: an auditor cycle compacts up to 64 segments sequentially, and the
-      # auditor runs its passes in sequence, so without this an unlucky cycle can spend
-      # 64 x 900s -- most of a day -- while truncate state, snapshot publication and the orphan
-      # sweep for that log wait behind it. Segments not started are reported as deferred and
-      # picked up on a later cycle.
-      #
-      # It also sets the steady-state throughput when compactions are slow: at 200s per segment
-      # this budget starts exactly one per cycle, so the log compacts one segment per ~200s.
-      # Raise it to trade the timeliness of the other passes for compaction throughput.
+      # How long one auditor cycle keeps starting compactions, in seconds, default is 60s. A
+      # compaction already running is never cut off, so a cycle can overrun by one segment. Without
+      # it a cycle can spend hours draining a backlog while the log's other maintenance waits.
       compactionPassBudget: 60
     sessionMonitor:
       checkInterval: 3 # How often to check session health in seconds, default is 3 seconds
@@ -144,12 +118,8 @@ woodpecker:
       maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4
       maxParallelReads: 8 # Maximum number of parallel read threads for compaction, default is 8
-      # Ceiling on how long one compaction may run on this node, in seconds, default is 300s.
-      # This is the node's guardrail, not a per-tenant policy: one logstore serves many
-      # bucket/rootPath tenants from this single value, and it exists so no one request can hold
-      # a node's compaction resources indefinitely. The client sends its own deadline with the
-      # request (client.auditor.compactionAttemptTimeout) and the shorter of the two applies, so
-      # with the shipped defaults this 300s is what actually bounds the work.
+      # Ceiling on how long one compaction may run on this node, in seconds, default is 300s. A node
+      # guardrail, not a per-tenant policy: one logstore serves many tenants from this one value.
       timeout: 300
     segmentReadPolicy:
       maxBatchSize: 2000000 # Maximum size of a batch in bytes, default is 2MB
