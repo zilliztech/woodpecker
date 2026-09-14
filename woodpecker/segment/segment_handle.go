@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -1706,6 +1708,17 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 
 	// Try each node sequentially until one succeeds
 	for i, node := range quorumInfo.Nodes {
+		// Stop once the caller is done, and report the cancellation rather than falling through
+		// to the all-nodes-failed path. Without this the walk keeps going: GetLogStoreClient
+		// returns a cached client without consulting the context, and WithTimeout on a context
+		// that is already done yields an immediately-expired child, so every remaining node
+		// "fails" instantly and is recorded in nodeFailures. That would count replicas which
+		// were never contacted into WpSegmentCompactionFailuresTotal and the "all quorum nodes
+		// failed" warning -- the signal operators use to find a broken node. Any node that did
+		// fail before the cancellation has already been logged inside this loop.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		logger.Ctx(ctx).Info("Attempting compaction on node",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -1731,7 +1744,29 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 
 		// Try compaction on this node. The node refuses (returns ErrSegmentCompactionDataBehind)
 		// if its local data is behind expectedLastEntryId, so we fall through to the next node.
-		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, expectedLastEntryId)
+		//
+		// The attempt carries this client's deadline, which gRPC sends to the node. The node
+		// applies its own ceiling (logstore.segmentCompactionPolicy.timeout) on top and the
+		// shorter wins; the two are separate because one node serves many tenants from one
+		// configuration, so its ceiling cannot express what any single tenant wants.
+		//
+		// This side is also the only bound that survives a node that stops answering at all: the
+		// node's ceiling is enforced by the node, so a wedged or black-holed one never reaches
+		// it, and the auditor's context carries no deadline of its own. The pass budget cannot
+		// stand in for it either -- that is checked between segments, and a call that never
+		// returns never gets back to the check. It keeps this sequential walk moving too: one
+		// hung node costs one attempt instead of the segment never reaching its healthy replicas.
+		//
+		// Guard against a non-positive value, which validation rejects but a Configuration
+		// assembled programmatically can still carry. It must not become WithTimeout(ctx, 0):
+		// that expires immediately and would fail every attempt on every node rather than
+		// bounding one.
+		attemptCtx, cancelAttempt := ctx, context.CancelFunc(func() {})
+		if attemptTimeout := s.cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Duration.Duration(); attemptTimeout > 0 {
+			attemptCtx, cancelAttempt = context.WithTimeout(ctx, attemptTimeout)
+		}
+		compactSegMetaInfo, compactErr := cli.SegmentCompact(attemptCtx, s.bucketName, s.rootPath, s.logId, s.segmentId, expectedLastEntryId)
+		cancelAttempt()
 		if compactErr != nil {
 			reason := classifyCompactionFailureReason(compactErr)
 			nodeFailures = append(nodeFailures, fmt.Sprintf("%s:%s", node, reason))
@@ -1789,6 +1824,18 @@ const (
 	compactionFailureReasonMixed               = "mixed"
 )
 
+// isDeadlineExceeded reports whether err is an expired deadline, from either side of the RPC.
+//
+// A local expiry is context.DeadlineExceeded, but once the deadline reaches the node over gRPC the
+// client sees status.Error(codes.DeadlineExceeded, ...), which does not wrap the sentinel, is not a
+// woodpeckerError, and is not codes.Unavailable -- so none of errors.Is, IsRetryableErr or
+// IsTransportError match it. Only embedded mode returns the native error. Without the status check
+// a node that stops responding is classified as "other" in exactly the deployment where the
+// per-attempt deadline is what detects it.
+func isDeadlineExceeded(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded
+}
+
 func classifyCompactionFailureReason(err error) string {
 	switch {
 	case err == nil:
@@ -1797,7 +1844,7 @@ func classifyCompactionFailureReason(err error) string {
 		return compactionFailureReasonDataBehind
 	case errors.Is(err, werr.ErrInvalidLACAlignment):
 		return compactionFailureReasonInvalidLACAlignment
-	case werr.IsTransportError(err), werr.IsRetryableErr(err), errors.Is(err, context.DeadlineExceeded):
+	case werr.IsTransportError(err), werr.IsRetryableErr(err), isDeadlineExceeded(err):
 		return compactionFailureReasonTransient
 	default:
 		return compactionFailureReasonOther

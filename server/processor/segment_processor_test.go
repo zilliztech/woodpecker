@@ -1127,3 +1127,60 @@ func TestSegmentProcessor_Close_WithLocalWriterAndReader(t *testing.T) {
 	assert.Nil(t, sp.currentSegmentWriter)
 	assert.Nil(t, sp.currentSegmentReader)
 }
+
+// TestSegmentProcessor_Compact_HonoursTheCallerDeadline pins how the two compaction bounds
+// combine. The client sends its own deadline with the request and the node applies its ceiling
+// (segmentCompactionPolicy.timeout) on top, so the shorter of the two is what the compaction
+// actually gets.
+//
+// They are separate for a reason: one logstore serves many bucket/rootPath tenants from a single
+// configuration, so the node's ceiling is a property of the node and cannot express what any one
+// tenant wants. The tenant's half has to arrive over the wire, which is exactly what this checks.
+func TestSegmentProcessor_Compact_HonoursTheCallerDeadline(t *testing.T) {
+	nodeCeiling := time.Duration(0)
+
+	t.Run("a shorter caller deadline wins over the node ceiling", func(t *testing.T) {
+		sp := newTestProcessor(t)
+		nodeCeiling = time.Duration(sp.cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds()) * time.Second
+		require.Positive(t, nodeCeiling)
+
+		var seen time.Duration
+		mockWriter := mocks_storage.NewWriter(t)
+		mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ int64) (int64, error) {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok, "the compaction must run under a deadline")
+			seen = time.Until(deadline)
+			return int64(1024), nil
+		})
+		sp.currentSegmentWriter = mockWriter
+
+		callerCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err := sp.Compact(callerCtx, -1)
+		require.NoError(t, err)
+
+		assert.Less(t, seen, 3*time.Second, "the caller's 2s deadline must reach the compaction")
+		assert.Less(t, seen, nodeCeiling, "the node ceiling must not override a shorter caller deadline")
+	})
+
+	t.Run("without a caller deadline the node ceiling applies", func(t *testing.T) {
+		sp := newTestProcessor(t)
+
+		var seen time.Duration
+		mockWriter := mocks_storage.NewWriter(t)
+		mockWriter.EXPECT().Compact(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ int64) (int64, error) {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok, "the node bounds its own work even when the caller does not")
+			seen = time.Until(deadline)
+			return int64(1024), nil
+		})
+		sp.currentSegmentWriter = mockWriter
+
+		// context.Background() carries no deadline, exactly as the auditor's context does not.
+		_, err := sp.Compact(context.Background(), -1)
+		require.NoError(t, err)
+
+		assert.InDelta(t, nodeCeiling.Seconds(), seen.Seconds(), 5,
+			"the node ceiling is what bounds an otherwise unbounded caller")
+	})
+}

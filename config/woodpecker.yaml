@@ -34,6 +34,14 @@ woodpecker:
       maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
+      # Deadline for one compaction request to one replica, in seconds, default is 330s. Travels to
+      # the node as the gRPC deadline and is capped there by logstore.segmentCompactionPolicy.timeout,
+      # so the shorter of the two applies. This is what bounds a node that stops answering at all.
+      compactionAttemptTimeout: 330
+      # How long one auditor cycle keeps starting compactions, in seconds, default is 60s. A
+      # compaction already running is never cut off, so a cycle can overrun by one segment. Without
+      # it a cycle can spend hours draining a backlog while the log's other maintenance waits.
+      compactionPassBudget: 60
     sessionMonitor:
       checkInterval: 3 # How often to check session health in seconds, default is 3 seconds
       maxFailures: 5 # Consecutive failures before marking session invalid, default is 5
@@ -110,7 +118,9 @@ woodpecker:
       maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4
       maxParallelReads: 8 # Maximum number of parallel read threads for compaction, default is 8
-      timeout: 300 # Deadline for compacting one segment in seconds, default is 300s. Covers the whole read/merge/upload pass; on expiry the compaction is aborted and the auditor retries it on a later cycle.
+      # Ceiling on how long one compaction may run on this node, in seconds, default is 300s. A node
+      # guardrail, not a per-tenant policy: one logstore serves many tenants from this one value.
+      timeout: 300
     segmentReadPolicy:
       maxBatchSize: 2000000 # Maximum size of a batch in bytes, default is 2MB
       maxFetchThreads: 32 # Maximum number of threads to fetch data, default is 32

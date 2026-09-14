@@ -75,6 +75,26 @@ type ClientConfig struct {
 
 type AuditorConfig struct {
 	MaxInterval DurationSeconds `yaml:"maxInterval"`
+	// CompactionAttemptTimeout is how long this client waits for one node to answer one
+	// compaction request. It travels as the gRPC deadline and the node caps it with its own
+	// segmentCompactionPolicy.timeout, so the shorter applies. The two are separate because a
+	// node serves many tenants from one configuration: its ceiling is the node's, this is the
+	// tenant's.
+	//
+	// It is the only bound that survives a node that stops answering at all -- the node's
+	// ceiling is enforced by the node, and the auditor's context carries no deadline of its own.
+	// Setting it below the node's ceiling is legal, but nothing of an abandoned attempt is kept,
+	// so a value below what compaction needs makes every attempt futile.
+	CompactionAttemptTimeout DurationSeconds `yaml:"compactionAttemptTimeout"`
+	// CompactionPassBudget bounds how long one auditor cycle spends starting compactions. The
+	// auditor runs its passes in sequence, so an unbounded one stalls that log's truncate state,
+	// snapshot publication and orphan sweep for as long as it lasts.
+	//
+	// It is a budget, not a deadline: once spent no further segment is started, but one already
+	// in flight runs to completion, so a pass lasts at most this plus one segment. Cancelling in
+	// flight would cut off a segment that legitimately takes longer, on every cycle, so it would
+	// never finish. Segments not started are picked up on a later cycle.
+	CompactionPassBudget DurationSeconds `yaml:"compactionPassBudget"`
 }
 
 // SessionMonitorConfig stores the session monitor configuration for writer lock health checking.
@@ -651,6 +671,12 @@ func (c *Configuration) validateClientConfig() error {
 	if client.Auditor.MaxInterval.Seconds() <= 0 {
 		return fmt.Errorf("auditor max interval must be positive, got %d", client.Auditor.MaxInterval.Seconds())
 	}
+	if client.Auditor.CompactionAttemptTimeout.Seconds() <= 0 {
+		return fmt.Errorf("auditor compaction attempt timeout must be positive, got %ds", client.Auditor.CompactionAttemptTimeout.Seconds())
+	}
+	if client.Auditor.CompactionPassBudget.Seconds() <= 0 {
+		return fmt.Errorf("auditor compaction pass budget must be positive, got %ds", client.Auditor.CompactionPassBudget.Seconds())
+	}
 
 	// Validate DirectRead configuration
 	if client.DirectRead.Enabled {
@@ -918,7 +944,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxBlocks:   1000,
 			},
 			Auditor: AuditorConfig{
-				MaxInterval: DurationSeconds{Duration: Duration{duration: 5 * 1000000000}}, // 5s
+				MaxInterval:              DurationSeconds{Duration: Duration{duration: 5 * 1000000000}}, // 5s
+				CompactionAttemptTimeout: NewDurationSecondsFromInt(330),
+				CompactionPassBudget:     NewDurationSecondsFromInt(60),
 			},
 			Quorum: QuorumConfig{
 				BufferPools: NewDynamic([]QuorumBufferPool{
