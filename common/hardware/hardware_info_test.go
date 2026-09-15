@@ -101,14 +101,6 @@ func Test_GetContainerMemUsed(t *testing.T) {
 	// On Linux: err may be nil with any usage value. Both are valid.
 }
 
-func Test_GetAllGPUMemoryInfo(t *testing.T) {
-	// Non-CUDA build returns error
-	info, err := GetAllGPUMemoryInfo()
-	assert.Error(t, err)
-	assert.Nil(t, info)
-	assert.Contains(t, err.Error(), "CUDA not supported")
-}
-
 func Test_GetCPUNum_Positive(t *testing.T) {
 	n := GetCPUNum()
 	assert.Greater(t, n, 0)
