@@ -70,9 +70,17 @@ message QuorumInfo{
 
 /**
  * QuorumNode defines the topology metadata for a quorum replica.
+ *
+ * replicas[i] describes nodes[i]: quorum selection builds the two lists in
+ * lockstep, so they are paired by index.
  */
 message QuorumNode{
-  string endpoint = 1;
+  // Deprecated: this only ever duplicated QuorumInfo.nodes[i] so the two lists
+  // could be joined by address, at the cost of a second copy of the address in
+  // every segment's metadata — about a third of the value under Kubernetes FQDN
+  // naming. It is no longer written; readers pair by index, and fall back to
+  // this field only for metadata written before the deprecation.
+  string endpoint = 1 [deprecated = true];
   string node_id = 2;
   string cluster_name = 3;
   string region = 4;

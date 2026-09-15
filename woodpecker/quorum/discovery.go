@@ -238,8 +238,11 @@ func quorumNodeFromMeta(node *proto.NodeMeta) *proto.QuorumNode {
 	for k, v := range node.Tags {
 		tags[k] = v
 	}
+	// Endpoint is deliberately not set: it is deprecated (issue #280) because it
+	// only ever duplicated the address already held in QuorumInfo.nodes[i], at
+	// the cost of a second copy of the string in every segment's metadata. The
+	// two lists are paired by index instead.
 	return &proto.QuorumNode{
-		Endpoint:      node.Endpoint,
 		NodeId:        node.NodeId,
 		ClusterName:   node.ClusterName,
 		Region:        node.Region,
@@ -249,16 +252,14 @@ func quorumNodeFromMeta(node *proto.NodeMeta) *proto.QuorumNode {
 	}
 }
 
-func replicaForEndpoint(info *proto.QuorumInfo, endpoint string) *proto.QuorumNode {
-	if info == nil {
+// replicaAt returns the placement metadata for info.Nodes[i]. Selection builds
+// the two lists in lockstep, so the index is the pairing; a missing entry
+// yields nil rather than a wrong replica.
+func replicaAt(info *proto.QuorumInfo, i int) *proto.QuorumNode {
+	if info == nil || i < 0 || i >= len(info.Replicas) {
 		return nil
 	}
-	for _, replica := range info.Replicas {
-		if replica != nil && replica.Endpoint == endpoint {
-			return replica
-		}
-	}
-	return nil
+	return info.Replicas[i]
 }
 
 func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context, pools []config.QuorumBufferPool, filters []*proto.NodeFilter) (*proto.QuorumInfo, error) {
@@ -315,11 +316,11 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context, pools []c
 		}
 
 		if regionResult != nil {
-			for _, node := range regionResult.Nodes {
+			for nodeIndex, node := range regionResult.Nodes {
 				if !selectedSet[node] {
 					selectedSet[node] = true
 					allSelectedNodes = append(allSelectedNodes, node)
-					allSelectedReplicas = append(allSelectedReplicas, replicaForEndpoint(regionResult, node))
+					allSelectedReplicas = append(allSelectedReplicas, replicaAt(regionResult, nodeIndex))
 				}
 			}
 		}
@@ -409,9 +410,11 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context, pools
 
 		// Pick the first non-duplicate node from candidates
 		var selectedNode string
-		for _, node := range regionResult.Nodes {
+		selectedIndex := -1
+		for nodeIndex, node := range regionResult.Nodes {
 			if !selectedSet[node] {
 				selectedNode = node
+				selectedIndex = nodeIndex
 				break
 			}
 		}
@@ -423,7 +426,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context, pools
 
 		selectedSet[selectedNode] = true
 		allSelectedNodes = append(allSelectedNodes, selectedNode)
-		allSelectedReplicas = append(allSelectedReplicas, replicaForEndpoint(regionResult, selectedNode))
+		allSelectedReplicas = append(allSelectedReplicas, replicaAt(regionResult, selectedIndex))
 
 		logger.Ctx(ctx).Debug("Successfully selected node for active custom placement rule",
 			zap.Int("ruleIndex", i),
@@ -484,11 +487,11 @@ func (d *quorumDiscovery) fillRemainingNodesWithReplicas(ctx context.Context, po
 			continue
 		}
 		if fillResult != nil {
-			for _, node := range fillResult.Nodes {
+			for nodeIndex, node := range fillResult.Nodes {
 				if !selectedSet[node] {
 					selectedSet[node] = true
 					currentNodes = append(currentNodes, node)
-					currentReplicas = append(currentReplicas, replicaForEndpoint(fillResult, node))
+					currentReplicas = append(currentReplicas, replicaAt(fillResult, nodeIndex))
 				}
 			}
 			if len(currentNodes) >= requiredNodes {

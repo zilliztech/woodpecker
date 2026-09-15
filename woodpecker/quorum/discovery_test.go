@@ -63,7 +63,10 @@ func TestQuorumDiscovery_SelectQuorumNodes_SingleRegion_Success(t *testing.T) {
 	assert.Contains(t, result.Nodes, "node2:8080")
 	assert.Contains(t, result.Nodes, "node3:8080")
 	require.Len(t, result.Replicas, 3)
-	assert.Equal(t, "node1:8080", result.Replicas[0].Endpoint)
+	// Replicas are paired with Nodes by index; QuorumNode.endpoint is deprecated
+	// (issue #280) because it only duplicated Nodes[i].
+	assert.Equal(t, "node1:8080", result.Nodes[0])
+	assert.Empty(t, result.Replicas[0].Endpoint)
 	assert.Equal(t, "node-1", result.Replicas[0].NodeId)
 	assert.Equal(t, "cluster-a", result.Replicas[0].ClusterName)
 	assert.Equal(t, "region-a", result.Replicas[0].Region)
