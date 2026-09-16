@@ -98,6 +98,7 @@ func TestBuildInitContainers_UsesCurlImage(t *testing.T) {
 		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
 			GossipPort: 17946,
 			Replicas:   ptr.To(int32(3)),
+			InitImage:  "curlimages/curl:8.7.1",
 		},
 	}
 
@@ -105,6 +106,22 @@ func TestBuildInitContainers_UsesCurlImage(t *testing.T) {
 	require.Len(t, initCs, 1)
 	assert.Equal(t, "init-topology", initCs[0].Name)
 	assert.Contains(t, initCs[0].Image, "curlimages/curl")
+}
+
+func TestBuildInitContainers_UsesCustomInitImage(t *testing.T) {
+	r := &WoodpeckerClusterReconciler{}
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "default"},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
+			GossipPort: 17946,
+			Replicas:   ptr.To(int32(3)),
+			InitImage:  "registry.example.com/curl:custom",
+		},
+	}
+
+	initCs := r.buildInitContainers(cluster)
+	require.Len(t, initCs, 1)
+	assert.Equal(t, "registry.example.com/curl:custom", initCs[0].Image)
 }
 
 func TestBuildInitContainers_HasHostNodeNameFromSpecNodeName(t *testing.T) {
