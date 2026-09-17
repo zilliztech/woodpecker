@@ -246,7 +246,7 @@ echo "Init complete: pod=$POD_NAME node=$HOST_NODE_NAME cluster=%s region=$REGIO
 	return []corev1.Container{
 		{
 			Name:    "init-topology",
-			Image:   "curlimages/curl:8.7.1",
+			Image:   cluster.Spec.InitImage,
 			Command: []string{"/bin/sh", "-c", script},
 			Env: []corev1.EnvVar{
 				{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},

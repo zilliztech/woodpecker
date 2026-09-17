@@ -1012,6 +1012,10 @@ spec:
                   type: object
                   x-kubernetes-map-type: atomic
                 type: array
+              initImage:
+                default: curlimages/curl:8.7.1
+                description: initImage is the image of the init-topology init container.
+                type: string
               metricsPort:
                 default: 9091
                 description: metricsPort is the HTTP metrics/health port.

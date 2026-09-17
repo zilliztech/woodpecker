@@ -31,6 +31,11 @@ type WoodpeckerClusterSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
+	// initImage is the image of the init-topology init container.
+	// +kubebuilder:default="curlimages/curl:8.7.1"
+	// +optional
+	InitImage string `json:"initImage,omitempty"`
+
 	// imagePullPolicy defaults to IfNotPresent.
 	// +kubebuilder:default="IfNotPresent"
 	// +optional
