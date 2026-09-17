@@ -39,6 +39,9 @@ metadata:
   name: woodpecker-sample
 spec:
   image: zilliztech/woodpecker:v0.1.26
+  # Image for the init-topology init container, which reads the node's zone/region
+  # labels. Override it when Docker Hub is unreachable.
+  # initImage: my-registry.internal/curl:8.7.1
   replicas: 3
   resources:
     requests:

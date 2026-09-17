@@ -124,6 +124,24 @@ func TestBuildInitContainers_UsesCustomInitImage(t *testing.T) {
 	assert.Equal(t, "registry.example.com/curl:custom", initCs[0].Image)
 }
 
+func TestBuildInitContainers_FallsBackWhenInitImageUnset(t *testing.T) {
+	// A CRD that predates spec.initImage leaves the field empty, since the
+	// default lives in the CRD schema rather than in the controller. An empty
+	// image makes the API server reject the StatefulSet outright.
+	r := &WoodpeckerClusterReconciler{}
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "default"},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
+			GossipPort: 17946,
+			Replicas:   ptr.To(int32(3)),
+		},
+	}
+
+	initCs := r.buildInitContainers(cluster)
+	require.Len(t, initCs, 1)
+	assert.Equal(t, defaultInitImage, initCs[0].Image)
+}
+
 func TestBuildInitContainers_HasHostNodeNameFromSpecNodeName(t *testing.T) {
 	r := &WoodpeckerClusterReconciler{}
 	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{

@@ -250,6 +250,24 @@ kubectl logs <pod-name>
 
 Common causes: etcd/MinIO not reachable (check ConfigMap endpoints), invalid `woodpecker.yaml` syntax.
 
+### Init container stuck in ImagePullBackOff
+
+Every server pod runs an `init-topology` init container before the main container. It reads the
+node's `topology.kubernetes.io/zone` and `region` labels from the Kubernetes API and writes them
+to `/etc/woodpecker/topology.env`, which is why it needs an image that can make an HTTPS request.
+
+It defaults to `curlimages/curl:8.7.1` from Docker Hub. If your cluster cannot reach Docker Hub,
+mirror that image into your own registry and point `spec.initImage` at it:
+
+```yaml
+spec:
+  image: my-registry.internal/woodpecker:v0.1.26
+  initImage: my-registry.internal/curl:8.7.1
+```
+
+Any image with a `curl` binary and `/bin/sh` works. For a private registry, add the pull secret to
+`spec.imagePullSecrets` — it is a pod-level field, so it covers the init container too.
+
 ### Operator not reconciling
 
 - Check operator logs: `kubectl logs -n woodpecker-operator-system -l control-plane=controller-manager`

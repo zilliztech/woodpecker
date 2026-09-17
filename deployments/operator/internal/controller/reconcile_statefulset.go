@@ -34,6 +34,12 @@ import (
 	woodpeckerv1alpha1 "github.com/zilliztech/woodpecker/deployments/operator/api/v1alpha1"
 )
 
+// defaultInitImage is the image the init-topology container falls back to when
+// spec.initImage is empty. Keep it in step with the +kubebuilder:default marker
+// on WoodpeckerClusterSpec.InitImage — the marker only accepts a literal, so the
+// two cannot share a source.
+const defaultInitImage = "curlimages/curl:8.7.1"
+
 func (r *WoodpeckerClusterReconciler) reconcileStatefulSet(ctx context.Context, cluster *woodpeckerv1alpha1.WoodpeckerCluster) error {
 	logger := log.FromContext(ctx)
 
@@ -243,10 +249,18 @@ EOF
 echo "Init complete: pod=$POD_NAME node=$HOST_NODE_NAME cluster=%s region=$REGION az=$AZ"
 `, seedsExpr, cluster.Name, cluster.Name)
 
+	// The default lives in the CRD schema, so an operator running against a CRD
+	// that predates spec.initImage sees an empty string here. Emitting an empty
+	// image would make the API server reject the whole StatefulSet.
+	initImage := cluster.Spec.InitImage
+	if initImage == "" {
+		initImage = defaultInitImage
+	}
+
 	return []corev1.Container{
 		{
 			Name:    "init-topology",
-			Image:   cluster.Spec.InitImage,
+			Image:   initImage,
 			Command: []string{"/bin/sh", "-c", script},
 			Env: []corev1.EnvVar{
 				{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
