@@ -73,6 +73,7 @@ Kind:    WoodpeckerCluster
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `image` | string | `zilliztech/woodpecker:v0.1.26` | Server container image |
+| `initImage` | string | `curlimages/curl:8.7.1` | Image for the `init-topology` init container; override it when Docker Hub is unreachable |
 | `imagePullPolicy` | string | `IfNotPresent` | Image pull policy |
 | `imagePullSecrets` | []LocalObjectReference | - | Secrets for private registries |
 | `replicas` | int32 | `3` | Number of server nodes |
