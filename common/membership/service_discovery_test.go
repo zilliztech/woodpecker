@@ -17,8 +17,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -2212,4 +2215,62 @@ func TestUpdateServer_AcceptsAFresherLoadFromMeta(t *testing.T) {
 	if got := sd.RuntimeOf("n1"); got.GetLoadFactor() != 0.7 {
 		t.Fatalf("a newer reading carried by meta should win, got %v", got.GetLoadFactor())
 	}
+}
+
+// TestQuorumNodeSelected_CountsEveryReturnedNode covers the per-node selection counter
+// (issue #339). quorum_selection_skew_total counts selection *calls* by mode, so it cannot
+// say which node is over-picked; this one counts nodes, making
+// max/avg over selected_node_id a direct skew measure with no proxy.
+//
+// The counter is a package-level global shared across tests, so every assertion is on a
+// delta rather than an absolute value.
+func TestQuorumNodeSelected_CountsEveryReturnedNode(t *testing.T) {
+	read := func(selected, mode string) float64 {
+		return testutil.ToFloat64(metrics.WpQuorumNodeSelected.WithLabelValues(metrics.NodeID, selected, mode))
+	}
+
+	t.Run("weighted counts every node in the sample, not the call", func(t *testing.T) {
+		sd := newTestDiscoveryFixedNow()
+		nodes := []*NodeInfo{nodeWithLoad("a", 0.1, 1000), nodeWithLoad("b", 0.1, 1000)}
+
+		before := read("a", "weighted") + read("b", "weighted")
+		got := sd.selectLowestLoadNodes(nodes, 2)
+		require.Len(t, got, 2)
+
+		assert.Equal(t, float64(2), read("a", "weighted")+read("b", "weighted")-before,
+			"two nodes returned must be two increments; one per call is what the old counter already does")
+	})
+
+	t.Run("no usable load reports the random_no_load mode", func(t *testing.T) {
+		sd := newTestDiscoveryFixedNow()
+		nodes := []*NodeInfo{
+			{Meta: &proto.NodeMeta{NodeId: "stale-1"}},
+			{Meta: &proto.NodeMeta{NodeId: "stale-2"}},
+		}
+
+		before := read("stale-1", "random_no_load") + read("stale-2", "random_no_load")
+		got := sd.selectLowestLoadNodes(nodes, 2)
+		require.Len(t, got, 2)
+
+		assert.Equal(t, float64(2),
+			read("stale-1", "random_no_load")+read("stale-2", "random_no_load")-before)
+	})
+
+	t.Run("load-aware disabled is its own mode", func(t *testing.T) {
+		sd := NewServiceDiscovery(WithLoadAware(false, 0))
+		nodes := []*NodeInfo{nodeWithLoad("x", 0.1, 1000)}
+
+		before := read("x", "load_disabled")
+		require.Len(t, sd.selectLowestLoadNodes(nodes, 1), 1)
+
+		assert.Equal(t, float64(1), read("x", "load_disabled")-before,
+			"quorum_selection_skew_total is silent on this path; the per-node counter must not be")
+	})
+
+	t.Run("a candidate without meta is skipped, not a panic", func(t *testing.T) {
+		sd := newTestDiscoveryFixedNow()
+		assert.NotPanics(t, func() {
+			sd.recordSelection([]*NodeInfo{nil, {}}, "weighted")
+		})
+	})
 }
