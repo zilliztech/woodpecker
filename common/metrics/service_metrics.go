@@ -135,6 +135,20 @@ var (
 		Name:      "logstore_write_reject_probability",
 		Help:      "Current probability that a new append is rejected by the disk watermark policy (0..1)",
 	}, []string{"node_id"})
+	// Configured thresholds, exported so alert rules and dashboards can read the line
+	// instead of hardcoding it and silently drifting when the config changes (issue #338).
+	WpLogStoreDiskWatermarkSoft = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_disk_watermark_soft",
+		Help:      "Configured soft disk watermark ratio, above which a warning is raised; 0 when the policy is disabled",
+	}, []string{"node_id"})
+	WpLogStoreDiskWatermarkHard = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_disk_watermark_hard",
+		Help:      "Configured hard disk watermark ratio, above which appends are rejected; 0 when the policy is disabled",
+	}, []string{"node_id"})
 
 	// Buffer wait latency
 	WpServerBufferWaitLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -368,6 +382,12 @@ var (
 	// The reason is the actionable part and the two call for different responses: "reservation"
 	// means compaction itself is at its ceiling and more of it would not fit, "memory_pressure"
 	// means the node is near its limit for reasons that may have nothing to do with compaction.
+	WpCompactionAdmissionMemoryWatermark = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_memory_watermark",
+		Help:      "Configured memory usage fraction above which this node stops taking on new compactions",
+	}, []string{"node_id"})
 	WpCompactionAdmissionRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
@@ -436,6 +456,8 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpNodeDecommissionRemainingProcessors)
 		registerer.MustRegister(WpNodeDecommissionHasLocalData)
 		registerer.MustRegister(WpNodeDecommissionSafeToTerminate)
+		registerer.MustRegister(WpLogStoreDiskWatermarkSoft)
+		registerer.MustRegister(WpLogStoreDiskWatermarkHard)
 		registerer.MustRegister(WpSyncSchedulerScheduled)
 		registerer.MustRegister(WpSyncSchedulerRunning)
 		registerer.MustRegister(WpSyncSchedulerWaiting)
@@ -445,6 +467,7 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpCompactionAdmissionReservedBytes)
 		registerer.MustRegister(WpCompactionAdmissionPeakReservedBytes)
 		registerer.MustRegister(WpCompactionAdmissionRejectedTotal)
+		registerer.MustRegister(WpCompactionAdmissionMemoryWatermark)
 		// Quorum selection skew (load-aware node selection, issue #114)
 		registerer.MustRegister(WpQuorumSelectionSkew)
 	})

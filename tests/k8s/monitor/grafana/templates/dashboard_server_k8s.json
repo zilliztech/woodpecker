@@ -1077,6 +1077,11 @@
               "expr": "sum(woodpecker_server_system_memory_usage_ratio{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
               "legendFormat": "nodeID={{node_id}} ratio",
               "refId": "B"
+            },
+            {
+              "expr": "sum(woodpecker_server_compaction_admission_memory_watermark{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
+              "legendFormat": "nodeID={{node_id}} compaction watermark",
+              "refId": "C"
             }
           ],
           "title": "Memory Usage",
@@ -1531,6 +1536,16 @@
               "expr": "sum(woodpecker_server_logstore_disk_usage_ratio{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}) by (node_id, path)",
               "legendFormat": "nodeID={{node_id}} path={{path}}",
               "refId": "A"
+            },
+            {
+              "expr": "sum(woodpecker_server_logstore_disk_watermark_soft{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
+              "legendFormat": "nodeID={{node_id}} soft",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(woodpecker_server_logstore_disk_watermark_hard{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}) by (node_id)",
+              "legendFormat": "nodeID={{node_id}} hard",
+              "refId": "C"
             }
           ],
           "title": "WAL Disk Usage Ratio",

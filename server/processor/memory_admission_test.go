@@ -91,6 +91,34 @@ func TestMemoryAdmission_PressureGate(t *testing.T) {
 	})
 }
 
+// TestMemoryAdmission_MemoryHighWatermark covers the reporting getter behind the
+// compaction_admission_memory_watermark gauge. It reports the threshold this node actually
+// enforces, so an alert rule reading it never compares against a line that cannot be crossed.
+func TestMemoryAdmission_MemoryHighWatermark(t *testing.T) {
+	t.Run("reports the configured fraction when the gate is live", func(t *testing.T) {
+		a := NewMemoryAdmission(1<<40, 8<<30, 0.7)
+		require.True(t, a.pressureGateEnabled())
+		assert.InDelta(t, 0.7, a.MemoryHighWatermark(), 1e-9)
+	})
+
+	t.Run("reports zero without a readable memory limit", func(t *testing.T) {
+		a := NewMemoryAdmission(1<<40, 0, 0.7)
+		require.False(t, a.pressureGateEnabled())
+		assert.Zero(t, a.MemoryHighWatermark(),
+			"a watermark that is never applied must not look like one that is")
+	})
+
+	t.Run("reports zero when no watermark is configured", func(t *testing.T) {
+		a := NewMemoryAdmission(1<<40, 8<<30, 0)
+		assert.Zero(t, a.MemoryHighWatermark())
+	})
+
+	t.Run("nil is zero, not a panic", func(t *testing.T) {
+		var a *MemoryAdmission
+		assert.Zero(t, a.MemoryHighWatermark())
+	})
+}
+
 // TestMemoryAdmission_AlwaysTakesTheFirst covers the misconfiguration and the bad-neighbour case
 // together. Refusing every compaction on the node -- no segment leaving local disk, no space
 // reclaimed, and eventually the disk watermark throttling writes as well -- is worse than briefly
