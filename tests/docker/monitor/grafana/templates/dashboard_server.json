@@ -1453,6 +1453,118 @@
           ],
           "title": "Process Virtual Memory",
           "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "iops"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 36
+          },
+          "id": 115,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(woodpecker_server_system_disk_read_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m])) by (node_id, device)",
+              "legendFormat": "nodeID={{node_id}} dev={{device}} read",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m])) by (node_id, device)",
+              "legendFormat": "nodeID={{node_id}} dev={{device}} write",
+              "refId": "B"
+            }
+          ],
+          "title": "WAL Disk IOPS",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "Bps"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 36
+          },
+          "id": 116,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(woodpecker_server_system_disk_read_bytes_total{woodpecker_id=~\"$woodpecker_id\"}[5m])) by (node_id, device)",
+              "legendFormat": "nodeID={{node_id}} dev={{device}} read",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(woodpecker_server_system_disk_write_bytes_total{woodpecker_id=~\"$woodpecker_id\"}[5m])) by (node_id, device)",
+              "legendFormat": "nodeID={{node_id}} dev={{device}} write",
+              "refId": "B"
+            }
+          ],
+          "title": "WAL Disk Throughput",
+          "type": "timeseries"
         }
       ],
       "title": "System",
