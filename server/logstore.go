@@ -161,9 +161,20 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 	// Disk-watermark backpressure (issue #215): only meaningful when this node keeps
 	// WAL data on a local disk (service/local storage modes).
 	dwPolicy := cfg.Woodpecker.Logstore.DiskWatermarkPolicy
-	if dwPolicy.Enabled && cfg.Woodpecker.Storage.RootPath != "" &&
-		(cfg.Woodpecker.Storage.IsStorageService() || cfg.Woodpecker.Storage.IsStorageLocal()) {
+	dwActive := dwPolicy.Enabled && cfg.Woodpecker.Storage.RootPath != "" &&
+		(cfg.Woodpecker.Storage.IsStorageService() || cfg.Woodpecker.Storage.IsStorageLocal())
+	if dwActive {
 		logStore.maintenance.Register(newDiskWatermarkTask(logStore))
+	}
+	// Export the thresholds this node actually enforces (issue #338). Gated on dwActive, not on
+	// dwPolicy.Enabled: a node that keeps no WAL on local disk never applies the watermark, and
+	// publishing the configured ratio there would give alert rules a line that is never crossed.
+	if dwActive {
+		metrics.WpLogStoreDiskWatermarkSoft.WithLabelValues(metrics.NodeID).Set(dwPolicy.SoftThresholdRatio)
+		metrics.WpLogStoreDiskWatermarkHard.WithLabelValues(metrics.NodeID).Set(dwPolicy.HardThresholdRatio)
+	} else {
+		metrics.WpLogStoreDiskWatermarkSoft.WithLabelValues(metrics.NodeID).Set(0)
+		metrics.WpLogStoreDiskWatermarkHard.WithLabelValues(metrics.NodeID).Set(0)
 	}
 
 	logger.Ctx(ctx).Info("LogStore created successfully",
@@ -1184,6 +1195,7 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 	if l.compactionAdmission != nil {
 		metrics.WpCompactionAdmissionRunning.WithLabelValues(metrics.NodeID).Set(float64(l.compactionAdmission.Running()))
 		metrics.WpCompactionAdmissionMaxInflightBytes.WithLabelValues(metrics.NodeID).Set(float64(l.compactionAdmission.MaxInflightBytes()))
+		metrics.WpCompactionAdmissionMemoryWatermark.WithLabelValues(metrics.NodeID).Set(l.compactionAdmission.MemoryHighWatermark())
 		metrics.WpCompactionAdmissionReservedBytes.WithLabelValues(metrics.NodeID).Set(float64(l.compactionAdmission.ReservedBytes()))
 		metrics.WpCompactionAdmissionPeakReservedBytes.WithLabelValues(metrics.NodeID).Set(float64(l.compactionAdmission.PeakReservedBytes()))
 	}

@@ -218,6 +218,17 @@ func (a *MemoryAdmission) MaxInflightBytes() int64 {
 	return a.maxInflightBytes
 }
 
+// MemoryHighWatermark is the memory fraction above which this node stops taking on new
+// compactions, 0 when the pressure gate is inactive -- no container memory limit readable,
+// or no watermark configured. Reporting the effective value rather than the configured one
+// keeps an alert rule that reads it from comparing against a threshold that never applies.
+func (a *MemoryAdmission) MemoryHighWatermark() float64 {
+	if !a.pressureGateEnabled() {
+		return 0
+	}
+	return a.highWatermark
+}
+
 // ReservedBytes is what running compactions currently hold against the ceiling.
 func (a *MemoryAdmission) ReservedBytes() int64 {
 	if a == nil {
