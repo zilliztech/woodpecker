@@ -1164,7 +1164,7 @@ func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*NodeInfo, limit int) 
 	}
 
 	if !sd.loadAware {
-		return sd.randomSelectNodes(nodes, limit)
+		return sd.recordSelection(sd.randomSelectNodes(nodes, limit), "load_disabled")
 	}
 
 	weights := make([]float64, len(nodes))
@@ -1186,7 +1186,7 @@ func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*NodeInfo, limit int) 
 
 	if !anyKnown {
 		metrics.WpQuorumSelectionSkew.WithLabelValues("random_no_load").Inc()
-		return sd.randomSelectNodes(nodes, limit)
+		return sd.recordSelection(sd.randomSelectNodes(nodes, limit), "random_no_load")
 	}
 	metrics.WpQuorumSelectionSkew.WithLabelValues("weighted").Inc()
 
@@ -1195,7 +1195,28 @@ func (sd *ServiceDiscovery) selectLowestLoadNodes(nodes []*NodeInfo, limit int) 
 	for _, i := range picked {
 		out = append(out, nodes[i])
 	}
-	return out
+	return sd.recordSelection(out, "weighted")
+}
+
+// recordSelection counts every node the selection returned and passes the slice through, so
+// callers read as before. This is the per-node view quorum_selection_skew_total cannot give:
+// that counter is incremented once per call, and on the weighted path before the sample is
+// drawn, so the chosen nodes are not known at that point.
+//
+// node_id is the node running the selection (a SelectNodes RPC is served by whichever logstore
+// the client reached), selected_node_id the node it picked. Skew is then
+//
+//	max(sum by (selected_node_id) (rate(...))) / avg(sum by (selected_node_id) (rate(...)))
+//
+// with no proxy through active_segments, which conflates skew with logs of uneven size.
+func (sd *ServiceDiscovery) recordSelection(selected []*NodeInfo, mode string) []*NodeInfo {
+	for _, n := range selected {
+		if n == nil || n.Meta == nil {
+			continue
+		}
+		metrics.WpQuorumNodeSelected.WithLabelValues(metrics.NodeID, n.Meta.NodeId, mode).Inc()
+	}
+	return selected
 }
 
 func (sd *ServiceDiscovery) randomSelectNodes(nodes []*NodeInfo, limit int) []*NodeInfo {

@@ -379,6 +379,16 @@ var (
 	// how often load actually changed the selection (issue #114).
 	// mode: "weighted" (load-ranked), "random_no_load" (no fresh load data,
 	// fell back to random).
+	// WpQuorumNodeSelected counts each node the selector actually returned, which is what
+	// makes skew localizable. WpQuorumSelectionSkew below counts selection *calls* by mode
+	// and cannot say which node is over-picked -- in the weighted branch it is incremented
+	// before the sample is drawn, where the chosen nodes are not yet known (issue #339).
+	WpQuorumNodeSelected = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "quorum_node_selected_total",
+		Help:      "Nodes returned by load-aware selection, counted once per node per selection. node_id is the node that ran the selection, selected_node_id the node it picked",
+	}, []string{"node_id", "selected_node_id", "mode"})
 	WpQuorumSelectionSkew = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
@@ -447,6 +457,7 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpCompactionAdmissionRejectedTotal)
 		// Quorum selection skew (load-aware node selection, issue #114)
 		registerer.MustRegister(WpQuorumSelectionSkew)
+		registerer.MustRegister(WpQuorumNodeSelected)
 	})
 }
 
