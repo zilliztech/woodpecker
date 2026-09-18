@@ -228,6 +228,15 @@ var (
 		Name:      "segment_handle_pending_append_ops",
 		Help:      "Number of pending append operations in segment handles",
 	}, []string{"log_ns", "log_id"})
+	// WpSegmentRolledTotal counts completed segment rolls by what triggered them. Roll size
+	// drives compaction volume, which is the dominant term in a logstore pod's object-storage
+	// egress, so this is the first place to look when that egress moves (issue #340).
+	WpSegmentRolledTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_rolled_total",
+		Help:      "Segment rolls that completed, by the limit that triggered them",
+	}, []string{"log_ns", "log_id", "reason"})
 	WpSegmentCompactionFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
@@ -357,6 +366,7 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSegmentHandleOperationLatency)
 		registerer.MustRegister(WpSegmentHandlePendingAppendOps)
 		registerer.MustRegister(WpSegmentCompactionFailuresTotal)
+		registerer.MustRegister(WpSegmentRolledTotal)
 		// Active segment node membership
 		registerer.MustRegister(WpActiveSegmentNode)
 		// Direct read metrics
