@@ -29,31 +29,17 @@ type InstanceDataCallback func(bucketName, rootPath string) any
 // NewInstanceDataHandler serves GET /admin/instance/data, the read half of the
 // /admin/instance family whose write half is POST /admin/instance/delete.
 //
-// Optional query params: ?bucket_name=<bucket>&root_path=<root>. Filter semantics follow
-// /admin/log-health, the only other endpoint taking these two params: both must be
-// supplied or the filter is ignored, and the common spelling variants are accepted. The
-// payload echoes the filter that actually took effect, so a caller that misspelled a
-// param can see it received an unfiltered answer instead of mistaking it for one
-// instance's data.
+// Optional query params: ?bucket_name=<bucket>&root_path=<root>, parsed by the shared
+// tenantFilter so the semantics cannot drift from /admin/log-health. The payload echoes
+// the filter that actually took effect, so a caller that misspelled a param can see it
+// received an unfiltered answer instead of mistaking it for one instance's data.
 func NewInstanceDataHandler(get InstanceDataCallback) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		bucketName := firstNonEmpty(
-			r.URL.Query().Get("bucket_name"),
-			r.URL.Query().Get("bucketName"),
-			r.URL.Query().Get("bucketname"),
-		)
-		rootPath := firstNonEmpty(
-			r.URL.Query().Get("root_path"),
-			r.URL.Query().Get("rootPath"),
-			r.URL.Query().Get("rootpath"),
-		)
-		if bucketName == "" || rootPath == "" {
-			bucketName, rootPath = "", "" // partial filter -> no filter
-		}
+		bucketName, rootPath := tenantFilter(r)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(get(bucketName, rootPath))
