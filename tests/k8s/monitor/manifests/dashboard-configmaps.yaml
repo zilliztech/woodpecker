@@ -4101,14 +4101,14 @@ data:
               },
               "targets": [
                 {
-                  "expr": "histogram_quantile(0.99, sum by (le, grpc_method) (rate(grpc_server_handling_seconds_bucket{SEL, grpc_method=~\"AppendEntry|AppendEntries\"}[5m])))",
+                  "expr": "histogram_quantile(0.99, sum by (le, grpc_method) (rate(grpc_server_handling_seconds_bucket{SEL, grpc_method=~\"AddEntry|AddEntries\"}[5m])))",
                   "legendFormat": "{{grpc_method}}",
                   "refId": "A"
                 }
               ],
               "title": "F6 · gRPC append handling p99",
               "type": "timeseries",
-              "description": "Seconds here, unlike every woodpecker histogram next to it, which are milliseconds. Mixing the two is the easiest way to write a rule that never fires."
+              "description": "Seconds here, unlike every woodpecker histogram next to it, which are milliseconds. Mixing the two is the easiest way to write a rule that never fires. The methods are AddEntry and AddEntries -- the proto names, not Append."
             },
             {
               "datasource": {
