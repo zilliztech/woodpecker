@@ -1,9 +1,8 @@
 package http
 
 import (
-	"io"
+	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -156,33 +155,36 @@ func TestStartAndStop_WithLifecycleEndpoints(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestMemberlistHandler_ContentNegotiation(t *testing.T) {
-	callbacks := AdminCallbacks{
-		GetMemberlistStatus: func() string { return "Total Members: 1\n" },
-		GetMemberlistJSON:   func() []byte { return []byte(`{"members":[{"id":"node-1"}]}`) },
-	}
+// TestStartAndStop_WithInstanceDataEndpoint covers the wiring from the callback to the
+// registered route: the filter reaches the callback and the payload reaches the caller.
+func TestStartAndStop_WithInstanceDataEndpoint(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+	t.Setenv(ListenPortEnvKey, "19093")
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(AdminMemberlistPath, newMemberlistHandler(callbacks))
+	cfg, _ := config.NewConfiguration()
 
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	var gotBucket, gotRoot string
+	err := Start(cfg, AdminCallbacks{
+		GetInstanceData: func(bucketName, rootPath string) any {
+			gotBucket, gotRoot = bucketName, rootPath
+			return map[string]any{"node_id": "woodpecker-0", "instances": []any{}}
+		},
+	})
+	assert.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
 
-	// Default (no Accept header) → text
-	resp, err := http.Get(srv.URL + AdminMemberlistPath)
-	require.NoError(t, err)
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	require.Contains(t, string(body), "Total Members")
-	require.Equal(t, "text/plain; charset=utf-8", resp.Header.Get("Content-Type"))
+	resp, httpErr := http.Get("http://127.0.0.1:19093" + AdminInstanceDataPath +
+		"?bucket_name=a-bucket&root_path=in01-abc")
+	require.NoError(t, httpErr)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	// Accept: application/json → JSON
-	req, _ := http.NewRequest("GET", srv.URL+AdminMemberlistPath, nil)
-	req.Header.Set("Accept", "application/json")
-	resp2, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	body2, _ := io.ReadAll(resp2.Body)
-	resp2.Body.Close()
-	require.Contains(t, string(body2), `"members"`)
-	require.Equal(t, "application/json", resp2.Header.Get("Content-Type"))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "woodpecker-0", body["node_id"])
+	assert.Equal(t, "a-bucket", gotBucket)
+	assert.Equal(t, "in01-abc", gotRoot)
+
+	assert.NoError(t, Stop())
 }

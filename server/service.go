@@ -700,6 +700,11 @@ func (s *Server) EvictInstance(ctx context.Context, bucketName, rootPath string)
 	return s.logStore.EvictInstance(ctx, bucketName, rootPath)
 }
 
+// LocalInstanceData reports the instances holding node-local data on this node.
+func (s *Server) LocalInstanceData(bucketName, rootPath string) *InstanceDataReport {
+	return s.logStore.LocalInstanceData(bucketName, rootPath)
+}
+
 func (s *Server) UpdateLastAddConfirmed(ctx context.Context, request *proto.UpdateLastAddConfirmedRequest) (*proto.UpdateLastAddConfirmedResponse, error) {
 	if err := s.logStore.UpdateLastAddConfirmed(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, request.LastAddConfirmed); err != nil {
 		return &proto.UpdateLastAddConfirmedResponse{Status: werr.Status(err)}, nil

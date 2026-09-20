@@ -39,8 +39,24 @@ never gated — those operations free disk.
 ## Sizing the PVC / tuning retention
 
 WAL disk demand ≈ peak ingest rate × `woodpecker.logstore.retentionPolicy.ttl`
-(default 72h), plus compaction headroom. If nodes sit above the soft watermark in
-steady state, either:
+(default 72h), plus compaction headroom.
+
+Before reaching for any remedy below, confirm the space is actually held by live
+instances. A Milvus instance whose Woodpecker data was never reclaimed — the node was
+down when the delete went out, or the control plane skipped the cleanup step — keeps
+occupying the PVC, and none of the options below will free it:
+
+```bash
+curl -s http://localhost:9091/admin/instance/data \
+  | jq '.instances[] | {root_path, size_bytes, active_processors, last_modified_ms}'
+```
+
+An instance with `active_processors: 0` and a `last_modified_ms` long in the past, which
+the control plane no longer knows about, is stranded rather than merely idle. See
+[Instance Local Data](../../common/http/README.md#instance-local-data) for how to confirm
+that across every node and reclaim it.
+
+If the usage is genuine and nodes sit above the soft watermark in steady state, either:
 
 1. **Expand the PVC** (preferred for sustained higher ingest), or
 2. **Scale out logstore nodes** — new nodes bind fresh PVCs, quorum selection

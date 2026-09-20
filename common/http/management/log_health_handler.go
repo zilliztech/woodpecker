@@ -19,19 +19,7 @@ func NewLogHealthHandler(get LogHealthCallback) http.HandlerFunc {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		bucketName := firstNonEmpty(
-			r.URL.Query().Get("bucket_name"),
-			r.URL.Query().Get("bucketName"),
-			r.URL.Query().Get("bucketname"),
-		)
-		rootPath := firstNonEmpty(
-			r.URL.Query().Get("root_path"),
-			r.URL.Query().Get("rootPath"),
-			r.URL.Query().Get("rootpath"),
-		)
-		if bucketName == "" || rootPath == "" {
-			bucketName, rootPath = "", "" // partial filter -> no filter
-		}
+		bucketName, rootPath := tenantFilter(r)
 
 		result, statusCode := get(r.Context(), bucketName, rootPath)
 		if statusCode == 0 {
@@ -41,13 +29,4 @@ func NewLogHealthHandler(get LogHealthCallback) http.HandlerFunc {
 		w.WriteHeader(statusCode)
 		_ = json.NewEncoder(w).Encode(result)
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

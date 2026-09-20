@@ -74,6 +74,10 @@ type LogStore interface {
 	AllowNewWrites()
 	MarkRetired()
 	HasLocalSegmentData() bool
+	// LocalInstanceData reports which instances hold node-local data, optionally
+	// filtered to one (bucketName, rootPath). It is the read half of the delete
+	// below: a caller can only converge on a clean state if it can also observe.
+	LocalInstanceData(bucketName string, rootPath string) *InstanceDataReport
 	// EvictLog reports whether the node had local data for the log. Only meaningful with
 	// sync=true; the asynchronous path returns before the reclaim task has run.
 	EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error)
@@ -883,15 +887,15 @@ func (l *logStore) HasLocalSegmentData() bool {
 			}
 			return nil
 		}
-		if d.Name() == "data.log" {
+		if d.Name() == segmentDataFileName {
 			info, statErr := d.Info()
-			if statErr == nil && info.Size() > 0 {
-				if hasCompactedMark(filepath.Dir(path)) {
-					// Already durably compacted in object storage; this data.log is
-					// redundant and scheduled for physical GC. Don't let it block
-					// decommission — keep walking for other, un-marked segments.
-					return nil
-				}
+			// isLiveSegmentData is shared with the local-data inventory so the
+			// decommission gate and the inventory an operator reads can never
+			// disagree about what "this node still holds data" means. A segment
+			// already durably compacted in object storage is redundant and
+			// scheduled for physical GC, so it must not block decommission —
+			// keep walking for other, un-marked segments.
+			if statErr == nil && isLiveSegmentData(filepath.Dir(path), info) {
 				found = true
 				return filepath.SkipAll // stop walking, we found data
 			}

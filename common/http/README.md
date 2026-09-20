@@ -12,6 +12,7 @@ Woodpecker exposes an HTTP admin server on each node (default port `9091`, confi
 | GET | `/admin/memberlist` | Cluster | Gossip memberlist status |
 | GET | `/admin/node/status` | Lifecycle | Node status and membership info |
 | GET | `/admin/log-health` | Health | Node-wide per-log read/write health (optionally filtered by bucket/rootPath) |
+| GET | `/admin/instance/data` | Data | Instances holding node-local data (optionally filtered by bucket/rootPath) |
 | POST | `/admin/node/decommission` | Lifecycle | Start graceful node decommission |
 | GET | `/admin/node/decommission/progress` | Lifecycle | Decommission progress and safe-to-terminate check |
 | GET | `/debug/pprof/` | Debug | Pprof index page (enabled by default, disable via `PPROF_ENABLE=false`) |
@@ -100,6 +101,90 @@ curl "http://localhost:9091/admin/log-health?bucket_name=a-bucket&root_path=file
 - Cold start, idle, or no observed log activity returns `Healthy` (a quiet node is not
   pulled out of rotation).
 - **HTTP Status:** `503` only when every tracked log is Stalled or Failed; `200` otherwise.
+
+---
+
+## Instance Local Data
+
+`/admin/instance/data` reports which Woodpecker instances still hold data on **this
+node's** local disk. It is the read half of the `/admin/instance` family whose write half
+is `POST /admin/instance/delete`: deletion alone is write-only, so a control plane could
+act but never verify. With both, it can run a query -> decide -> reclaim loop.
+
+```bash
+# Every instance holding local data on this node
+curl "http://localhost:9091/admin/instance/data"
+
+# Is one specific instance still here? (both params required, otherwise ignored)
+curl "http://localhost:9091/admin/instance/data?bucket_name=a-bucket&root_path=in01-abc"
+```
+
+**Response:**
+```json
+{
+  "node_id": "woodpecker-0",
+  "storage_mode": "service",
+  "storage_root": "/var/lib/woodpecker",
+  "timestamp_ms": 1758300000123,
+  "instance_count": 1,
+  "total_size_bytes": 1234567,
+  "scan_errors": 0,
+  "instances": [
+    {
+      "bucket_name": "a-bucket",
+      "root_path": "in01-abc",
+      "log_count": 12,
+      "segment_count": 37,
+      "live_segment_count": 30,
+      "size_bytes": 1234567,
+      "last_modified_ms": 1758299000456,
+      "active_processors": 0,
+      "delete_state": "",
+      "marked_deleted_at_ms": 0
+    }
+  ]
+}
+```
+
+**Fields:**
+- `scan_errors` — paths that could not be read. **While this is non-zero, an instance
+  missing from `instances` does not prove it has no data here.**
+- `active_processors`, `last_modified_ms` — a freshly created instance and a genuine
+  orphan look identical on disk; only live processors and data age separate them.
+  Require `active_processors == 0` plus an age threshold before deleting.
+- `delete_state` (`""` | `"log"` | `"instance"`), `marked_deleted_at_ms` — already marked
+  and inside the grace window. Do not re-send the delete; do not read it as a failure.
+- `segment_count` vs `live_segment_count` — the latter is the predicate
+  `/admin/node/decommission/progress` uses for `has_local_data`, which ignores segments
+  already durably compacted into object storage. That is why the two can disagree.
+- `storage_mode` — in `minio` mode there is no node-local data at all, so an empty list
+  means "not applicable", not "clean".
+- `filter_bucket_name` / `filter_root_path` — present only when a filter took effect.
+  Supplying just one of the two params is ignored (same rule as `/admin/log-health`), and
+  the echo is how a caller notices it got an unfiltered answer.
+
+**HTTP Status:** always `200`; `405` for any method other than GET.
+
+### Reconciling orphaned instance data
+
+This endpoint answers only for the node that serves it — like every other admin endpoint
+here. The cluster-wide view is assembled by the caller:
+
+1. Enumerate nodes (your own pod inventory, or `GET /admin/memberlist`) and query each.
+   **If any node fails to answer, or any answer has `scan_errors > 0`, stop** — an
+   unreachable node holds intact data, and deleting on a partial view is exactly the
+   accident this endpoint exists to prevent.
+2. Diff against your live-instance registry, then filter candidates by
+   `active_processors == 0` and a `last_modified_ms` age threshold.
+3. `POST /admin/instance/delete` to exactly the nodes that reported the instance.
+4. Re-query with the filter until the instance is absent everywhere. Instance reclamation
+   is asynchronous (there is no `sync` option on the instance delete), so poll rather than
+   expect immediate absence.
+
+```bash
+# From a machine with wp: step 1 across every node, with the completeness check applied
+wp instance data --all --strict
+```
 
 ---
 

@@ -66,6 +66,7 @@ type AdminCallbacks struct {
 	Ops                 OpsCallbacks
 	MarkLogDeleted      func(bucketName, rootPath string, logId int64, sync bool) error
 	MarkInstanceDeleted func(bucketName, rootPath string) error
+	GetInstanceData     management.InstanceDataCallback
 }
 
 const (
@@ -134,23 +135,6 @@ func registerDefaults(cfg *config.Configuration) {
 	})
 }
 
-// newMemberlistHandler serves /admin/memberlist with content negotiation.
-// Returns JSON when Accept: application/json, plain text otherwise.
-func newMemberlistHandler(callbacks AdminCallbacks) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		accept := r.Header.Get("Accept")
-		if accept == "application/json" && callbacks.GetMemberlistJSON != nil {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(callbacks.GetMemberlistJSON())
-			return
-		}
-		if callbacks.GetMemberlistStatus != nil {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = w.Write([]byte(callbacks.GetMemberlistStatus()))
-		}
-	}
-}
-
 // Start initializes and starts the HTTP server
 func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	// Register default handlers
@@ -159,7 +143,7 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	// Register admin handler for memberlist status (with content negotiation)
 	Register(&Handler{
 		Path:        AdminMemberlistPath,
-		HandlerFunc: newMemberlistHandler(callbacks),
+		HandlerFunc: management.NewMemberlistHandler(callbacks.GetMemberlistJSON, callbacks.GetMemberlistStatus),
 	})
 
 	// Register node lifecycle admin handlers (if callbacks provided)
@@ -249,6 +233,12 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		Register(&Handler{
 			Path:        AdminInstanceDeletePath,
 			HandlerFunc: management.NewInstanceDeleteHandler(callbacks.MarkInstanceDeleted),
+		})
+	}
+	if callbacks.GetInstanceData != nil {
+		Register(&Handler{
+			Path:        AdminInstanceDataPath,
+			HandlerFunc: management.NewInstanceDataHandler(callbacks.GetInstanceData),
 		})
 	}
 
