@@ -156,7 +156,7 @@ During decommission, the external orchestrator should poll `GET /admin/node/deco
 ```
 
 - `remaining_processors`: Count of active `SegmentProcessor` instances (informational only, does not affect `safe_to_terminate`). Due to idle cleanup protection (highest segmentId per log is always kept), this number may not reach 0 — processors are in-memory objects that disappear on shutdown.
-- `has_local_data`: Whether there are `data.log` files remaining on disk. Even after all processors are idle, local segment data may persist until the Client-side cleanup flow completes (truncation + retention expiry + CleanSegment RPC).
+- `has_local_data`: Whether there are `data.log` files remaining on disk. Even after all processors are idle, local segment data may persist until the Client-side cleanup flow completes (truncation + retention expiry + CleanSegment RPC). This flag says only *that* data is left, not whose it is — when a drain sits here, `GET /admin/instance/data` attributes what remains to specific instances, which is how you tell a cleanup still in flight from data stranded by an instance whose deletion never reached this node.
 - `safe_to_terminate`: `true` when `has_local_data == false`. This is the **sole criterion** — no local data means the node can be safely terminated.
 
 ### Server Shutdown Sequence (Stop)
@@ -183,4 +183,5 @@ Regardless of lifecycle state, when `Server.Stop()` is called (via SIGTERM/SIGIN
 | `logstore.go` | `LogStore` with `rejectWrites` flag and `GetActiveProcessorCount()` |
 | `service.go` | `Server.Decommission()`, `GetNodeStatus()`, `GetDecommissionProgress()`, and `Stop()` |
 | `../common/http/management/node_handler.go` | HTTP handlers for the admin lifecycle APIs |
+| `local_instance_data.go` | Scans the storage root and attributes local data to instances — what `GET /admin/instance/data` reports, sharing its `isLiveSegmentData` predicate with `HasLocalSegmentData` above |
 | `../common/http/README.md` | Full HTTP API reference with curl examples |
