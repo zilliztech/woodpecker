@@ -181,6 +181,11 @@ here. The cluster-wide view is assembled by the caller:
    is asynchronous (there is no `sync` option on the instance delete), so poll rather than
    expect immediate absence.
 
+```bash
+# From a machine with wp: step 1 across every node, with the completeness check applied
+wp instance data --all --strict
+```
+
 ---
 
 ## Prometheus Metrics

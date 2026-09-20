@@ -1,6 +1,6 @@
 # wp CLI Cookbook
 
-10 common incident-response recipes for Woodpecker operators.
+12 common incident-response recipes for Woodpecker operators.
 
 ---
 
@@ -191,3 +191,56 @@ Notes:
   at it"), not because data is at risk.
 - `confirm` refuses `IN_PROGRESS`/`COMPLETED` records (they're managed automatically);
   `--force` overrides.
+
+## 12. Find local data left behind by a deleted instance
+
+An instance's node-local WAL data is only reclaimed when the control plane calls
+`POST /admin/instance/delete` on every node holding it. That broadcast is lossy: a node
+that was down when the delete went out has no marker, so nothing on it will ever reclaim
+the data. It shows up later as a PVC that will not drain, or a pod stuck at
+`has_local_data: true`.
+
+```bash
+# What every node still holds, refusing to answer on a partial view
+wp instance data --all --strict
+
+# Is one specific instance gone yet? (both filters required, or neither applies)
+wp instance data --all --bucket a-bucket --root in01-abc
+
+# Just one node
+wp instance data node-1
+```
+
+Reading the output:
+- `PROCS` (active processors) and the data's age are what separate a genuine orphan from
+  an instance that was merely created a moment ago and has not flushed yet. Treat a row as
+  stranded only when `PROCS` is 0, the data is old, and the control plane no longer knows
+  the instance.
+- `DELETE_STATE` of `instance` or `log` means the delete already landed and the grace
+  window is running — do not re-send it, and do not read it as a failure.
+- `LIVE` counts only segments not yet durably compacted to object storage, which is the
+  same predicate `/admin/node/decommission/progress` uses for `has_local_data`. A row with
+  `SEGMENTS` > `LIVE` is why those two can disagree.
+
+Reclaiming one, once you are sure:
+
+```bash
+# There is no wp subcommand for the delete — it is deliberately explicit and per-node.
+# Send it only to the nodes the query above listed for that instance.
+curl -X POST http://<node>:9091/admin/instance/delete \
+  -H 'Content-Type: application/json' \
+  -d '{"bucketName":"a-bucket","rootPath":"in01-abc"}'
+
+# Then poll until it is absent everywhere
+wp instance data --all --strict --bucket a-bucket --root in01-abc
+```
+
+Notes:
+- **`--strict` is the safety flag, not a formatting one.** Without it an unreachable node
+  is merely a row in the table; with it the command exits non-zero. An unreachable node
+  still holds intact data, so deleting on a partial view is exactly the accident this
+  recipe exists to prevent. Nodes reporting scan errors are flagged for the same reason.
+- Reclamation is asynchronous (there is no `sync` option on the instance delete), so the
+  data disappears a few seconds after the call, not immediately — poll rather than expect
+  the next query to be empty.
+- Full endpoint reference, including every field: `common/http/README.md`.
