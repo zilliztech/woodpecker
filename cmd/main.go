@@ -306,6 +306,7 @@ func main() {
 	// Set node identity and namespace for metrics, then register all metrics
 	metrics.RegisterServerMetricsWithRegisterer(prometheus.DefaultRegisterer)
 	metrics.RegisterSystemMetrics(prometheus.DefaultRegisterer)
+	metrics.RegisterDiskIOMetrics(prometheus.DefaultRegisterer, cfg.Woodpecker.Storage.RootPath)
 	opregistry.RegisterMetrics(prometheus.DefaultRegisterer)
 
 	// Start system metrics collector
