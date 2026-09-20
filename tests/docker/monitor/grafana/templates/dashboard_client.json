@@ -1723,7 +1723,7 @@
           ],
           "title": "C4 · Write frontier movement, 5m",
           "type": "timeseries",
-          "description": "Movement of the write frontier, counted as segments rolled plus entries advanced inside the current one. Entry ids restart at zero on every segment roll (client_metrics.go:401), so a plain delta on the entry gauge goes large-negative for a healthy writer and reads 0 for one genuinely stuck -- the criterion inverted. clamp_min absorbs the reset and the segment term keeps the roll itself counted as progress."
+          "description": "Movement of the write frontier, counted as segments rolled plus entries advanced inside the current one. Entry ids restart at zero on every segment roll (client_metrics.go:401), so a plain delta on the entry gauge goes large-negative for a healthy writer and reads 0 for one genuinely stuck -- the criterion inverted. clamp_min absorbs the reset and the segment term keeps the roll itself counted as progress. An occasional isolated spike here is expected and can be ignored: the segment and entry gauges are registered separately, so a scrape landing between the two Set calls during a roll records the new segment beside the old segment's entry id. The error only ever overstates progress, never the reverse, so it cannot hide a stall."
         },
         {
           "datasource": {
@@ -1848,7 +1848,7 @@
           ],
           "title": "C6 · Read frontier movement, 10m",
           "type": "timeseries",
-          "description": "Movement of the read frontier, counted as segments rolled plus entries advanced inside the current one. Entry ids restart at zero on every segment roll (client_metrics.go:401), so a plain delta on the entry gauge goes large-negative for a healthy writer and reads 0 for one genuinely stuck -- the criterion inverted. clamp_min absorbs the reset and the segment term keeps the roll itself counted as progress. The append rate is drawn alongside for the same reason C4 carries it: a flat read frontier is only a stall if something is being written. On an idle log both lines sit at zero and nothing is wrong."
+          "description": "Movement of the read frontier, counted as segments rolled plus entries advanced inside the current one. Entry ids restart at zero on every segment roll (client_metrics.go:401), so a plain delta on the entry gauge goes large-negative for a healthy writer and reads 0 for one genuinely stuck -- the criterion inverted. clamp_min absorbs the reset and the segment term keeps the roll itself counted as progress. The append rate is drawn alongside for the same reason C4 carries it: a flat read frontier is only a stall if something is being written. On an idle log both lines sit at zero and nothing is wrong. An occasional isolated spike here is expected and can be ignored: the segment and entry gauges are registered separately, so a scrape landing between the two Set calls during a roll records the new segment beside the old segment's entry id. The error only ever overstates progress, never the reverse, so it cannot hide a stall."
         },
         {
           "datasource": {
