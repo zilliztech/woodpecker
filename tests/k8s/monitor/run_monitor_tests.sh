@@ -80,6 +80,14 @@ install_monitoring() {
 }
 
 start_loadgen() {
+  # A fresh log name per run. etcd and MinIO here are plain pods with no volume, so a minikube
+  # restart empties both while the servers keep their PVCs -- and an empty etcd hands out logId 1
+  # again, straight onto local segment dirs the previous run left behind. The server then finds a
+  # data.compacted tombstone with no matching footer in object storage and refuses to serve the
+  # segment, which is the correct fail-closed behaviour and makes every append fail. Sidestepping
+  # the id reuse is cheaper than giving the dependencies durable storage they do not otherwise
+  # need.
+  LOG_NAME="${LOG_NAME:-k8s-monitor-loadgen-$(date +%s)}"
   kubectl apply -f "$SCRIPT_DIR/manifests/client-loadgen.yaml"
   kubectl -n "$NAMESPACE" wait --for=condition=Ready pod/wp-loadgen --timeout=120s
   log "building loadgen binary on host"
@@ -88,8 +96,8 @@ start_loadgen() {
   kubectl -n "$NAMESPACE" cp /tmp/wp-loadgen wp-loadgen:/root/wp-loadgen
   # client config: reuse the same etcd/minio/seeds the CR uses (see README for the file)
   kubectl -n "$NAMESPACE" cp "$SCRIPT_DIR/manifests/loadgen-config.yaml" wp-loadgen:/tmp/test-config.yaml
-  kubectl -n "$NAMESPACE" exec wp-loadgen -- bash -c 'chmod +x /root/wp-loadgen && nohup /root/wp-loadgen -config-file=/tmp/test-config.yaml >/tmp/loadgen.log 2>&1 &'
-  log "loadgen started; sleeping 45s to accumulate metrics"; sleep 45
+  kubectl -n "$NAMESPACE" exec wp-loadgen -- bash -c 'chmod +x /root/wp-loadgen && nohup /root/wp-loadgen -config-file=/tmp/test-config.yaml -log=$LOG_NAME >/tmp/loadgen.log 2>&1 &'
+  log "loadgen started on log $LOG_NAME; sleeping 45s to accumulate metrics"; sleep 45
 }
 
 run_tests() {
