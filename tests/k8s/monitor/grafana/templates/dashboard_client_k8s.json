@@ -1586,14 +1586,14 @@
           },
           "targets": [
             {
-              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", le=\"256\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
+              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", le=~\"256(\\\\.0+)?\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
           ],
           "title": "C1/C2 · Share of appends slower than 256 ms",
           "type": "timeseries",
-          "description": "The bucket boundary is the threshold, so this is an exact count rather than an interpolated quantile. C2 compares the same value against the previous week."
+          "description": "The bucket boundary is the threshold, so this is an exact count rather than an interpolated quantile. C2 compares the same value against the previous week. The le matcher is a regex because Prometheus renders these bucket bounds as \"256.0\", not \"256\"; an exact match on the bare integer silently returns nothing."
         },
         {
           "datasource": {
@@ -1779,14 +1779,14 @@
           },
           "targets": [
             {
-              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", le=\"512\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
+              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", le=~\"512(\\\\.0+)?\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
           ],
           "title": "C5 · Share of reads slower than 512 ms",
           "type": "timeseries",
-          "description": "512 ms is the top finite bucket of this histogram, which is why the rule counts the tail rather than asking for a p99 the buckets cannot express."
+          "description": "512 ms is the top finite bucket of this histogram, which is why the rule counts the tail rather than asking for a p99 the buckets cannot express. The le matcher is a regex because Prometheus renders these bucket bounds as \"512.0\", not \"512\"; an exact match on the bare integer silently returns nothing."
         },
         {
           "datasource": {
