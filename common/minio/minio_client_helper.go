@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -232,7 +233,23 @@ func IsPreconditionFailed(err error) bool {
 // IsObjectNotExists if the error is object not exists
 // error code list: https://github.com/minio/minio/blob/master/cmd/api-errors.go
 func IsObjectNotExists(err error) bool {
-	return minio.ToErrorResponse(err).Code == "NoSuchKey"
+	resp := minio.ToErrorResponse(err)
+	// A HEAD carries no body for the code to be parsed out of, so some gateways answer a
+	// missing object with a bare 404 and an empty Code. Both mean the same thing here.
+	return resp.Code == "NoSuchKey" || resp.Code == "NoSuchBucket" ||
+		resp.Code == "NotFound" || resp.StatusCode == http.StatusNotFound
+}
+
+// readStatus labels a failed read or probe. A missing object is the expected answer for an
+// existence check -- whether a compacted footer has been uploaded yet, say -- and folding it
+// into "error" makes the obvious error ratio read ~80% on a healthy cluster, which in
+// practice gets the alert silenced. Callers that care about the distinction already use
+// IsObjectNotExistsError; this gives queries the same distinction.
+func readStatus(err error) string {
+	if IsObjectNotExists(err) {
+		return "not_found"
+	}
+	return "error"
 }
 
 func IsFencedObject(objInfo minio.ObjectInfo) bool {

@@ -18,8 +18,12 @@ package minio
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"os"
 	"testing"
+
+	minio "github.com/minio/minio-go/v7"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -480,4 +484,44 @@ func TestCloudProviderConstants(t *testing.T) {
 	assert.Equal(t, "azure", CloudProviderAzure)
 	assert.Equal(t, "tencent", CloudProviderTencent)
 	assert.Equal(t, 20, CheckBucketRetryAttempts)
+}
+
+// TestReadStatus covers the label a failed read or probe carries. A missing object is the
+// expected answer to an existence check -- has this footer been uploaded yet -- and counting
+// it as an error made the obvious object-storage error ratio read about 80% on a healthy
+// cluster, which in practice means the alert gets silenced (issue #354).
+func TestReadStatus(t *testing.T) {
+	notFound := []struct {
+		name string
+		err  error
+	}{
+		{"NoSuchKey", minio.ErrorResponse{Code: "NoSuchKey", StatusCode: http.StatusNotFound}},
+		{"NotFound", minio.ErrorResponse{Code: "NotFound", StatusCode: http.StatusNotFound}},
+		{"NoSuchBucket", minio.ErrorResponse{Code: "NoSuchBucket", StatusCode: http.StatusNotFound}},
+		// A HEAD has no body to parse a code out of, so some gateways answer with a bare 404.
+		{"bare 404", minio.ErrorResponse{StatusCode: http.StatusNotFound}},
+	}
+	for _, tc := range notFound {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.True(t, IsObjectNotExists(tc.err))
+			assert.Equal(t, "not_found", readStatus(tc.err))
+		})
+	}
+
+	realErrors := []struct {
+		name string
+		err  error
+	}{
+		{"access denied", minio.ErrorResponse{Code: "AccessDenied", StatusCode: http.StatusForbidden}},
+		{"internal", minio.ErrorResponse{Code: "InternalError", StatusCode: http.StatusInternalServerError}},
+		{"slow down", minio.ErrorResponse{Code: "SlowDown", StatusCode: http.StatusServiceUnavailable}},
+		{"not an S3 error at all", errors.New("dial tcp: connection refused")},
+	}
+	for _, tc := range realErrors {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.False(t, IsObjectNotExists(tc.err),
+				"a genuine failure must not be reclassified as a missing object")
+			assert.Equal(t, "error", readStatus(tc.err))
+		})
+	}
 }

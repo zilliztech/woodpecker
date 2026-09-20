@@ -94,8 +94,9 @@ func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		status := readStatus(err)
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", status).Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", status).Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "success").Inc()
@@ -109,8 +110,9 @@ func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName,
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error").Observe(float64(time.Since(start).Milliseconds()))
+		status := readStatus(err)
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", status).Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", status).Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
 	}
 	info, err := obj.Stat()
@@ -299,8 +301,9 @@ func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectNam
 	start := time.Now()
 	info, err := m.client.StatObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		status := readStatus(err)
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", status).Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", status).Observe(float64(time.Since(start).Milliseconds()))
 	} else {
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Inc()
 		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))
