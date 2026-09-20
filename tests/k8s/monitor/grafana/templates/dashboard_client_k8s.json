@@ -1586,7 +1586,7 @@
           },
           "targets": [
             {
-              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{SEL, le=\"256\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m]))",
+              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", le=\"256\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -1654,7 +1654,7 @@
           },
           "targets": [
             {
-              "expr": "sum by (log_ns, log_id) (woodpecker_client_segment_handle_pending_append_ops{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"})",
+              "expr": "sum by (log_ns, log_id) (woodpecker_client_segment_handle_pending_append_ops{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"})",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -1706,12 +1706,12 @@
           },
           "targets": [
             {
-              "expr": "sum by (log_ns, log_id) (delta(woodpecker_client_write_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m]))",
+              "expr": "sum by (log_ns, log_id) (delta(woodpecker_client_write_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
               "legendFormat": "logID={{log_id}} frontier delta",
               "refId": "A"
             },
             {
-              "expr": "sum by (log_ns, log_id) (rate(woodpecker_client_append_requests_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m]))",
+              "expr": "sum by (log_ns, log_id) (rate(woodpecker_client_append_requests_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
               "legendFormat": "logID={{log_id}} append rate",
               "refId": "B"
             }
@@ -1779,7 +1779,7 @@
           },
           "targets": [
             {
-              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_bucket{SEL, le=\"512\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m]))",
+              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", le=\"512\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -1831,7 +1831,7 @@
           },
           "targets": [
             {
-              "expr": "sum by (log_ns, log_id, reader_name) (delta(woodpecker_client_read_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[10m]))",
+              "expr": "sum by (log_ns, log_id, reader_name) (delta(woodpecker_client_read_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[10m]))",
               "legendFormat": "logID={{log_id}} {{reader_name}}",
               "refId": "A"
             }
@@ -1899,7 +1899,7 @@
           },
           "targets": [
             {
-              "expr": "sum by (log_ns, log_id) (rate(woodpecker_client_direct_read_requests_total{SEL, status=\"error\"}[5m]))",
+              "expr": "sum by (log_ns, log_id) (rate(woodpecker_client_direct_read_requests_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", status=\"error\"}[5m]))",
               "legendFormat": "logID={{log_id}}",
               "refId": "A"
             }
@@ -1967,7 +1967,7 @@
           },
           "targets": [
             {
-              "expr": "sum by (log_ns, log_id, reason) (increase(woodpecker_client_segment_compaction_failures_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[15m]))",
+              "expr": "sum by (log_ns, log_id, reason) (increase(woodpecker_client_segment_compaction_failures_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[15m]))",
               "legendFormat": "logID={{log_id}} {{reason}}",
               "refId": "A"
             }
@@ -2035,12 +2035,12 @@
           },
           "targets": [
             {
-              "expr": "min(count by (log_ns, log_id, segment_id) (woodpecker_client_active_segment_node{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}))",
+              "expr": "min(count by (log_ns, log_id, segment_id) (woodpecker_client_active_segment_node{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}))",
               "legendFormat": "min replicas",
               "refId": "A"
             },
             {
-              "expr": "min(count by (log_ns, log_id, segment_id) (count by (log_ns, log_id, segment_id, az) (woodpecker_client_active_segment_node{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"})))",
+              "expr": "min(count by (log_ns, log_id, segment_id) (count by (log_ns, log_id, segment_id, az) (woodpecker_client_active_segment_node{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"})))",
               "legendFormat": "min distinct AZs",
               "refId": "B"
             }

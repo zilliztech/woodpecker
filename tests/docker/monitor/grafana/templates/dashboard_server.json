@@ -3712,17 +3712,17 @@
           },
           "targets": [
             {
-              "expr": "max(woodpecker_server_system_cpu_usage{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) / 100",
+              "expr": "max(woodpecker_server_system_cpu_usage{woodpecker_id=~\"$woodpecker_id\"}) / 100",
               "legendFormat": "cpu",
               "refId": "A"
             },
             {
-              "expr": "max(woodpecker_server_system_memory_usage_ratio{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"})",
+              "expr": "max(woodpecker_server_system_memory_usage_ratio{woodpecker_id=~\"$woodpecker_id\"})",
               "legendFormat": "memory",
               "refId": "B"
             },
             {
-              "expr": "max(sum by (node_id) (rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))) / $vol_iops_limit",
+              "expr": "max(sum by (node_id) (rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_iops_limit",
               "legendFormat": "volume iops",
               "refId": "C"
             }
@@ -3790,22 +3790,22 @@
           },
           "targets": [
             {
-              "expr": "avg(woodpecker_server_system_cpu_usage{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) / 100",
+              "expr": "avg(woodpecker_server_system_cpu_usage{woodpecker_id=~\"$woodpecker_id\"}) / 100",
               "legendFormat": "cpu",
               "refId": "A"
             },
             {
-              "expr": "avg(woodpecker_server_system_memory_usage_ratio{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"})",
+              "expr": "avg(woodpecker_server_system_memory_usage_ratio{woodpecker_id=~\"$woodpecker_id\"})",
               "legendFormat": "memory",
               "refId": "B"
             },
             {
-              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))) / $vol_iops_limit",
+              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_iops_limit",
               "legendFormat": "volume iops",
               "refId": "C"
             },
             {
-              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_write_bytes_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))) / $vol_bw_limit",
+              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_write_bytes_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_bw_limit",
               "legendFormat": "volume throughput",
               "refId": "D"
             },
@@ -3878,12 +3878,12 @@
           },
           "targets": [
             {
-              "expr": "min(woodpecker_server_logstore_disk_free_bytes{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"})",
+              "expr": "min(woodpecker_server_logstore_disk_free_bytes{woodpecker_id=~\"$woodpecker_id\"})",
               "legendFormat": "free now",
               "refId": "A"
             },
             {
-              "expr": "min(predict_linear(woodpecker_server_logstore_disk_free_bytes{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1h], 4 * 3600))",
+              "expr": "min(predict_linear(woodpecker_server_logstore_disk_free_bytes{woodpecker_id=~\"$woodpecker_id\"}[1h], 4 * 3600))",
               "legendFormat": "projected in 4h",
               "refId": "B"
             }
@@ -3951,7 +3951,7 @@
           },
           "targets": [
             {
-              "expr": "sum by (node_id, reason) (increase(woodpecker_server_compaction_admission_rejected_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[15m]))",
+              "expr": "sum by (node_id, reason) (increase(woodpecker_server_compaction_admission_rejected_total{woodpecker_id=~\"$woodpecker_id\"}[15m]))",
               "legendFormat": "{{node_id}} {{reason}}",
               "refId": "A"
             }
@@ -4091,7 +4091,7 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum by (le, grpc_method) (rate(grpc_server_handling_seconds_bucket{SEL, grpc_method=~\"AddEntry|AddEntries\"}[5m])))",
+              "expr": "histogram_quantile(0.99, sum by (le, grpc_method) (rate(grpc_server_handling_seconds_bucket{woodpecker_id=~\"$woodpecker_id\", grpc_method=~\"AddEntry|AddEntries\"}[5m])))",
               "legendFormat": "{{grpc_method}}",
               "refId": "A"
             }
@@ -4163,7 +4163,7 @@
           },
           "targets": [
             {
-              "expr": "sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{SEL, status=\"error\"}[5m])) / sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))",
+              "expr": "sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\", status=\"error\"}[5m])) / sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))",
               "legendFormat": "{{node_id}}",
               "refId": "A"
             }
@@ -4299,7 +4299,7 @@
           },
           "targets": [
             {
-              "expr": "max(woodpecker_server_sync_scheduler_waiting{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) / max(woodpecker_server_sync_scheduler_capacity{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"})",
+              "expr": "max(woodpecker_server_sync_scheduler_waiting{woodpecker_id=~\"$woodpecker_id\"}) / max(woodpecker_server_sync_scheduler_capacity{woodpecker_id=~\"$woodpecker_id\"})",
               "legendFormat": "waiting / capacity",
               "refId": "A"
             }
@@ -4367,7 +4367,7 @@
           },
           "targets": [
             {
-              "expr": "sum by (node_id) (rate(woodpecker_server_logstore_operations_total{SEL, operation=~\"add_entry.*\", status=\"error\"}[5m])) / sum by (node_id) (rate(woodpecker_server_logstore_operations_total{SEL, operation=~\"add_entry.*\"}[5m]))",
+              "expr": "sum by (node_id) (rate(woodpecker_server_logstore_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\", operation=~\"add_entry.*\", status=\"error\"}[5m])) / sum by (node_id) (rate(woodpecker_server_logstore_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\", operation=~\"add_entry.*\"}[5m]))",
               "legendFormat": "{{node_id}}",
               "refId": "A"
             }
@@ -4503,7 +4503,7 @@
           },
           "targets": [
             {
-              "expr": "max(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[15m]))) / avg(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[15m])))",
+              "expr": "max(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\"}[15m]))) / avg(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\"}[15m])))",
               "legendFormat": "max / mean",
               "refId": "A"
             }
