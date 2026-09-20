@@ -94,9 +94,11 @@ func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		status := readStatus(err)
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", status).Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", status).Observe(float64(time.Since(start).Milliseconds()))
+		// Lazy reader: minio-go's GetObject only validates the names before returning
+		// (api-get-object.go:32-39), so this error is a name-validation failure, never a
+		// missing object. A GET miss surfaces on the first Read, under read_object_full.
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "success").Inc()
@@ -110,9 +112,11 @@ func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName,
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		status := readStatus(err)
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", status).Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", status).Observe(float64(time.Since(start).Milliseconds()))
+		// Lazy reader: minio-go's GetObject only validates the names before returning
+		// (api-get-object.go:32-39), so this error is a name-validation failure, never a
+		// missing object. A GET miss surfaces on the first Read, under read_object_full.
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
 	}
 	info, err := obj.Stat()

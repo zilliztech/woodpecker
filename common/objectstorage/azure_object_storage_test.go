@@ -28,13 +28,16 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
@@ -974,6 +977,52 @@ func TestNewAzureObjectStorageWithConfig_NonIAM_CancelledCtx(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestAzureStatObjectRecordsStatus drives the real recording site rather than the classifier,
+// because the label that reaches WithLabelValues is what this change is about -- a test on the
+// pure function would pass just as happily with the recording wired up wrong.
+func TestAzureStatObjectRecordsStatus(t *testing.T) {
+	read := func(status string) float64 {
+		return testutil.ToFloat64(metrics.WpObjectStorageOperationsTotal.WithLabelValues(
+			metrics.NodeID, "ns", "1", "stat_object", status))
+	}
+	statFails := func(err error) *AzureObjectStorage {
+		return newTestAzureStorage(&mockBlobClient{
+			getPropertiesFunc: func(_ context.Context, _ *blob.GetPropertiesOptions) (blob.GetPropertiesResponse, error) {
+				return blob.GetPropertiesResponse{}, err
+			},
+		})
+	}
+
+	t.Run("a missing blob counts as not_found", func(t *testing.T) {
+		before := read("not_found")
+		_, _, err := statFails(&azcore.ResponseError{StatusCode: http.StatusNotFound}).
+			StatObject(context.Background(), "b", "o", "ns", "1")
+		require.Error(t, err)
+		assert.Equal(t, float64(1), read("not_found")-before)
+	})
+
+	t.Run("a missing container counts as error, not not_found", func(t *testing.T) {
+		// An absent container is an unavailable backend. Counting it as not_found would let a
+		// mistyped container read exactly like a footer that has not been uploaded yet.
+		beforeErr, beforeNF := read("error"), read("not_found")
+		_, _, err := statFails(&azcore.ResponseError{
+			StatusCode: http.StatusNotFound,
+			ErrorCode:  string(bloberror.ContainerNotFound),
+		}).StatObject(context.Background(), "b", "o", "ns", "1")
+		require.Error(t, err)
+		assert.Equal(t, float64(1), read("error")-beforeErr)
+		assert.Zero(t, read("not_found")-beforeNF)
+	})
+
+	t.Run("a forbidden blob counts as error", func(t *testing.T) {
+		before := read("error")
+		_, _, err := statFails(&azcore.ResponseError{StatusCode: http.StatusForbidden}).
+			StatObject(context.Background(), "b", "o", "ns", "1")
+		require.Error(t, err)
+		assert.Equal(t, float64(1), read("error")-before)
+	})
+}
+
 // TestAzureReadStatus mirrors the MinIO side: a missing blob is the expected answer to an
 // existence check and must not be counted as a failure, while a real failure must not be
 // relabelled as a missing blob.
@@ -998,9 +1047,14 @@ func TestAzureReadStatus(t *testing.T) {
 		{"server error", &azcore.ResponseError{StatusCode: http.StatusInternalServerError}},
 		{"throttled", &azcore.ResponseError{StatusCode: http.StatusTooManyRequests}},
 		{"not an azure error at all", fmt.Errorf("dial tcp: connection refused")},
+		{"missing container", &azcore.ResponseError{
+			StatusCode: http.StatusNotFound,
+			ErrorCode:  string(bloberror.ContainerNotFound),
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.False(t, a.IsObjectNotExistsError(tc.err))
+			// IsObjectNotExistsError keys only on the 404 status, so a container-level 404
+			// satisfies it; readStatus is what has to tell the two apart.
 			assert.Equal(t, "error", a.readStatus(tc.err))
 		})
 	}

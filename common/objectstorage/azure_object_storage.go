@@ -275,15 +275,11 @@ func newAzureObjectStorageClient(ctx context.Context, c *config.Configuration) (
 }
 
 func (a *AzureObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minioHandler.FileReader, error) {
-	start := time.Now()
-	reader, err := NewBlobReaderWithSize(a.client.GetBlobClient(bucketName, objectName), offset, size)
-	status := "success"
-	if err != nil {
-		status = a.readStatus(err)
-	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", status).Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", status).Observe(float64(time.Since(start).Milliseconds()))
-	return reader, err
+	// Deliberately uncounted. NewBlobReaderWithSize hands back a reader without issuing a
+	// request, so anything recorded here would be an unconditional success and a latency
+	// sample timing a struct allocation. The transfer happens in BlobReader.Read/ReadAt, and
+	// instrumenting there is a separate change -- the MinIO side is lazy in the same way.
+	return NewBlobReaderWithSize(a.client.GetBlobClient(bucketName, objectName), offset, size)
 }
 
 func (a *AzureObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
@@ -298,6 +294,7 @@ func (a *AzureObjectStorage) PutObject(ctx context.Context, bucketName, objectNa
 	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", status).Observe(float64(time.Since(start).Milliseconds()))
 	if err == nil {
 		metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object").Add(float64(objectSize))
+		metrics.WpObjectStorageRequestBytes.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object").Observe(float64(objectSize))
 	}
 	return err
 }
@@ -446,6 +443,14 @@ func (a *AzureObjectStorage) RemoveObject(ctx context.Context, bucketName, objec
 // answer to an existence check -- has this compacted footer been uploaded yet -- so counting it
 // as an error makes the obvious object-storage error ratio meaningless.
 func (a *AzureObjectStorage) readStatus(err error) string {
+	// A 404 on the container is not a missing object -- it is an unavailable backend, and the
+	// container is only created when Minio.CreateBucket is set, so an absent one is a reachable
+	// steady state rather than a startup misconfiguration. azcore fills ErrorCode from the
+	// x-ms-error-code header, which GetProperties returns.
+	var azError *azcore.ResponseError
+	if errors.As(err, &azError) && bloberror.Code(azError.ErrorCode) == bloberror.ContainerNotFound {
+		return "error"
+	}
 	if a.IsObjectNotExistsError(err) {
 		return "not_found"
 	}
