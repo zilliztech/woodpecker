@@ -3722,14 +3722,14 @@
               "refId": "B"
             },
             {
-              "expr": "max(sum by (node_id) (rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_iops_limit",
+              "expr": "max(sum by (node_id) (rate(woodpecker_server_system_disk_read_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m]) + rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_iops_limit",
               "legendFormat": "volume iops",
               "refId": "C"
             }
           ],
           "title": "R1 · Per-node headroom, fraction of its limit",
           "type": "timeseries",
-          "description": "R1 fires when any node passes 70% CPU, 50% memory or 50% of its volume IOPS. Everything is drawn as a fraction of its own limit so one line reads for all three."
+          "description": "R1 fires when any node passes 70% CPU, 50% memory or 50% of its volume IOPS. Everything is drawn as a fraction of its own limit so one line reads for all three. Reads and writes are summed: the device ceiling is shared between them, so counting writes alone understates saturation during catch-up reads or compaction."
         },
         {
           "datasource": {
@@ -3800,12 +3800,12 @@
               "refId": "B"
             },
             {
-              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_iops_limit",
+              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_read_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m]) + rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_iops_limit",
               "legendFormat": "volume iops",
               "refId": "C"
             },
             {
-              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_write_bytes_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_bw_limit",
+              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_read_bytes_total{woodpecker_id=~\"$woodpecker_id\"}[5m]) + rate(woodpecker_server_system_disk_write_bytes_total{woodpecker_id=~\"$woodpecker_id\"}[5m]))) / $vol_bw_limit",
               "legendFormat": "volume throughput",
               "refId": "D"
             },
@@ -3817,7 +3817,7 @@
           ],
           "title": "R2 · Cluster mean, all five must pass 50%",
           "type": "timeseries",
-          "description": "R2 scales out only when every one of the five is over the line at once. Any single one crossing has other explanations -- CPU rises during compaction, network during read amplification."
+          "description": "R2 scales out only when every one of the five is over the line at once. Any single one crossing has other explanations -- CPU rises during compaction, network during read amplification. Reads and writes are summed: the device ceiling is shared between them, so counting writes alone understates saturation during catch-up reads or compaction."
         },
         {
           "datasource": {
@@ -3847,7 +3847,7 @@
                   },
                   {
                     "color": "yellow",
-                    "value": 0
+                    "value": 0.001
                   }
                 ]
               }
@@ -3920,7 +3920,7 @@
                   },
                   {
                     "color": "yellow",
-                    "value": 0
+                    "value": 0.001
                   }
                 ]
               }
@@ -4503,14 +4503,14 @@
           },
           "targets": [
             {
-              "expr": "max(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\"}[15m]))) / avg(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\"}[15m])))",
+              "expr": "max(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\"}[15m])))\n/\n(sum(rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\"}[15m])) / count(count by (node_id) (woodpecker_server_system_cpu_usage{woodpecker_id=~\"$woodpecker_id\"})))",
               "legendFormat": "max / mean",
               "refId": "A"
             }
           ],
           "title": "S5 · Node selection skew, max over mean",
           "type": "timeseries",
-          "description": "Counts how often each node was actually picked. The older quorum_selection_skew_total counts selection calls by mode and cannot localise skew to a node."
+          "description": "Counts how often each node was actually picked. The mean divides by the number of nodes that exist, not by the number that appear in the counter -- a node never selected since start has no child series at all, and dividing by the survivors would read total starvation as perfect balance."
         },
         {
           "datasource": {

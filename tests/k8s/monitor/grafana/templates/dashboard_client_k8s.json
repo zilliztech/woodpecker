@@ -1706,8 +1706,8 @@
           },
           "targets": [
             {
-              "expr": "sum by (log_ns, log_id) (delta(woodpecker_client_write_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
-              "legendFormat": "logID={{log_id}} frontier delta",
+              "expr": "sum by (log_ns, log_id) (\n  changes(woodpecker_client_write_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m])\n+ clamp_min(delta(woodpecker_client_write_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]), 0)\n)",
+              "legendFormat": "logID={{log_id}} movement",
               "refId": "A"
             },
             {
@@ -1718,7 +1718,7 @@
           ],
           "title": "C4 · Write frontier movement, 5m",
           "type": "timeseries",
-          "description": "Flat frontier with a non-zero append rate is a stall. Both series are needed: a flat frontier on an idle log is just an idle log."
+          "description": "Movement of the write frontier, counted as segments rolled plus entries advanced inside the current one. Entry ids restart at zero on every segment roll (client_metrics.go:401), so a plain delta on the entry gauge goes large-negative for a healthy writer and reads 0 for one genuinely stuck -- the criterion inverted. clamp_min absorbs the reset and the segment term keeps the roll itself counted as progress."
         },
         {
           "datasource": {
@@ -1831,14 +1831,14 @@
           },
           "targets": [
             {
-              "expr": "sum by (log_ns, log_id, reader_name) (delta(woodpecker_client_read_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[10m]))",
+              "expr": "sum by (log_ns, log_id, reader_name) (\n  changes(woodpecker_client_read_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[10m])\n+ clamp_min(delta(woodpecker_client_read_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[10m]), 0)\n)",
               "legendFormat": "logID={{log_id}} {{reader_name}}",
               "refId": "A"
             }
           ],
           "title": "C6 · Read frontier movement, 10m",
           "type": "timeseries",
-          "description": "Readers retry silently when an entry cannot be found, so a stuck reader is invisible in error metrics. This is the only signal for it."
+          "description": "Movement of the read frontier, counted as segments rolled plus entries advanced inside the current one. Entry ids restart at zero on every segment roll (client_metrics.go:401), so a plain delta on the entry gauge goes large-negative for a healthy writer and reads 0 for one genuinely stuck -- the criterion inverted. clamp_min absorbs the reset and the segment term keeps the roll itself counted as progress."
         },
         {
           "datasource": {
@@ -1868,7 +1868,7 @@
                   },
                   {
                     "color": "yellow",
-                    "value": 0
+                    "value": 0.001
                   }
                 ]
               }
@@ -1936,7 +1936,7 @@
                   },
                   {
                     "color": "yellow",
-                    "value": 0
+                    "value": 0.001
                   }
                 ]
               }
