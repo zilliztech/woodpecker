@@ -514,7 +514,7 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 	}
 
 	// Check if the writable segment handle needs to be rolling close and create a new one
-	if l.shouldRollingCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle) {
+	if rollNeeded, rollReason := l.shouldRollingCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle); rollNeeded {
 		op = "get_or_create_writable_segment_roll"
 		logger.Ctx(ctx).Debug("start to close segment",
 			zap.String("logName", l.Name),
@@ -557,6 +557,9 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 		}
 
 		// 3. return new segmentHandle
+		// Counted here rather than at the decision above: a roll can still be aborted by
+		// another writer taking over the log, and those must not show up as rolls.
+		metrics.WpSegmentRolledTotal.WithLabelValues(l.logNs, logIdStr, rollReason).Inc()
 		logger.Ctx(ctx).Info("segment rolling completed successfully",
 			zap.String("logName", l.Name),
 			zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
@@ -651,10 +654,13 @@ func (l *logHandleImpl) createAndCacheWritableSegmentHandleWithID(ctx context.Co
 
 // TODO It also depends on the number of segments that are rolling but not yet completed.
 // If there are too many, it can no longer be rolled and we have to wait for a while
-func (l *logHandleImpl) shouldRollingCloseAndCreateWritableSegmentHandle(ctx context.Context, segmentHandle segment.SegmentHandle) bool {
+// shouldRollingCloseAndCreateWritableSegmentHandle also reports which limit decided the
+// roll, so the caller can label the counter once the roll actually completes. The reason is
+// empty when no roll is due.
+func (l *logHandleImpl) shouldRollingCloseAndCreateWritableSegmentHandle(ctx context.Context, segmentHandle segment.SegmentHandle) (bool, string) {
 	if segmentHandle.IsForceRollingReady(ctx) {
 		// force rolling is set
-		return true
+		return true, segment.RollReasonForce
 	}
 	size := segmentHandle.GetSize(ctx)
 	blocksCount := segmentHandle.GetBlocksCount(ctx)

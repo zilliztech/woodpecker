@@ -36,6 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
 func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProvider) {
@@ -673,16 +674,16 @@ func TestLogHandle_Rolling_RollingPolicyBehavior(t *testing.T) {
 	ctx := context.Background()
 
 	// Test size-based rolling policy (MaxSize = 64MB in config)
-	assert.True(t, logHandle.rollingPolicy.ShouldRollover(ctx, 65*1024*1024, 500, time.Now().UnixMilli()))
-	assert.False(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, time.Now().UnixMilli()))
+	assertRolls(t, true, logHandle.rollingPolicy, ctx, 65*1024*1024, 500, time.Now().UnixMilli())
+	assertRolls(t, false, logHandle.rollingPolicy, ctx, 1024, 500, time.Now().UnixMilli())
 
 	// Test time-based rolling policy
 	// Note: MaxInterval is 10 seconds (config.NewDurationSecondsFromInt(10)), converted to milliseconds
 	oldTime := time.Now().Add(-15 * time.Second).UnixMilli()   // 15 seconds ago, exceeds 10s threshold
 	recentTime := time.Now().Add(-5 * time.Second).UnixMilli() // 5 seconds ago, within 10s threshold
 
-	assert.True(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, oldTime))
-	assert.False(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, recentTime))
+	assertRolls(t, true, logHandle.rollingPolicy, ctx, 1024, 500, oldTime)
+	assertRolls(t, false, logHandle.rollingPolicy, ctx, 1024, 500, recentTime)
 }
 
 // TestLogHandle_Rolling_ConcurrentAccess tests rolling behavior under concurrent access
@@ -2598,4 +2599,12 @@ func TestGetOrCreateWritableSegmentHandle_LabelsEachPath(t *testing.T) {
 		assert.Equal(t, float64(1), count(logHandle, "get_or_create_writable_segment_roll", "success"))
 		assert.Equal(t, float64(0), count(logHandle, "get_or_create_writable_segment", "success"))
 	})
+}
+
+// assertRolls checks only the roll decision; the reason each branch returns is pinned in
+// the segment package's own policy test.
+func assertRolls(t *testing.T, want bool, p segment.RollingPolicy, ctx context.Context, size, blocks, last int64) {
+	t.Helper()
+	roll, _ := p.ShouldRollover(ctx, size, blocks, last)
+	assert.Equal(t, want, roll)
 }

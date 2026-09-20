@@ -103,8 +103,10 @@ func TestRegisterCompactedCleanupAndFrontierMetrics(t *testing.T) {
 		SetTruncationFrontier("bucket/root", "1", 3, 7)
 		SetReadFrontier("bucket/root", "1", "registration-reader", 2, 4)
 		WpSegmentCompactionFailuresTotal.WithLabelValues("bucket/root", "1", "data_behind").Inc()
+		WpSegmentRolledTotal.WithLabelValues("bucket/root", "1", "size").Inc()
 
 		names := gatheredMetricNames(t, registry)
+		assert.True(t, names["woodpecker_client_segment_rolled_total"])
 		assert.True(t, names["woodpecker_client_write_frontier_segment"])
 		assert.True(t, names["woodpecker_client_write_frontier_entry"])
 		assert.True(t, names["woodpecker_client_compaction_frontier_segment"])
