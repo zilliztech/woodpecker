@@ -4163,14 +4163,14 @@
           },
           "targets": [
             {
-              "expr": "sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\", status=\"error\"}[5m])) / sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))",
+              "expr": "sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\", operation!=\"stat_object\", status=\"error\"}[5m]))\n/\nsum by (node_id) (rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\", operation!=\"stat_object\"}[5m]))",
               "legendFormat": "{{node_id}}",
               "refId": "A"
             }
           ],
           "title": "F7/F8 · Object storage error ratio",
           "type": "timeseries",
-          "description": "Writes survive object storage being down; compaction does not, so local disk starts filling. That is why 50% is a page and not a warning."
+          "description": "Excludes stat_object. It is an existence probe, and minio_handler.go:301 records any non-nil error as status=error, so a footer not yet uploaded -- the normal answer -- lands in the error bucket. Counting it reads ~80% error on a healthy cluster and would hold the P0 rule permanently firing. What is left is the operations where a failure really is one. An empty panel means no failures on those operations at all: sum() over an empty set is an empty vector, not zero, which is also why the rule stays silent rather than evaluating 0 > 0.05."
         },
         {
           "datasource": {
