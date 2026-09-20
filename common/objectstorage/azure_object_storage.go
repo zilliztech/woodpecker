@@ -275,11 +275,27 @@ func newAzureObjectStorageClient(ctx context.Context, c *config.Configuration) (
 }
 
 func (a *AzureObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minioHandler.FileReader, error) {
+	// Deliberately uncounted. NewBlobReaderWithSize hands back a reader without issuing a
+	// request, so anything recorded here would be an unconditional success and a latency
+	// sample timing a struct allocation. The transfer happens in BlobReader.Read/ReadAt, and
+	// instrumenting there is a separate change -- the MinIO side is lazy in the same way.
 	return NewBlobReaderWithSize(a.client.GetBlobClient(bucketName, objectName), offset, size)
 }
 
 func (a *AzureObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
+	start := time.Now()
 	_, err := a.client.GetBlobClient(bucketName, objectName).UploadStream(ctx, reader, &azblob.UploadStreamOptions{})
+	// A write is not an existence check: a failure here is a failure, never "not found".
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", status).Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", status).Observe(float64(time.Since(start).Milliseconds()))
+	if err == nil {
+		metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object").Add(float64(objectSize))
+		metrics.WpObjectStorageRequestBytes.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object").Observe(float64(objectSize))
+	}
 	return err
 }
 
@@ -359,10 +375,16 @@ func (a *AzureObjectStorage) PutFencedObject(ctx context.Context, bucketName, ob
 }
 
 func (a *AzureObjectStorage) StatObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (int64, bool, error) {
+	start := time.Now()
 	info, err := a.client.GetBlobClient(bucketName, objectName).GetProperties(ctx, &blob.GetPropertiesOptions{})
 	if err != nil {
+		status := a.readStatus(err)
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", status).Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", status).Observe(float64(time.Since(start).Milliseconds()))
 		return 0, false, err
 	}
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	isFencedObject := info.Metadata[minioHandler.FencedObjectMetaKey]
 	if isFencedObject != nil && len(*isFencedObject) > 0 && *isFencedObject == "true" {
 		return *info.ContentLength, true, nil
@@ -414,6 +436,25 @@ func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName str
 func (a *AzureObjectStorage) RemoveObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error {
 	_, err := a.client.GetBlobClient(bucketName, objectName).Delete(ctx, &blob.DeleteOptions{})
 	return err
+}
+
+// readStatus labels a failed read or probe on this backend, using this backend's own
+// not-exists predicate rather than a second copy of the rule. A missing blob is the expected
+// answer to an existence check -- has this compacted footer been uploaded yet -- so counting it
+// as an error makes the obvious object-storage error ratio meaningless.
+func (a *AzureObjectStorage) readStatus(err error) string {
+	// A 404 on the container is not a missing object -- it is an unavailable backend, and the
+	// container is only created when Minio.CreateBucket is set, so an absent one is a reachable
+	// steady state rather than a startup misconfiguration. azcore fills ErrorCode from the
+	// x-ms-error-code header, which GetProperties returns.
+	var azError *azcore.ResponseError
+	if errors.As(err, &azError) && bloberror.Code(azError.ErrorCode) == bloberror.ContainerNotFound {
+		return "error"
+	}
+	if a.IsObjectNotExistsError(err) {
+		return "not_found"
+	}
+	return "error"
 }
 
 // IsObjectNotExistsError check if the error is object not exists

@@ -18,9 +18,12 @@ package minio
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"os"
 	"testing"
 
+	minio "github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -480,4 +483,42 @@ func TestCloudProviderConstants(t *testing.T) {
 	assert.Equal(t, "azure", CloudProviderAzure)
 	assert.Equal(t, "tencent", CloudProviderTencent)
 	assert.Equal(t, 20, CheckBucketRetryAttempts)
+}
+
+// TestReadStatus covers how a failed read or probe is labelled on the MinIO backend. A missing
+// object is the expected answer to an existence check -- has this footer been uploaded yet --
+// and counting it as an error made the obvious error ratio read about 80% on a healthy cluster,
+// which in practice means the alert gets silenced (issue #354).
+//
+// minio-go already normalises a 404 on a keyed request to NoSuchKey (api-error-response.go:143),
+// so the predicate needs no widening -- and must not get any: IsObjectNotExists backs
+// IsObjectNotExistsError, which fifteen production call sites branch on, including the cleanup
+// path that decides whether local data may be reclaimed.
+func TestReadStatus(t *testing.T) {
+	t.Run("a missing key is not an error", func(t *testing.T) {
+		err := minio.ErrorResponse{Code: "NoSuchKey", StatusCode: http.StatusNotFound}
+		assert.True(t, IsObjectNotExists(err))
+		assert.Equal(t, "not_found", readStatus(err))
+	})
+
+	// Each of these must stay in "error": relabelling a real failure as a missing object would
+	// silence an outage, which is worse than the ratio this change exists to fix.
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"access denied", minio.ErrorResponse{Code: "AccessDenied", StatusCode: http.StatusForbidden}},
+		{"internal", minio.ErrorResponse{Code: "InternalError", StatusCode: http.StatusInternalServerError}},
+		{"slow down", minio.ErrorResponse{Code: "SlowDown", StatusCode: http.StatusServiceUnavailable}},
+		{"not an S3 error at all", errors.New("dial tcp: connection refused")},
+		// A missing bucket is a misconfiguration, not a not-yet-uploaded object. Treating it as
+		// the latter would let the cleanup path read "footer legitimately absent" off a bucket
+		// that is simply wrong.
+		{"missing bucket", minio.ErrorResponse{Code: "NoSuchBucket", StatusCode: http.StatusNotFound}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.False(t, IsObjectNotExists(tc.err))
+			assert.Equal(t, "error", readStatus(tc.err))
+		})
+	}
 }

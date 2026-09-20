@@ -235,6 +235,22 @@ func IsObjectNotExists(err error) bool {
 	return minio.ToErrorResponse(err).Code == "NoSuchKey"
 }
 
+// readStatus labels a failed read or probe on this backend. A missing object is the expected
+// answer to an existence check -- has this compacted footer been uploaded yet -- and folding it
+// into "error" makes the obvious error ratio read ~80% on a healthy cluster, which in practice
+// gets the alert silenced.
+//
+// It uses the MinIO predicate directly because it is called from the MinIO handler, which sits
+// below the ObjectStorage interface and so has no access to the backend-dispatched
+// IsObjectNotExistsError. Every backend classifies at its own recording site with its own
+// predicate; AzureObjectStorage does the same with azcore.ResponseError.
+func readStatus(err error) string {
+	if IsObjectNotExists(err) {
+		return "not_found"
+	}
+	return "error"
+}
+
 func IsFencedObject(objInfo minio.ObjectInfo) bool {
 	isFencedObject := objInfo.UserMetadata[FencedObjectMetaKey]
 	if len(isFencedObject) > 0 && isFencedObject == "true" {
