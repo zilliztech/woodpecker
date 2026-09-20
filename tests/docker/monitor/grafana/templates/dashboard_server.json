@@ -3638,6 +3638,940 @@
       ],
       "title": "Compaction Admission",
       "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 130,
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.5
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.7
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 11
+          },
+          "id": 117,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "max(woodpecker_server_system_cpu_usage{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) / 100",
+              "legendFormat": "cpu",
+              "refId": "A"
+            },
+            {
+              "expr": "max(woodpecker_server_system_memory_usage_ratio{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"})",
+              "legendFormat": "memory",
+              "refId": "B"
+            },
+            {
+              "expr": "max(sum by (node_id) (rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))) / $vol_iops_limit",
+              "legendFormat": "volume iops",
+              "refId": "C"
+            }
+          ],
+          "title": "R1 · Per-node headroom, fraction of its limit",
+          "type": "timeseries",
+          "description": "R1 fires when any node passes 70% CPU, 50% memory or 50% of its volume IOPS. Everything is drawn as a fraction of its own limit so one line reads for all three."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.5
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 11
+          },
+          "id": 118,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "avg(woodpecker_server_system_cpu_usage{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) / 100",
+              "legendFormat": "cpu",
+              "refId": "A"
+            },
+            {
+              "expr": "avg(woodpecker_server_system_memory_usage_ratio{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"})",
+              "legendFormat": "memory",
+              "refId": "B"
+            },
+            {
+              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_write_ops_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))) / $vol_iops_limit",
+              "legendFormat": "volume iops",
+              "refId": "C"
+            },
+            {
+              "expr": "avg(sum by (node_id) (rate(woodpecker_server_system_disk_write_bytes_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))) / $vol_bw_limit",
+              "legendFormat": "volume throughput",
+              "refId": "D"
+            },
+            {
+              "expr": "avg(sum by (instance) (rate(process_network_receive_bytes_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[5m]) + rate(process_network_transmit_bytes_total{woodpecker_id=~\"$woodpecker_id\", job=~\"$server_job\"}[5m]))) / $node_net_limit",
+              "legendFormat": "network",
+              "refId": "E"
+            }
+          ],
+          "title": "R2 · Cluster mean, all five must pass 50%",
+          "type": "timeseries",
+          "description": "R2 scales out only when every one of the five is over the line at once. Any single one crossing has other explanations -- CPU rises during compaction, network during read amplification."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "bytes",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 19
+          },
+          "id": 119,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "min(woodpecker_server_logstore_disk_free_bytes{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"})",
+              "legendFormat": "free now",
+              "refId": "A"
+            },
+            {
+              "expr": "min(predict_linear(woodpecker_server_logstore_disk_free_bytes{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1h], 4 * 3600))",
+              "legendFormat": "projected in 4h",
+              "refId": "B"
+            }
+          ],
+          "title": "R6 · WAL disk free, and the 4h linear projection",
+          "type": "timeseries",
+          "description": "R6 fires when the projection goes below zero, which is earlier than any watermark alert. The rule also requires free > 0 so a disk that is already full reports through R5 instead of repeating here."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 19
+          },
+          "id": 120,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (node_id, reason) (increase(woodpecker_server_compaction_admission_rejected_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[15m]))",
+              "legendFormat": "{{node_id}} {{reason}}",
+              "refId": "A"
+            }
+          ],
+          "title": "R7 · Compaction admissions declined, 15m",
+          "type": "timeseries",
+          "description": "reservation means the concurrency slot ran out; memory_pressure means the node crossed its memory watermark. The two have different fixes, so they are kept apart."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 100
+                  },
+                  {
+                    "color": "red",
+                    "value": 500
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 27
+          },
+          "id": 121,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, node_id) (rate(woodpecker_server_file_flush_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m])))",
+              "legendFormat": "{{node_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "F4/F5 · Flush latency p99",
+          "type": "timeseries",
+          "description": "Milliseconds, matching the metric. Measured peak under load was 19.6 ms, so 100 ms leaves 5x and 500 ms is well into trouble."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 27
+          },
+          "id": 122,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, grpc_method) (rate(grpc_server_handling_seconds_bucket{SEL, grpc_method=~\"AppendEntry|AppendEntries\"}[5m])))",
+              "legendFormat": "{{grpc_method}}",
+              "refId": "A"
+            }
+          ],
+          "title": "F6 · gRPC append handling p99",
+          "type": "timeseries",
+          "description": "Seconds here, unlike every woodpecker histogram next to it, which are milliseconds. Mixing the two is the easiest way to write a rule that never fires."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.05
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.5
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 35
+          },
+          "id": 123,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{SEL, status=\"error\"}[5m])) / sum by (node_id) (rate(woodpecker_server_object_storage_operations_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))",
+              "legendFormat": "{{node_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "F7/F8 · Object storage error ratio",
+          "type": "timeseries",
+          "description": "Writes survive object storage being down; compaction does not, so local disk starts filling. That is why 50% is a page and not a warning."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 5000
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 35
+          },
+          "id": 124,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, operation) (rate(woodpecker_server_object_storage_operation_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m])))",
+              "legendFormat": "{{operation}}",
+              "refId": "A"
+            }
+          ],
+          "title": "F9 · Object storage latency p99",
+          "type": "timeseries",
+          "description": "Milliseconds, so the rule threshold for 5s is 5000. Broken out by operation because a slow list and a slow put mean different things."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 2
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 43
+          },
+          "id": 125,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "max(woodpecker_server_sync_scheduler_waiting{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}) / max(woodpecker_server_sync_scheduler_capacity{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"})",
+              "legendFormat": "waiting / capacity",
+              "refId": "A"
+            }
+          ],
+          "title": "S1 · Sync scheduler queue, multiples of capacity",
+          "type": "timeseries",
+          "description": "A full pool is normal under load -- raising the worker count made latency worse in testing. Only a queue far past capacity is a signal."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.01
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 43
+          },
+          "id": 126,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (node_id) (rate(woodpecker_server_logstore_operations_total{SEL, operation=~\"add_entry.*\", status=\"error\"}[5m])) / sum by (node_id) (rate(woodpecker_server_logstore_operations_total{SEL, operation=~\"add_entry.*\"}[5m]))",
+              "legendFormat": "{{node_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "S3 · AddEntry error ratio",
+          "type": "timeseries",
+          "description": "Both the single and batch operations, since they are separate label values. Disk-pressure rejections are by design and show up in R5, not here."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 5
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 51
+          },
+          "id": 127,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "max(histogram_quantile(0.99, sum by (le, node_id) (rate(woodpecker_server_file_flush_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m])))) / quantile(0.5, histogram_quantile(0.99, sum by (le, node_id) (rate(woodpecker_server_file_flush_latency_bucket{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[5m]))))",
+              "legendFormat": "max / median",
+              "refId": "A"
+            }
+          ],
+          "title": "S4 · Slowest node vs the median, flush p99",
+          "type": "timeseries",
+          "description": "One slow node drags every quorum it belongs to, so the comparison that matters is against its peers rather than against an absolute latency."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 3
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 51
+          },
+          "id": 128,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "max(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[15m]))) / avg(sum by (selected_node_id) (rate(woodpecker_server_quorum_node_selected_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[15m])))",
+              "legendFormat": "max / mean",
+              "refId": "A"
+            }
+          ],
+          "title": "S5 · Node selection skew, max over mean",
+          "type": "timeseries",
+          "description": "Counts how often each node was actually picked. The older quorum_selection_skew_total counts selection calls by mode and cannot localise skew to a node."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "__DATASOURCE_UID__"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 59
+          },
+          "id": 129,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (node_id) (increase(woodpecker_server_compacted_cleanup_reclaimed_bytes_total{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1h]))",
+              "legendFormat": "{{node_id}} reclaimed",
+              "refId": "A"
+            },
+            {
+              "expr": "sum by (node_id) (delta(woodpecker_server_file_stored_bytes{woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", log_id=~\"$log_id\"}[1h]))",
+              "legendFormat": "{{node_id}} local growth",
+              "refId": "B"
+            }
+          ],
+          "title": "S6 · Local reclaim against local growth, 1h",
+          "type": "timeseries",
+          "description": "Reclaim flat while local data grows means compaction is failing upstream. Reclaimed is a counter and takes increase(); stored bytes is a gauge and takes delta()."
+        }
+      ],
+      "title": "Alerts — what the rules actually threshold",
+      "type": "row"
     }
   ],
   "refresh": "5s",
@@ -3718,6 +4652,39 @@
         "query": "label_values(woodpecker_server_logstore_instances_total{woodpecker_id=~\"$woodpecker_id\"}, job)",
         "refresh": 2,
         "type": "query"
+      },
+      {
+        "name": "vol_iops_limit",
+        "type": "textbox",
+        "label": "Single-volume IOPS limit",
+        "query": "3000",
+        "current": {
+          "text": "3000",
+          "value": "3000"
+        },
+        "hide": 0
+      },
+      {
+        "name": "vol_bw_limit",
+        "type": "textbox",
+        "label": "Single-volume throughput limit, bytes/s",
+        "query": "81000000",
+        "current": {
+          "text": "81000000",
+          "value": "81000000"
+        },
+        "hide": 0
+      },
+      {
+        "name": "node_net_limit",
+        "type": "textbox",
+        "label": "Node network baseline, bytes/s",
+        "query": "97000000",
+        "current": {
+          "text": "97000000",
+          "value": "97000000"
+        },
+        "hide": 0
       }
     ]
   },

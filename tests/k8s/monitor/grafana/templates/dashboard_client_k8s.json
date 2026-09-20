@@ -1516,6 +1516,542 @@
       ],
       "title": "Transport Layer — gRPC",
       "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 85
+      },
+      "id": 124,
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.01
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 86
+          },
+          "id": 116,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{SEL, le=\"256\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m]))",
+              "legendFormat": "logID={{log_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "C1/C2 · Share of appends slower than 256 ms",
+          "type": "timeseries",
+          "description": "The bucket boundary is the threshold, so this is an exact count rather than an interpolated quantile. C2 compares the same value against the previous week."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 5000
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 86
+          },
+          "id": 117,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (log_ns, log_id) (woodpecker_client_segment_handle_pending_append_ops{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"})",
+              "legendFormat": "logID={{log_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "C3 · Pending append ops",
+          "type": "timeseries",
+          "description": "The queue caps at 10000, so half full is the warning."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 94
+          },
+          "id": 118,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (log_ns, log_id) (delta(woodpecker_client_write_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m]))",
+              "legendFormat": "logID={{log_id}} frontier delta",
+              "refId": "A"
+            },
+            {
+              "expr": "sum by (log_ns, log_id) (rate(woodpecker_client_append_requests_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m]))",
+              "legendFormat": "logID={{log_id}} append rate",
+              "refId": "B"
+            }
+          ],
+          "title": "C4 · Write frontier movement, 5m",
+          "type": "timeseries",
+          "description": "Flat frontier with a non-zero append rate is a stall. Both series are needed: a flat frontier on an idle log is just an idle log."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.01
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 94
+          },
+          "id": 119,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_bucket{SEL, le=\"512\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_read_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[5m]))",
+              "legendFormat": "logID={{log_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "C5 · Share of reads slower than 512 ms",
+          "type": "timeseries",
+          "description": "512 ms is the top finite bucket of this histogram, which is why the rule counts the tail rather than asking for a p99 the buckets cannot express."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 102
+          },
+          "id": 120,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (log_ns, log_id, reader_name) (delta(woodpecker_client_read_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[10m]))",
+              "legendFormat": "logID={{log_id}} {{reader_name}}",
+              "refId": "A"
+            }
+          ],
+          "title": "C6 · Read frontier movement, 10m",
+          "type": "timeseries",
+          "description": "Readers retry silently when an entry cannot be found, so a stuck reader is invisible in error metrics. This is the only signal for it."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 102
+          },
+          "id": 121,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (log_ns, log_id) (rate(woodpecker_client_direct_read_requests_total{SEL, status=\"error\"}[5m]))",
+              "legendFormat": "logID={{log_id}}",
+              "refId": "A"
+            }
+          ],
+          "title": "C7 · Direct read failures",
+          "type": "timeseries",
+          "description": "A failed direct read falls back to a quorum read, so this degrades latency rather than correctness."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 110
+          },
+          "id": 122,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (log_ns, log_id, reason) (increase(woodpecker_client_segment_compaction_failures_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}[15m]))",
+              "legendFormat": "logID={{log_id}} {{reason}}",
+              "refId": "A"
+            }
+          ],
+          "title": "C8 · Segment compaction failures, 15m",
+          "type": "timeseries",
+          "description": "Uncompacted means the data is still only on local disk. The reason label is a stable enum and belongs in the alert annotation."
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "lineWidth": 2,
+                "pointSize": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 3
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 110
+          },
+          "id": 123,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "max",
+                "mean"
+              ],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "min(count by (log_ns, log_id, segment_id) (woodpecker_client_active_segment_node{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"}))",
+              "legendFormat": "min replicas",
+              "refId": "A"
+            },
+            {
+              "expr": "min(count by (log_ns, log_id, segment_id) (count by (log_ns, log_id, segment_id, az) (woodpecker_client_active_segment_node{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\"})))",
+              "legendFormat": "min distinct AZs",
+              "refId": "B"
+            }
+          ],
+          "title": "C9 · Replicas holding each active segment",
+          "type": "timeseries",
+          "description": "Below the replica factor, one more failure loses the segment. The AZ series catches a quorum that is nominally three replicas but not actually spread."
+        }
+      ],
+      "title": "Alerts — what the rules actually threshold",
+      "type": "row"
     }
   ],
   "refresh": "5s",
