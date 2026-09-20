@@ -3852,12 +3852,12 @@ data:
                     "mode": "absolute",
                     "steps": [
                       {
-                        "color": "green",
+                        "color": "red",
                         "value": null
                       },
                       {
-                        "color": "yellow",
-                        "value": 0.001
+                        "color": "green",
+                        "value": 0
                       }
                     ]
                   }
@@ -3900,7 +3900,7 @@ data:
               ],
               "title": "R6 · WAL disk free, and the 4h linear projection",
               "type": "timeseries",
-              "description": "R6 fires when the projection goes below zero, which is earlier than any watermark alert. The rule also requires free > 0 so a disk that is already full reports through R5 instead of repeating here."
+              "description": "R6 fires when the projection goes below zero, which is earlier than any watermark alert. The rule also requires free > 0 so a disk that is already full reports through R5 instead of repeating here. Colour runs the other way here because less free space is worse: below the line the four-hour projection has crossed zero, which is what the rule fires on."
             },
             {
               "datasource": {
@@ -6585,11 +6585,16 @@ data:
                   "expr": "sum by (log_ns, log_id, reader_name) (\n  changes(woodpecker_client_read_frontier_segment{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[10m])\n+ clamp_min(delta(woodpecker_client_read_frontier_entry{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[10m]), 0)\n)",
                   "legendFormat": "logID={{log_id}} {{reader_name}}",
                   "refId": "A"
+                },
+                {
+                  "expr": "sum by (log_ns, log_id) (rate(woodpecker_client_append_requests_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[10m]))",
+                  "legendFormat": "logID={{log_id}} append rate",
+                  "refId": "B"
                 }
               ],
               "title": "C6 · Read frontier movement, 10m",
               "type": "timeseries",
-              "description": "Movement of the read frontier, counted as segments rolled plus entries advanced inside the current one. Entry ids restart at zero on every segment roll (client_metrics.go:401), so a plain delta on the entry gauge goes large-negative for a healthy writer and reads 0 for one genuinely stuck -- the criterion inverted. clamp_min absorbs the reset and the segment term keeps the roll itself counted as progress."
+              "description": "Movement of the read frontier, counted as segments rolled plus entries advanced inside the current one. Entry ids restart at zero on every segment roll (client_metrics.go:401), so a plain delta on the entry gauge goes large-negative for a healthy writer and reads 0 for one genuinely stuck -- the criterion inverted. clamp_min absorbs the reset and the segment term keeps the roll itself counted as progress. The append rate is drawn alongside for the same reason C4 carries it: a flat read frontier is only a stall if something is being written. On an idle log both lines sit at zero and nothing is wrong."
             },
             {
               "datasource": {
@@ -6750,11 +6755,11 @@ data:
                     "mode": "absolute",
                     "steps": [
                       {
-                        "color": "green",
+                        "color": "red",
                         "value": null
                       },
                       {
-                        "color": "yellow",
+                        "color": "green",
                         "value": 3
                       }
                     ]
@@ -6798,7 +6803,7 @@ data:
               ],
               "title": "C9 · Replicas holding each active segment",
               "type": "timeseries",
-              "description": "Below the replica factor, one more failure loses the segment. The AZ series catches a quorum that is nominally three replicas but not actually spread."
+              "description": "Below the replica factor, one more failure loses the segment. The AZ series catches a quorum that is nominally three replicas but not actually spread. Colour runs the other way here because fewer replicas is worse: at or above the line the segment still has its full quorum, below it one more failure loses the segment."
             }
           ],
           "title": "Alerts — what the rules actually threshold",

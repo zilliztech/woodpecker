@@ -3842,12 +3842,12 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "green",
+                    "color": "red",
                     "value": null
                   },
                   {
-                    "color": "yellow",
-                    "value": 0.001
+                    "color": "green",
+                    "value": 0
                   }
                 ]
               }
@@ -3890,7 +3890,7 @@
           ],
           "title": "R6 · WAL disk free, and the 4h linear projection",
           "type": "timeseries",
-          "description": "R6 fires when the projection goes below zero, which is earlier than any watermark alert. The rule also requires free > 0 so a disk that is already full reports through R5 instead of repeating here."
+          "description": "R6 fires when the projection goes below zero, which is earlier than any watermark alert. The rule also requires free > 0 so a disk that is already full reports through R5 instead of repeating here. Colour runs the other way here because less free space is worse: below the line the four-hour projection has crossed zero, which is what the rule fires on."
         },
         {
           "datasource": {
