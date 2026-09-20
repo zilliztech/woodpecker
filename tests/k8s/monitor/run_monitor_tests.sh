@@ -96,7 +96,8 @@ start_loadgen() {
   kubectl -n "$NAMESPACE" cp /tmp/wp-loadgen wp-loadgen:/root/wp-loadgen
   # client config: reuse the same etcd/minio/seeds the CR uses (see README for the file)
   kubectl -n "$NAMESPACE" cp "$SCRIPT_DIR/manifests/loadgen-config.yaml" wp-loadgen:/tmp/test-config.yaml
-  kubectl -n "$NAMESPACE" exec wp-loadgen -- bash -c 'chmod +x /root/wp-loadgen && nohup /root/wp-loadgen -config-file=/tmp/test-config.yaml -log=$LOG_NAME >/tmp/loadgen.log 2>&1 &'
+  # LOG_NAME is expanded here, not in the pod: the remote shell has no such variable.
+  kubectl -n "$NAMESPACE" exec wp-loadgen -- bash -c "chmod +x /root/wp-loadgen && nohup /root/wp-loadgen -config-file=/tmp/test-config.yaml -log=$LOG_NAME >/tmp/loadgen.log 2>&1 &"
   log "loadgen started on log $LOG_NAME; sleeping 45s to accumulate metrics"; sleep 45
 }
 
