@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	minio "github.com/minio/minio-go/v7"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
