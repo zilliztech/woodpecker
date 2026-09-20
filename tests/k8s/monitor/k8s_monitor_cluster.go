@@ -38,6 +38,7 @@ func NewK8sMonitorCluster(promBaseURL string) *K8sMonitorCluster {
 
 type promResult struct {
 	Status string `json:"status"`
+	Error  string `json:"error"`
 	Data   struct {
 		Result []struct {
 			Metric map[string]string `json:"metric"`
@@ -84,6 +85,43 @@ func (c *K8sMonitorCluster) query(t *testing.T, q string) *promResult {
 		return nil
 	}
 	return &r
+}
+
+// QueryError runs q and reports why Prometheus rejected it, or "" when it was accepted.
+// An accepted query that matched nothing is not an error -- the distinction matters because
+// a wrong label value fails open into an empty result while a malformed one fails loudly,
+// and only the second is a bug the dashboard author can see.
+func (c *K8sMonitorCluster) QueryError(t *testing.T, q string) string {
+	t.Helper()
+	reqURL := fmt.Sprintf("%s/api/v1/query?query=%s", c.PromBaseURL, url.QueryEscape(q))
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(reqURL)
+	if err != nil {
+		return fmt.Sprintf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var r promResult
+	if err := json.Unmarshal(body, &r); err != nil {
+		return fmt.Sprintf("unparseable response: %v", err)
+	}
+	if r.Status != "success" {
+		if r.Error != "" {
+			return r.Error
+		}
+		return "status " + r.Status
+	}
+	return ""
+}
+
+// QuerySeriesCount runs q and reports how many series came back, -1 when it was rejected.
+func (c *K8sMonitorCluster) QuerySeriesCount(t *testing.T, q string) int {
+	t.Helper()
+	r := c.query(t, q)
+	if r == nil {
+		return -1
+	}
+	return len(r.Data.Result)
 }
 
 // QueryPromQL returns the first sample value as a string.
