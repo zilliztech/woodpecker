@@ -89,18 +89,48 @@ wp_deploy_deps() {
         return 0
     fi
 
+    # etcd and MinIO get volumes because the servers have them. Without that, a minikube
+    # restart empties these two while the servers keep their PVCs, and an empty etcd re-seeds
+    # logs/idgen to 0 -- handing the next log an id that the servers' local directories are
+    # still holding data for. meta/clear_meta.go spells out why that counter has to stay
+    # monotonic: log ids are path components in both storage tiers, so restarting the counter
+    # makes a new log reuse an old log's directory. Production keeps etcd durable, so a harness
+    # that does not is simulating a state production does not permit -- which matters most for
+    # the chaos suite, where killing etcd should exercise recovery, not metadata loss.
     kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: etcd-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 4Gi } }
+---
 apiVersion: v1
 kind: Pod
 metadata:
   name: etcd
   labels: { app: etcd }
 spec:
+  volumes:
+    - name: data
+      persistentVolumeClaim: { claimName: etcd-data }
   containers:
     - name: etcd
       image: ${ETCD_IMG:-quay.io/coreos/etcd:v3.5.25}
-      command: ["etcd", "--listen-client-urls=http://0.0.0.0:2379",
+      command: ["etcd", "--data-dir=/etcd-data",
+                "--listen-client-urls=http://0.0.0.0:2379",
                 "--advertise-client-urls=http://etcd.default.svc:2379"]
+      volumeMounts:
+        - { name: data, mountPath: /etcd-data }
       ports: [{ containerPort: 2379 }]
 ---
 apiVersion: v1
@@ -117,10 +147,15 @@ metadata:
   name: minio
   labels: { app: minio }
 spec:
+  volumes:
+    - name: data
+      persistentVolumeClaim: { claimName: minio-data }
   containers:
     - name: minio
       image: ${MINIO_IMG:-quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z}
       command: ["minio", "server", "/data"]
+      volumeMounts:
+        - { name: data, mountPath: /data }
       env:
         - { name: MINIO_ROOT_USER, value: minioadmin }
         - { name: MINIO_ROOT_PASSWORD, value: minioadmin }
