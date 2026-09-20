@@ -6333,13 +6333,18 @@ data:
               "targets": [
                 {
                   "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m])) - sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", le=~\"256(\\\\.0+)?\"}[5m]))) / sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m]))",
-                  "legendFormat": "logID={{log_id}}",
+                  "legendFormat": "logID={{log_id}} · 现在",
                   "refId": "A"
+                },
+                {
+                  "expr": "(sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m] offset 7d)) - sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\", le=~\"256(\\\\.0+)?\"}[5m] offset 7d))) / sum by (log_ns, log_id) (rate(woodpecker_client_append_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", log_ns=~\"$log_ns\"}[5m] offset 7d))",
+                  "legendFormat": "logID={{log_id}} · 上周同时段",
+                  "refId": "B"
                 }
               ],
               "title": "C1/C2 · Share of appends slower than 256 ms",
               "type": "timeseries",
-              "description": "The bucket boundary is the threshold, so this is an exact count rather than an interpolated quantile. C2 compares the same value against the previous week. The le matcher is a regex because Prometheus renders these bucket bounds as \"256.0\", not \"256\"; an exact match on the bare integer silently returns nothing."
+              "description": "C1 is the solid reading against the 1% line: more than one append in a hundred slower than 256 ms. C2 is the same quantity a week earlier, drawn alongside so the comparison the rule makes -- now above three times then -- is something you can see rather than compute. The line only applies to C1; C2 has no fixed level, which is the point of it: a region that normally sits at 0.01% is in trouble at 0.5% long before it reaches 1%."
             },
             {
               "datasource": {
