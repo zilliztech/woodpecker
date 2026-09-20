@@ -486,29 +486,25 @@ func TestCloudProviderConstants(t *testing.T) {
 	assert.Equal(t, 20, CheckBucketRetryAttempts)
 }
 
-// TestReadStatus covers the label a failed read or probe carries. A missing object is the
-// expected answer to an existence check -- has this footer been uploaded yet -- and counting
-// it as an error made the obvious object-storage error ratio read about 80% on a healthy
-// cluster, which in practice means the alert gets silenced (issue #354).
+// TestReadStatus covers how a failed read or probe is labelled on the MinIO backend. A missing
+// object is the expected answer to an existence check -- has this footer been uploaded yet --
+// and counting it as an error made the obvious error ratio read about 80% on a healthy cluster,
+// which in practice means the alert gets silenced (issue #354).
+//
+// minio-go already normalises a 404 on a keyed request to NoSuchKey (api-error-response.go:143),
+// so the predicate needs no widening -- and must not get any: IsObjectNotExists backs
+// IsObjectNotExistsError, which fifteen production call sites branch on, including the cleanup
+// path that decides whether local data may be reclaimed.
 func TestReadStatus(t *testing.T) {
-	notFound := []struct {
-		name string
-		err  error
-	}{
-		{"NoSuchKey", minio.ErrorResponse{Code: "NoSuchKey", StatusCode: http.StatusNotFound}},
-		{"NotFound", minio.ErrorResponse{Code: "NotFound", StatusCode: http.StatusNotFound}},
-		{"NoSuchBucket", minio.ErrorResponse{Code: "NoSuchBucket", StatusCode: http.StatusNotFound}},
-		// A HEAD has no body to parse a code out of, so some gateways answer with a bare 404.
-		{"bare 404", minio.ErrorResponse{StatusCode: http.StatusNotFound}},
-	}
-	for _, tc := range notFound {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.True(t, IsObjectNotExists(tc.err))
-			assert.Equal(t, "not_found", readStatus(tc.err))
-		})
-	}
+	t.Run("a missing key is not an error", func(t *testing.T) {
+		err := minio.ErrorResponse{Code: "NoSuchKey", StatusCode: http.StatusNotFound}
+		assert.True(t, IsObjectNotExists(err))
+		assert.Equal(t, "not_found", readStatus(err))
+	})
 
-	realErrors := []struct {
+	// Each of these must stay in "error": relabelling a real failure as a missing object would
+	// silence an outage, which is worse than the ratio this change exists to fix.
+	for _, tc := range []struct {
 		name string
 		err  error
 	}{
@@ -516,11 +512,13 @@ func TestReadStatus(t *testing.T) {
 		{"internal", minio.ErrorResponse{Code: "InternalError", StatusCode: http.StatusInternalServerError}},
 		{"slow down", minio.ErrorResponse{Code: "SlowDown", StatusCode: http.StatusServiceUnavailable}},
 		{"not an S3 error at all", errors.New("dial tcp: connection refused")},
-	}
-	for _, tc := range realErrors {
+		// A missing bucket is a misconfiguration, not a not-yet-uploaded object. Treating it as
+		// the latter would let the cleanup path read "footer legitimately absent" off a bucket
+		// that is simply wrong.
+		{"missing bucket", minio.ErrorResponse{Code: "NoSuchBucket", StatusCode: http.StatusNotFound}},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.False(t, IsObjectNotExists(tc.err),
-				"a genuine failure must not be reclassified as a missing object")
+			assert.False(t, IsObjectNotExists(tc.err))
 			assert.Equal(t, "error", readStatus(tc.err))
 		})
 	}

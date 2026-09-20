@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -233,18 +232,18 @@ func IsPreconditionFailed(err error) bool {
 // IsObjectNotExists if the error is object not exists
 // error code list: https://github.com/minio/minio/blob/master/cmd/api-errors.go
 func IsObjectNotExists(err error) bool {
-	resp := minio.ToErrorResponse(err)
-	// A HEAD carries no body for the code to be parsed out of, so some gateways answer a
-	// missing object with a bare 404 and an empty Code. Both mean the same thing here.
-	return resp.Code == "NoSuchKey" || resp.Code == "NoSuchBucket" ||
-		resp.Code == "NotFound" || resp.StatusCode == http.StatusNotFound
+	return minio.ToErrorResponse(err).Code == "NoSuchKey"
 }
 
-// readStatus labels a failed read or probe. A missing object is the expected answer for an
-// existence check -- whether a compacted footer has been uploaded yet, say -- and folding it
-// into "error" makes the obvious error ratio read ~80% on a healthy cluster, which in
-// practice gets the alert silenced. Callers that care about the distinction already use
-// IsObjectNotExistsError; this gives queries the same distinction.
+// readStatus labels a failed read or probe on this backend. A missing object is the expected
+// answer to an existence check -- has this compacted footer been uploaded yet -- and folding it
+// into "error" makes the obvious error ratio read ~80% on a healthy cluster, which in practice
+// gets the alert silenced.
+//
+// It uses the MinIO predicate directly because it is called from the MinIO handler, which sits
+// below the ObjectStorage interface and so has no access to the backend-dispatched
+// IsObjectNotExistsError. Every backend classifies at its own recording site with its own
+// predicate; AzureObjectStorage does the same with azcore.ResponseError.
 func readStatus(err error) string {
 	if IsObjectNotExists(err) {
 		return "not_found"

@@ -973,3 +973,35 @@ func TestNewAzureObjectStorageWithConfig_NonIAM_CancelledCtx(t *testing.T) {
 	_, err := newAzureObjectStorageWithConfig(ctx, cfg)
 	assert.Error(t, err)
 }
+
+// TestAzureReadStatus mirrors the MinIO side: a missing blob is the expected answer to an
+// existence check and must not be counted as a failure, while a real failure must not be
+// relabelled as a missing blob.
+//
+// It classifies through this backend's own IsObjectNotExistsError rather than a second copy of
+// the rule, which is the whole point -- the MinIO predicate parses an S3 ErrorResponse and would
+// not recognise an azcore.ResponseError at all.
+func TestAzureReadStatus(t *testing.T) {
+	a := &AzureObjectStorage{}
+
+	t.Run("a missing blob is not an error", func(t *testing.T) {
+		err := &azcore.ResponseError{StatusCode: http.StatusNotFound}
+		assert.True(t, a.IsObjectNotExistsError(err))
+		assert.Equal(t, "not_found", a.readStatus(err))
+	})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"forbidden", &azcore.ResponseError{StatusCode: http.StatusForbidden}},
+		{"server error", &azcore.ResponseError{StatusCode: http.StatusInternalServerError}},
+		{"throttled", &azcore.ResponseError{StatusCode: http.StatusTooManyRequests}},
+		{"not an azure error at all", fmt.Errorf("dial tcp: connection refused")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.False(t, a.IsObjectNotExistsError(tc.err))
+			assert.Equal(t, "error", a.readStatus(tc.err))
+		})
+	}
+}
