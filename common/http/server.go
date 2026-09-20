@@ -66,6 +66,7 @@ type AdminCallbacks struct {
 	Ops                 OpsCallbacks
 	MarkLogDeleted      func(bucketName, rootPath string, logId int64, sync bool) error
 	MarkInstanceDeleted func(bucketName, rootPath string) error
+	GetInstanceData     management.InstanceDataCallback
 }
 
 const (
@@ -249,6 +250,12 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		Register(&Handler{
 			Path:        AdminInstanceDeletePath,
 			HandlerFunc: management.NewInstanceDeleteHandler(callbacks.MarkInstanceDeleted),
+		})
+	}
+	if callbacks.GetInstanceData != nil {
+		Register(&Handler{
+			Path:        AdminInstanceDataPath,
+			HandlerFunc: management.NewInstanceDataHandler(callbacks.GetInstanceData),
 		})
 	}
 

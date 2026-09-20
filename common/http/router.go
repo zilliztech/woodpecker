@@ -63,6 +63,10 @@ const AdminLogDeletePath = "/admin/log/delete"
 // AdminInstanceDeletePath marks a whole instance deleted: POST {bucketName, rootPath}.
 const AdminInstanceDeletePath = "/admin/instance/delete"
 
+// AdminInstanceDataPath lists the instances holding node-local data, optionally filtered:
+// GET ?bucket_name=<bucket>&root_path=<root>. Read half of the /admin/instance family.
+const AdminInstanceDataPath = "/admin/instance/data"
+
 // G family — ops registry
 const (
 	AdminRuntimeOpsPath      = "/admin/runtime/ops"

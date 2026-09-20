@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -185,4 +186,38 @@ func TestMemberlistHandler_ContentNegotiation(t *testing.T) {
 	resp2.Body.Close()
 	require.Contains(t, string(body2), `"members"`)
 	require.Equal(t, "application/json", resp2.Header.Get("Content-Type"))
+}
+
+// TestStartAndStop_WithInstanceDataEndpoint covers the wiring from the callback to the
+// registered route: the filter reaches the callback and the payload reaches the caller.
+func TestStartAndStop_WithInstanceDataEndpoint(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+	t.Setenv(ListenPortEnvKey, "19093")
+
+	cfg, _ := config.NewConfiguration()
+
+	var gotBucket, gotRoot string
+	err := Start(cfg, AdminCallbacks{
+		GetInstanceData: func(bucketName, rootPath string) any {
+			gotBucket, gotRoot = bucketName, rootPath
+			return map[string]any{"node_id": "woodpecker-0", "instances": []any{}}
+		},
+	})
+	assert.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	resp, httpErr := http.Get("http://127.0.0.1:19093" + AdminInstanceDataPath +
+		"?bucket_name=a-bucket&root_path=in01-abc")
+	require.NoError(t, httpErr)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "woodpecker-0", body["node_id"])
+	assert.Equal(t, "a-bucket", gotBucket)
+	assert.Equal(t, "in01-abc", gotRoot)
+
+	assert.NoError(t, Stop())
 }

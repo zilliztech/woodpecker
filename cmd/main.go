@@ -298,6 +298,9 @@ func main() {
 		MarkInstanceDeleted: func(bucketName, rootPath string) error {
 			return srv.EvictInstance(context.Background(), bucketName, rootPath)
 		},
+		GetInstanceData: func(bucketName, rootPath string) any {
+			return srv.LocalInstanceData(bucketName, rootPath)
+		},
 	}); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
