@@ -80,13 +80,10 @@ install_monitoring() {
 }
 
 start_loadgen() {
-  # A fresh log name per run. etcd and MinIO here are plain pods with no volume, so a minikube
-  # restart empties both while the servers keep their PVCs -- and an empty etcd hands out logId 1
-  # again, straight onto local segment dirs the previous run left behind. The server then finds a
-  # data.compacted tombstone with no matching footer in object storage and refuses to serve the
-  # segment, which is the correct fail-closed behaviour and makes every append fail. Sidestepping
-  # the id reuse is cheaper than giving the dependencies durable storage they do not otherwise
-  # need.
+  # A fresh name per run so a rerun against a surviving etcd does not trip the duplicate-name
+  # check in CreateLog. It has no bearing on the log id -- ids come from the logs/idgen counter,
+  # not from the name -- so what keeps a rerun off the previous run's segment directories is the
+  # durable etcd volume in lib.sh, not this.
   LOG_NAME="${LOG_NAME:-k8s-monitor-loadgen-$(date +%s)}"
   kubectl apply -f "$SCRIPT_DIR/manifests/client-loadgen.yaml"
   kubectl -n "$NAMESPACE" wait --for=condition=Ready pod/wp-loadgen --timeout=120s
@@ -96,8 +93,10 @@ start_loadgen() {
   kubectl -n "$NAMESPACE" cp /tmp/wp-loadgen wp-loadgen:/root/wp-loadgen
   # client config: reuse the same etcd/minio/seeds the CR uses (see README for the file)
   kubectl -n "$NAMESPACE" cp "$SCRIPT_DIR/manifests/loadgen-config.yaml" wp-loadgen:/tmp/test-config.yaml
-  # LOG_NAME is expanded here, not in the pod: the remote shell has no such variable.
-  kubectl -n "$NAMESPACE" exec wp-loadgen -- bash -c "chmod +x /root/wp-loadgen && nohup /root/wp-loadgen -config-file=/tmp/test-config.yaml -log=$LOG_NAME >/tmp/loadgen.log 2>&1 &"
+  # LOG_NAME is expanded here, not in the pod: the remote shell has no such variable. printf %q
+  # because the remote bash -c reparses the string, so an unquoted value with a space or a glob
+  # character would be split there and -log= would receive only its first fragment.
+  kubectl -n "$NAMESPACE" exec wp-loadgen -- bash -c "chmod +x /root/wp-loadgen && nohup /root/wp-loadgen -config-file=/tmp/test-config.yaml -log=$(printf %q "$LOG_NAME") >/tmp/loadgen.log 2>&1 &"
   log "loadgen started on log $LOG_NAME; sleeping 45s to accumulate metrics"; sleep 45
 }
 
