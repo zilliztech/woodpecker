@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -86,6 +87,19 @@ func DefaultConfigPaths() []string {
 	var paths []string
 	if p := os.Getenv("WOODPECKER_CLI_CONFIG"); p != "" {
 		paths = append(paths, p)
+	}
+	// The directory holding this copy of wp, so a fixed cluster can be handed over as one
+	// folder: the binary and its cli.yaml together, nothing to pass per invocation.
+	//
+	// Ahead of the personal locations below because running *that* copy is a more specific
+	// statement of intent than a global config. Deliberately not the working directory:
+	// adopting a cli.yaml because of where the shell happens to be would let any directory
+	// someone else wrote point this tool at a cluster the operator did not choose.
+	if exe, err := os.Executable(); err == nil {
+		if resolved, linkErr := filepath.EvalSymlinks(exe); linkErr == nil {
+			exe = resolved
+		}
+		paths = append(paths, filepath.Join(filepath.Dir(exe), "cli.yaml"))
 	}
 	if p := os.Getenv("XDG_CONFIG_HOME"); p != "" {
 		paths = append(paths, p+"/woodpecker/cli.yaml")

@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/client"
-	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
 )
 
@@ -38,8 +37,8 @@ func newClusterInfoCommand() *cobra.Command {
 				Strict:      r.Context.Strict,
 			})
 			res := f.Get(urls, "/admin/node/status", "")
-			if res.StrictFailure() {
-				return wperrors.NewStrictPartialFailureError(res.Unreachable, len(urls))
+			if err := checkFanout(res, len(urls)); err != nil {
+				return err
 			}
 
 			// Compute state counts and group by region/AZ/RG.

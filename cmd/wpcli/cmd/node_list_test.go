@@ -84,3 +84,29 @@ func TestNodeList_HappyPath(t *testing.T) {
 	require.Equal(t, "us-east-1", rows[0]["region"])
 	require.Equal(t, "us-east-1a", rows[0]["az"])
 }
+
+// TestNodeList_NoNodeAnswersIsAnError separates a degraded view from no view at all. A run where
+// some nodes replied is worth showing with a warning; a run where none did has produced nothing,
+// and reporting success for it means a script acts on an empty table as though the cluster were
+// empty.
+func TestNodeList_NoNodeAnswersIsAnError(t *testing.T) {
+	// The memberlist advertises addresses nothing can reach, so every fan-out request fails
+	// while the seed endpoint itself stays healthy.
+	ml := `{"members":[
+		{"id":"node-1","gossip_addr":"10.244.1.5:17946","service_addr":"10.244.1.5:18080","tags":{"admin_port":"1"}},
+		{"id":"node-2","gossip_addr":"10.244.2.7:17946","service_addr":"10.244.2.7:18080","tags":{"admin_port":"1"}}
+	]}`
+	srv := spinTestServer(t, ml, nil)
+	defer srv.Close()
+	withCliYAML(t, srv.URL)
+
+	root := NewRootCommand()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"node", "list", "--admin-port", extractPort(t, srv.URL), "--timeout", "2s"})
+
+	err := root.Execute()
+
+	require.Error(t, err, "a run where no node answered must not report success")
+}

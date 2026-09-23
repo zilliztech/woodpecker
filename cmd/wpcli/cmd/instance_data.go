@@ -97,8 +97,8 @@ deleted on the strength of it. Use --strict to turn that into a non-zero exit.`,
 				Strict:      res.Context.Strict,
 			})
 			fanRes := f.Get(urls, path, "")
-			if fanRes.StrictFailure() {
-				return wperrors.NewStrictPartialFailureError(fanRes.Unreachable, len(urls))
+			if err := checkFanout(fanRes, len(urls)); err != nil {
+				return err
 			}
 
 			if Globals.Output == "json" || Globals.Output == "yaml" {

@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/client"
-	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
 )
 
@@ -48,8 +47,8 @@ func newNodeListCommand() *cobra.Command {
 				Strict:      r.Context.Strict,
 			})
 			res := f.Get(urls, "/admin/node/status", "")
-			if res.StrictFailure() {
-				return wperrors.NewStrictPartialFailureError(res.Unreachable, len(urls))
+			if err := checkFanout(res, len(urls)); err != nil {
+				return err
 			}
 
 			// Build rows by pairing memberlist entries with fanout results (index-aligned).

@@ -32,6 +32,9 @@ func newClusterGossipDiffCommand() *cobra.Command {
 				Timeout:     r.Context.Timeout,
 			})
 			res := f.Get(urls, "/admin/memberlist", "")
+			if err := checkFanout(res, len(urls)); err != nil {
+				return err
+			}
 
 			type viewRow struct {
 				NodeID  string

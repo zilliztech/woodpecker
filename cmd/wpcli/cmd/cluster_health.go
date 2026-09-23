@@ -33,6 +33,9 @@ func newClusterHealthCommand() *cobra.Command {
 				Timeout:     r.Context.Timeout,
 			})
 			res := f.Get(urls, "/admin/node/status", "")
+			if err := checkFanout(res, len(urls)); err != nil {
+				return err
+			}
 
 			activeCount := 0
 			decommissioningCount := 0
