@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"path"
 	"sort"
 	"strconv"
@@ -23,8 +24,14 @@ import (
 // The marking command family operates on the compacted-mark distribution records
 // (root/marking/<logId>/<segId> in etcd — the Sealed-phase sibling of root/cleaning).
 // Unlike the rest of wp, these records live in cluster metadata, not on a node, so the
-// commands connect to etcd directly; the etcd endpoints and meta prefix are discovered
-// from any node's /admin/config (zero-config), overridable via --etcd / --meta-prefix.
+// commands connect to etcd directly.
+//
+// For metadata the connection is something the caller states rather than something the cluster
+// can vouch for. Metadata belongs to the client library; the LogStore server never connects to
+// etcd, so the etcd section of its /admin/config carries no guarantee of being correct — in a
+// normal deployment it is simply the built-in default. Discovery from it is still attempted as a
+// convenience, and refused when it yields a value that cannot work, but --etcd / --meta-prefix
+// are the reliable path and any metadata command added later should assume the same.
 
 func newMarkingCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -61,7 +68,7 @@ type markingEtcdFlags struct {
 }
 
 func (f *markingEtcdFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "etcd endpoints (comma-separated); default: discovered from a node's /admin/config")
+	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this")
 	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "metadata key prefix; default: discovered from a node's /admin/config (etcd.rootPath + woodpecker.meta.prefix)")
 	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "etcd TLS client cert file; default: discovered (server-side path, valid in-pod)")
 	cmd.Flags().StringVar(&f.etcdKey, "etcd-key", "", "etcd TLS client key file; default: discovered")
@@ -144,6 +151,9 @@ func resolveMarkingEtcd(f *markingEtcdFlags) (*markingEtcdConn, error) {
 			return nil, wperrors.NewNetworkError(fmt.Sprintf("could not fetch /admin/config from any node: %v", lastErr))
 		}
 		if len(conn.endpoints) == 0 {
+			if err := rejectUnusableDiscoveredEtcd(snap.Etcd.Endpoints); err != nil {
+				return nil, err
+			}
 			conn.endpoints = snap.Etcd.Endpoints
 		}
 		if prefix == "" {
@@ -468,4 +478,53 @@ func formatMarkingTime(unixMilli uint64) string {
 		return "-"
 	}
 	return time.UnixMilli(int64(unixMilli)).UTC().Format("2006-01-02T15:04:05Z")
+}
+
+// rejectUnusableDiscoveredEtcd stops a discovered endpoint that cannot be right from being dialed.
+//
+// Discovery reads the etcd settings out of a node's /admin/config, but the LogStore server never
+// connects to etcd -- metadata belongs to the client library, and there is no clientv3 reference
+// anywhere in server/ or cmd/main.go. Nothing in a normal deployment overrides that section, so
+// what comes back is the built-in default. It points at loopback, which resolves to whichever
+// host happens to be running the command rather than to the cluster's etcd.
+//
+// Dialing it costs the whole timeout and ends in a raw etcd client error dump. Since the value
+// cannot be correct, saying so immediately and naming the flag is the only useful outcome.
+//
+// Discovery is kept for the deployments that do set the field, but it is a convenience with no
+// guarantee behind it: for metadata the connection is something the caller states, not something
+// the cluster can vouch for.
+func rejectUnusableDiscoveredEtcd(endpoints []string) error {
+	if len(endpoints) == 0 {
+		return wperrors.NewConfigError(
+			"no etcd endpoint could be discovered from /admin/config; pass --etcd <host:port> " +
+				"(the server does not connect to etcd, so it cannot report a usable one)",
+		)
+	}
+	for _, ep := range endpoints {
+		if !isLoopbackEndpoint(ep) {
+			return nil
+		}
+	}
+	return wperrors.NewConfigError(fmt.Sprintf(
+		"discovered etcd endpoint %v is loopback and points at this host, not the cluster's etcd; "+
+			"pass --etcd <host:port> (the server does not connect to etcd, so this field is an "+
+			"unset default rather than a reported value)", endpoints,
+	))
+}
+
+// isLoopbackEndpoint reports whether an endpoint names the local host, with or without a port.
+func isLoopbackEndpoint(endpoint string) bool {
+	host := strings.TrimSpace(endpoint)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

@@ -84,3 +84,61 @@ func TestMarkingConfirm_InvalidArgs(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid logId")
 }
+
+// TestMarkingDiscovery_LoopbackEndpointIsRefused covers what every real deployment actually
+// returns. The LogStore server never connects to etcd — there is no clientv3 reference anywhere
+// in server/ or cmd/main.go — so nothing ever overrides the default in its config, and discovery
+// hands back a loopback address that belongs to whatever host happens to answer.
+//
+// Dialing it wastes the full timeout and ends in a raw etcd client dump. Since the value cannot
+// be right, the useful outcome is to say so at once and name the flag that fixes it.
+func TestMarkingDiscovery_LoopbackEndpointIsRefused(t *testing.T) {
+	ml := `{"members":[{"id":"node-1","gossip_addr":"127.0.0.1:17946"}]}`
+	// Exactly what a UAT node reports.
+	cfg := `{"Etcd":{"Endpoints":["localhost:2379"],"RootPath":"woodpecker",` +
+		`"Ssl":{"Enabled":false},"Auth":{"Enabled":false}},` +
+		`"Woodpecker":{"Meta":{"Prefix":"woodpecker"}}}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/memberlist", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(ml)) })
+	mux.HandleFunc("/admin/config", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(cfg)) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	withCliYAML(t, srv.URL)
+
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	port, err := strconv.Atoi(extractPort(t, srv.URL))
+	require.NoError(t, err)
+	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
+
+	_, err = resolveMarkingEtcd(&markingEtcdFlags{})
+
+	require.Error(t, err, "a loopback endpoint discovered from a server that does not use etcd is not usable")
+	require.Contains(t, err.Error(), "--etcd", "the message must name the flag that resolves it")
+}
+
+// TestMarkingDiscovery_ExplicitFlagBeatsLoopback keeps the refusal from becoming a wall: an
+// operator who already knows the address must be able to say so and proceed.
+func TestMarkingDiscovery_ExplicitFlagBeatsLoopback(t *testing.T) {
+	ml := `{"members":[{"id":"node-1","gossip_addr":"127.0.0.1:17946"}]}`
+	cfg := `{"Etcd":{"Endpoints":["localhost:2379"],"RootPath":"woodpecker",` +
+		`"Ssl":{"Enabled":false},"Auth":{"Enabled":false}},` +
+		`"Woodpecker":{"Meta":{"Prefix":"woodpecker"}}}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/memberlist", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(ml)) })
+	mux.HandleFunc("/admin/config", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(cfg)) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	withCliYAML(t, srv.URL)
+
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	port, err := strconv.Atoi(extractPort(t, srv.URL))
+	require.NoError(t, err)
+	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
+
+	conn, err := resolveMarkingEtcd(&markingEtcdFlags{etcdEndpoints: "etcd-a:2379"})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"etcd-a:2379"}, conn.endpoints)
+}
