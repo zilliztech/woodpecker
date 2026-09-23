@@ -3038,3 +3038,83 @@ func TestMinioFileReaderAdv_ReadNextBatchAdv_FooterExistsNoDataCheckEOF(t *testi
 	// Should return ErrEntryNotFound since no footer, no blocks, not completed
 	assert.True(t, errors.Is(err, werr.ErrEntryNotFound))
 }
+
+// buildCorruptBlockData builds a block whose header is intact and self-consistent but whose
+// checksum disagrees with the bytes that follow — what bit rot looks like from the reader's side.
+func buildCorruptBlockData(t *testing.T, blockID int64, firstEntryID int64, payloads [][]byte) []byte {
+	t.Helper()
+	valid := buildValidBlockData(t, blockID, firstEntryID, payloads)
+	// Flip a byte in the payload region, past both the file header (block 0 only) and the
+	// block header, so the stored CRC no longer matches.
+	valid[len(valid)-1] ^= 0xFF
+	return valid
+}
+
+// TestMinioFileReaderAdv_ReadNextBatchAdv_CorruptBlockIsReportedAsCorruption pins the same
+// distinction as its staged-storage counterpart. This reader already flags the failed read, but
+// the flag only suppresses a false EOF: the call still ends in ErrEntryNotFound, which the log
+// reader treats as "not written yet" and waits on indefinitely.
+func TestMinioFileReaderAdv_ReadNextBatchAdv_CorruptBlockIsReportedAsCorruption(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks_objectstorage.NewObjectStorage(t)
+	reader := newTestReader(mockClient)
+
+	blockData := buildCorruptBlockData(t, 0, 0, [][]byte{[]byte("data0"), []byte("data1")})
+
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(int64(len(blockData)), false, nil).Once()
+	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", int64(0), int64(len(blockData)), mock.Anything, mock.Anything).
+		Return(&mockFileReader{data: blockData}, nil).Once()
+
+	notFoundErr := mockNoSuchKeyError()
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Maybe()
+	mockClient.EXPECT().IsObjectNotExistsError(mock.Anything).Return(true).Maybe()
+
+	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 100}, nil)
+
+	assert.Error(t, err)
+	assert.True(t, werr.ErrFileReaderCorrupted.Is(err),
+		"a checksum mismatch must be reported as corruption, got: %v", err)
+	assert.False(t, werr.ErrEntryNotFound.Is(err),
+		"reporting corruption as ErrEntryNotFound makes the reader retry a fault forever")
+	assert.Nil(t, batch)
+}
+
+// TestMinioFileReaderAdv_ReadNextBatchAdv_TransientErrorStaysRetriable guards the other half of
+// the distinction. hasDataReadError also covers reads that failed for reasons worth retrying — a
+// blip fetching the object, say. Those must keep reporting ErrEntryNotFound, or the fix for
+// corruption would turn every transient failure into a permanent one.
+func TestMinioFileReaderAdv_ReadNextBatchAdv_TransientErrorStaysRetriable(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks_objectstorage.NewObjectStorage(t)
+	reader := newTestReader(mockClient)
+
+	blockData := buildValidBlockData(t, 0, 0, [][]byte{[]byte("data0")})
+
+	// Block 0 exists; everything else does not, so the read must engage block 0 rather than
+	// short-circuiting on a missing object.
+	notFoundErr := mockNoSuchKeyError()
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.MatchedBy(func(key string) bool {
+		return key != "test-base/1/0/0.blk"
+	}), mock.Anything, mock.Anything).Return(int64(0), false, notFoundErr).Maybe()
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(int64(len(blockData)), false, nil).Once()
+	// The object is there, but fetching it fails this time.
+	fetchErr := errors.New("connection reset by peer")
+	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", int64(0), int64(len(blockData)), mock.Anything, mock.Anything).
+		Return(nil, fetchErr).Once()
+	// The footer probe must still resolve as "absent"; only the fetch failure is a real error.
+	mockClient.EXPECT().IsObjectNotExistsError(mock.MatchedBy(func(e error) bool {
+		return e != nil && e != fetchErr
+	})).Return(true).Maybe()
+	mockClient.EXPECT().IsObjectNotExistsError(fetchErr).Return(false).Maybe()
+
+	_, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 100}, nil)
+
+	assert.Error(t, err)
+	assert.False(t, werr.ErrFileReaderCorrupted.Is(err),
+		"a transient fetch failure is not corruption; calling it that makes a retriable error permanent")
+	assert.True(t, werr.ErrEntryNotFound.Is(err),
+		"a transient failure must stay retriable, got: %v", err)
+}

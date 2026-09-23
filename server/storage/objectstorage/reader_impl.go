@@ -534,6 +534,7 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	totalReadBytes := 0
 	totalCollectedSize := int64(0)
 	hasDataReadError := false
+	var corruptionErr error
 
 	// Keep reading batches until we have data or reach end
 	for {
@@ -572,6 +573,11 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 					zap.Int64("blockNumber", result.blockID),
 					zap.Error(result.err))
 				hasDataReadError = true
+				// Kept apart from hasDataReadError: that flag also covers transient read
+				// failures, which genuinely are worth retrying. A checksum mismatch never is.
+				if werr.ErrFileReaderCorrupted.Is(result.err) {
+					corruptionErr = result.err
+				}
 				break
 			}
 
@@ -632,6 +638,12 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	if len(allEntries) == 0 {
 		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
+		// Corruption is terminal for this replica: the bytes are there and they are wrong, so
+		// retrying cannot change the answer. Reporting it as "not written yet" is what makes a
+		// reader wait on it forever instead of failing over or surfacing the fault.
+		if corruptionErr != nil {
+			return nil, corruptionErr
+		}
 		// If no data read error (or error is compaction-related), determine if it is EOF
 		if !hasDataReadError {
 			// only if no data read error, determine if it is EOF
@@ -766,8 +778,15 @@ func (f *MinioFileReaderAdv) processBlockData(ctx context.Context, blockID int64
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("blockNumber", blockID),
 			zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
+			zap.Int64("firstEntryId", blockHeaderRecord.FirstEntryID),
+			zap.Int64("lastEntryId", blockHeaderRecord.LastEntryID),
 			zap.Error(verifyBlockErr))
-		return nil, 0, nil, verifyBlockErr
+		// Typed, and carrying the range the block header states it covers: that range is the
+		// only boundary available to whoever must decide what is unreadable, and it cannot be
+		// recovered from the corrupt bytes themselves.
+		return nil, 0, nil, werr.ErrFileReaderCorrupted.WithCauseErrMsg(
+			fmt.Sprintf("block %d (entries %d-%d) failed its integrity check: %v",
+				blockID, blockHeaderRecord.FirstEntryID, blockHeaderRecord.LastEntryID, verifyBlockErr))
 	}
 
 	// Extract entries from this block

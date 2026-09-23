@@ -1019,6 +1019,10 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 	entriesCollected := int64(0)
 	readBytes := int64(0)
 	hasDataReadError := false
+	// Kept apart from hasDataReadError on purpose. That flag also covers transient read
+	// failures, which genuinely are worth retrying; a checksum mismatch never is, and the
+	// two must not collapse into the same answer to the caller.
+	corruption := ""
 
 	// extract data from blocks
 	for i := startBlockID; readBytes < maxBytes && entriesCollected < maxEntries; i++ {
@@ -1092,7 +1096,15 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			logger.Ctx(ctx).Warn("verify block data integrity failed, stop reading",
 				zap.String("filePath", r.filePath),
 				zap.Int64("blockNumber", currentBlockID),
+				zap.Int64("firstEntryId", blockHeaderRecord.FirstEntryID),
+				zap.Int64("lastEntryId", blockHeaderRecord.LastEntryID),
 				zap.Error(err))
+			// The header parsed, so the block states the entry range it covers. Carry it: it is
+			// the only boundary available to whoever has to decide what is unreadable, and it is
+			// not recoverable from the corrupt bytes themselves.
+			corruption = fmt.Sprintf("block %d (entries %d-%d) failed its integrity check: %v",
+				currentBlockID, blockHeaderRecord.FirstEntryID, blockHeaderRecord.LastEntryID, err)
+			hasDataReadError = true
 			break // Stop reading on data integrity error, return what we have so far
 		}
 
@@ -1177,6 +1189,12 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			zap.Int64("lac", currentLAC),
 			zap.Int64("lastReadEntryID", lastReadEntryID),
 			zap.Int("entriesReturned", len(entries)))
+		// Corruption is terminal for this replica: the bytes are there and they are wrong, so
+		// no amount of retrying changes the answer. Reporting it as "not written yet" is what
+		// makes a reader wait on it forever instead of failing over or surfacing the fault.
+		if corruption != "" {
+			return nil, werr.ErrFileReaderCorrupted.WithCauseErrMsg(corruption)
+		}
 		if !hasDataReadError {
 			if r.isIncompleteFile.Load() && r.footer == nil && (opt.StartEntryID <= currentLAC || currentLAC == -1) {
 				// when node restart or no lac received ever, currentLAC == -1, means can't read here, should retry to read other nodes

@@ -3478,3 +3478,70 @@ func TestStagedReader_Compacted_ResumePastFullyConsumedLargeBlock(t *testing.T) 
 	assert.Equal(t, int32(1), result.LastReadState.LastBlockId)
 	assert.True(t, codec.IsCompacted(uint16(result.LastReadState.Flags)))
 }
+
+// TestReadDataBlocksCorruptBlockIsReportedAsCorruption pins the distinction a stalled reader
+// depends on. A block whose contents no longer match its checksum is broken, not late: retrying
+// will never produce it. Today the mismatch is swallowed and the empty result is reported as
+// ErrEntryNotFound, which the reader treats as "not written yet" and waits on indefinitely — so
+// a genuine fault is indistinguishable from tailing an idle log.
+func TestReadDataBlocksCorruptBlockIsReportedAsCorruption(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+
+	logId := int64(1)
+	segId := int64(1)
+
+	localBaseDir := filepath.Join(tempDir, "local")
+	require.NoError(t, os.MkdirAll(getSegmentDir(localBaseDir, logId, segId), 0o755))
+
+	file, err := os.Create(getSegmentFilePath(localBaseDir, logId, segId))
+	require.NoError(t, err)
+
+	headerData := codec.EncodeRecord(&codec.HeaderRecord{
+		Version:      codec.FormatVersion,
+		Flags:        0,
+		FirstEntryID: 0,
+	})
+	_, err = file.Write(headerData)
+	require.NoError(t, err)
+
+	dataRecords := make([]codec.Record, 0, 3)
+	for i := 0; i < 3; i++ {
+		dataRecords = append(dataRecords, &codec.DataRecord{Payload: []byte("test data")})
+	}
+	blockData := encodeRecordList(dataRecords)
+
+	// The header is intact and self-consistent; only the checksum disagrees with the bytes,
+	// which is what bit rot looks like from the reader's side.
+	blockHeaderData := codec.EncodeRecord(&codec.BlockHeaderRecord{
+		BlockNumber:  0,
+		FirstEntryID: 0,
+		LastEntryID:  2,
+		BlockLength:  uint32(len(blockData)),
+		BlockCrc:     crc32.ChecksumIEEE(blockData) ^ 0xFFFFFFFF,
+	})
+	_, err = file.Write(blockHeaderData)
+	require.NoError(t, err)
+	_, err = file.Write(blockData)
+	require.NoError(t, err)
+	file.Close()
+
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+	defer reader.Close(ctx)
+
+	require.NoError(t, reader.UpdateLastAddConfirmed(ctx, 2))
+
+	result, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{StartEntryID: 0, MaxBatchEntries: 10}, nil)
+
+	assert.Error(t, err)
+	assert.True(t, werr.ErrFileReaderCorrupted.Is(err),
+		"a checksum mismatch must be reported as corruption, got: %v", err)
+	assert.False(t, werr.ErrEntryNotFound.Is(err),
+		"reporting corruption as ErrEntryNotFound makes the reader retry a fault forever")
+	assert.Nil(t, result)
+}
