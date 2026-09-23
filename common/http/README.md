@@ -29,6 +29,45 @@ Woodpecker exposes an HTTP admin server on each node (default port `9091`, confi
 
 ---
 
+## Every endpoint answers for one node
+
+**No admin endpoint fans out to peers.** Each one reports the state of the node that
+received the request, and nothing else.
+
+This is an invariant, not an accident. The server process makes no outbound HTTP calls,
+holds no LogStore client, and does not connect to etcd; its only outbound connections are
+gossip (membership only) and object storage (data). Cluster-wide views are assembled by
+the caller:
+
+- `wp` fans out through a single translation point, `Client.PeerAdminURL(member)` — every
+  admin request, `/metrics` scrape and pprof download takes its base URL from there.
+- A control plane does the same from its own pod inventory, or from `GET /admin/memberlist`.
+
+### Why this is worth keeping
+
+A `?scope=cluster` parameter was proposed for `/admin/instance/data` and rejected
+([#349](https://github.com/zilliztech/woodpecker/issues/349)). The reasoning generalizes
+to any endpoint added later:
+
+- It would be the first node-to-node admin call in the tree, giving every storage node a
+  standing reason to reach its peers over the admin port.
+- It invites an N² fan-out the moment a caller queries every pod for a cluster-wide view.
+- It buys the caller nothing it does not already need. There is no cluster-scoped delete,
+  so a caller must already enumerate nodes and handle an unreachable one in order to act
+  at all; a cluster-scoped read paired with a node-scoped write is asymmetric in exactly
+  the place where care is required.
+- **It keeps addressing honest.** A node advertises the address its own cluster knows it
+  by — under Kubernetes, the headless-service FQDN, which is stable across pod restarts
+  but resolves only inside the cluster. A caller outside that network has to translate
+  that identity into something it can dial, and today that translation lives entirely on
+  the caller's side, in one place. A node fanning out on a caller's behalf would have to
+  know how *the caller* reaches its peers, which it cannot.
+
+When adding an endpoint, answer for the local node. If a caller needs a cluster-wide
+view, let it ask every node.
+
+---
+
 ## Health Check
 
 ```bash
@@ -167,8 +206,9 @@ curl "http://localhost:9091/admin/instance/data?bucket_name=a-bucket&root_path=i
 
 ### Reconciling orphaned instance data
 
-This endpoint answers only for the node that serves it — like every other admin endpoint
-here. The cluster-wide view is assembled by the caller:
+This endpoint answers only for the node that serves it, like every other one here (see
+[Every endpoint answers for one node](#every-endpoint-answers-for-one-node)). The
+cluster-wide view is assembled by the caller:
 
 1. Enumerate nodes (your own pod inventory, or `GET /admin/memberlist`) and query each.
    **If any node fails to answer, or any answer has `scan_errors > 0`, stop** — an
