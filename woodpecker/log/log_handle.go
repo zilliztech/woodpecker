@@ -75,6 +75,11 @@ type LogHandle interface {
 	// GetCurrentWritableSegmentHandle returns the current writable segment handle for the log.
 	// TODO Test only
 	GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle
+	// RollWritableSegmentIfDue seals the open writable segment when the rolling policy
+	// says it is due. Run from the auditor so a log that has stopped receiving writes
+	// still rolls on time; without it the segment stays Active forever and the node
+	// holding its data can never drain. Never creates a segment.
+	RollWritableSegmentIfDue(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) error
 }
 
 const (
@@ -516,59 +521,106 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 	// Check if the writable segment handle needs to be rolling close and create a new one
 	if rollNeeded, rollReason := l.shouldRollingCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle); rollNeeded {
 		op = "get_or_create_writable_segment_roll"
-		logger.Ctx(ctx).Debug("start to close segment",
-			zap.String("logName", l.Name),
-			zap.Int64("logId", l.GetId()),
-			zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
-		// 1. close segmentHandle,
-		//  it will send complete request to logStores
-		//  and error out all pendingAppendOps with segmentCloseError
-		logger.Ctx(ctx).Debug("mark segment rolling", zap.String("logName", l.Name), zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
-		rollErr := writeableSegmentHandle.SetRollingReady(ctx)
-
-		// If completion hit ErrMetadataRevisionInvalid, another writer has taken over
-		// the log. Do NOT create a new segment — the current writer must be invalidated
-		// instead. Returning ErrLogWriterLockLost lets the caller propagate the
-		// preemption signal to the application.
-		if rollErr != nil && werr.ErrMetadataRevisionInvalid.Is(rollErr) {
-			logger.Ctx(ctx).Warn("aborting segment rolling: log has been taken over by another writer",
-				zap.String("logName", l.Name),
-				zap.Int64("logId", l.GetId()),
-				zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)),
-				zap.Error(rollErr))
-			return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "segment completion metadata revision invalid", rollErr)
-		}
-
-		// 2. create new segMeta(active)
-		nextSegmentId := writeableSegmentHandle.GetId(ctx) + 1
-		logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name), zap.Int64("segmentId", nextSegmentId))
-		newSegmentHandle, err := l.createAndCacheWritableSegmentHandleWithID(ctx, nextSegmentId, writerInvalidationNotifier)
-		if err != nil {
-			if werr.ErrMetadataSegmentAlreadyExists.Is(err) {
-				logger.Ctx(ctx).Warn("aborting segment rolling: next segment has been claimed by another writer",
-					zap.String("logName", l.Name),
-					zap.Int64("logId", l.GetId()),
-					zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
-					zap.Int64("expectedSegmentId", nextSegmentId),
-					zap.Error(err))
-				return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "next segment creation conflict", err)
-			}
-			return nil, err
-		}
-
-		// 3. return new segmentHandle
-		// Counted here rather than at the decision above: a roll can still be aborted by
-		// another writer taking over the log, and those must not show up as rolls.
-		metrics.WpSegmentRolledTotal.WithLabelValues(l.logNs, logIdStr, rollReason).Inc()
-		logger.Ctx(ctx).Info("segment rolling completed successfully",
-			zap.String("logName", l.Name),
-			zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
-			zap.Int64("newSegmentId", newSegmentHandle.GetId(ctx)))
-		return newSegmentHandle, nil
+		return l.rollWritableSegmentUnsafe(ctx, writeableSegmentHandle, rollReason, logIdStr, writerInvalidationNotifier)
 	}
 
 	// return existing writable segment handle
 	return writeableSegmentHandle, nil
+}
+
+// rollWritableSegmentUnsafe seals the current writable segment and creates its successor,
+// returning the new handle. It is the single implementation of a roll: the append path
+// reaches it through GetOrCreateWritableSegmentHandle and the auditor through
+// RollWritableSegmentIfDue, so the two cannot drift apart.
+//
+// The caller must hold l.Lock(). Both abort paths below mean another writer has taken the
+// log over, and each invalidates this writer rather than creating a segment on top of
+// someone else's.
+func (l *logHandleImpl) rollWritableSegmentUnsafe(ctx context.Context, writeableSegmentHandle segment.SegmentHandle, rollReason string, logIdStr string, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error) {
+	logger.Ctx(ctx).Debug("start to close segment",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.GetId()),
+		zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
+	// 1. close segmentHandle,
+	//  it will send complete request to logStores
+	//  and error out all pendingAppendOps with segmentCloseError
+	logger.Ctx(ctx).Debug("mark segment rolling", zap.String("logName", l.Name), zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
+	rollErr := writeableSegmentHandle.SetRollingReady(ctx)
+
+	// If completion hit ErrMetadataRevisionInvalid, another writer has taken over
+	// the log. Do NOT create a new segment — the current writer must be invalidated
+	// instead. Returning ErrLogWriterLockLost lets the caller propagate the
+	// preemption signal to the application.
+	if rollErr != nil && werr.ErrMetadataRevisionInvalid.Is(rollErr) {
+		logger.Ctx(ctx).Warn("aborting segment rolling: log has been taken over by another writer",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.GetId()),
+			zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)),
+			zap.Error(rollErr))
+		return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "segment completion metadata revision invalid", rollErr)
+	}
+
+	// 2. create new segMeta(active)
+	nextSegmentId := writeableSegmentHandle.GetId(ctx) + 1
+	logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name), zap.Int64("segmentId", nextSegmentId))
+	newSegmentHandle, err := l.createAndCacheWritableSegmentHandleWithID(ctx, nextSegmentId, writerInvalidationNotifier)
+	if err != nil {
+		if werr.ErrMetadataSegmentAlreadyExists.Is(err) {
+			logger.Ctx(ctx).Warn("aborting segment rolling: next segment has been claimed by another writer",
+				zap.String("logName", l.Name),
+				zap.Int64("logId", l.GetId()),
+				zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
+				zap.Int64("expectedSegmentId", nextSegmentId),
+				zap.Error(err))
+			return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "next segment creation conflict", err)
+		}
+		return nil, err
+	}
+
+	// 3. return new segmentHandle
+	// Counted here rather than at the decision above: a roll can still be aborted by
+	// another writer taking over the log, and those must not show up as rolls.
+	metrics.WpSegmentRolledTotal.WithLabelValues(l.logNs, logIdStr, rollReason).Inc()
+	logger.Ctx(ctx).Info("segment rolling completed successfully",
+		zap.String("logName", l.Name),
+		zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
+		zap.Int64("newSegmentId", newSegmentHandle.GetId(ctx)))
+	return newSegmentHandle, nil
+}
+
+// RollWritableSegmentIfDue evaluates the rolling policy against the segment currently open
+// for writing and seals it when the policy says so.
+//
+// The append path is the only thing that evaluates the policy today, so a log that stops
+// receiving writes keeps its Active segment open indefinitely -- and the node holding that
+// segment's data can never report has_local_data == false, so it can never drain. Running
+// the same check from the auditor closes that gap at the cost of one extra segment per idle
+// period: the successor is empty, and the policy's own non-empty guard stops it rolling again.
+//
+// It never creates a segment. With nothing open there is nothing to roll, and a log that is
+// not being written should not acquire a segment merely because something asked about it.
+func (l *logHandleImpl) RollWritableSegmentIfDue(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "RollWritableSegmentIfDue")
+	defer sp.End()
+
+	l.Lock()
+	defer l.Unlock()
+
+	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
+	if !writableExists {
+		return nil
+	}
+	rollNeeded, rollReason := l.shouldRollingCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle)
+	if !rollNeeded {
+		return nil
+	}
+	logger.Ctx(ctx).Info("rolling an idle writable segment",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id),
+		zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)),
+		zap.String("reason", rollReason))
+	_, err := l.rollWritableSegmentUnsafe(ctx, writeableSegmentHandle, rollReason, strconv.FormatInt(l.Id, 10), writerInvalidationNotifier)
+	return err
 }
 
 // GetRecoverableSegmentHandle get exists segmentHandle for recover, only logWriter can use this method

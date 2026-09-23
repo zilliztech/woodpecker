@@ -147,6 +147,10 @@ func (m *testLogHandleMock) Close(ctx context.Context) error {
 	return args.Error(0)
 }
 
+func (m *testLogHandleMock) RollWritableSegmentIfDue(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) error {
+	return nil
+}
+
 func (m *testLogHandleMock) GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
