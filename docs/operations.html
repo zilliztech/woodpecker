@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Operations Guide - Woodpecker</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" href="images/icon.png" type="image/png">
+    <style>
+        :root {
+            --primary-color: #4a6cf7;
+            --secondary-color: #6c757d;
+            --dark-color: #2c3e50;
+            --light-color: #f8f9fa;
+            --border-color: #e1e4e8;
+            --success-color: #28a745;
+            --code-bg: #f6f8fa;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+        }
+        
+        .container {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Navigation */
+        .navbar {
+            background-color: #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .nav-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+        
+        .logo-wrapper {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo {
+            font-weight: 400;
+            font-size: 24px;
+            color: var(--primary-color);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            letter-spacing: -0.02em;
+        }
+        
+        .logo-dot {
+            margin: 0 4px;
+            font-size: 24px;
+            line-height: 1;
+            opacity: 0.7;
+        }
+        
+        .logo-beta {
+            font-size: 14px;
+            opacity: 0.6;
+            font-weight: 400;
+            margin-top: 2px;
+        }
+        
+        .nav-links {
+            display: flex;
+            list-style: none;
+        }
+        
+        .nav-links li {
+            margin-left: 30px;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--dark-color);
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: var(--primary-color);
+        }
+        
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, rgba(74, 108, 247, 0.9) 0%, rgba(106, 17, 203, 0.9) 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            height: 420px;
+            width: 100%;
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            width: 1080px;
+            height: 418px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .hero-text {
+            width: 400px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 20px 0;
+        }
+        
+        .hero h1 {
+            font-weight: 400;
+            font-size: 48px;
+            margin-bottom: 16px;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+        
+        .hero p {
+            font-size: 20px;
+            margin-bottom: 24px;
+            opacity: 0.9;
+            line-height: 1.4;
+            max-width: 440px;
+        }
+        
+        /* Content Sections */
+        .section {
+            padding: 60px 0;
+        }
+        
+        .section:nth-child(even) {
+            background-color: var(--light-color);
+        }
+        
+        .section-title {
+            margin-bottom: 40px;
+        }
+        
+        .section-title h2 {
+            font-weight: 400;
+            font-size: 36px;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+            letter-spacing: -0.02em;
+        }
+        
+        .section-title p {
+            color: var(--secondary-color);
+            max-width: 700px;
+        }
+        
+        /* Code Blocks */
+        .code-block {
+            background-color: var(--code-bg);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+        
+        .code-block pre {
+            margin: 0;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .code-block code {
+            color: #24292e;
+        }
+        
+        /* Configuration Tables */
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        .config-table th {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 15px;
+            text-align: left;
+        }
+        
+        .config-table td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .config-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Footer */
+        .footer {
+            background-color: var(--dark-color);
+            color: white;
+            padding: 40px 0;
+            text-align: center;
+        }
+        
+        .footer p {
+            margin-bottom: 10px;
+        }
+        
+        .footer a {
+            color: white;
+            text-decoration: none;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .nav-container {
+                flex-direction: column;
+            }
+            
+            .nav-links {
+                margin-top: 20px;
+            }
+            
+            .nav-links li {
+                margin: 0 15px;
+            }
+            
+            .section-title h2 {
+                font-size: 30px;
+            }
+        }
+
+        h1, h2, h3 {
+            font-weight: 400;
+            letter-spacing: -0.02em;
+        }
+    
+        .gap {
+            background-color: #fff8e1;
+            border-left: 4px solid #f0ad4e;
+            padding: 12px 18px;
+            margin: 18px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        .gap strong { color: #8a6d3b; }
+        .note {
+            background-color: #eef3ff;
+            border-left: 4px solid var(--primary-color);
+            padding: 12px 18px;
+            margin: 18px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        .lvl {
+            display: inline-block;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #eef3ff;
+            color: var(--primary-color);
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .lvl.none { background: #f5f5f5; color: var(--secondary-color); }
+        h3 { margin-top: 28px; margin-bottom: 10px; color: var(--dark-color); }
+        h4 { margin-top: 20px; margin-bottom: 8px; color: var(--dark-color); }
+        .section p { margin-bottom: 12px; }
+        .section ul { margin: 0 0 14px 22px; }
+        .section li { margin-bottom: 6px; }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+<div class="container nav-container">
+<div class="logo-wrapper">
+<a href="index.html" class="logo"><img src="images/logo.png" width="250" alt="Woodpecker Logo" /> <span class="logo-dot">·</span><span class="logo-beta">beta</span></a>
+</div>
+<ul class="nav-links">
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html">Quick Start</a></li>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a></li>
+</ul>
+</div>
+</nav>
+
+<section class="hero">
+<div class="container">
+<div class="hero-content">
+<div class="hero-text">
+<h1>Operations Guide</h1>
+<p>Observing and intervening in a running Woodpecker cluster</p>
+</div>
+</div>
+</div>
+</section>
+
+<section class="section">
+<div class="container">
+<h2 class="section-title">Before you start</h2>
+
+<p>Every Woodpecker node serves an admin HTTP API on port <code>9091</code> (<code>METRICS_PORT</code>), and the
+<code>wp</code> CLI is bundled into the server images from v0.1.32 onward. Inside a pod it needs no configuration —
+the images set <code>WOODPECKER_ENDPOINT=http://localhost:9091</code>:</p>
+
+<div class="code-block"><pre>kubectl exec -it &lt;woodpecker-pod&gt; -- wp node list</pre></div>
+
+<p>From outside the cluster there is one thing to know. Nodes advertise the address their own cluster knows them
+by — under Kubernetes the headless-service FQDN, which resolves only inside that network:</p>
+
+<div class="code-block"><pre>NAME                    ADDR                                                                                          STATE   AZ          RG
+wp-wpawsusw-dab462fa-1  wp-wpawsusw-dab462fa-1.wp-wpawsusw-dab462fa-headless.woodpecker-pool.svc.cluster.local:18080  active  us-west-2c  default
+wp-wpawsusw-dab462fa-5  wp-wpawsusw-dab462fa-5.wp-wpawsusw-dab462fa-headless.woodpecker-pool.svc.cluster.local:18080  active  us-west-2a  default</pre></div>
+
+<p>So running <code>wp</code> where those names resolve — in a Woodpecker pod, in a Milvus pod, or over a tunnel into
+the cluster network — is the path of least resistance. A single node can also be reached with
+<code>kubectl port-forward</code>.</p>
+
+<div class="note">
+<strong>Every endpoint answers for one node.</strong> No admin endpoint queries its peers; each reports only its own
+state. <code>wp</code> is what fans out. This matters when you read any cluster-wide output: it is an assembled view,
+and a node that did not answer is missing from it rather than reported as empty. Pass <code>--strict</code> to make an
+incomplete view an error instead of a silent gap.
+</div>
+
+<p>Field-by-field semantics for every endpoint live in
+<a href="https://github.com/zilliztech/woodpecker/blob/master/common/http/README.md" target="_blank"><code>common/http/README.md</code></a>.
+This page covers when to reach for something and how to read the result.</p>
+</div>
+</section>
+
+<section class="section" style="background-color: var(--light-color);">
+<div class="container">
+<h2 class="section-title">Part 1 &mdash; Commands by level</h2>
+
+<p>Every example below is captured from a real run. Coverage is uneven, and the gaps are marked rather than
+glossed over: knowing in advance that something cannot be answered is worth more during an incident than
+discovering it there.</p>
+
+<h3>Cluster and node <span class="lvl">good coverage</span></h3>
+
+<h4>Who is in the cluster, and where</h4>
+<div class="code-block"><pre>$ wp cluster info
+
+Cluster Overview
+  Cluster:     default
+  Endpoint:    http://localhost:9091
+  Total Nodes: 6
+
+By State
+  active: 6
+
+default
+└── us-west-2
+    ├── us-west-2a
+    │   └── default
+    │       ├── wp-wpawsusw-dab462fa-5  active
+    │       └── wp-wpawsusw-dab462fa-2  active
+    ├── us-west-2b
+    │   └── default
+    │       └── wp-wpawsusw-dab462fa-4  active</pre></div>
+
+<p>Groups nodes by region, availability zone and resource group. Use it to confirm placement spread — a quorum
+whose replicas share an AZ is a single-failure-domain quorum, whatever the replica count says.</p>
+
+<p><code>wp node list</code> gives the same membership as a flat table with each node&rsquo;s advertised address and
+health. <code>wp cluster health</code> reduces it to red/yellow/green and exits 8 on a yellow finding, 9 on red.</p>
+
+<h4>Can this node be terminated</h4>
+<div class="code-block"><pre>$ wp node drain-status wp-wpawsusw-dab462fa-0
+
+Drain status for wp-wpawsusw-dab462fa-0
+  state:                 active
+  remaining_processors:  68
+  has_local_data:        true
+  safe_to_terminate:     false</pre></div>
+
+<p><code>safe_to_terminate</code> is decided by <code>has_local_data</code> alone — whether any segment data remains
+on local disk. <code>remaining_processors</code> is informational: processors are in-memory objects that vanish on
+shutdown, and the highest segment per log is deliberately never evicted, so the count does not reach zero.</p>
+
+<h3>Writer and logstore <span class="lvl">partial</span></h3>
+
+<h4>What is being written on this node</h4>
+<div class="code-block"><pre>$ wp logstore segments wp-wpawsusw-dab462fa-0
+
+LOG_ID  SEG_ID  BACKEND        WRITABLE  FENCED  FINALIZED  ENTRIES  BLOCKS
+31      0       stagedstorage  true      false   false      2        2
+10      0       stagedstorage  true      false   false      2        2
+8       0       stagedstorage  true      false   false      2        2</pre></div>
+
+<p>One row per segment with a live writer on this node. <code>wp logstore segment-show</code> adds the detail that
+matters when a write is not progressing: buffered bytes and entries, flush-queue depth against its capacity,
+sync-scheduler scheduled/running/waiting counts, and the last entry submitted for flushing.</p>
+
+<p>Those fields separate the stalls that look alike from the outside:</p>
+<ul>
+<li>buffer neither growing nor draining &mdash; nothing is arriving; the writer is not the problem</li>
+<li>buffer growing, flush queue static &mdash; flushing is stuck</li>
+<li>flush queue depth equal to capacity &mdash; backpressure is saturated</li>
+<li>scheduler waiting high with nothing running &mdash; the scheduler is starved</li>
+<li>last submitted flushing entry not advancing &mdash; submission is stuck</li>
+</ul>
+
+<h4>Is anything in flight right now</h4>
+<div class="code-block"><pre>$ wp ops stats wp-wpawsusw-dab462fa-0
+
+Capacity
+  capacity:  1024
+  in_use:    0  (0.0%)
+  warn_age:  30000ms
+
+Eviction Totals
+  total:  0
+  young:  0
+  old:    0</pre></div>
+
+<p>The op registry tracks in-flight server-side operations, appends among them. <code>in_use: 0</code> above means
+this node is serving nothing at that instant. To ask about one log, or about operations that have been running too
+long:</p>
+
+<div class="code-block"><pre>wp ops list &lt;node&gt; --type logstore.add_entry --log 42
+wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</pre></div>
+
+<p>This is the most direct answer available to &ldquo;is anything still writing to this log&rdquo; and
+&ldquo;has an append been outstanding too long&rdquo;.</p>
+
+<div class="gap">
+<strong>Gap:</strong> the last-add-confirmed position is not exposed on the admin surface. Without it you can see
+that a writer is busy, but not how far the confirmed tail has reached — which is what tells a lagging reader apart
+from one that has caught up. Tracked as part of the reader-diagnosis work.
+</div>
+
+<h3>Local data and reclamation <span class="lvl">good coverage</span></h3>
+
+<p>From v0.1.45, <code>GET /admin/instance/data</code> reports which instances still hold data on a node:</p>
+
+<div class="code-block"><pre>$ wp instance data --all --strict
+
+NODE          BUCKET    ROOT_PATH             LOGS  SEGMENTS  LIVE  SIZE_BYTES  PROCS  DELETE_STATE
+woodpecker-0  a-bucket  in01-71ba8da6ff40c33  12    37        30    1234567     4
+woodpecker-0  a-bucket  in01-dead0beef000000  4     9         9     3589343     0</pre></div>
+
+<p>The second row is the shape of an orphan: nothing running against it, and data that has not been touched in
+weeks. <code>PROCS</code> and the data&rsquo;s age are what separate a genuine orphan from an instance created
+moments ago that has not flushed yet — on disk alone they are identical.</p>
+
+<p><code>--strict</code> is a safety flag rather than a formatting one. Without it an unreachable node is a row and
+the command still exits 0:</p>
+
+<div class="code-block"><pre>woodpecker-1  UNREACHABLE
+
+WARNING: 1/2 nodes unreachable — their instances are not listed; do not delete on this view</pre></div>
+
+<p>With it, the same situation exits 6:</p>
+
+<div class="code-block"><pre>wp: StrictPartial: 1/2 nodes unreachable in strict mode</pre></div>
+
+<h3>Metadata <span class="lvl none">minimal</span></h3>
+
+<p><code>wp marking list</code> / <code>confirm</code> handle compacted-mark distribution records, and are the only
+commands that read cluster metadata.</p>
+
+<div class="gap">
+<strong>Gap:</strong> metadata discovery is broken as shipped. <code>wp marking</code> takes its etcd endpoint from a
+node&rsquo;s <code>/admin/config</code>, but the LogStore server never connects to etcd, so that field is an
+unset default and the command dials <code>localhost:2379</code> and times out. Pass <code>--etcd</code> explicitly.
+Beyond this one command there is no way to list logs, inspect segment state, read quorum membership or see a
+reader&rsquo;s position.
+</div>
+
+<h3>Readers <span class="lvl none">none</span></h3>
+
+<div class="gap">
+<strong>Gap:</strong> there is no command to see which readers are attached to a log or where each has reached. The
+information exists — readers publish their position into metadata under a lease — but nothing surfaces it. A reader
+that has stopped advancing and one that has caught up are indistinguishable from the outside today.
+</div>
+
+<h3>Client-side writers and readers <span class="lvl none">out of reach</span></h3>
+
+<div class="gap">
+<strong>Gap, and a permanent one:</strong> the client library runs inside the embedding application, so its
+pending-append counts, write frontier and append latencies are published to <em>that</em> process&rsquo;s metrics
+endpoint. <code>wp</code> talks to Woodpecker nodes and cannot reach them. Client-side state has to be inferred
+from the node side — whether appends are arriving at all — or read from the application&rsquo;s own metrics.
+</div>
+
+</div>
+</section>
+
+<section class="section">
+<div class="container">
+<h2 class="section-title">Part 2 &mdash; By situation</h2>
+
+<table class="config-table">
+<thead><tr><th>Situation</th><th>Today</th></tr></thead>
+<tbody>
+<tr><td>A node will not drain</td><td>Works end to end</td></tr>
+<tr><td>Reclaiming an orphaned instance</td><td>Works end to end</td></tr>
+<tr><td>Local disk filling up</td><td>Works end to end</td></tr>
+<tr><td>Writes are not progressing</td><td>Partly &mdash; the stalled stage is visible, the confirmed tail is not</td></tr>
+<tr><td>A reader is not progressing</td><td>Not yet</td></tr>
+<tr><td>Correcting metadata</td><td>Not yet</td></tr>
+</tbody>
+</table>
+
+<h3>A node will not drain</h3>
+
+<p>Decommission waits for <code>has_local_data</code> to reach false. When it does not, ask what the node is still
+holding:</p>
+
+<div class="code-block"><pre>wp node drain-status &lt;node&gt;
+wp instance data &lt;node&gt;</pre></div>
+
+<p>Read the two together. <code>drain-status</code> says data remains; <code>instance data</code> attributes it to
+specific instances, which is what tells a cleanup still in flight apart from data stranded by an instance whose
+deletion never reached this node.</p>
+
+<p>A row whose <code>SEGMENTS</code> exceeds <code>LIVE</code> is the common false alarm: those segments are already
+durable in object storage and scheduled for removal, and they never block termination. The
+<code>has_local_data</code> flag ignores them for exactly that reason.</p>
+
+<h3>Reclaiming an orphaned instance</h3>
+
+<p>An instance&rsquo;s local data is reclaimed when the control plane calls the delete on every node holding it.
+That broadcast is lossy — a node that was down at the time keeps its copy indefinitely, and nothing on it will ever
+notice.</p>
+
+<div class="code-block"><pre># 1. Query. Stop here if any node failed to answer or reported scan errors.
+wp instance data --all --strict
+
+# 2. Decide: diff against your live-instance registry, then keep only rows with
+#    PROCS == 0 and data old enough to rule out a just-created instance.
+
+# 3. Delete — per node, only the nodes step 1 listed for that instance.
+curl -X POST http://&lt;node&gt;:9091/admin/instance/delete \
+  -H 'Content-Type: application/json' \
+  -d '{"bucketName":"a-bucket","rootPath":"in01-dead0beef000000"}'
+
+# 4. Poll until it is absent everywhere.
+wp instance data --all --strict --bucket a-bucket --root in01-dead0beef000000</pre></div>
+
+<p>Deletion stays per-node and explicit on purpose: step 1 names exactly which nodes to send it to. Reclamation is
+asynchronous, so step 4 is a poll rather than a single check.</p>
+
+<div class="note">
+An incomplete view must not authorise a delete. A node that is merely unreachable holds intact data, and acting on a
+partial snapshot is the accident this workflow exists to prevent — hence <code>--strict</code> throughout.
+</div>
+
+<h3>Local disk filling up</h3>
+
+<p>Before expanding a PVC or scaling out, confirm the space is held by live instances. An instance whose data was
+never reclaimed keeps occupying the disk, and none of the usual remedies frees it:</p>
+
+<div class="code-block"><pre>wp instance data &lt;node&gt;</pre></div>
+
+<p>A row with <code>PROCS</code> at zero and a last-modified time long in the past, for an instance the control plane
+no longer knows about, is stranded rather than idle — reclaim it as above. If the usage is genuine, the sizing and
+watermark guidance is in
+<a href="https://github.com/zilliztech/woodpecker/blob/master/docs/admin-guides/disk-watermark.md" target="_blank">disk-watermark.md</a>.</p>
+
+<h3>Writes are not progressing</h3>
+
+<p>Start by establishing whether anything is arriving at all:</p>
+
+<div class="code-block"><pre>wp ops list &lt;node&gt; --type logstore.add_entry --log 42
+wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</pre></div>
+
+<p>Nothing in flight and nothing long-running means the writers are quiet, not stuck — check whether the Milvus
+instance is stopped or disabled before looking further. Appends outstanding past 30 seconds point at the node side,
+and <code>wp logstore segment-show</code> narrows it to a stage using the buffer, flush-queue and scheduler counts
+listed in Part 1.</p>
+
+<p>A single slow replica is not a reason to intervene. A write completes once the ack quorum is satisfied, so one
+lagging node is absorbed; a write only fails when enough replicas fail that the ack quorum cannot be reached.</p>
+
+<div class="gap">
+<strong>Gap:</strong> the confirmed tail position is not exposed, so &ldquo;stuck&rdquo; cannot be told apart from
+&ldquo;idle&rdquo; from the server side alone. Compare against the write frontier in the client application&rsquo;s
+own metrics in the meantime.
+</div>
+
+<p>When a writer has to be made to start over, fencing is the mechanism: a fenced segment fails the next append,
+and the application is expected to reopen its writer, which re-establishes state through the normal path. Note that
+fencing a single node is not enough to trigger it — a write survives on the remaining replicas until enough of the
+quorum is fenced to break the ack quorum.</p>
+
+<h3>A reader is not progressing</h3>
+
+<div class="gap">
+<strong>Not yet supported.</strong> Readers do publish their position into metadata, but no command surfaces it, and
+the confirmed tail needed to judge lag is not exposed either — so a stalled reader and a caught-up one look the same.
+Corruption makes this worse: a checksum failure is currently reported as &ldquo;data has not arrived yet&rdquo;,
+which the reader retries indefinitely, so a genuine fault is indistinguishable from an idle log. Until that is fixed,
+the server-side WARN logged at the point of the checksum failure is the only signal.
+</div>
+
+<h3>Correcting metadata</h3>
+
+<div class="gap">
+<strong>Not yet supported.</strong> Beyond <code>wp marking</code>, metadata has no operational surface: no way to
+list logs, inspect segment state, read quorum membership, or repair a segment stuck in the wrong state. Metadata is
+owned by the client library, not by the LogStore nodes, so this will not appear on the admin API — it belongs to
+<code>wp</code> talking to etcd directly, with the connection configured explicitly rather than discovered.
+</div>
+
+</div>
+</section>
+
+<footer class="footer">
+<div class="container">
+<p>Woodpecker - High-Performance Distributed Log Storage System</p>
+<p>Licensed under the <a href="https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt">Server Side Public License (SSPL) v1</a></p>
+</div>
+</footer>
+</body>
+</html>
