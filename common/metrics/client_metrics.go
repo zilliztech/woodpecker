@@ -99,9 +99,11 @@ var (
 	}, []string{"log_ns", "log_id", "reader_name"})
 
 	// write_frontier_* above reports the LAC: how far the quorum has confirmed. The pair below
-	// reports how far the client has submitted. Neither alone says whether a writer is stuck --
-	// the distance between them does, because an idle writer has submitted exactly what was
-	// confirmed while a wedged one keeps submitting past a confirmation that stopped moving.
+	// reports how far the client has submitted. They are not comparable by subtraction: entry ids
+	// restart in every segment, the two are published at different moments (one on the auditor's
+	// tick, the other as acknowledgements arrive), and the submitted position never goes back
+	// when a failed append drains the queue. What is outstanding is pending_append_ops; the
+	// submitted position is for seeing whether submission itself has advanced at all.
 	WpClientSubmittedFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
@@ -112,7 +114,7 @@ var (
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "submitted_frontier_entry",
-		Help:      "Highest entry id submitted in the submitted frontier segment per log; minus write_frontier_entry this is the number of appends awaiting confirmation",
+		Help:      "Highest entry id submitted in the submitted frontier segment per log. Do not subtract write_frontier_entry from this: entry ids restart in every segment, the two are sampled at different moments, and the submitted position does not go back when a failed append drains the queue. Use pending_append_ops for what is outstanding",
 	}, []string{"log_ns", "log_id"})
 	WpClientPendingAppendOps = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
@@ -450,7 +452,8 @@ func SetWriteFrontier(logNs, logId string, segmentId, entryId int64) {
 // SetSubmittedFrontier records how far the client has submitted. Published on the auditor's
 // tick rather than from the append path: the append path is per-entry hot, and more importantly
 // the confirmation path stops running exactly when a writer wedges, so a value published from
-// there would freeze at the moment it started to matter.
+// there would freeze at the moment it started to matter. Read it for whether submission is
+// advancing at all, not as one side of a subtraction -- see the note on the collectors.
 func SetSubmittedFrontier(logNs, logId string, segmentId, entryId int64) {
 	WpClientSubmittedFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
 	WpClientSubmittedFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
@@ -460,6 +463,16 @@ func SetSubmittedFrontier(logNs, logId string, segmentId, entryId int64) {
 func SetPendingAppends(logNs, logId string, pending int, oldest time.Duration) {
 	WpClientPendingAppendOps.WithLabelValues(logNs, logId).Set(float64(pending))
 	WpClientOldestPendingAppendSeconds.WithLabelValues(logNs, logId).Set(oldest.Seconds())
+}
+
+// ClearPendingAppends drops a log's queue series. Without it a gauge sampled mid-stall keeps
+// that value after the segment rolls, completes or the writer closes, and an age threshold goes
+// on firing against a queue that no longer exists.
+func ClearPendingAppends(logNs, logId string) {
+	WpClientPendingAppendOps.DeleteLabelValues(logNs, logId)
+	WpClientOldestPendingAppendSeconds.DeleteLabelValues(logNs, logId)
+	WpClientSubmittedFrontierSegment.DeleteLabelValues(logNs, logId)
+	WpClientSubmittedFrontierEntry.DeleteLabelValues(logNs, logId)
 }
 
 // AddAuditorSegments records one auditor cycle's outcomes. Failures were already logged per

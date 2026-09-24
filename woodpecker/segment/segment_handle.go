@@ -235,8 +235,14 @@ type segmentHandleImpl struct {
 	lastPushed       atomic.Int64
 	lastAddConfirmed atomic.Int64
 	appendOpsQueue   *list.List
-	commitedSize     atomic.Int64
-	submittedSize    atomic.Int64
+	// Derived from appendOpsQueue, republished on every mutation of it. Readers outside the
+	// write path must not take this handle's lock: AppendAsync holds it across executor.Submit,
+	// which blocks on a bounded queue whose worker stops draining when a node hangs -- exactly
+	// the stall these numbers exist to describe.
+	pendingCount    atomic.Int64
+	oldestPendingMs atomic.Int64
+	commitedSize    atomic.Int64
+	submittedSize   atomic.Int64
 
 	fencedState    atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
 	canWriteState  atomic.Bool
@@ -323,6 +329,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	// Only add to queue and update metrics after successful submit
 	s.lastPushed.Add(1)
 	s.appendOpsQueue.PushBack(appendOp)
+	s.refreshPendingSnapshot()
 	s.submittedSize.Add(int64(len(bytes)))
 	logIdStr := strconv.FormatInt(s.logId, 10)
 	metrics.WpClientAppendRequestsTotal.WithLabelValues(s.logNs, logIdStr).Inc()
@@ -395,6 +402,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 	}
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
+		s.refreshPendingSnapshot()
 		op := element.Value.(*AppendOp)
 		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
@@ -467,6 +475,7 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 				zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId),
 				zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
 			s.appendOpsQueue.Remove(element)
+			s.refreshPendingSnapshot()
 			op.FastFail(ctx, werr.ErrAppendOpRetrySubmitFailed)
 			metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 			continue
@@ -488,6 +497,7 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 	// send error callback to all elementsToRemove
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
+		s.refreshPendingSnapshot()
 		op := element.Value.(*AppendOp)
 		op.FastFail(ctx, err)
 		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
@@ -1099,6 +1109,7 @@ func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEnt
 	// Clear the queue
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
+		s.refreshPendingSnapshot()
 		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 	logger.Ctx(ctx).Debug("fastFailAppendOps finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("fastFailOps", len(elementsToRemove)), zap.Int("successCount", successCount), zap.Int("failCount", failCount), zap.Error(err))

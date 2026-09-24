@@ -303,6 +303,11 @@ func (l *internalLogWriterImpl) runAuditor() {
 				zap.Int64("logId", l.logHandle.GetId()))
 
 			// check and set segment truncate state if necessary
+			// First thing in the tick, before anything that can fail into a continue or block
+			// on a hung dependency. These numbers describe a stall, so they must not be the
+			// first casualty of one.
+			publishPendingAppends(ctx, l.logNs, l.logIdStr, l.logHandle.GetCurrentWritableSegmentHandle(ctx))
+
 			if err := l.logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx); err != nil {
 				logger.Ctx(ctx).Warn("check and set segment truncated failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 				sp.End()
@@ -365,7 +370,6 @@ func (l *internalLogWriterImpl) runAuditor() {
 			// The lines above live in the host application's process, where nothing can alert on
 			// them and a deferred cycle reads the same as an idle one.
 			metrics.AddAuditorSegments(l.logNs, l.logIdStr, cs.compacted, cs.failed, cs.deferred)
-			publishPendingAppends(ctx, l.logNs, l.logIdStr, l.logHandle.GetCurrentWritableSegmentHandle(ctx))
 
 			// Clean up truncated segments (object-storage data + local files + tombstones).
 			if len(truncatedSegmentExists) > 0 {

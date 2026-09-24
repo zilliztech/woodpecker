@@ -1935,6 +1935,8 @@ func TestInternalLogWriter_CloseWaitsForAuditorToExit(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(nil)
 	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
 		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}},
