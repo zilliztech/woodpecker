@@ -100,6 +100,8 @@ deleted on the strength of it. Use --strict to turn that into a non-zero exit.`,
 			if err := checkFanout(fanRes, len(urls)); err != nil {
 				return err
 			}
+			// Deferred so it lands after the view it qualifies, on every return path.
+			defer warnIfPartial(cmd.ErrOrStderr(), fanRes, len(urls))
 
 			if Globals.Output == "json" || Globals.Output == "yaml" {
 				return output.RenderJSON(cmd.OutOrStdout(), buildInstanceDataJSON(targets, fanRes))

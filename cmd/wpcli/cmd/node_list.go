@@ -50,6 +50,8 @@ func newNodeListCommand() *cobra.Command {
 			if err := checkFanout(res, len(urls)); err != nil {
 				return err
 			}
+			// Deferred so it lands after the view it qualifies, on every return path.
+			defer warnIfPartial(cmd.ErrOrStderr(), res, len(urls))
 
 			// Build rows by pairing memberlist entries with fanout results (index-aligned).
 			rows := make([]nodeListRow, 0, len(r.Members.Members))

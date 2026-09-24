@@ -18,6 +18,9 @@ type resolved struct {
 	// ConfigPath is the cli.yaml that supplied Context, empty when none was found.
 	// Reported so a run can never silently act on a cluster the operator did not pick.
 	ConfigPath string
+	// ContextName is the context ResolveContext settled on, which is cli.yaml's
+	// current-context whenever --context is absent. Empty when no cli.yaml was found.
+	ContextName string
 }
 
 // resolveAndDiscover loads cli.yaml, applies flag/env overrides, builds the
@@ -26,7 +29,7 @@ type resolved struct {
 func resolveAndDiscover() (*resolved, error) {
 	// 1. Load cli.yaml (if present).
 	var ctx config.Context
-	var configPath string
+	var configPath, contextName string
 	for _, p := range config.DefaultConfigPaths() {
 		f, err := config.Load(p)
 		if err == nil {
@@ -36,6 +39,11 @@ func resolveAndDiscover() (*resolved, error) {
 			}
 			ctx = c
 			configPath = p
+			// Mirror ResolveContext's own fallback: an absent --context means current-context.
+			contextName = Globals.Context
+			if contextName == "" {
+				contextName = f.CurrentContext
+			}
 			break
 		}
 	}
@@ -71,7 +79,7 @@ func resolveAndDiscover() (*resolved, error) {
 		return nil, wperrors.NewNetworkError(fmt.Sprintf("fetch memberlist from %s: %v", ctx.Endpoint, err))
 	}
 
-	r := &resolved{Context: ctx, Client: c, Members: ml, ConfigPath: configPath}
+	r := &resolved{Context: ctx, Client: c, Members: ml, ConfigPath: configPath, ContextName: contextName}
 	r.announceSource()
 	return r, nil
 }
@@ -104,9 +112,9 @@ func (r *resolved) SourceLine() string {
 	if src == "" {
 		src = "(no cli.yaml; flags and environment only)"
 	}
-	ctxName := Globals.Context
+	ctxName := r.ContextName
 	if ctxName == "" {
-		ctxName = "default"
+		ctxName = "(none)"
 	}
 	return fmt.Sprintf("wp: config %s · context %s · endpoint %s", src, ctxName, r.Context.Endpoint)
 }

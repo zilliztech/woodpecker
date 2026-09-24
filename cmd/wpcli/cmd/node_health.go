@@ -3,8 +3,10 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -47,13 +49,23 @@ func newNodeLogHealthCommand() *cobra.Command {
 				path += "?" + params.Encode()
 			}
 
-			body, err := fetchAdminJSON(res.Client.PeerAdminURL(member), path)
+			// A 503 here carries the report, not an excuse for one: the server answers it only
+			// when every tracked log is Stalled or Failed, and encodes the full body with it.
+			body, status, err := fetchAdminJSONWithStatus(res.Client.PeerAdminURL(member), path)
 			if err != nil {
 				return err
 			}
+			unhealthy := func() error {
+				if status == http.StatusOK {
+					return nil
+				}
+				return wperrors.NewRedFindingError(
+					fmt.Sprintf("%s reports log health %s (HTTP %d)", member.ID, reportState(body), status),
+				)
+			}
 			if Globals.Output == "json" || Globals.Output == "yaml" {
 				_, _ = cmd.OutOrStdout().Write(body)
-				return nil
+				return unhealthy()
 			}
 
 			var report struct {
@@ -75,6 +87,10 @@ func newNodeLogHealthCommand() *cobra.Command {
 				} `json:"logs"`
 			}
 			if jsonErr := json.Unmarshal(body, &report); jsonErr != nil {
+				if status != http.StatusOK {
+					return wperrors.NewNetworkError(
+						fmt.Sprintf("%s returned status %d: %s", path, status, strings.TrimSpace(string(body))))
+				}
 				return wperrors.NewNetworkError(fmt.Sprintf("invalid response: %v", jsonErr))
 			}
 
@@ -87,7 +103,7 @@ func newNodeLogHealthCommand() *cobra.Command {
 				report.TrackedLogs, report.HealthyLogs, report.StalledLogs, report.FailedLogs, report.IdleLogs)
 
 			if len(report.Logs) == 0 {
-				return nil
+				return unhealthy()
 			}
 			headers := []string{"LOG_ID", "BUCKET", "ROOT_PATH", "WRITE", "READ", "LAST_FAILURE"}
 			rows := make([][]string, 0, len(report.Logs))
@@ -96,7 +112,10 @@ func newNodeLogHealthCommand() *cobra.Command {
 					fmt.Sprintf("%d", l.LogID), l.Bucket, l.RootPath, l.Write, l.Read, l.LastError,
 				})
 			}
-			return output.RenderRowTable(w, headers, rows)
+			if tableErr := output.RenderRowTable(w, headers, rows); tableErr != nil {
+				return tableErr
+			}
+			return unhealthy()
 		},
 	}
 	cmd.Flags().StringVar(&bucket, "bucket", "", "Filter to one instance's bucket (requires --root)")
@@ -135,6 +154,11 @@ func newNodeHealthzCommand() *cobra.Command {
 			}
 			defer resp.Body.Close()
 
+			raw, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				return wperrors.NewNetworkError(readErr.Error())
+			}
+
 			var probe struct {
 				State  string `json:"state"`
 				Detail []struct {
@@ -142,12 +166,17 @@ func newNodeHealthzCommand() *cobra.Command {
 					Code string `json:"code"`
 				} `json:"detail"`
 			}
-			_ = json.NewDecoder(resp.Body).Decode(&probe)
+			_ = json.Unmarshal(raw, &probe)
 
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "Health probe on %s: %s\n", member.ID, probe.State)
-			for _, d := range probe.Detail {
-				fmt.Fprintf(w, "  %-14s %s\n", d.Name, d.Code)
+			if Globals.Output == "json" || Globals.Output == "yaml" {
+				// /healthz already answers JSON, so the body passes through for piping.
+				_, _ = w.Write(raw)
+			} else {
+				fmt.Fprintf(w, "Health probe on %s: %s\n", member.ID, probe.State)
+				for _, d := range probe.Detail {
+					fmt.Fprintf(w, "  %-14s %s\n", d.Name, d.Code)
+				}
 			}
 
 			if resp.StatusCode != http.StatusOK {
@@ -158,4 +187,16 @@ func newNodeHealthzCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// reportState pulls the overall state out of a log-health body for the error message, so a
+// failing status is reported in the server's own words.
+func reportState(body []byte) string {
+	var r struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil || r.State == "" {
+		return "unknown"
+	}
+	return r.State
 }
