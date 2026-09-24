@@ -1609,6 +1609,8 @@ func TestInternalLogWriter_RunAuditor_FullCycle_NoSegments(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, nil)
 	w.auditorMaxInterval = 1 // 1 second
@@ -1638,6 +1640,8 @@ func TestInternalLogWriter_RunAuditor_CheckTruncatedError(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, nil)
 	w.auditorMaxInterval = 1
@@ -1661,6 +1665,8 @@ func TestInternalLogWriter_RunAuditor_GetSegmentsError(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, nil)
 	w.auditorMaxInterval = 1
@@ -1682,6 +1688,8 @@ func TestInternalLogWriter_RunAuditor_CompactCompletedSegments(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 	w := createTestInternalWriter(t, mockLogHandle, nil)
@@ -1712,6 +1720,8 @@ func TestInternalLogWriter_RunAuditor_CompactError(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 	w := createTestInternalWriter(t, mockLogHandle, nil)
@@ -1739,6 +1749,8 @@ func TestInternalLogWriter_RunAuditor_GetRecoverableError(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, nil)
 	w.auditorMaxInterval = 1
@@ -1764,6 +1776,8 @@ func TestInternalLogWriter_RunAuditor_TruncatedSegmentsCleanup(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
@@ -1798,6 +1812,8 @@ func TestLogWriter_RunAuditor_FullCycle(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, nil, sessionLock)
@@ -1821,6 +1837,8 @@ func TestLogWriter_RunAuditor_WithCompletedAndTruncated(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
@@ -1862,6 +1880,8 @@ func TestInternalLogWriter_RunAuditor_InvalidationCancelsInFlightCompact(t *test
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(nil)
 	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
 		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}},
@@ -1915,6 +1935,8 @@ func TestInternalLogWriter_CloseWaitsForAuditorToExit(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(nil)
 	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
 		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}},
@@ -2022,6 +2044,8 @@ func TestLogWriter_RunAuditor_SessionExpirationCancelsInFlightCompact(t *testing
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 	mockLogHandle.On("CheckAndSetSegmentTruncatedIfNeed", mock.Anything).Return(nil)
 	mockLogHandle.On("GetSegments", mock.Anything).Return(map[int64]*meta.SegmentMeta{
 		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}},
@@ -2346,6 +2370,8 @@ func TestInternalLogWriter_RunAuditor_StopsOnWriterClose(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, nil)
 	w.auditorMaxInterval = 60 // Long interval so ticker won't fire
@@ -2372,6 +2398,8 @@ func TestLogWriter_RunAuditor_StopsOnWriterClose(t *testing.T) {
 	mockLogHandle.Test(t)
 	mockLogHandle.On("GetName").Return("test-log").Maybe()
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	// The auditor publishes the writable segment's queue each tick.
+	mockLogHandle.On("GetCurrentWritableSegmentHandle", mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, nil, sessionLock)

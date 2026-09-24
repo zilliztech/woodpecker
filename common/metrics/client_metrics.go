@@ -18,6 +18,7 @@ package metrics
 
 import (
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -96,6 +97,43 @@ var (
 		Name:      "read_frontier_entry",
 		Help:      "Read position of each reader within read_frontier_segment: the entry it last delivered, or the one it opened at",
 	}, []string{"log_ns", "log_id", "reader_name"})
+
+	// write_frontier_* above reports the LAC: how far the quorum has confirmed. The pair below
+	// reports how far the client has submitted. They are not comparable by subtraction: entry ids
+	// restart in every segment, the two are published at different moments (one on the auditor's
+	// tick, the other as acknowledgements arrive), and the submitted position never goes back
+	// when a failed append drains the queue. What is outstanding is pending_append_ops; the
+	// submitted position is for seeing whether submission itself has advanced at all.
+	WpClientSubmittedFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "submitted_frontier_segment",
+		Help:      "Highest segment id the client has submitted appends into per log (compare with write_frontier_segment, which is confirmed)",
+	}, []string{"log_ns", "log_id"})
+	WpClientSubmittedFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "submitted_frontier_entry",
+		Help:      "Highest entry id submitted in the submitted frontier segment per log. Do not subtract write_frontier_entry from this: entry ids restart in every segment, the two are sampled at different moments, and the submitted position does not go back when a failed append drains the queue. Use pending_append_ops for what is outstanding",
+	}, []string{"log_ns", "log_id"})
+	WpClientPendingAppendOps = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "pending_append_ops",
+		Help:      "Appends submitted and not yet confirmed, per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientOldestPendingAppendSeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "oldest_pending_append_seconds",
+		Help:      "How long the oldest unconfirmed append has been waiting, per log; 0 when nothing is pending. Depth alone cannot tell a draining queue from a stalled one",
+	}, []string{"log_ns", "log_id"})
+	WpClientAuditorSegmentsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "auditor_segments_total",
+		Help:      "Segments the client auditor acted on per log, by outcome: compacted, failed, or deferred to a later cycle by the per-cycle cap or time budget",
+	}, []string{"log_ns", "log_id", "result"})
 
 	// client append data to log
 	WpClientAppendRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -341,6 +379,11 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpClientTruncationFrontierEntry)
 		registerer.MustRegister(WpClientReadFrontierSegment)
 		registerer.MustRegister(WpClientReadFrontierEntry)
+		registerer.MustRegister(WpClientSubmittedFrontierSegment)
+		registerer.MustRegister(WpClientSubmittedFrontierEntry)
+		registerer.MustRegister(WpClientPendingAppendOps)
+		registerer.MustRegister(WpClientOldestPendingAppendSeconds)
+		registerer.MustRegister(WpClientAuditorSegmentsTotal)
 
 		// Client append metrics
 		registerer.MustRegister(WpClientAppendRequestsTotal)
@@ -404,6 +447,47 @@ func UpdateSegmentState(logNs, logId, oldState, newState string) {
 func SetWriteFrontier(logNs, logId string, segmentId, entryId int64) {
 	WpClientWriteFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
 	WpClientWriteFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
+}
+
+// SetSubmittedFrontier records how far the client has submitted. Published on the auditor's
+// tick rather than from the append path: the append path is per-entry hot, and more importantly
+// the confirmation path stops running exactly when a writer wedges, so a value published from
+// there would freeze at the moment it started to matter. Read it for whether submission is
+// advancing at all, not as one side of a subtraction -- see the note on the collectors.
+func SetSubmittedFrontier(logNs, logId string, segmentId, entryId int64) {
+	WpClientSubmittedFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientSubmittedFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
+}
+
+// SetPendingAppends records the queue depth and the wait of its oldest entry.
+func SetPendingAppends(logNs, logId string, pending int, oldest time.Duration) {
+	WpClientPendingAppendOps.WithLabelValues(logNs, logId).Set(float64(pending))
+	WpClientOldestPendingAppendSeconds.WithLabelValues(logNs, logId).Set(oldest.Seconds())
+}
+
+// ClearPendingAppends drops a log's queue series. Without it a gauge sampled mid-stall keeps
+// that value after the segment rolls, completes or the writer closes, and an age threshold goes
+// on firing against a queue that no longer exists.
+func ClearPendingAppends(logNs, logId string) {
+	WpClientPendingAppendOps.DeleteLabelValues(logNs, logId)
+	WpClientOldestPendingAppendSeconds.DeleteLabelValues(logNs, logId)
+	WpClientSubmittedFrontierSegment.DeleteLabelValues(logNs, logId)
+	WpClientSubmittedFrontierEntry.DeleteLabelValues(logNs, logId)
+}
+
+// AddAuditorSegments records one auditor cycle's outcomes. Failures were already logged per
+// segment, but a log line in the host application's process cannot be alerted on, and deferred
+// work is indistinguishable from an idle auditor without it.
+func AddAuditorSegments(logNs, logId string, compacted, failed, deferred int) {
+	if compacted > 0 {
+		WpClientAuditorSegmentsTotal.WithLabelValues(logNs, logId, "compacted").Add(float64(compacted))
+	}
+	if failed > 0 {
+		WpClientAuditorSegmentsTotal.WithLabelValues(logNs, logId, "failed").Add(float64(failed))
+	}
+	if deferred > 0 {
+		WpClientAuditorSegmentsTotal.WithLabelValues(logNs, logId, "deferred").Add(float64(deferred))
+	}
 }
 
 func SetCompactionFrontier(logNs, logId string, segmentId, entryId int64) {
