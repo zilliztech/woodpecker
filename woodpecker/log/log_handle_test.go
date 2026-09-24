@@ -1666,7 +1666,6 @@ func TestLogHandle_GetRecoverableSegmentHandle(t *testing.T) {
 	})
 }
 
-// TestLogHandle_GetCurrentWritableSegmentHandle tests the test-only method
 func TestLogHandle_GetCurrentWritableSegmentHandle(t *testing.T) {
 	t.Run("NoWritableSegment", func(t *testing.T) {
 		logHandle, _ := createMockLogHandle(t)
@@ -1684,10 +1683,40 @@ func TestLogHandle_GetCurrentWritableSegmentHandle(t *testing.T) {
 		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 		logHandle.SegmentHandles[5] = mockSegHandle
 		logHandle.WritableSegmentId = 5
+		logHandle.setCurrentWritableUnsafe(mockSegHandle)
 
 		segHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
 		assert.NotNil(t, segHandle)
 		assert.Equal(t, mockSegHandle, segHandle)
+	})
+
+	// The auditor calls this on every tick to publish the append queue, so it must not queue
+	// behind l.Lock. GetOrCreateWritableSegmentHandle holds that lock for its whole run --
+	// including a roll that waits on the segment's own lock, which an append blocked in
+	// executor.Submit can hold for as long as a logstore node stays hung. Go's RWMutex also
+	// blocks new readers while a writer is waiting, so taking l.RLock here would freeze the
+	// queue metrics exactly during the stall they describe, and stop the rest of the tick with
+	// them.
+	t.Run("ReadableWhileTheLogHandleWriteLockIsHeld", func(t *testing.T) {
+		logHandle, _ := createMockLogHandle(t)
+		ctx := context.Background()
+		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+		logHandle.SegmentHandles[5] = mockSegHandle
+		logHandle.WritableSegmentId = 5
+		logHandle.setCurrentWritableUnsafe(mockSegHandle)
+
+		logHandle.Lock() // stand in for a roll waiting on a wedged segment
+		defer logHandle.Unlock()
+
+		done := make(chan segment.SegmentHandle, 1)
+		go func() { done <- logHandle.GetCurrentWritableSegmentHandle(ctx) }()
+
+		select {
+		case got := <-done:
+			assert.Equal(t, mockSegHandle, got)
+		case <-time.After(2 * time.Second):
+			t.Fatal("GetCurrentWritableSegmentHandle blocked behind the log handle lock; the auditor would stall with it")
+		}
 	})
 }
 

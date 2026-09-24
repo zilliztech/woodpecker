@@ -92,8 +92,14 @@ type logHandleImpl struct {
 	SegmentHandles map[int64]segment.SegmentHandle
 	// active writable segment handle index
 	WritableSegmentId int64
-	Metadata          meta.MetadataProvider
-	ClientPool        client.LogStoreClientPool
+	// currentWritable mirrors SegmentHandles[WritableSegmentId] for readers that must not take
+	// this handle's lock. GetOrCreateWritableSegmentHandle holds l.Lock for its whole run --
+	// segment creation including the etcd write, and a roll that waits on the segment's own
+	// lock -- and Go's RWMutex blocks new readers while a writer waits, so a reader taking
+	// l.RLock can be held behind a stalled append indefinitely. Written only under l.Lock.
+	currentWritable atomic.Pointer[writableSegmentRef]
+	Metadata        meta.MetadataProvider
+	ClientPool      client.LogStoreClientPool
 
 	// rolling policy
 	lastRolloverTimeMs int64
@@ -647,6 +653,7 @@ func (l *logHandleImpl) createAndCacheWritableSegmentHandleWithID(ctx context.Co
 	newSegHandle.SetWriterInvalidationNotifier(ctx, writerInvalidationNotifier)
 	l.SegmentHandles[newSegMeta.Metadata.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.Metadata.SegNo
+	l.setCurrentWritableUnsafe(newSegHandle)
 	l.lastRolloverTimeMs = newSegMeta.Metadata.CreateTime
 	logger.Ctx(ctx).Info("new writable segment created", zap.String("logName", l.Name), zap.Int64("segmentId", newSegMeta.Metadata.SegNo))
 	return newSegHandle, nil
@@ -1123,6 +1130,7 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 	// Clear the segment handles map to prevent memory leaks
 	l.SegmentHandles = make(map[int64]segment.SegmentHandle)
 	l.WritableSegmentId = -1
+	l.setCurrentWritableUnsafe(nil)
 
 	return lastError
 }
@@ -1251,6 +1259,9 @@ func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, max
 
 			// Remove from map
 			delete(l.SegmentHandles, segmentId)
+			if segmentId == l.WritableSegmentId {
+				l.setCurrentWritableUnsafe(nil)
+			}
 
 			logger.Ctx(ctx).Debug("cleaned up idle segment handle",
 				zap.String("logName", l.Name),
@@ -1273,9 +1284,31 @@ func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, max
 	}
 }
 
-// Test only
+// writableSegmentRef boxes the interface so it can live in an atomic.Pointer, and so an unset
+// value is a nil pointer rather than a typed nil interface.
+type writableSegmentRef struct {
+	handle segment.SegmentHandle
+}
+
+// setCurrentWritableUnsafe republishes the lock-free mirror. Callers hold l.Lock.
+func (l *logHandleImpl) setCurrentWritableUnsafe(handle segment.SegmentHandle) {
+	if handle == nil {
+		l.currentWritable.Store(nil)
+		return
+	}
+	l.currentWritable.Store(&writableSegmentRef{handle: handle})
+}
+
+// GetCurrentWritableSegmentHandle returns the writable segment, or nil when there is none.
+//
+// It reads a mirror rather than the map, so it takes no lock. The auditor calls it on every
+// tick to publish the append queue, and that must not queue behind l.Lock: a roll holds that
+// lock while waiting on the segment's own lock, which an append blocked in executor.Submit can
+// hold for as long as a logstore node stays hung -- precisely the stall the queue metrics exist
+// to report.
 func (l *logHandleImpl) GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle {
-	l.RLock()
-	defer l.RUnlock()
-	return l.SegmentHandles[l.WritableSegmentId]
+	if ref := l.currentWritable.Load(); ref != nil {
+		return ref.handle
+	}
+	return nil
 }

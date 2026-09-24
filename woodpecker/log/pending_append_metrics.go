@@ -26,11 +26,12 @@ import (
 // publishPendingAppends reports a writable segment's submit queue on the auditor's tick.
 //
 // It runs first in the tick, ahead of every step that can fail into a continue or block on a
-// hung dependency, and it reads the handle without taking its lock. Both matter for the same
-// reason: these numbers describe a stall, and a stall is exactly when the metadata calls above
-// start failing and when AppendAsync is sitting on the write lock waiting for a queue that has
-// stopped draining. Sampled anywhere later, or behind that lock, they would freeze at the moment
-// they began to matter.
+// hung dependency, and neither reaching the handle nor reading it takes a lock. All of that
+// matters for one reason: these numbers describe a stall, and a stall is exactly when the
+// metadata calls later in the tick start failing, when AppendAsync is sitting on the segment's
+// write lock waiting for a queue that has stopped draining, and when a roll is holding the log
+// handle's lock waiting on that same segment. Sampled later, or behind either lock, they would
+// freeze at the moment they began to matter -- and would stop the rest of the tick with them.
 //
 // With no writable segment the series are dropped rather than left as they were: a log between
 // segments has no queue, and a gauge holding the last value sampled mid-stall goes on firing an
