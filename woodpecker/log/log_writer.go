@@ -438,6 +438,10 @@ func (l *logWriterImpl) runAuditor() {
 				zap.Int("segmentsFailed", cs.failed),
 				zap.Int("segmentsDeferred", cs.deferred),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))
+			// The lines above live in the host application's process, where nothing can alert on
+			// them and a deferred cycle reads the same as an idle one.
+			metrics.AddAuditorSegments(l.logNs, l.logIdStr, cs.compacted, cs.failed, cs.deferred)
+			publishPendingAppends(ctx, l.logNs, l.logIdStr, l.logHandle.GetCurrentWritableSegmentHandle(ctx))
 
 			// Clean up truncated segments (object-storage data + local files + tombstones).
 			if len(truncatedSegmentExists) > 0 {

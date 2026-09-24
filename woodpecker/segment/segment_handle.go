@@ -61,6 +61,11 @@ type SegmentHandle interface {
 	ReadBatchAdv(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	// GetLastAddConfirmed entryId for the segment
 	GetLastAddConfirmed(ctx context.Context) (int64, error)
+	// PendingAppendStats reports the submit queue without disturbing it: how many appends are
+	// awaiting confirmation, how long the oldest has waited, and the submitted and confirmed
+	// positions. Published by the auditor so the numbers survive a writer that has stopped
+	// receiving acknowledgements.
+	PendingAppendStats() (pending int, oldestPendingAge time.Duration, lastPushed, lastAddConfirmed int64)
 	// GetLastAddPushed entryId for the segment
 	GetLastAddPushed(ctx context.Context) (int64, error)
 	// GetMetadata of the segment

@@ -86,12 +86,18 @@ type AppendOp struct {
 
 	completed  atomic.Bool
 	fastCalled atomic.Bool // Prevent repeated calls to FastFail/FastSuccess
+
+	// queuedAt is when this op entered the pending queue. Read from outside to report how long
+	// the oldest unacknowledged append has been waiting, which is what separates a deep queue
+	// that is draining from one that has stopped.
+	queuedAt time.Time
 }
 
 func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
 	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo, nodeScopes []string,
 ) *AppendOp {
 	op := &AppendOp{
+		queuedAt:   time.Now(),
 		bucketName: bucketName,
 		rootPath:   rootPath,
 		logId:      logId,
