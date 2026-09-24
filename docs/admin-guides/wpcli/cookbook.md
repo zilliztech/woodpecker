@@ -175,9 +175,14 @@ wp marking confirm 42 7
 ```
 
 Notes:
-- These commands read etcd directly; endpoints, the meta prefix, AND the cluster's etcd
-  TLS/auth settings are discovered from any node's `/admin/config` automatically. Override
-  with `--etcd` / `--meta-prefix` if the admin plane is unreachable, and
+- These commands read etcd directly. Discovery from a node's `/admin/config` is attempted, but
+  **expect to pass `--etcd` and `--meta-prefix` yourself**: the server does not connect to etcd,
+  so that whole section is unvalidated. By default the endpoint is loopback, which the command
+  refuses rather than dialing your own machine; if etcd really does run on that host, pass
+  `--etcd` explicitly to proceed. The meta prefix fails more quietly — a wrong one connects to
+  the right etcd and lists an empty keyspace, so `list` prints the prefix it scanned for you to
+  check against the client's `etcd.rootPath` (default `by-dev`) plus `woodpecker.meta.prefix`.
+  TLS/auth settings come from the same section, overridable with
   `--etcd-cert/-key/-cacert` / `--etcd-username/-password` for a secured etcd (the
   discovered cert paths are server-side paths — valid when running in-pod).
 - `confirm` marks the record `OPERATOR_CONFIRMED` — durable across writer restarts and

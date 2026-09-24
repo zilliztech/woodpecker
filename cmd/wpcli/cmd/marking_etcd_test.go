@@ -151,6 +151,13 @@ func TestMarkingCommands_EmbeddedEtcd(t *testing.T) {
 		cmd2, out2, _ := markingTestCmd()
 		require.NoError(t, runMarkingList(cmd2, cli, kb, 999, true, true))
 		assert.Contains(t, out2.String(), "no marking records")
+
+		// Both messages name the keyspace they scanned. The prefix is derived from a node's
+		// /admin/config unless --meta-prefix is given, so "nothing here" and "I looked in the
+		// wrong place" read identically without it.
+		want := kb.BuildLogCompactedNotifyStatusPrefix(999)
+		assert.Contains(t, out.String(), want, "empty result must name the keyspace it scanned")
+		assert.Contains(t, out2.String(), want, "empty result must name the keyspace it scanned")
 	})
 
 	t.Run("list skips unparseable record with warning", func(t *testing.T) {
