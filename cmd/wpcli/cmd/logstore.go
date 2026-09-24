@@ -10,6 +10,7 @@ func newLogstoreCommand() *cobra.Command {
 	cmd.AddCommand(
 		newLogstoreSegmentsCommand(),
 		newLogstoreSegmentShowCommand(),
+		newLogstoreLACCommand(),
 		newLogstoreBufferCommand(),
 		newLogstoreFlushQueueCommand(),
 		newLogstoreForceFlushCommand(),
