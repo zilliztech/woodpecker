@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -135,4 +136,50 @@ func TestInstanceData_StrictFailsOnUnreachableNode(t *testing.T) {
 	_, err := runInstanceCmd(t, srv, "--strict", "instance", "data", "--all")
 
 	require.Error(t, err)
+}
+
+// TestInstanceData_PartialViewWarnsExactlyOnce keeps the generic fan-out warning from doubling
+// up with this command's own. Both fire on the same condition, and the bespoke one is the more
+// useful of the two: it names the consequence that matters here — that an absent instance on a
+// partial view is not grounds to delete anything.
+func TestInstanceData_PartialViewWarnsExactlyOnce(t *testing.T) {
+	live := httptest.NewServer(instanceDataMux(`{"instances":[]}`))
+	defer live.Close()
+	ml := `{"members":[
+		{"id":"node-1","gossip_addr":"127.0.0.1:17946","service_addr":"127.0.0.1:18080","tags":{"admin_port":"` + extractPort(t, live.URL) + `"}},
+		{"id":"node-2","gossip_addr":"127.0.0.1:17947","service_addr":"127.0.0.1:18081","tags":{"admin_port":"1"}}
+	]}`
+	mlSrv := httptest.NewServer(instanceDataMemberlistMux(ml))
+	defer mlSrv.Close()
+	withCliYAML(t, mlSrv.URL)
+
+	root := NewRootCommand()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	root.SetOut(out)
+	root.SetErr(errOut)
+	root.SetArgs([]string{"instance", "data", "--all", "--timeout", "3s"})
+
+	require.NoError(t, root.Execute())
+
+	combined := out.String() + errOut.String()
+	require.Equal(t, 1, strings.Count(combined, "nodes unreachable"),
+		"one unreachable condition must produce one warning, not two")
+	require.Contains(t, combined, "do not delete on this view",
+		"the surviving warning is the one that names the consequence")
+}
+
+func instanceDataMux(body string) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/instance/data", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	})
+	return mux
+}
+
+func instanceDataMemberlistMux(ml string) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/memberlist", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(ml))
+	})
+	return mux
 }
