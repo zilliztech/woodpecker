@@ -194,3 +194,25 @@ func TestMarkingDiscovery_LoopbackIPIsRefused(t *testing.T) {
 	require.Error(t, err, "127.0.0.1 is the same unusable address as localhost")
 	require.Contains(t, err.Error(), "--etcd", "the message must name the flag that resolves it")
 }
+
+// TestIsLoopbackEndpoint covers the address forms etcd clientv3 accepts. The scheme-prefixed
+// form matters because net.SplitHostPort rejects it ("too many colons"), leaving the whole
+// string as the host, which matches neither the name nor an IP.
+func TestIsLoopbackEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		endpoint string
+		want     bool
+	}{
+		{"localhost:2379", true},
+		{"127.0.0.1:2379", true},
+		{"127.0.0.1", true},
+		{"[::1]:2379", true},
+		{"http://localhost:2379", true},
+		{"https://127.0.0.1:2379", true},
+		{"etcd-a:2379", false},
+		{"10.0.0.5:2379", false},
+		{"http://etcd-a:2379", false},
+	} {
+		assert.Equal(t, tc.want, isLoopbackEndpoint(tc.endpoint), "endpoint %q", tc.endpoint)
+	}
+}
