@@ -41,7 +41,7 @@ func newClusterInfoCommand() *cobra.Command {
 				return err
 			}
 			// Deferred so it lands after the view it qualifies, on every return path.
-			defer warnIfPartial(cmd.ErrOrStderr(), res, len(urls))
+			defer warnIfPartial(cmd.ErrOrStderr(), res.Unreachable, len(urls))
 
 			// Compute state counts and group by region/AZ/RG.
 			byRegionAZRG := make(map[string]map[string]map[string][]clusterNodeInfo) // region -> az -> rg -> nodes

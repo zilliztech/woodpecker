@@ -41,21 +41,41 @@ func newConfigDiffCommand() *cobra.Command {
 				return wperrors.NewUsageError("pass two node names, or --all")
 			}
 
-			// Fetch each target's config.
+			// A node that did not answer is tracked as unreachable, never stored as a value to
+			// compare. Storing a sentinel made silence compare equal to silence, so a run that
+			// read nothing reported every node identical.
 			configs := make(map[string][]byte)
+			unreachable := make(map[string]bool)
 			for _, t := range targets {
 				b, err := fetchAdminJSON(r.Client.PeerAdminURL(t), "/admin/config")
 				if err != nil {
-					configs[t.ID] = []byte("<unreachable>")
+					unreachable[t.ID] = true
 					continue
 				}
 				configs[t.ID] = b
 			}
+			if len(unreachable) == len(targets) {
+				return wperrors.NewNetworkError(
+					fmt.Sprintf("no node answered: all %d unreachable", len(targets)))
+			}
+			defer warnIfPartial(cmd.ErrOrStderr(), len(unreachable), len(targets))
 
-			// Reference: first target, or explicit --reference.
-			refID := targets[0].ID
+			// Reference: explicit --reference, else the first target that answered, which is
+			// what --all advertises.
+			refID := ""
 			if reference != "" {
 				refID = reference
+				if unreachable[refID] {
+					return wperrors.NewNetworkError(
+						fmt.Sprintf("reference node %s is unreachable", refID))
+				}
+			} else {
+				for _, t := range targets {
+					if !unreachable[t.ID] {
+						refID = t.ID
+						break
+					}
+				}
 			}
 			refBytes, ok := configs[refID]
 			if !ok {
@@ -67,6 +87,10 @@ func newConfigDiffCommand() *cobra.Command {
 			anyDrift := false
 			for _, t := range targets {
 				if t.ID == refID {
+					continue
+				}
+				if unreachable[t.ID] {
+					fmt.Fprintf(w, "%s: UNREACHABLE (not compared)\n", t.ID)
 					continue
 				}
 				if bytes.Equal(configs[t.ID], refBytes) {

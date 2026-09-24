@@ -36,7 +36,7 @@ func newClusterGossipDiffCommand() *cobra.Command {
 				return err
 			}
 			// Deferred so it lands after the view it qualifies, on every return path.
-			defer warnIfPartial(cmd.ErrOrStderr(), res, len(urls))
+			defer warnIfPartial(cmd.ErrOrStderr(), res.Unreachable, len(urls))
 
 			type viewRow struct {
 				NodeID  string
