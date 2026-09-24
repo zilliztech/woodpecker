@@ -28,8 +28,8 @@ func checkFanout(res *client.FanoutResult, total int) error {
 
 // warnIfPartial tells the reader that what follows is missing nodes. Without it an unreachable
 // node is just a row among others, and the table reads as the whole truth.
-func warnIfPartial(w io.Writer, res *client.FanoutResult, total int) {
-	if res.Unreachable > 0 {
-		fmt.Fprintf(w, "\nWARNING: %d/%d nodes unreachable — this view is incomplete\n", res.Unreachable, total)
+func warnIfPartial(w io.Writer, unreachable, total int) {
+	if unreachable > 0 {
+		fmt.Fprintf(w, "\nWARNING: %d/%d nodes unreachable — this view is incomplete\n", unreachable, total)
 	}
 }

@@ -19,20 +19,29 @@ func newEnvDiffCommand() *cobra.Command {
 				return err
 			}
 			envs := make(map[string][]byte)
+			unreachable := make(map[string]bool)
 			for _, m := range r.Members.Members {
 				b, err := fetchAdminJSON(r.Client.PeerAdminURL(m), "/admin/env")
 				if err != nil {
-					envs[m.ID] = []byte("<unreachable>")
+					unreachable[m.ID] = true
 					continue
 				}
 				envs[m.ID] = b
 			}
+			if len(unreachable) == len(r.Members.Members) {
+				return wperrors.NewNetworkError(
+					fmt.Sprintf("no node answered: all %d unreachable", len(r.Members.Members)))
+			}
+			defer warnIfPartial(cmd.ErrOrStderr(), len(unreachable), len(r.Members.Members))
 			w := cmd.OutOrStdout()
 			// Simple byte-compare. A proper implementation would filter noise keys
 			// (HOSTNAME, PWD, etc.) — deferred to Phase 1.5.
 			var reference []byte
 			var refID string
 			for _, m := range r.Members.Members {
+				if unreachable[m.ID] {
+					continue
+				}
 				reference = envs[m.ID]
 				refID = m.ID
 				break
@@ -41,6 +50,10 @@ func newEnvDiffCommand() *cobra.Command {
 			anyDrift := false
 			for _, m := range r.Members.Members {
 				if m.ID == refID {
+					continue
+				}
+				if unreachable[m.ID] {
+					fmt.Fprintf(w, "%s: UNREACHABLE (not compared)\n", m.ID)
 					continue
 				}
 				if bytes.Equal(envs[m.ID], reference) {
