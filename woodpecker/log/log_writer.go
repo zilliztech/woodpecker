@@ -379,6 +379,14 @@ func (l *logWriterImpl) runAuditor() {
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()))
 
+			// Roll the open segment when the policy is due. The append path is the only
+			// other place this is evaluated, so without this a log that stops being
+			// written keeps its Active segment open and pins the data to its nodes.
+			// A failure here is not fatal to the cycle: the next pass retries.
+			if err := l.logHandle.RollWritableSegmentIfDue(ctx, l.onWriterInvalidated); err != nil {
+				logger.Ctx(ctx).Warn("roll writable segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+			}
+
 			// check and set segment truncate state if necessary
 			if err := l.logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx); err != nil {
 				logger.Ctx(ctx).Warn("check and set segment truncated failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))

@@ -2608,3 +2608,91 @@ func assertRolls(t *testing.T, want bool, p segment.RollingPolicy, ctx context.C
 	roll, _ := p.ShouldRollover(ctx, size, blocks, last)
 	assert.Equal(t, want, roll)
 }
+
+// TestLogHandle_RollWritableSegmentIfDue_SealsAnIdleSegmentPastTheInterval pins the behaviour a
+// draining node depends on. The rolling policy is only ever evaluated from the write path, so a
+// log that stops receiving writes keeps its Active segment open indefinitely and the node holding
+// that segment's data can never report has_local_data == false.
+func TestLogHandle_RollWritableSegmentIfDue_SealsAnIdleSegmentPastTheInterval(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	idle := mocks_segment_handle.NewSegmentHandle(t)
+	logHandle.SegmentHandles[1] = idle
+	logHandle.WritableSegmentId = 1
+	// Last roll well past MaxInterval (10s in the mock config), with no write since.
+	logHandle.lastRolloverTimeMs = time.Now().Add(-15 * time.Minute).UnixMilli()
+
+	idle.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
+	idle.EXPECT().GetSize(mock.Anything).Return(int64(1024)) // holds data, so the time branch applies
+	idle.EXPECT().GetBlocksCount(mock.Anything).Return(int64(1))
+	idle.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+	idle.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
+
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.MatchedBy(func(m *meta.SegmentMeta) bool {
+		return m.Metadata.SegNo == 2 && m.Metadata.State == proto.SegmentState_Active
+	})).Return(nil)
+
+	err := logHandle.RollWritableSegmentIfDue(ctx, nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, int64(2), logHandle.WritableSegmentId, "the idle segment should have been sealed and a successor created")
+	assert.Contains(t, logHandle.SegmentHandles, int64(2))
+}
+
+// TestLogHandle_RollWritableSegmentIfDue_LeavesAnEmptySegmentAlone is what bounds the cost of
+// rolling from the auditor. The successor of an idle roll holds nothing, so without this guard
+// every interval would seal an empty segment and create another, forever.
+func TestLogHandle_RollWritableSegmentIfDue_LeavesAnEmptySegmentAlone(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+	ctx := context.Background()
+
+	empty := mocks_segment_handle.NewSegmentHandle(t)
+	logHandle.SegmentHandles[1] = empty
+	logHandle.WritableSegmentId = 1
+	logHandle.lastRolloverTimeMs = time.Now().Add(-15 * time.Minute).UnixMilli()
+
+	empty.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
+	empty.EXPECT().GetSize(mock.Anything).Return(int64(0)) // nothing written since the last roll
+	empty.EXPECT().GetBlocksCount(mock.Anything).Return(int64(0))
+
+	err := logHandle.RollWritableSegmentIfDue(ctx, nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), logHandle.WritableSegmentId, "an empty segment must not roll")
+	assert.NotContains(t, logHandle.SegmentHandles, int64(2))
+}
+
+// TestLogHandle_RollWritableSegmentIfDue_DoesNotCreateWhenNothingIsOpen: a log nobody is writing
+// must not acquire a segment merely because the auditor asked about it.
+func TestLogHandle_RollWritableSegmentIfDue_DoesNotCreateWhenNothingIsOpen(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+	ctx := context.Background()
+
+	// No entry in SegmentHandles for WritableSegmentId.
+	err := logHandle.RollWritableSegmentIfDue(ctx, nil)
+
+	assert.NoError(t, err)
+	assert.Empty(t, logHandle.SegmentHandles)
+}
+
+// TestLogHandle_RollWritableSegmentIfDue_WaitsUntilTheIntervalElapses keeps the auditor from
+// rolling a segment the write path would have left alone.
+func TestLogHandle_RollWritableSegmentIfDue_WaitsUntilTheIntervalElapses(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+	ctx := context.Background()
+
+	fresh := mocks_segment_handle.NewSegmentHandle(t)
+	logHandle.SegmentHandles[1] = fresh
+	logHandle.WritableSegmentId = 1
+	logHandle.lastRolloverTimeMs = time.Now().UnixMilli() // just rolled
+
+	fresh.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
+	fresh.EXPECT().GetSize(mock.Anything).Return(int64(1024))
+	fresh.EXPECT().GetBlocksCount(mock.Anything).Return(int64(1))
+
+	err := logHandle.RollWritableSegmentIfDue(ctx, nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), logHandle.WritableSegmentId)
+}
