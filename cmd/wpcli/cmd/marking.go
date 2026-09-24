@@ -50,8 +50,8 @@ pull reconcile; nodes that never held the segment only lose a read optimization.
 	return cmd
 }
 
-// markingEtcdFlags are shared discovery overrides for the marking subcommands.
-type markingEtcdFlags struct {
+// metaEtcdFlags are shared discovery overrides for the marking subcommands.
+type metaEtcdFlags struct {
 	etcdEndpoints string // comma-separated override; with --meta-prefix, skips /admin/config discovery
 	metaPrefix    string // full meta prefix override (e.g. "woodpecker" or "by-dev/woodpecker")
 	// TLS/auth overrides. Defaults are discovered from a node's /admin/config (its cert PATHS
@@ -64,7 +64,7 @@ type markingEtcdFlags struct {
 	etcdPassword      string
 }
 
-func (f *markingEtcdFlags) register(cmd *cobra.Command) {
+func (f *metaEtcdFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this")
 	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "metadata key prefix; default: discovered from a node's /admin/config (etcd.rootPath + woodpecker.meta.prefix)")
 	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "etcd TLS client cert file; default: discovered (server-side path, valid in-pod)")
@@ -101,9 +101,9 @@ type adminConfigSnapshot struct {
 	}
 }
 
-// markingEtcdConn is the fully resolved etcd connection spec for the marking commands:
+// metaEtcdConn is the fully resolved etcd connection spec for the marking commands:
 // endpoints + key prefix + the TLS/auth material the cluster's own nodes use.
-type markingEtcdConn struct {
+type metaEtcdConn struct {
 	endpoints                             []string
 	kb                                    *meta.KeyBuilder
 	useSSL                                bool
@@ -111,12 +111,12 @@ type markingEtcdConn struct {
 	username, password                    string
 }
 
-// resolveMarkingEtcd resolves the connection spec from flags or, when endpoints/prefix are not
+// resolveMetaEtcd resolves the connection spec from flags or, when endpoints/prefix are not
 // both given, from the first reachable node's /admin/config — including the etcd TLS and auth
 // settings the cluster itself uses, so `wp marking` works against a secured etcd. Flags always
 // override discovered values.
-func resolveMarkingEtcd(f *markingEtcdFlags) (*markingEtcdConn, error) {
-	conn := &markingEtcdConn{}
+func resolveMetaEtcd(f *metaEtcdFlags) (*metaEtcdConn, error) {
+	conn := &metaEtcdConn{}
 	prefix := f.metaPrefix
 
 	if f.etcdEndpoints != "" {
@@ -202,9 +202,9 @@ func resolveMarkingEtcd(f *markingEtcdFlags) (*markingEtcdConn, error) {
 	return conn, nil
 }
 
-// markingEtcdClient dials etcd with the resolved TLS/auth material, reusing the same
+// metaEtcdClient dials etcd with the resolved TLS/auth material, reusing the same
 // common/etcd constructors the server uses.
-func markingEtcdClient(conn *markingEtcdConn) (*clientv3.Client, error) {
+func metaEtcdClient(conn *metaEtcdConn) (*clientv3.Client, error) {
 	timeout := Globals.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -229,7 +229,7 @@ func markingEtcdClient(conn *markingEtcdConn) (*clientv3.Client, error) {
 	return cli, nil
 }
 
-func markingCtx() (context.Context, context.CancelFunc) {
+func metaCtx() (context.Context, context.CancelFunc) {
 	timeout := Globals.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -249,7 +249,7 @@ type markingRow struct {
 }
 
 func newMarkingListCommand() *cobra.Command {
-	var flags markingEtcdFlags
+	var flags metaEtcdFlags
 	var logID int64
 	var allStates bool
 	cmd := &cobra.Command{
@@ -257,11 +257,11 @@ func newMarkingListCommand() *cobra.Command {
 		Short: "List compacted-mark distribution records (default: only NOTIFY_PENDING_MANUAL)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			conn, err := resolveMarkingEtcd(&flags)
+			conn, err := resolveMetaEtcd(&flags)
 			if err != nil {
 				return err
 			}
-			cli, err := markingEtcdClient(conn)
+			cli, err := metaEtcdClient(conn)
 			if err != nil {
 				return err
 			}
@@ -284,7 +284,7 @@ func runMarkingList(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilde
 		prefix = kb.BuildLogCompactedNotifyStatusPrefix(logID)
 	}
 
-	ctx, cancel := markingCtx()
+	ctx, cancel := metaCtx()
 	defer cancel()
 	resp, err := cli.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
@@ -361,7 +361,7 @@ func runMarkingList(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilde
 }
 
 func newMarkingConfirmCommand() *cobra.Command {
-	var flags markingEtcdFlags
+	var flags metaEtcdFlags
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "confirm <logId> <segmentId>",
@@ -386,11 +386,11 @@ managed automatically and normally need no operator action).`,
 				return wperrors.NewUsageError(fmt.Sprintf("invalid segmentId %q", args[1]))
 			}
 
-			conn, err := resolveMarkingEtcd(&flags)
+			conn, err := resolveMetaEtcd(&flags)
 			if err != nil {
 				return err
 			}
-			cli, err := markingEtcdClient(conn)
+			cli, err := metaEtcdClient(conn)
 			if err != nil {
 				return err
 			}
@@ -407,7 +407,7 @@ managed automatically and normally need no operator action).`,
 // resolve/dial plumbing so tests can drive it against an embedded etcd client.
 func runMarkingConfirm(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder, logID int64, segID int64, force bool) error {
 	key := kb.BuildSegmentCompactedNotifyStatusKey(logID, segID)
-	ctx, cancel := markingCtx()
+	ctx, cancel := metaCtx()
 	defer cancel()
 
 	resp, err := cli.Get(ctx, key)

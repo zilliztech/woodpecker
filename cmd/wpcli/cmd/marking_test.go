@@ -34,7 +34,7 @@ func TestMarkingDiscovery_FromAdminConfig(t *testing.T) {
 	require.NoError(t, err)
 	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
 
-	conn, err := resolveMarkingEtcd(&markingEtcdFlags{})
+	conn, err := resolveMetaEtcd(&metaEtcdFlags{})
 	require.NoError(t, err)
 	require.Equal(t, []string{"etcd-a:2379", "etcd-b:2379"}, conn.endpoints)
 	require.Equal(t, "by-dev/woodpecker/marking", conn.kb.SegmentCompactedNotifyStatusPrefix())
@@ -57,7 +57,7 @@ func TestMarkingDiscovery_FlagOverridesSkipDiscovery(t *testing.T) {
 	defer func() { Globals = oldGlobals }()
 	Globals = GlobalFlags{Timeout: 5 * time.Second}
 
-	conn, err := resolveMarkingEtcd(&markingEtcdFlags{
+	conn, err := resolveMetaEtcd(&metaEtcdFlags{
 		etcdEndpoints: "e1:2379,e2:2379",
 		metaPrefix:    "custom/wp",
 		etcdCACert:    "/local/ca.crt",
@@ -107,7 +107,7 @@ func TestMarkingDiscovery_LoopbackEndpointIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
 
-	_, err = resolveMarkingEtcd(&markingEtcdFlags{})
+	_, err = resolveMetaEtcd(&metaEtcdFlags{})
 
 	require.Error(t, err, "a loopback endpoint discovered from a server that does not use etcd is not usable")
 	require.Contains(t, err.Error(), "--etcd", "the message must name the flag that resolves it")
@@ -133,7 +133,7 @@ func TestMarkingDiscovery_ExplicitFlagBeatsLoopback(t *testing.T) {
 	require.NoError(t, err)
 	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
 
-	conn, err := resolveMarkingEtcd(&markingEtcdFlags{etcdEndpoints: "etcd-a:2379"})
+	conn, err := resolveMetaEtcd(&metaEtcdFlags{etcdEndpoints: "etcd-a:2379"})
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"etcd-a:2379"}, conn.endpoints)
@@ -160,7 +160,7 @@ func TestMarkingDiscovery_NoEndpointDiscoveredIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
 
-	_, err = resolveMarkingEtcd(&markingEtcdFlags{})
+	_, err = resolveMetaEtcd(&metaEtcdFlags{})
 
 	require.Error(t, err, "an empty discovered endpoint list is not something to proceed on")
 	require.Contains(t, err.Error(), "--etcd", "the message must name the flag that resolves it")
@@ -189,7 +189,7 @@ func TestMarkingDiscovery_LoopbackIPIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
 
-	_, err = resolveMarkingEtcd(&markingEtcdFlags{})
+	_, err = resolveMetaEtcd(&metaEtcdFlags{})
 
 	require.Error(t, err, "127.0.0.1 is the same unusable address as localhost")
 	require.Contains(t, err.Error(), "--etcd", "the message must name the flag that resolves it")
