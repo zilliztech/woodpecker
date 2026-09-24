@@ -57,14 +57,26 @@ func newLogstoreLACCommand() *cobra.Command {
 	return cmd
 }
 
+// Per-node outcomes. "no writer" is deliberately not "unreachable": a node that answered and
+// simply has no live writer for the segment is healthy, and a sealed or compacted segment has
+// none anywhere. Counting those as unreachable turns a finished segment into a network fault.
+const (
+	posOK          = "ok"
+	posNoWriter    = "no writer"
+	posUnreachable = "unreachable"
+	posUnknownNode = "not in memberlist"
+	posBadResponse = "invalid response"
+)
+
 // nodePosition is one quorum member's answer, or the reason it has none.
 type nodePosition struct {
-	Node      string `json:"node"`
-	NodeID    string `json:"node_id,omitempty"`
-	Durable   int64  `json:"durable_entry_id"`
-	Reachable bool   `json:"reachable"`
-	Note      string `json:"note,omitempty"`
+	Node    string `json:"node"`
+	NodeID  string `json:"node_id,omitempty"`
+	Durable int64  `json:"durable_entry_id"`
+	State   string `json:"state"`
 }
+
+func (p nodePosition) answered() bool { return p.State == posOK }
 
 func runSegmentLAC(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
 	ac *client.Client, members *client.Memberlist, logName string, segmentID int64,
@@ -81,65 +93,95 @@ func runSegmentLAC(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder
 	if err := getProto(ctx, cli, segKey, segMeta); err != nil {
 		return wperrors.NewTargetNotFoundError(fmt.Sprintf("segment %d of log %s: %v", segmentID, logName, err))
 	}
-	quorum := &proto.QuorumInfo{}
-	qKey := kb.BuildQuorumInfoKey(strconv.FormatInt(segMeta.QuorumId, 10))
-	if err := getProto(ctx, cli, qKey, quorum); err != nil {
-		return wperrors.NewTargetNotFoundError(fmt.Sprintf("quorum %d: %v", segMeta.QuorumId, err))
+	// The quorum is stored inline on the segment. storeNewSegmentMeta sets only Quorum, quorumId
+	// is deprecated and left at zero, and StoreQuorumInfo has no production caller -- so the
+	// quorums/ keyspace is empty on a real cluster and reading it would find nothing.
+	quorum := segMeta.GetQuorum()
+	if quorum == nil {
+		return wperrors.NewTargetNotFoundError(fmt.Sprintf(
+			"segment %d of log %s carries no quorum", segmentID, logName))
 	}
 
 	positions := collectQuorumPositions(ac, members, quorum, logMeta.LogId, segmentID)
+
+	answered, unreachable := 0, 0
+	for _, p := range positions {
+		switch {
+		case p.answered():
+			answered++
+		case p.State != posNoWriter:
+			unreachable++
+		}
+	}
+
+	// A segment past Active has its end recorded in metadata, and no node needs a live writer
+	// for it -- compaction, a processor close or idle eviction all drop one. Falling back here
+	// keeps a finished segment from being reported as a network fault.
+	lac, ok := quorumLAC(positions, int(quorum.Aq))
+	source := "quorum"
+	if !ok && segMeta.State != proto.SegmentState_Active && segMeta.LastEntryId >= 0 {
+		lac, ok, source = segMeta.LastEntryId, true, "segment metadata"
+	}
+
+	var unresolved error
+	if !ok {
+		unresolved = wperrors.NewNetworkError(fmt.Sprintf(
+			"only %d of %d quorum nodes answered, below aq=%d: no position can be called confirmed",
+			answered, len(positions), quorum.Aq))
+	}
 
 	w := cmd.OutOrStdout()
 	if Globals.Output == "json" || Globals.Output == "yaml" {
 		payload := map[string]any{
 			"log_name": logName, "log_id": logMeta.LogId, "segment_id": segmentID,
-			"state": segMeta.State.String(), "quorum_id": segMeta.QuorumId,
+			"state": segMeta.State.String(), "quorum_id": quorum.Id,
 			"es": quorum.Es, "wq": quorum.Wq, "aq": quorum.Aq,
 			"nodes": positions,
 		}
-		if lac, ok := quorumLAC(positions, int(quorum.Aq)); ok {
+		if ok {
 			payload["quorum_lac"] = lac
+			payload["quorum_lac_source"] = source
 		}
+		var renderErr error
 		if Globals.Output == "yaml" {
-			return output.RenderYAML(w, payload)
+			renderErr = output.RenderYAML(w, payload)
+		} else {
+			renderErr = output.RenderJSON(w, payload)
 		}
-		return output.RenderJSON(w, payload)
+		if renderErr != nil {
+			return renderErr
+		}
+		// Same outcome as text mode: a script reading the exit code must not take an absent
+		// quorum_lac for a successful query.
+		return unresolved
 	}
 
 	fmt.Fprintf(w, "Segment %d of log %s — state %s, quorum %d (es %d, wq %d, aq %d)\n\n",
-		segmentID, logName, segMeta.State.String(), segMeta.QuorumId, quorum.Es, quorum.Wq, quorum.Aq)
+		segmentID, logName, segMeta.State.String(), quorum.Id, quorum.Es, quorum.Wq, quorum.Aq)
 
 	rows := make([][]string, 0, len(positions))
 	for _, p := range positions {
 		durable := "-"
-		if p.Reachable {
+		if p.answered() {
 			durable = strconv.FormatInt(p.Durable, 10)
 		}
-		rows = append(rows, []string{p.Node, p.NodeID, durable, p.Note})
+		rows = append(rows, []string{p.Node, p.NodeID, durable, p.State})
 	}
-	if err := output.RenderRowTable(w, []string{"NODE", "NODE_ID", "DURABLE_ENTRY", "NOTE"}, rows); err != nil {
+	if err := output.RenderRowTable(w, []string{"NODE", "NODE_ID", "DURABLE_ENTRY", "STATE"}, rows); err != nil {
 		return err
 	}
 
-	reachable := 0
-	for _, p := range positions {
-		if p.Reachable {
-			reachable++
-		}
-	}
-	unreachable := len(positions) - reachable
-	lac, ok := quorumLAC(positions, int(quorum.Aq))
 	if !ok {
 		fmt.Fprintf(w, "\nquorum LAC: unknown — %d of %d nodes answered, fewer than aq=%d\n",
-			reachable, len(positions), quorum.Aq)
-		warnIfPartial(cmd.ErrOrStderr(), unreachable, len(positions))
-		return wperrors.NewNetworkError(fmt.Sprintf(
-			"only %d of %d quorum nodes answered, below aq=%d: no position can be called confirmed",
-			reachable, len(positions), quorum.Aq))
+			answered, len(positions), quorum.Aq)
+	} else if source == "quorum" {
+		fmt.Fprintf(w, "\nquorum LAC: %d (aq=%d of %d nodes at or past it)\n", lac, quorum.Aq, len(positions))
+	} else {
+		fmt.Fprintf(w, "\nquorum LAC: %d (from %s; segment is %s, no live writer needed)\n",
+			lac, source, segMeta.State.String())
 	}
-	fmt.Fprintf(w, "\nquorum LAC: %d (aq=%d of %d nodes at or past it)\n", lac, quorum.Aq, len(positions))
 	warnIfPartial(cmd.ErrOrStderr(), unreachable, len(positions))
-	return nil
+	return unresolved
 }
 
 // collectQuorumPositions asks each node the segment's quorum names for its own durable position.
@@ -150,10 +192,10 @@ func collectQuorumPositions(ac *client.Client, members *client.Memberlist, quoru
 ) []nodePosition {
 	positions := make([]nodePosition, 0, len(quorum.Nodes))
 	for _, addr := range quorum.Nodes {
-		p := nodePosition{Node: addr, Durable: -1}
+		p := nodePosition{Node: addr, Durable: -1, State: posUnreachable}
 		member, found := memberByAddr(members, addr)
 		if !found {
-			p.Note = "not in memberlist"
+			p.State = posUnknownNode
 			positions = append(positions, p)
 			continue
 		}
@@ -161,7 +203,7 @@ func collectQuorumPositions(ac *client.Client, members *client.Memberlist, quoru
 		path := fmt.Sprintf("/admin/logstore/segments?log_id=%d", logID)
 		body, err := fetchAdminJSON(ac.PeerAdminURL(member), path)
 		if err != nil {
-			p.Note = "unreachable"
+			p.State = posUnreachable
 			positions = append(positions, p)
 			continue
 		}
@@ -172,14 +214,14 @@ func collectQuorumPositions(ac *client.Client, members *client.Memberlist, quoru
 			} `json:"segments"`
 		}
 		if jsonErr := json.Unmarshal(body, &resp); jsonErr != nil {
-			p.Note = "invalid response"
+			p.State = posBadResponse
 			positions = append(positions, p)
 			continue
 		}
-		p.Note = "no active writer"
+		p.State = posNoWriter
 		for _, s := range resp.Segments {
 			if s.SegmentID == segmentID {
-				p.Durable, p.Reachable, p.Note = s.LastEntry, true, ""
+				p.Durable, p.State = s.LastEntry, posOK
 				break
 			}
 		}
@@ -211,7 +253,7 @@ func quorumLAC(positions []nodePosition, aq int) (int64, bool) {
 	}
 	durable := make([]int64, 0, len(positions))
 	for _, p := range positions {
-		if p.Reachable {
+		if p.answered() {
 			durable = append(durable, p.Durable)
 		}
 	}
