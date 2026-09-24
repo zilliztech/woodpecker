@@ -53,6 +53,13 @@ type FanoutResult struct {
 	strict      bool
 }
 
+// NoneReachable reports that the fan-out produced nothing: every peer failed. This is not a
+// degraded view of the cluster, it is the absence of one, and it is worth separating from a
+// partial result regardless of strict mode.
+func (r *FanoutResult) NoneReachable() bool {
+	return len(r.Results) > 0 && r.Reachable == 0
+}
+
 // StrictFailure returns true when strict mode is on AND at least one peer failed.
 func (r *FanoutResult) StrictFailure() bool {
 	return r.strict && r.Unreachable > 0

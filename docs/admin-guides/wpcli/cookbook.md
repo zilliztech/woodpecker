@@ -1,6 +1,6 @@
 # wp CLI Cookbook
 
-12 common incident-response recipes for Woodpecker operators.
+13 common incident-response recipes for Woodpecker operators.
 
 ---
 
@@ -244,3 +244,29 @@ Notes:
   data disappears a few seconds after the call, not immediately — poll rather than expect
   the next query to be empty.
 - Full endpoint reference, including every field: `common/http/README.md`.
+
+## 13. Tell a quiet log from a sick one
+
+`/healthz` decides whether Kubernetes keeps routing to a pod; `/admin/log-health` says how reading
+and writing is actually going, per log. They disagree on purpose — a stalled log never pulls a node
+out of rotation — so a pod passing its probe while serving nothing is a state you have to look for.
+
+```bash
+# The probe readiness acts on. Exits non-zero when the node reports unhealthy.
+wp node healthz node-1
+
+# What the data path looks like from that node
+wp node log-health node-1
+
+# Narrow to one instance (both filters required, or neither applies)
+wp node log-health node-1 --bucket a-bucket --root in01-abc
+```
+
+Notes:
+- Counts come first: `tracked / healthy / stalled / failed / idle`. A stalled log is one whose
+  reads or writes stopped completing — not one nobody is using, which counts as idle.
+- Health is derived from real operation outcomes, not synthetic probes, so a log nothing has
+  touched reports healthy rather than unknown. Reaching the end of a log is a healthy read.
+- From outside the cluster, `wp node log-health 127.0.0.1:9091` works against a `kubectl
+  port-forward`: an explicit `host:port` is dialed as given rather than looked up in the
+  memberlist, which only knows in-cluster names.

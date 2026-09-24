@@ -84,3 +84,58 @@ func TestNodeList_HappyPath(t *testing.T) {
 	require.Equal(t, "us-east-1", rows[0]["region"])
 	require.Equal(t, "us-east-1a", rows[0]["az"])
 }
+
+// TestNodeList_NoNodeAnswersIsAnError separates a degraded view from no view at all. A run where
+// some nodes replied is worth showing with a warning; a run where none did has produced nothing,
+// and reporting success for it means a script acts on an empty table as though the cluster were
+// empty.
+func TestNodeList_NoNodeAnswersIsAnError(t *testing.T) {
+	// The memberlist advertises addresses nothing can reach, so every fan-out request fails
+	// while the seed endpoint itself stays healthy.
+	ml := `{"members":[
+		{"id":"node-1","gossip_addr":"10.244.1.5:17946","service_addr":"10.244.1.5:18080","tags":{"admin_port":"1"}},
+		{"id":"node-2","gossip_addr":"10.244.2.7:17946","service_addr":"10.244.2.7:18080","tags":{"admin_port":"1"}}
+	]}`
+	srv := spinTestServer(t, ml, nil)
+	defer srv.Close()
+	withCliYAML(t, srv.URL)
+
+	root := NewRootCommand()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"node", "list", "--admin-port", extractPort(t, srv.URL), "--timeout", "2s"})
+
+	err := root.Execute()
+
+	require.Error(t, err, "a run where no node answered must not report success")
+}
+
+// TestNodeList_PartialFanoutWarns covers the half of the silent-partial-view problem that an
+// error cannot cover: some nodes answered, so the command succeeds and prints a table. Without
+// a warning that table is indistinguishable from a complete one.
+func TestNodeList_PartialFanoutWarns(t *testing.T) {
+	srv := spinTestServer(t, "", nil)
+	defer srv.Close()
+	live := extractPort(t, srv.URL)
+	// node-2 points at a port nothing listens on, so exactly one of the two answers.
+	ml := `{"members":[
+		{"id":"node-1","gossip_addr":"127.0.0.1:17946","service_addr":"127.0.0.1:18080","tags":{"admin_port":"` + live + `"}},
+		{"id":"node-2","gossip_addr":"127.0.0.1:17947","service_addr":"127.0.0.1:18081","tags":{"admin_port":"1"}}
+	]}`
+	srv2 := spinTestServer(t, ml, nil)
+	defer srv2.Close()
+	withCliYAML(t, srv2.URL)
+
+	root := NewRootCommand()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	root.SetOut(out)
+	root.SetErr(errOut)
+	root.SetArgs([]string{"node", "list", "--timeout", "3s"})
+
+	require.NoError(t, root.Execute(), "one node answered, so this is not a failure")
+	// Assert the summary line, not the word: the table already marks the row UNREACHABLE, so a
+	// looser match would pass with warnIfPartial never called.
+	require.Contains(t, errOut.String()+out.String(), "this view is incomplete",
+		"a view missing nodes must say so as a whole, not only per row")
+}

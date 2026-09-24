@@ -14,6 +14,12 @@ func NewRootCommand() *cobra.Command {
 		Short:        "Woodpecker operational CLI",
 		Long:         "wp is the Woodpecker operational CLI for service-mode clusters.",
 		SilenceUsage: true,
+		// Capture the command's error stream so resolveAndDiscover can name the cluster this
+		// run is pointed at. It goes to stderr rather than stdout so piping a command into a
+		// parser is unaffected.
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			sourceWriter = cmd.ErrOrStderr()
+		},
 		// RunE prints help when wp is invoked with no sub-command so that
 		// the global flags section is visible in the output.
 		RunE: func(cmd *cobra.Command, args []string) error {

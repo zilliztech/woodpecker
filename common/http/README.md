@@ -140,6 +140,7 @@ curl "http://localhost:9091/admin/log-health?bucket_name=a-bucket&root_path=file
 - Cold start, idle, or no observed log activity returns `Healthy` (a quiet node is not
   pulled out of rotation).
 - **HTTP Status:** `503` only when every tracked log is Stalled or Failed; `200` otherwise.
+- From the CLI: `wp node log-health <node>`, with `--bucket` / `--root` for the same filter.
 
 ---
 

@@ -10,6 +10,8 @@ func newNodeCommand() *cobra.Command {
 	n.AddCommand(
 		newNodeListCommand(),
 		newNodeShowCommand(),
+		newNodeLogHealthCommand(),
+		newNodeHealthzCommand(),
 		newNodeDecommissionCommand(),
 		newNodeDrainStatusCommand(),
 		newNodeCancelDecommissionCommand(),

@@ -85,3 +85,21 @@ func TestResolveNode_NotFound(t *testing.T) {
 	_, ok := ml.Resolve("node-99")
 	require.False(t, ok)
 }
+
+// TestResolve_ExplicitAddressRequiresAPort keeps the escape hatch from swallowing typos. Without
+// a port there is nothing to distinguish an address from a mistyped node name, and dialing a
+// guess is worse than reporting the target as not found.
+func TestResolve_ExplicitAddressRequiresAPort(t *testing.T) {
+	ml := &Memberlist{Members: []Member{{ID: "node-1", ServiceAddr: "10.244.1.5:18080"}}}
+
+	m, ok := ml.Resolve("127.0.0.1:9091")
+	require.True(t, ok, "an explicit host:port should resolve even when no member carries it")
+	require.Equal(t, "127.0.0.1:9091", m.ServiceAddr)
+	require.Equal(t, "9091", m.Tags["admin_port"])
+
+	_, ok = ml.Resolve("noed-1")
+	require.False(t, ok, "a mistyped node name must stay unresolved rather than being dialed")
+
+	_, ok = ml.Resolve("127.0.0.1:not-a-port")
+	require.False(t, ok, "a non-numeric port is not an address")
+}

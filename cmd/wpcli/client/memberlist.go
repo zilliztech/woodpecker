@@ -56,7 +56,38 @@ func (m *Memberlist) Resolve(identifier string) (Member, bool) {
 	if len(matches) == 1 {
 		return matches[0], true
 	}
+
+	// 4. An explicit host:port the memberlist cannot name.
+	//
+	// Nodes advertise the address their own cluster knows them by, which under Kubernetes is a
+	// headless-service FQDN that resolves only inside that network. From outside it, a
+	// port-forward to one pod is what an operator actually has, and no entry here will ever
+	// carry that address — so refusing it makes the one reachable endpoint unusable.
+	//
+	// A port is required. Without it there is no way to tell an address from a mistyped node
+	// name, and quietly dialing a typo is worse than saying the target was not found.
+	if _, port, ok := splitHostPort(identifier); ok {
+		return Member{
+			ID:          identifier,
+			ServiceAddr: identifier,
+			Tags:        map[string]string{"admin_port": port},
+		}, true
+	}
 	return Member{}, false
+}
+
+// splitHostPort accepts "host:port" with a numeric port, which is how a caller states that it
+// means an address rather than a node name.
+func splitHostPort(s string) (string, string, bool) {
+	i := strings.LastIndex(s, ":")
+	if i <= 0 || i == len(s)-1 {
+		return "", "", false
+	}
+	host, port := s[:i], s[i+1:]
+	if parsePort(port) <= 0 {
+		return "", "", false
+	}
+	return host, port, true
 }
 
 // GetMemberlist fetches and parses /admin/memberlist from the client's seed URL.

@@ -17,16 +17,30 @@ import (
 // fetchAdminJSON fetches a JSON endpoint from a peer and returns the raw bytes.
 // Shared by config show/diff and env show/diff.
 func fetchAdminJSON(peerURL, path string) ([]byte, error) {
+	body, status, err := fetchAdminJSONWithStatus(peerURL, path)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, wperrors.NewNetworkError(fmt.Sprintf("%s returned status %d", path, status))
+	}
+	return body, nil
+}
+
+// fetchAdminJSONWithStatus returns the body whatever the status. Some admin endpoints answer a
+// failing status with the report that explains it, and for those the body is the answer.
+func fetchAdminJSONWithStatus(peerURL, path string) ([]byte, int, error) {
 	client := &http.Client{Timeout: Globals.Timeout}
 	resp, err := client.Get(peerURL + path)
 	if err != nil {
-		return nil, wperrors.NewNetworkError(fmt.Sprintf("GET %s: %v", path, err))
+		return nil, 0, wperrors.NewNetworkError(fmt.Sprintf("GET %s: %v", path, err))
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, wperrors.NewNetworkError(fmt.Sprintf("%s returned status %d", path, resp.StatusCode))
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, resp.StatusCode, wperrors.NewNetworkError(fmt.Sprintf("read %s: %v", path, readErr))
 	}
-	return io.ReadAll(resp.Body)
+	return body, resp.StatusCode, nil
 }
 
 // convertJSONNumbers recursively converts json.Number values to int64 or float64
