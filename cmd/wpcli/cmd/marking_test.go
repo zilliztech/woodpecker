@@ -85,13 +85,9 @@ func TestMarkingConfirm_InvalidArgs(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid logId")
 }
 
-// TestMarkingDiscovery_LoopbackEndpointIsRefused covers what every real deployment actually
-// returns. The LogStore server never connects to etcd — there is no clientv3 reference anywhere
-// in server/ or cmd/main.go — so nothing ever overrides the default in its config, and discovery
-// hands back a loopback address that belongs to whatever host happens to answer.
-//
-// Dialing it wastes the full timeout and ends in a raw etcd client dump. Since the value cannot
-// be right, the useful outcome is to say so at once and name the flag that fixes it.
+// TestMarkingDiscovery_LoopbackEndpointIsRefused covers what a real deployment reports: the
+// server does not connect to etcd, so its config carries the built-in loopback default. That
+// address belongs to whichever host answers, so it is refused with the flag that replaces it.
 func TestMarkingDiscovery_LoopbackEndpointIsRefused(t *testing.T) {
 	ml := `{"members":[{"id":"node-1","gossip_addr":"127.0.0.1:17946"}]}`
 	// Exactly what a UAT node reports.
@@ -118,7 +114,7 @@ func TestMarkingDiscovery_LoopbackEndpointIsRefused(t *testing.T) {
 }
 
 // TestMarkingDiscovery_ExplicitFlagBeatsLoopback keeps the refusal from becoming a wall: an
-// operator who already knows the address must be able to say so and proceed.
+// operator who knows the address states it and proceeds.
 func TestMarkingDiscovery_ExplicitFlagBeatsLoopback(t *testing.T) {
 	ml := `{"members":[{"id":"node-1","gossip_addr":"127.0.0.1:17946"}]}`
 	cfg := `{"Etcd":{"Endpoints":["localhost:2379"],"RootPath":"woodpecker",` +
@@ -144,9 +140,8 @@ func TestMarkingDiscovery_ExplicitFlagBeatsLoopback(t *testing.T) {
 }
 
 // TestMarkingDiscovery_NoEndpointDiscoveredIsRefused covers a node that reports no etcd endpoint
-// at all. Falling through with an empty list would dial nothing and fail somewhere further in
-// with a message about the keyspace rather than about the connection, so the refusal has to
-// happen here and has to name the flag.
+// at all. An empty list is refused here, where the message can name the connection and the flag,
+// rather than further in where the failure reads as a keyspace problem.
 func TestMarkingDiscovery_NoEndpointDiscoveredIsRefused(t *testing.T) {
 	ml := `{"members":[{"id":"node-1","gossip_addr":"127.0.0.1:17946"}]}`
 	cfg := `{"Etcd":{"Endpoints":[],"RootPath":"woodpecker",` +
@@ -169,16 +164,13 @@ func TestMarkingDiscovery_NoEndpointDiscoveredIsRefused(t *testing.T) {
 
 	require.Error(t, err, "an empty discovered endpoint list is not something to proceed on")
 	require.Contains(t, err.Error(), "--etcd", "the message must name the flag that resolves it")
-	// Assert the empty-list wording, not just the flag: without the length guard the empty list
-	// falls through the loop into the loopback branch, which also names --etcd and would let a
-	// broken guard pass this test while reporting "endpoint [] is loopback".
+	// Assert the empty-list wording, not just the flag: the loopback branch also names --etcd,
+	// so a broken length guard would otherwise pass here while reporting "endpoint [] is loopback".
 	require.Contains(t, err.Error(), "no etcd endpoint could be discovered")
 }
 
-// TestMarkingDiscovery_LoopbackIPIsRefused pins the address form rather than the spelling. The
-// default is written as "localhost", but a deployment that resolves or rewrites it hands back
-// 127.0.0.1, which is the same unusable address and has to be refused the same way -- matching
-// on the literal string alone would let it through.
+// TestMarkingDiscovery_LoopbackIPIsRefused pins the address form, not the spelling: 127.0.0.1
+// is as unusable as "localhost", and matching the literal string alone would let it through.
 func TestMarkingDiscovery_LoopbackIPIsRefused(t *testing.T) {
 	ml := `{"members":[{"id":"node-1","gossip_addr":"127.0.0.1:17946"}]}`
 	cfg := `{"Etcd":{"Endpoints":["127.0.0.1:2379"],"RootPath":"woodpecker",` +

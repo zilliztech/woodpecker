@@ -176,10 +176,10 @@ wp marking confirm 42 7
 
 Notes:
 - These commands read etcd directly. Discovery from a node's `/admin/config` is attempted, but
-  **expect to pass `--etcd` yourself**: the server never connects to etcd, so that field is
-  normally an unset default pointing at loopback, and the command now refuses it rather than
-  dialing your own machine. The meta prefix and the cluster's etcd TLS/auth settings come from
-  the same place, overridable with `--meta-prefix` and
+  **expect to pass `--etcd` yourself**: the server does not connect to etcd, so that field is
+  normally an unset default pointing at loopback, which the command refuses rather than dialing
+  your own machine. The meta prefix and the cluster's etcd TLS/auth settings come from the same
+  place, overridable with `--meta-prefix` and
   `--etcd-cert/-key/-cacert` / `--etcd-username/-password` for a secured etcd (the
   discovered cert paths are server-side paths — valid when running in-pod).
 - `confirm` marks the record `OPERATOR_CONFIRMED` — durable across writer restarts and

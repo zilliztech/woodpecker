@@ -22,16 +22,13 @@ import (
 )
 
 // The marking command family operates on the compacted-mark distribution records
-// (root/marking/<logId>/<segId> in etcd — the Sealed-phase sibling of root/cleaning).
-// Unlike the rest of wp, these records live in cluster metadata, not on a node, so the
-// commands connect to etcd directly.
+// (root/marking/<logId>/<segId> in etcd). These records live in cluster metadata rather
+// than on a node, so the commands connect to etcd directly.
 //
-// For metadata the connection is something the caller states rather than something the cluster
-// can vouch for. Metadata belongs to the client library; the LogStore server never connects to
-// etcd, so the etcd section of its /admin/config carries no guarantee of being correct — in a
-// normal deployment it is simply the built-in default. Discovery from it is still attempted as a
-// convenience, and refused when it yields a value that cannot work, but --etcd / --meta-prefix
-// are the reliable path and any metadata command added later should assume the same.
+// The LogStore server does not connect to etcd, so the etcd section of its /admin/config is
+// a built-in default, not a reported value. Discovery from it is attempted as a convenience
+// and refused when it yields an address that cannot work; --etcd and --meta-prefix are the
+// reliable path, for these commands and for any metadata command added later.
 
 func newMarkingCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -480,20 +477,12 @@ func formatMarkingTime(unixMilli uint64) string {
 	return time.UnixMilli(int64(unixMilli)).UTC().Format("2006-01-02T15:04:05Z")
 }
 
-// rejectUnusableDiscoveredEtcd stops a discovered endpoint that cannot be right from being dialed.
+// rejectUnusableDiscoveredEtcd refuses a discovered endpoint that cannot be the cluster's etcd.
 //
-// Discovery reads the etcd settings out of a node's /admin/config, but the LogStore server never
-// connects to etcd -- metadata belongs to the client library, and there is no clientv3 reference
-// anywhere in server/ or cmd/main.go. Nothing in a normal deployment overrides that section, so
-// what comes back is the built-in default. It points at loopback, which resolves to whichever
-// host happens to be running the command rather than to the cluster's etcd.
-//
-// Dialing it costs the whole timeout and ends in a raw etcd client error dump. Since the value
-// cannot be correct, saying so immediately and naming the flag is the only useful outcome.
-//
-// Discovery is kept for the deployments that do set the field, but it is a convenience with no
-// guarantee behind it: for metadata the connection is something the caller states, not something
-// the cluster can vouch for.
+// The server does not connect to etcd, so /admin/config reports the built-in default: loopback,
+// which resolves to whichever host runs the command. Dialing it spends the full timeout and ends
+// in a raw etcd client error, so an empty or loopback-only list is refused here, naming the flag
+// that sets a real address.
 func rejectUnusableDiscoveredEtcd(endpoints []string) error {
 	if len(endpoints) == 0 {
 		return wperrors.NewConfigError(
