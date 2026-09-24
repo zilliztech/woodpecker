@@ -341,7 +341,19 @@ wp-wpawsusw-dab462fa-5  wp-wpawsusw-dab462fa-5.wp-wpawsusw-dab462fa-headless.woo
 
 <p>So running <code>wp</code> where those names resolve — in a Woodpecker pod, in a Milvus pod, or over a tunnel into
 the cluster network — is the path of least resistance. A single node can also be reached with
-<code>kubectl port-forward</code>.</p>
+<code>kubectl port-forward</code>, and passing an explicit <code>host:port</code> in place of a node name dials it
+directly rather than looking it up in the memberlist.</p>
+
+<p>Settings come from <code>cli.yaml</code>, looked for in <code>$WOODPECKER_CLI_CONFIG</code>, then the directory
+holding the <code>wp</code> binary, then <code>$XDG_CONFIG_HOME/woodpecker/</code>, then <code>~/.woodpecker/</code>.
+The binary&rsquo;s own directory comes second on purpose: a fixed cluster can be handed over as one folder, binary
+and config together, with nothing to pass per invocation. The working directory is deliberately not searched —
+adopting a config because of where the shell happens to be would let any directory point this tool at a cluster
+nobody chose.</p>
+
+<p>Every run prints what it resolved, so a wrong cluster is visible before the output rather than after:</p>
+
+<div class="code-block"><pre>wp: config /opt/wp/cli.yaml &middot; context prod &middot; endpoint 10.0.1.5:9091</pre></div>
 
 <div class="note">
 <strong>Every endpoint answers for one node.</strong> No admin endpoint queries its peers; each reports only its own
@@ -360,8 +372,8 @@ This page covers when to reach for something and how to read the result.</p>
 <div class="container">
 <h2 class="section-title">Part 1 &mdash; Commands by level</h2>
 
-<p>Every example below is captured from a real run. Coverage is uneven, and the gaps are marked rather than
-glossed over: knowing in advance that something cannot be answered is worth more during an incident than
+<p>Examples below are captured from real runs unless marked otherwise. Coverage is uneven, and the gaps are
+marked rather than glossed over: knowing in advance that something cannot be answered is worth more during an incident than
 discovering it there.</p>
 
 <h3>Cluster and node <span class="lvl">good coverage</span></h3>
@@ -392,6 +404,13 @@ whose replicas share an AZ is a single-failure-domain quorum, whatever the repli
 
 <p><code>wp node list</code> gives the same membership as a flat table with each node&rsquo;s advertised address and
 health. <code>wp cluster health</code> reduces it to red/yellow/green and exits 8 on a yellow finding, 9 on red.</p>
+
+<p>Two narrower health questions have their own commands. <code>wp node healthz</code> returns the readiness probe
+Kubernetes itself acts on — the one that decides whether a pod receives traffic — and exits non-zero when it
+reports unhealthy. <code>wp node log-health</code> returns the node&rsquo;s own per-log view of how reading and
+writing are going, derived from real operation outcomes rather than synthetic probes; when every tracked log is
+stalled or failed the endpoint answers 503 and the command reports the finding with the full per-log table
+rather than the status alone.</p>
 
 <h4>Can this node be terminated</h4>
 <div class="code-block"><pre>$ wp node drain-status wp-wpawsusw-dab462fa-0
@@ -452,11 +471,33 @@ wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</pre></di
 <p>This is the most direct answer available to &ldquo;is anything still writing to this log&rdquo; and
 &ldquo;has an append been outstanding too long&rdquo;.</p>
 
-<div class="gap">
-<strong>Gap:</strong> the last-add-confirmed position is not exposed on the admin surface. Without it you can see
-that a writer is busy, but not how far the confirmed tail has reached — which is what tells a lagging reader apart
-from one that has caught up. Tracked as part of the reader-diagnosis work.
-</div>
+<h4>How far is this segment confirmed readable</h4>
+<div class="code-block"><pre>$ wp logstore lac my-channel 3 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+
+Segment 3 of log my-channel &mdash; state Active, quorum 1 (es 3, wq 3, aq 2)
+
+NODE            NODE_ID                 DURABLE_ENTRY  STATE
+10.0.1.5:18080  wp-wpawsusw-dab462fa-0  4900           ok
+10.0.1.6:18080  wp-wpawsusw-dab462fa-1  4821           ok
+10.0.1.7:18080  wp-wpawsusw-dab462fa-2  4650           ok
+
+quorum LAC: 4821 (aq=2 of 3 nodes at or past it)</pre></div>
+<p class="muted" style="font-size:0.85rem">Illustrative; the shape is the command&rsquo;s, the numbers are not from
+a captured run.</p>
+
+<p>Each node reports only how far it has durably written. No node can report the quorum&rsquo;s position, because
+that is a property of the set: a position is confirmed readable once <code>aq</code> nodes have reached it, so the
+answer is the <code>aq</code>-th highest of the per-node figures &mdash; 4821 above, not the 4900 one node has
+reached alone.</p>
+
+<p>The spread is the point. Nodes agreeing means the quorum is healthy and the tail is where it says; one node
+trailing, as the third does here, is a replica falling behind while the quorum still holds. If fewer than
+<code>aq</code> nodes answer, the command reports no value at all rather than the best it has &mdash; one
+node&rsquo;s position presented as the quorum&rsquo;s would overstate what is readable, which is the mistake the
+command exists to prevent.</p>
+
+<p>A segment past Active takes its end from metadata instead, where it is authoritative: compaction, a processor
+close or idle eviction all leave a finished segment with no live writer on any node, and that is not a fault.</p>
 
 <h3>Local data and reclamation <span class="lvl">good coverage</span></h3>
 
@@ -485,32 +526,59 @@ WARNING: 1/2 nodes unreachable — their instances are not listed; do not delete
 
 <h3>Metadata <span class="lvl none">minimal</span></h3>
 
-<p><code>wp marking list</code> / <code>confirm</code> handle compacted-mark distribution records, and are the only
-commands that read cluster metadata.</p>
+<p><code>wp marking list</code> / <code>confirm</code> handle compacted-mark distribution records, and
+<code>wp logstore lac</code> reads a segment&rsquo;s state and quorum membership. These are the commands that talk
+to cluster metadata directly.</p>
+
+<div class="note">
+<strong>State the connection; do not expect it to be discovered.</strong> These commands read etcd, and the
+LogStore server does not, so the etcd section of its <code>/admin/config</code> is unvalidated — by default it
+points at loopback. Discovery is attempted as a convenience and refused when the address cannot work, naming the
+flag instead of spending the timeout. Expect to pass <code>--etcd</code> and <code>--meta-prefix</code> yourself.
+The prefix fails the more quietly of the two: a wrong one connects to the right etcd and lists an empty keyspace,
+so <code>marking list</code> prints the prefix it scanned for you to check against the client&rsquo;s
+<code>etcd.rootPath</code> and <code>woodpecker.meta.prefix</code>.
+</div>
 
 <div class="gap">
-<strong>Gap:</strong> metadata discovery is broken as shipped. <code>wp marking</code> takes its etcd endpoint from a
-node&rsquo;s <code>/admin/config</code>, but the LogStore server never connects to etcd, so that field is an
-unset default and the command dials <code>localhost:2379</code> and times out. Pass <code>--etcd</code> explicitly.
-Beyond this one command there is no way to list logs, inspect segment state, read quorum membership or see a
-reader&rsquo;s position.
+<strong>Gap:</strong> there is still no way to list logs, or to read a reader&rsquo;s recorded position, and no
+command corrects a metadata record beyond <code>marking confirm</code>.
 </div>
 
 <h3>Readers <span class="lvl none">none</span></h3>
 
 <div class="gap">
 <strong>Gap:</strong> there is no command to see which readers are attached to a log or where each has reached. The
-information exists — readers publish their position into metadata under a lease — but nothing surfaces it. A reader
-that has stopped advancing and one that has caught up are indistinguishable from the outside today.
+information exists — readers publish their position into metadata under a lease — but nothing surfaces it.
+<p style="margin-top:0.6rem">Half of the comparison now does exist: <code>wp logstore lac</code> gives the tail a
+reader would be measured against. Until the reader side is surfaced too, a reader that has stopped and one that has
+caught up still cannot be told apart.</p>
+<p style="margin-top:0.6rem">When that arrives, one constraint comes with it: reader positions are republished
+every 30 seconds, so any comparison sampling faster than that sees every reader frozen and calls them all stuck.</p>
 </div>
 
 <h3>Client-side writers and readers <span class="lvl none">out of reach</span></h3>
 
-<div class="gap">
-<strong>Gap, and a permanent one:</strong> the client library runs inside the embedding application, so its
-pending-append counts, write frontier and append latencies are published to <em>that</em> process&rsquo;s metrics
-endpoint. <code>wp</code> talks to Woodpecker nodes and cannot reach them. Client-side state has to be inferred
-from the node side — whether appends are arriving at all — or read from the application&rsquo;s own metrics.
+<p>The client library runs inside the embedding application, so its queue depth, submitted and confirmed
+positions and append latencies are published to <em>that</em> process&rsquo;s metrics endpoint, not to any
+Woodpecker node.</p>
+
+<p>They are still reachable from here. <code>wp metrics</code> takes an explicit <code>host:port</code> like any
+other target and scrapes whatever <code>/metrics</code> answers, and Milvus serves its own on 9091 as Woodpecker
+does, so the client side can be read without a dashboard:</p>
+
+<div class="code-block"><pre>wp metrics list &lt;milvus-pod-ip&gt;:9091 --filter woodpecker_client</pre></div>
+
+<p>The pair that matters is <code>submitted_frontier_entry</code> against <code>write_frontier_entry</code>. The
+second is the confirmed position despite its name; the first is what has been submitted. Equal means idle.
+Submitted running ahead of a confirmed position that has stopped moving is a writer that is wedged rather than
+quiet, and <code>pending_append_ops</code> with <code>oldest_pending_append_seconds</code> says how much is behind
+it and for how long.</p>
+
+<div class="note">
+<strong>These are sampled every 10 seconds, on purpose.</strong> They are published from the client&rsquo;s auditor
+tick rather than from the append path, because the acknowledgement path stops running exactly when a writer wedges
+— anything published from there would freeze at the moment it started to matter.
 </div>
 
 </div>
@@ -526,9 +594,9 @@ from the node side — whether appends are arriving at all — or read from the 
 <tr><td>A node will not drain</td><td>Works end to end</td></tr>
 <tr><td>Reclaiming an orphaned instance</td><td>Works end to end</td></tr>
 <tr><td>Local disk filling up</td><td>Works end to end</td></tr>
-<tr><td>Writes are not progressing</td><td>Partly &mdash; the stalled stage is visible, the confirmed tail is not</td></tr>
-<tr><td>A reader is not progressing</td><td>Not yet</td></tr>
-<tr><td>Correcting metadata</td><td>Not yet</td></tr>
+<tr><td>Writes are not progressing</td><td>Works end to end &mdash; server-side stage, confirmed tail and client-side queue are all readable</td></tr>
+<tr><td>A reader is not progressing</td><td>Partly &mdash; the tail to measure against exists; the reader&rsquo;s own position is not surfaced</td></tr>
+<tr><td>Correcting metadata</td><td>Not yet &mdash; beyond <code>marking confirm</code></td></tr>
 </tbody>
 </table>
 
@@ -603,11 +671,21 @@ listed in Part 1.</p>
 <p>A single slow replica is not a reason to intervene. A write completes once the ack quorum is satisfied, so one
 lagging node is absorbed; a write only fails when enough replicas fail that the ack quorum cannot be reached.</p>
 
-<div class="gap">
-<strong>Gap:</strong> the confirmed tail position is not exposed, so &ldquo;stuck&rdquo; cannot be told apart from
-&ldquo;idle&rdquo; from the server side alone. Compare against the write frontier in the client application&rsquo;s
-own metrics in the meantime.
-</div>
+<p>To tell &ldquo;stuck&rdquo; from &ldquo;idle&rdquo;, compare what has been submitted against what has been
+confirmed. Both halves are client metrics, so one scrape answers it:</p>
+
+<div class="code-block"><pre>wp metrics list &lt;milvus-pod-ip&gt;:9091 --filter frontier</pre></div>
+
+<p>Equal positions mean the writer has nothing outstanding — it is idle, and the place to look next is upstream.
+Submitted running ahead of a confirmed position that has stopped moving is a stall, and
+<code>oldest_pending_append_seconds</code> says how long it has lasted.</p>
+
+<p>Then find which replica is responsible:</p>
+
+<div class="code-block"><pre>wp logstore lac &lt;logName&gt; &lt;segmentId&gt; --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>The per-node positions show whether one replica is trailing or the quorum has lost enough nodes to stop
+confirming at all.</p>
 
 <p>When a writer has to be made to start over, fencing is the mechanism: a fenced segment fails the next append,
 and the application is expected to reopen its writer, which re-establishes state through the normal path. Note that
@@ -616,21 +694,36 @@ quorum is fenced to break the ack quorum.</p>
 
 <h3>A reader is not progressing</h3>
 
+<p>Half of what this needs now exists. <code>wp logstore lac</code> gives the confirmed tail a reader would be
+measured against, so the question is no longer unanswerable in principle:</p>
+
+<div class="code-block"><pre>wp logstore lac &lt;logName&gt; &lt;segmentId&gt; --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
 <div class="gap">
-<strong>Not yet supported.</strong> Readers do publish their position into metadata, but no command surfaces it, and
-the confirmed tail needed to judge lag is not exposed either — so a stalled reader and a caught-up one look the same.
-Corruption makes this worse: a checksum failure is currently reported as &ldquo;data has not arrived yet&rdquo;,
-which the reader retries indefinitely, so a genuine fault is indistinguishable from an idle log. Until that is fixed,
-the server-side WARN logged at the point of the checksum failure is the only signal.
+<strong>Gap:</strong> the reader&rsquo;s own position is still not surfaced. Readers publish it into metadata under
+a lease, but no command reads it back, so there is nothing to compare the tail against and a stalled reader still
+looks like a caught-up one.
+<p style="margin-top:0.6rem">Corruption makes this worse: a checksum failure is currently reported as &ldquo;data
+has not arrived yet&rdquo;, which the reader retries indefinitely, so a genuine fault is indistinguishable from an
+idle log. Until that is fixed, the server-side WARN logged at the point of the checksum failure is the only
+signal.</p>
+<p style="margin-top:0.6rem">When the reader side arrives, sample no faster than 30 seconds: positions are
+republished on that cadence, and a tighter interval shows every reader frozen and calls them all stuck.</p>
 </div>
 
 <h3>Correcting metadata</h3>
 
+<p>Reading has a start. <code>wp logstore lac</code> shows a segment&rsquo;s state and quorum membership, and
+<code>wp marking list</code> shows compacted-mark distribution records. Both connect to etcd directly, with the
+endpoint and prefix given explicitly.</p>
+
 <div class="gap">
-<strong>Not yet supported.</strong> Beyond <code>wp marking</code>, metadata has no operational surface: no way to
-list logs, inspect segment state, read quorum membership, or repair a segment stuck in the wrong state. Metadata is
-owned by the client library, not by the LogStore nodes, so this will not appear on the admin API — it belongs to
-<code>wp</code> talking to etcd directly, with the connection configured explicitly rather than discovered.
+<strong>Gap:</strong> there is still no way to list logs, read a reader&rsquo;s recorded position, or repair a
+segment stuck in the wrong state. <code>marking confirm</code> is the only correction available, and it settles one
+record rather than repairing one.
+<p style="margin-top:0.6rem">None of this will appear on the admin API. Metadata is owned by the client library,
+not by the LogStore nodes, which never connect to etcd — so it belongs to <code>wp</code> talking to etcd directly,
+with the connection stated rather than discovered.</p>
 </div>
 
 </div>
