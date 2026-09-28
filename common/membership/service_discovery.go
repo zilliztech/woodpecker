@@ -359,7 +359,7 @@ func (sd *ServiceDiscovery) SelectSingleAzSingleRg(filter *proto.NodeFilter, aff
 		// 5. Randomly select nodes from azRgIndex[az][rg]
 		nodes := sd.azRgIndex[selectedAZ][selectedRG]
 		filteredNodes := sd.filterByTags(nodes, filter.Tags)
-		filteredNodes = sd.excludeDecommissioning(filteredNodes)
+		filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 
 		if len(filteredNodes) > 0 {
 			return metasOf(sd.selectLowestLoadNodes(filteredNodes, int(filter.Limit))), nil
@@ -394,7 +394,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzSingleRg(candidateAZs []stri
 		for _, rg := range candidateRGs {
 			nodes := sd.azRgIndex[az][rg]
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
-			filteredNodes = sd.excludeDecommissioning(filteredNodes)
+			filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 			if len(filteredNodes) > 0 {
 				validCombinations = append(validCombinations, struct {
 					az    string
@@ -452,7 +452,7 @@ func (sd *ServiceDiscovery) SelectSingleAzMultiRg(filter *proto.NodeFilter, affi
 		for _, rg := range selectedRGs {
 			nodes := sd.azRgIndex[selectedAZ][rg]
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
-			filteredNodes = sd.excludeDecommissioning(filteredNodes)
+			filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 			if len(filteredNodes) > 0 {
 				selectedNode := sd.selectLowestLoadNode(filteredNodes)
 				selectedNodes = append(selectedNodes, selectedNode)
@@ -478,7 +478,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchSingleAzMultiRg(candidateAZs []strin
 		for _, rg := range candidateRGs {
 			nodes := sd.azRgIndex[az][rg]
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
-			filteredNodes = sd.excludeDecommissioning(filteredNodes)
+			filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 			if len(filteredNodes) > 0 {
 				// Randomly select one node from each RG
 				selectedNode := sd.selectLowestLoadNode(filteredNodes)
@@ -537,7 +537,7 @@ func (sd *ServiceDiscovery) SelectMultiAzSingleRg(filter *proto.NodeFilter, affi
 		for _, az := range selectedAZs {
 			nodes := sd.rgAzIndex[selectedRG][az]
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
-			filteredNodes = sd.excludeDecommissioning(filteredNodes)
+			filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 			if len(filteredNodes) > 0 {
 				selectedNode := sd.selectLowestLoadNode(filteredNodes)
 				selectedNodes = append(selectedNodes, selectedNode)
@@ -563,7 +563,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchMultiAzSingleRg(candidateRGs []strin
 		for _, az := range candidateAZs {
 			nodes := sd.rgAzIndex[rg][az]
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
-			filteredNodes = sd.excludeDecommissioning(filteredNodes)
+			filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 			if len(filteredNodes) > 0 {
 				// Randomly select one node from each AZ
 				selectedNode := sd.selectLowestLoadNode(filteredNodes)
@@ -619,7 +619,7 @@ func (sd *ServiceDiscovery) SelectMultiAzMultiRg(filter *proto.NodeFilter, affin
 				selectedRG := candidateRGs[rand.Intn(len(candidateRGs))]
 				nodes := sd.azRgIndex[az][selectedRG]
 				filteredNodes := sd.filterByTags(nodes, filter.Tags)
-				filteredNodes = sd.excludeDecommissioning(filteredNodes)
+				filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 				if len(filteredNodes) > 0 {
 					selectedNode := sd.selectLowestLoadNode(filteredNodes)
 					selectedNodes = append(selectedNodes, selectedNode)
@@ -651,7 +651,7 @@ func (sd *ServiceDiscovery) exhaustiveSearchMultiAzMultiRg(candidateAZs []string
 		for _, rg := range candidateRGs {
 			nodes := sd.azRgIndex[az][rg]
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
-			filteredNodes = sd.excludeDecommissioning(filteredNodes)
+			filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 			if len(filteredNodes) > 0 {
 				// Randomly select one node from each AZ-RG combination
 				selectedNode := sd.selectLowestLoadNode(filteredNodes)
@@ -687,7 +687,7 @@ func (sd *ServiceDiscovery) SelectRandom(filter *proto.NodeFilter, affinityMode 
 		for _, rg := range candidateRGs {
 			nodes := sd.azRgIndex[az][rg]
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
-			filteredNodes = sd.excludeDecommissioning(filteredNodes)
+			filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 			allCandidates = append(allCandidates, filteredNodes...)
 		}
 	}
@@ -719,7 +719,7 @@ func (sd *ServiceDiscovery) SelectRandomGroup(filter *proto.NodeFilter, affinity
 		for _, rg := range candidateRGs {
 			nodes := sd.azRgIndex[az][rg]
 			filteredNodes := sd.filterByTags(nodes, filter.Tags)
-			filteredNodes = sd.excludeDecommissioning(filteredNodes)
+			filteredNodes = sd.excludeUnselectable(filteredNodes, filter)
 			allCandidates = append(allCandidates, filteredNodes...)
 		}
 	}
@@ -1281,6 +1281,28 @@ func (sd *ServiceDiscovery) filterByTags(nodes []*NodeInfo, tags map[string]stri
 }
 
 // excludeDecommissioning filters out nodes that have the "status" tag set to "decommissioning" or "decommissioned".
+// excludeUnselectable drops the nodes a selection must not return: those being
+// decommissioned, and those whose endpoint the request asked to exclude.
+func (sd *ServiceDiscovery) excludeUnselectable(nodes []*NodeInfo, filter *proto.NodeFilter) []*NodeInfo {
+	nodes = sd.excludeDecommissioning(nodes)
+	excluded := filter.GetExcludeEndpoints()
+	if len(excluded) == 0 {
+		return nodes
+	}
+	skip := make(map[string]struct{}, len(excluded))
+	for _, endpoint := range excluded {
+		skip[endpoint] = struct{}{}
+	}
+	var kept []*NodeInfo
+	for _, node := range nodes {
+		if _, ok := skip[node.Meta.GetEndpoint()]; ok {
+			continue
+		}
+		kept = append(kept, node)
+	}
+	return kept
+}
+
 func (sd *ServiceDiscovery) excludeDecommissioning(nodes []*NodeInfo) []*NodeInfo {
 	var active []*NodeInfo
 	for _, node := range nodes {

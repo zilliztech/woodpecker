@@ -35,6 +35,7 @@ import (
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
+	"github.com/zilliztech/woodpecker/woodpecker/quorum"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
@@ -459,6 +460,12 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 	return nil
 }
 
+// unreachableReplicaSource is implemented by segment handles that remember
+// which replicas they failed to reach.
+type unreachableReplicaSource interface {
+	UnreachableReplicas() []string
+}
+
 func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segHandle segment.SegmentHandle, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetOrCreateWritableSegmentHandle")
 	defer sp.End()
@@ -542,7 +549,19 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 		// 2. create new segMeta(active)
 		nextSegmentId := writeableSegmentHandle.GetId(ctx) + 1
 		logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name), zap.Int64("segmentId", nextSegmentId))
-		newSegmentHandle, err := l.createAndCacheWritableSegmentHandleWithID(ctx, nextSegmentId, writerInvalidationNotifier)
+		// Select the next segment's quorum without the replicas this segment
+		// could not reach. The membership view can still list a replica that
+		// just went away, and selecting it again would fail the new segment
+		// the same way.
+		selectCtx := ctx
+		if src, ok := writeableSegmentHandle.(unreachableReplicaSource); ok {
+			if unreachable := src.UnreachableReplicas(); len(unreachable) > 0 {
+				logger.Ctx(ctx).Info("rolling away from unreachable replicas",
+					zap.String("logName", l.Name), zap.Int64("oldSegmentId", nextSegmentId-1), zap.Strings("unreachable", unreachable))
+				selectCtx = quorum.WithExcludedEndpoints(ctx, unreachable)
+			}
+		}
+		newSegmentHandle, err := l.createAndCacheWritableSegmentHandleWithID(selectCtx, nextSegmentId, writerInvalidationNotifier)
 		if err != nil {
 			if werr.ErrMetadataSegmentAlreadyExists.Is(err) {
 				logger.Ctx(ctx).Warn("aborting segment rolling: next segment has been claimed by another writer",

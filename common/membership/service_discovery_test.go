@@ -2274,3 +2274,44 @@ func TestQuorumNodeSelected_CountsEveryReturnedNode(t *testing.T) {
 		})
 	})
 }
+
+// Every selection strategy must honour ExcludeEndpoints: a client that just
+// failed to reach a replica asks for a quorum without it.
+func TestSelect_AllStrategiesHonourExcludeEndpoints(t *testing.T) {
+	sd := NewServiceDiscovery()
+	for i, az := range []string{"az1", "az1", "az2", "az2", "az3", "az3"} {
+		id := fmt.Sprintf("node%d", i)
+		sd.UpdateServer(id, createFinalTestNode(id, "rg1", az, nil))
+	}
+	excluded := []string{"node0.example.com:8080", "node2.example.com:8080"}
+
+	strategies := map[string]func(*proto.NodeFilter, proto.AffinityMode) ([]*proto.NodeMeta, error){
+		"random":          sd.SelectRandom,
+		"random-group":    sd.SelectRandomGroup,
+		"custom":          sd.SelectCustom,
+		"single-az-rg":    sd.SelectSingleAzSingleRg,
+		"single-az-multi": sd.SelectSingleAzMultiRg,
+		"multi-az-rg":     sd.SelectMultiAzSingleRg,
+		"multi-az-multi":  sd.SelectMultiAzMultiRg,
+	}
+	for name, selectFn := range strategies {
+		t.Run(name, func(t *testing.T) {
+			for round := 0; round < 20; round++ {
+				nodes, err := selectFn(&proto.NodeFilter{Limit: 3, ExcludeEndpoints: excluded}, proto.AffinityMode_SOFT)
+				require.NoError(t, err)
+				for _, n := range nodes {
+					assert.NotContains(t, excluded, n.Endpoint)
+				}
+			}
+		})
+	}
+
+	// Excluding everything leaves nothing, which the client treats as a cue to
+	// select again without the exclusion.
+	var all []string
+	for i := 0; i < 6; i++ {
+		all = append(all, fmt.Sprintf("node%d.example.com:8080", i))
+	}
+	nodes, _ := sd.SelectRandom(&proto.NodeFilter{Limit: 3, ExcludeEndpoints: all}, proto.AffinityMode_SOFT)
+	assert.Empty(t, nodes)
+}

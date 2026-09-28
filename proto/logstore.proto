@@ -341,6 +341,9 @@ message NodeFilter {
   string resource_group = 2;        // Filter by resource group (supports regex)
   map<string, string> tags = 3;     // Filter by tags (exact match)
   int32 limit = 4;                  // Limit the number of returned servers (0 = no limit)
+  // Service endpoints not to select, e.g. replicas the client just failed to
+  // reach. A server that predates this field ignores it and may return them.
+  repeated string exclude_endpoints = 5;
 }
 
 // Select nodes request

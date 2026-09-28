@@ -704,6 +704,11 @@ func (m *NodeFilter) CloneVT() *NodeFilter {
 		}
 		r.Tags = tmpContainer
 	}
+	if rhs := m.ExcludeEndpoints; rhs != nil {
+		tmpContainer := make([]string, len(rhs))
+		copy(tmpContainer, rhs)
+		r.ExcludeEndpoints = tmpContainer
+	}
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
 		copy(r.unknownFields, m.unknownFields)
@@ -1798,6 +1803,15 @@ func (this *NodeFilter) EqualVT(that *NodeFilter) bool {
 	}
 	if this.Limit != that.Limit {
 		return false
+	}
+	if len(this.ExcludeEndpoints) != len(that.ExcludeEndpoints) {
+		return false
+	}
+	for i, vx := range this.ExcludeEndpoints {
+		vy := that.ExcludeEndpoints[i]
+		if vx != vy {
+			return false
+		}
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
@@ -3899,6 +3913,15 @@ func (m *NodeFilter) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if len(m.ExcludeEndpoints) > 0 {
+		for iNdEx := len(m.ExcludeEndpoints) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.ExcludeEndpoints[iNdEx])
+			copy(dAtA[i:], m.ExcludeEndpoints[iNdEx])
+			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.ExcludeEndpoints[iNdEx])))
+			i--
+			dAtA[i] = 0x2a
+		}
+	}
 	if m.Limit != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Limit))
 		i--
@@ -5093,6 +5116,12 @@ func (m *NodeFilter) SizeVT() (n int) {
 	}
 	if m.Limit != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.Limit))
+	}
+	if len(m.ExcludeEndpoints) > 0 {
+		for _, s := range m.ExcludeEndpoints {
+			l = len(s)
+			n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+		}
 	}
 	n += len(m.unknownFields)
 	return n
@@ -10421,6 +10450,38 @@ func (m *NodeFilter) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ExcludeEndpoints", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ExcludeEndpoints = append(m.ExcludeEndpoints, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
@@ -16706,6 +16767,42 @@ func (m *NodeFilter) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ExcludeEndpoints", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.ExcludeEndpoints = append(m.ExcludeEndpoints, stringValue)
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])

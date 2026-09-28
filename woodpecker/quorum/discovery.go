@@ -2,6 +2,7 @@ package quorum
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"time"
@@ -185,6 +186,13 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
 	}
 
+	excluded := excludedEndpointsFrom(ctx)
+	if len(excluded) > 0 {
+		logger.Ctx(ctx).Info("Active discovery: selecting without replicas the previous segment could not reach",
+			zap.Strings("excluded", excluded))
+	}
+	setExclusion(filters, excluded)
+
 	var result *proto.QuorumInfo
 	err = retry.Do(ctx, func() error {
 		var selErr error
@@ -195,6 +203,14 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 			result, selErr = d.selectCustomPlacementQuorum(ctx, pools, custom, filters)
 		default:
 			result, selErr = d.selectSingleRegionQuorum(ctx, pools, filters)
+		}
+		if selErr != nil && len(excluded) > 0 && errors.Is(selErr, werr.ErrServiceInsufficientQuorum) {
+			// Too few nodes without the excluded ones: select from all of them
+			// rather than hold the log up.
+			logger.Ctx(ctx).Warn("Active discovery: not enough nodes without the excluded replicas, selecting with them",
+				zap.Strings("excluded", excluded), zap.Error(selErr))
+			excluded = nil
+			setExclusion(filters, nil)
 		}
 		return selErr
 	}, retry.AttemptAlways(), retry.Sleep(200*time.Millisecond), retry.MaxSleepTime(2*time.Second))
@@ -512,6 +528,7 @@ func (d *quorumDiscovery) requestNodesFromPool(ctx context.Context, pool config.
 	seeds := make([]string, len(pool.Seeds))
 	copy(seeds, pool.Seeds)
 	rand.Shuffle(len(seeds), func(i, j int) { seeds[i], seeds[j] = seeds[j], seeds[i] })
+	seeds = seedsExcludedLast(seeds, filter.GetExcludeEndpoints())
 
 	var lastErr error
 	for _, seed := range seeds {
@@ -547,6 +564,24 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 	selectedNodes, err := grpcClient.SelectNodes(ctx, d.strategyType(), d.affinityMode(), []*proto.NodeFilter{filter})
 	if err != nil {
 		return nil, fmt.Errorf("gRPC SelectNodes call failed for seed %s: %w", seed, err)
+	}
+
+	// A seed that predates ExcludeEndpoints may return excluded nodes. Drop
+	// them, and if that leaves too few, ask once more for enough extra nodes
+	// to make up for the ones dropped.
+	var dropped int
+	selectedNodes, dropped = withoutExcluded(selectedNodes, filter.GetExcludeEndpoints())
+	if dropped > 0 && len(selectedNodes) < expectedAtLeast {
+		widened := filter.CloneVT()
+		widened.Limit = filter.Limit + int32(len(filter.GetExcludeEndpoints()))
+		more, err := grpcClient.SelectNodes(ctx, d.strategyType(), d.affinityMode(), []*proto.NodeFilter{widened})
+		if err != nil {
+			return nil, fmt.Errorf("gRPC SelectNodes call failed for seed %s: %w", seed, err)
+		}
+		selectedNodes, _ = withoutExcluded(more, filter.GetExcludeEndpoints())
+		if filter.Limit > 0 && len(selectedNodes) > int(filter.Limit) {
+			selectedNodes = selectedNodes[:filter.Limit]
+		}
 	}
 
 	if len(selectedNodes) < expectedAtLeast {
