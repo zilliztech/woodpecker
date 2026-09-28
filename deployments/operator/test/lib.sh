@@ -152,7 +152,7 @@ spec:
       persistentVolumeClaim: { claimName: minio-data }
   containers:
     - name: minio
-      image: ${MINIO_IMG:-quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z}
+      image: ${MINIO_IMG:-milvusdb/minio:RELEASE.2024-12-18T13-15-44Z}
       command: ["minio", "server", "/data"]
       volumeMounts:
         - { name: data, mountPath: /data }

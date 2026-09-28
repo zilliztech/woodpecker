@@ -63,7 +63,7 @@ services:
 
   minio:
     container_name: milvus-minio
-    image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z 
+    image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z 
     environment:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin

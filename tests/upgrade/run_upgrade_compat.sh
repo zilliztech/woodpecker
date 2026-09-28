@@ -45,6 +45,8 @@ EOF
 STORAGE="local"
 DATA_DIR="/tmp/woodpecker_upgrade_data"
 ETCD_ENDPOINT="localhost:2379"
+# The MinIO image doubles as the mc client; see the listing step below.
+MINIO_IMAGE="${MINIO_IMAGE:-milvusdb/minio:RELEASE.2024-12-18T13-15-44Z}"
 MINIO_ENDPOINT="localhost:9000"
 MINIO_BUCKET="a-bucket"
 # Keep the dataset small: object storage flushes ~1 block/sec, and with MAX_BLOCKS=4
@@ -193,8 +195,16 @@ else
     # Object storage: a complete upgrade test must read BOTH a COMPACTED (merged
     # m_*.blk) v5 block and an UNCOMPACTED (plain N.blk) v5 block.
     echo "[ORCHESTRATOR] Phase 2.5: asserting BOTH compacted (m_*.blk) and uncompacted (.blk) blocks exist..."
-    LISTING="$(docker run --rm --network host -e MC_CONFIG_DIR=/tmp/mc --entrypoint sh quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z -c \
-        "mc alias set L http://${MINIO_ENDPOINT} minioadmin minioadmin >/dev/null 2>&1 && mc ls -r L/${MINIO_BUCKET}/ 2>/dev/null" 2>/dev/null || true)"
+    # mc comes out of the MinIO image, which ships it at /usr/bin/mc, so this needs no second
+    # image. Failures here are NOT swallowed: an unreadable listing used to fall through to the
+    # "no compacted block" branch below and blame compaction timing, which sent the reader
+    # looking in entirely the wrong place.
+    if ! LISTING="$(docker run --rm --network host -e MC_CONFIG_DIR=/tmp/mc --entrypoint sh "$MINIO_IMAGE" -c \
+        "mc alias set L http://${MINIO_ENDPOINT} minioadmin minioadmin && mc ls -r L/${MINIO_BUCKET}/")"; then
+        echo "[ORCHESTRATOR] ERROR: could not list ${MINIO_BUCKET} — the assertions below cannot run." >&2
+        echo "[ORCHESTRATOR]        This is a listing failure, not a statement about compaction." >&2
+        exit 1
+    fi
     MERGED="$(printf '%s\n' "$LISTING" | grep -E 'm_[0-9]+\.blk' | head -1 || true)"
     PLAIN="$(printf '%s\n' "$LISTING" | grep -E '/[0-9]+\.blk' | grep -v 'footer.blk' | head -1 || true)"
     if [[ -z "$MERGED" ]]; then
