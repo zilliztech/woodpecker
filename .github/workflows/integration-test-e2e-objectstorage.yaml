@@ -67,13 +67,15 @@ jobs:
 
       - name: Create MinIO bucket
         run: |
-          # mc runs from a pinned image on the compose network rather than a binary fetched at
-          # run time: dl.min.io now answers 410 for it (issue #330). The tag is the one CI was
-          # already getting -- the download URL carried no version, and RELEASE.2025-08-13T08-35-41Z
-          # is the last mc MinIO published -- so this pins what was resolved, it does not move it.
+          # mc comes from the MinIO image the stack already pulls, which ships it at
+          # /usr/bin/mc. Neither of the two sources this step used before survived: the binary
+          # download answers 410 (issue #330) and the standalone mc image is no longer public
+          # (issue #376). Reusing the server image leaves one image to keep working instead of
+          # two, and it is one we mirror ourselves.
           docker run --rm --network woodpecker-ci \
             -e MC_HOST_local=http://minioadmin:minioadmin@ci-minio:9000 \
-            quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z \
+            --entrypoint mc \
+            milvusdb/minio:RELEASE.2024-12-18T13-15-44Z \
             mb local/a-bucket --ignore-existing
 
       - name: Install gotestsum
