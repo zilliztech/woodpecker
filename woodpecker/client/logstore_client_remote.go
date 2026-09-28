@@ -18,11 +18,14 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -32,14 +35,45 @@ import (
 
 var _ LogStoreClient = (*logStoreClientRemote)(nil)
 
-// appendFirstResponseTimeout bounds the synchronous wait for the first
-// (Buffered) response of AddEntry / AddEntries. The caller passes a
-// deadline-less context, so without this bound a server that accepts the
-// stream but never responds blocks the send forever — wedging the per-segment
-// executor worker and stalling every subsequent append for the log (#232).
+// appendFirstResponseTimeout bounds the synchronous part of AddEntry /
+// AddEntries: opening the stream and reading its first (Buffered) response.
+// The caller passes a deadline-less context, and the send runs on the
+// per-segment executor, so while it waits every later append of the log waits
+// too (#232). Opening waits for the connection to be READY, which an address
+// that never answers never becomes; a peer that accepted the stream and went
+// silent never sends the first frame. Buffering an entry takes milliseconds,
+// so two seconds without it is a peer that is gone, and failing fast is the
+// point: until the replica is given up and the segment rolls, the log is either
+// stalled behind it or writing with one copy less.
 // Package var so tests can shrink it. TODO make configurable; tracked with the
 // timeout audit (#229).
-var appendFirstResponseTimeout = 30 * time.Second
+var appendFirstResponseTimeout = 2 * time.Second
+
+// selectNodesTimeout bounds one SelectNodes call to a seed. The seed answers
+// from its in-memory membership view; a seed that does not answer in time is
+// skipped by the caller's retry, which tries another seed.
+var selectNodesTimeout = 2 * time.Second
+
+// errCallTimedOut reports that a bound this client puts on a call expired. It
+// is Unavailable on purpose: a peer that cannot open a stream or answer within
+// the bound is as good as unreachable, so it takes the same path as a refused
+// dial, including maybeDropCachedConn evicting the connection. Left in the
+// pool, a connection pinned to an address that never answers would stall the
+// next caller the same way.
+func errCallTimedOut(what string, bound time.Duration, cause error) error {
+	return status.Errorf(codes.Unavailable, "%s timed out after %v: %v", what, bound, cause)
+}
+
+// appendTimedOut logs an expired append bound and returns the error that makes
+// the send fail like an unreachable replica.
+func (l *logStoreClientRemote) appendTimedOut(ctx context.Context, what string, logId int64, segId int64, cause error, fields ...zap.Field) error {
+	logger.Ctx(ctx).Warn(what+" timed out",
+		append([]zap.Field{
+			zap.String("target", l.target), zap.Int64("logId", logId), zap.Int64("segId", segId),
+			zap.Duration("timeout", appendFirstResponseTimeout), zap.Error(cause),
+		}, fields...)...)
+	return errCallTimedOut(what, appendFirstResponseTimeout, cause)
+}
 
 // logStoreClientRemote is a remote implementation of LogStoreClient,
 // which will interact with a remote LogStoreClient instance using gRPC.
@@ -102,26 +136,33 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 	}
 	l.mu.RUnlock()
 
-	// Create a child context with cancel for controlling the stream lifecycle
+	// The stream's context outlives this call (it carries the async ack), so the
+	// synchronous part is bounded by a timer that cancels it rather than by a
+	// deadline. The timer is armed before the stream is opened: opening blocks
+	// until the connection is READY, and that wait needs the bound as much as
+	// the first Recv does. Only the synchronous part is bounded here; the async
+	// ack phase keeps its own budget (receivedAckCallback / batch drain).
 	streamCtx, streamCancel := context.WithCancel(ctx)
+	firstRespTimer := time.AfterFunc(appendFirstResponseTimeout, streamCancel)
 
 	// Send unary append request first to get the actual entryId
 	respStream, err := l.innerClient.AddEntry(streamCtx, &proto.AddEntryRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, Entry: entry})
 	if err != nil {
+		timedOut := !firstRespTimer.Stop()
 		streamCancel() // Cancel context on error
+		if timedOut {
+			return -1, l.appendTimedOut(ctx, "append stream open", logId, entry.SegId, err, zap.Int64("entryId", entry.EntryId))
+		}
 		return -1, err
 	}
 	// First, get the initial AddEntryResponse to check if entry was buffered.
-	// Recv has no per-call deadline and the caller's context is deadline-less,
-	// so bound this synchronous wait with a timer that cancels the stream: a
-	// server that accepted the stream but never responds must not block the
-	// send forever (#232). Only the first response is bounded here — the async
-	// ack phase keeps its own budget (receivedAckCallback / batch drain).
-	firstRespTimer := time.AfterFunc(appendFirstResponseTimeout, streamCancel)
 	addEntryFirstResponse, err := respStream.Recv()
 	firstRespArrived := firstRespTimer.Stop()
 	if err != nil {
 		streamCancel() // Cancel context on error
+		if !firstRespArrived {
+			return -1, l.appendTimedOut(ctx, "append first response", logId, entry.SegId, err, zap.Int64("entryId", entry.EntryId))
+		}
 		return -1, err
 	}
 	if !firstRespArrived {
@@ -129,10 +170,7 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 		// carry the async ack, so treat the send as timed out even though a
 		// frame arrived at the deadline boundary.
 		streamCancel()
-		logger.Ctx(ctx).Warn("append first response timed out",
-			zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId),
-			zap.Duration("timeout", appendFirstResponseTimeout))
-		return -1, context.DeadlineExceeded
+		return -1, l.appendTimedOut(ctx, "append first response", logId, entry.SegId, context.DeadlineExceeded, zap.Int64("entryId", entry.EntryId))
 	}
 	// Then use the stream for async monitoring of the second AddEntryResponse status
 	if addEntryFirstResponse.GetState() == proto.AddEntryState_Buffered {
@@ -195,7 +233,11 @@ func (l *logStoreClientRemote) AppendEntries(ctx context.Context, bucketName str
 		chByEntry[e.EntryId] = resultChs[i]
 	}
 
+	// Bound opening the stream and phase 1 with one timer, armed before the
+	// stream is opened, the same way as the single-entry path (#232).
 	streamCtx, streamCancel := context.WithCancel(ctx)
+	firstRespTimer := time.AfterFunc(appendFirstResponseTimeout, streamCancel)
+	segId := entries[0].SegId
 	respStream, err := l.innerClient.AddEntries(streamCtx, &proto.AddEntriesRequest{
 		BucketName: bucketName,
 		RootPath:   rootPath,
@@ -203,29 +245,31 @@ func (l *logStoreClientRemote) AppendEntries(ctx context.Context, bucketName str
 		Entries:    entries,
 	})
 	if err != nil {
+		timedOut := !firstRespTimer.Stop()
 		streamCancel()
+		if timedOut {
+			return nil, l.appendTimedOut(ctx, "batch append stream open", logId, segId, err, zap.Int("entries", n))
+		}
 		return nil, err
 	}
 
 	// Phase 1: a single Buffered frame carries every id in the batch (the
 	// amortized send round-trip). A Failed frame here means the batch failed to
-	// buffer as a whole. Bound this synchronous wait the same way as the
-	// single-entry path (#232): a silent server must not block the send forever.
-	firstRespTimer := time.AfterFunc(appendFirstResponseTimeout, streamCancel)
+	// buffer as a whole.
 	resp, recvErr := respStream.Recv()
 	firstRespArrived := firstRespTimer.Stop()
 	if recvErr != nil {
 		streamCancel()
+		if !firstRespArrived {
+			return nil, l.appendTimedOut(ctx, "batch append first response", logId, segId, recvErr, zap.Int("entries", n))
+		}
 		return nil, recvErr
 	}
 	if !firstRespArrived {
 		// Timer already fired: the stream is (being) cancelled and cannot carry
 		// phase 2; treat the batch send as timed out.
 		streamCancel()
-		logger.Ctx(ctx).Warn("batch append first response timed out",
-			zap.Int64("logId", logId), zap.Int("entries", n),
-			zap.Duration("timeout", appendFirstResponseTimeout))
-		return nil, context.DeadlineExceeded
+		return nil, l.appendTimedOut(ctx, "batch append first response", logId, segId, context.DeadlineExceeded, zap.Int("entries", n))
 	}
 	if resp.GetState() == proto.AddEntryState_Failed {
 		statusErr := werr.Error(resp.GetStatus())
@@ -408,12 +452,19 @@ func (l *logStoreClientRemote) UpdateLastAddConfirmed(ctx context.Context, bucke
 
 func (l *logStoreClientRemote) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) (nodes []*proto.NodeMeta, err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
-	resp, err := l.innerClient.SelectNodes(ctx, &proto.SelectNodesRequest{
+	// New segments are created on the append path, so a seed that does not
+	// answer would stall appends; bound the call and let the caller try another.
+	callCtx, cancel := context.WithTimeout(ctx, selectNodesTimeout)
+	defer cancel()
+	resp, err := l.innerClient.SelectNodes(callCtx, &proto.SelectNodesRequest{
 		Strategy:     strategyType,
 		AffinityMode: affinityMode,
 		Filters:      filters,
 	})
 	if err != nil {
+		if ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+			return nil, errCallTimedOut("select nodes", selectNodesTimeout, err)
+		}
 		return nil, err
 	}
 	selectNodesErr := werr.Error(resp.GetStatus())

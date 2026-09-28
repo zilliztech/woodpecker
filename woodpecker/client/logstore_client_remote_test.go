@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -671,7 +673,7 @@ func TestRemoteClient_SelectNodes_Success(t *testing.T) {
 	ctx := context.Background()
 
 	expectedNodes := []*proto.NodeMeta{{NodeId: "node1"}, {NodeId: "node2"}}
-	mockClient.On("SelectNodes", ctx, mock.AnythingOfType("*proto.SelectNodesRequest")).
+	mockClient.On("SelectNodes", mock.Anything, mock.AnythingOfType("*proto.SelectNodesRequest")).
 		Return(&proto.SelectNodesResponse{Nodes: expectedNodes}, nil)
 
 	nodes, err := client.SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
@@ -683,7 +685,7 @@ func TestRemoteClient_SelectNodes_GrpcError(t *testing.T) {
 	client, mockClient := newRemoteClientWithMock(t)
 	ctx := context.Background()
 
-	mockClient.On("SelectNodes", ctx, mock.Anything).
+	mockClient.On("SelectNodes", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("select error"))
 
 	nodes, err := client.SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
@@ -695,7 +697,7 @@ func TestRemoteClient_SelectNodes_StatusError(t *testing.T) {
 	client, mockClient := newRemoteClientWithMock(t)
 	ctx := context.Background()
 
-	mockClient.On("SelectNodes", ctx, mock.Anything).
+	mockClient.On("SelectNodes", mock.Anything, mock.Anything).
 		Return(&proto.SelectNodesResponse{
 			Status: werr.Status(werr.ErrUnknownError),
 		}, nil)
@@ -1067,4 +1069,147 @@ func TestMarkLogDeletedSyncFailsClosedOnOldNode(t *testing.T) {
 	found, err := newClient.MarkLogDeleted(ctx, "bucket", "root", 1, true)
 	require.NoError(t, err)
 	assert.True(t, found)
+}
+
+// blockUntilCancelled makes a mocked call behave like gRPC opening a stream or
+// issuing a call on a connection that is still CONNECTING: it returns only when
+// the call's context ends.
+func blockUntilCancelled(args mock.Arguments) {
+	<-args.Get(0).(context.Context).Done()
+}
+
+// TestRemoteClient_AppendEntry_StreamOpenTimeout: opening the stream waits for
+// the connection to be READY, which an address that never answers never
+// becomes. The bound must cover that wait, not only the first Recv, and the
+// failure must read as an unreachable replica.
+func TestRemoteClient_AppendEntry_StreamOpenTimeout(t *testing.T) {
+	oldTimeout := appendFirstResponseTimeout
+	appendFirstResponseTimeout = 200 * time.Millisecond
+	defer func() { appendFirstResponseTimeout = oldTimeout }()
+
+	client, mockClient := newRemoteClientWithMock(t)
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Run(blockUntilCancelled).
+		Return(nil, status.Error(codes.Canceled, "context canceled"))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.AppendEntry(context.Background(), "bucket", "root", 1,
+			&proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("v")},
+			channel.NewRemoteResultChannel("ch"))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Equal(t, codes.Unavailable, status.Code(err), "a timed-out open must read as an unreachable replica: %v", err)
+		assert.True(t, werr.IsTransportError(err), "a timed-out open must evict the pinned connection")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AppendEntry is not bounded while opening the stream")
+	}
+}
+
+// TestRemoteClient_AppendEntries_StreamOpenTimeout is the batched counterpart.
+func TestRemoteClient_AppendEntries_StreamOpenTimeout(t *testing.T) {
+	oldTimeout := appendFirstResponseTimeout
+	appendFirstResponseTimeout = 200 * time.Millisecond
+	defer func() { appendFirstResponseTimeout = oldTimeout }()
+
+	client, mockClient := newRemoteClientWithMock(t)
+	mockClient.On("AddEntries", mock.Anything, mock.Anything).
+		Run(blockUntilCancelled).
+		Return(nil, status.Error(codes.Canceled, "context canceled"))
+
+	entries := []*proto.LogEntry{{SegId: 1, EntryId: 0, Values: []byte("v0")}}
+	resultChs := []channel.ResultChannel{channel.NewLocalResultChannel("e0")}
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.AppendEntries(context.Background(), "bucket", "root", 1, entries, resultChs)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Equal(t, codes.Unavailable, status.Code(err), "%v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("AppendEntries is not bounded while opening the stream")
+	}
+}
+
+// TestRemoteClient_SelectNodes_Timeout: segment creation sits on the append
+// path, so a seed that never answers must fail the call within the bound.
+func TestRemoteClient_SelectNodes_Timeout(t *testing.T) {
+	oldTimeout := selectNodesTimeout
+	selectNodesTimeout = 200 * time.Millisecond
+	defer func() { selectNodesTimeout = oldTimeout }()
+
+	client, mockClient := newRemoteClientWithMock(t)
+	mockClient.On("SelectNodes", mock.Anything, mock.Anything).
+		Run(blockUntilCancelled).
+		Return(nil, status.Error(codes.DeadlineExceeded, "context deadline exceeded"))
+
+	start := time.Now()
+	_, err := client.SelectNodes(context.Background(), proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.Equal(t, codes.Unavailable, status.Code(err), "%v", err)
+
+	// The caller's own cancellation is not our timeout and keeps its error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mockClient.ExpectedCalls = nil
+	mockClient.On("SelectNodes", mock.Anything, mock.Anything).
+		Return(nil, status.Error(codes.Canceled, "context canceled"))
+	_, err = client.SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	assert.Equal(t, codes.Canceled, status.Code(err))
+}
+
+// TestLogStoreClientPool_ConnectTimeout drives a real gRPC connection at an
+// address that accepts TCP and then never answers, the way a reclaimed pod IP
+// behaves. Without a connect bound the call waits for gRPC's default 20s; it
+// must give up after connectTimeout even though the call itself has a longer
+// budget.
+func TestLogStoreClientPool_ConnectTimeout(t *testing.T) {
+	oldConnect, oldSelect := connectTimeout, selectNodesTimeout
+	connectTimeout, selectNodesTimeout = 300*time.Millisecond, 10*time.Second
+	defer func() { connectTimeout, selectNodesTimeout = oldConnect, oldSelect }()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	var heldMu sync.Mutex
+	var held []net.Conn
+	defer func() {
+		heldMu.Lock()
+		defer heldMu.Unlock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+	}()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			heldMu.Lock()
+			held = append(held, c) // never read, never written: no server preface
+			heldMu.Unlock()
+		}
+	}()
+
+	pool := NewLogStoreClientPool(1<<20, 1<<20)
+	defer pool.Close(context.Background())
+	cli, err := pool.GetLogStoreClient(context.Background(), ln.Addr().String())
+	require.NoError(t, err)
+
+	start := time.Now()
+	_, err = cli.SelectNodes(context.Background(), proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	assert.Equal(t, codes.Unavailable, status.Code(err), "%v", err)
+	assert.Less(t, elapsed, 3*time.Second, "the connect attempt was not bounded by connectTimeout")
+	t.Logf("call against a silent address failed after %v: %v", elapsed, err)
 }
