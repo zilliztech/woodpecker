@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -152,6 +154,27 @@ func (p *logStoreClientPool) getConnectionFromPoolUnsafe(target string) (grpc.Cl
 	return cnx, nil
 }
 
+// connectTimeout bounds one attempt to establish a connection.
+//
+// An RPC issued while its connection is still CONNECTING waits for the attempt
+// to finish, even with WaitForReady(false): fail-fast only applies once the
+// connection has failed. gRPC's default bound is 20 seconds, and an attempt
+// against an address that never answers (a restarted pod's reclaimed IP still
+// resolved from DNS) runs to that bound, stalling every append behind it. A
+// connection to a live peer in the same cluster takes milliseconds.
+// Package var so tests can shrink it. TODO make configurable.
+var connectTimeout = 1 * time.Second
+
+// connectBackoff paces reconnection after a failed attempt. It matches the
+// values Milvus uses for its internal clients; the zero Config would retry in
+// a tight loop, so it must be set whenever connectTimeout is.
+var connectBackoff = backoff.Config{
+	BaseDelay:  100 * time.Millisecond,
+	Multiplier: 1.6,
+	Jitter:     0.2,
+	MaxDelay:   3 * time.Second,
+}
+
 func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, error) {
 	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -162,6 +185,10 @@ func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, err
 			grpc.WaitForReady(false),
 		),
 		// NOTE: grpc.WithBlock() is not used here because it will block the connection
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           connectBackoff,
+			MinConnectTimeout: connectTimeout,
+		}),
 		grpc.WithChainUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
 		grpc.WithChainStreamInterceptor(otelgrpc.StreamClientInterceptor()),
 	}
