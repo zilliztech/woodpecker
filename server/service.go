@@ -378,6 +378,46 @@ func (s *Server) Stop() error {
 	return nil
 }
 
+// Kill stops the server the way a SIGKILL or a crash would, for tests that
+// need the cluster to see an abrupt death rather than a clean exit: it never
+// leaves the gossip cluster, so peers only learn of the death by failed
+// probes, and it drops in-flight RPCs instead of draining them.
+//
+// The log store is still stopped so the test process gets its files and
+// goroutines back; that flushes buffered data a real crash would lose, which is
+// harmless here because nothing is acknowledged before it is synced.
+func (s *Server) Kill() error {
+	if s.listener != nil {
+		_ = s.listener.Close()
+	}
+
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node != nil {
+		if shutdownErr := node.Shutdown(); shutdownErr != nil {
+			logger.Ctx(s.ctx).Warn("server node shutdown failed during kill", zap.Error(shutdownErr))
+		}
+	}
+
+	if s.grpcServer != nil {
+		s.grpcServer.Stop()
+	}
+	s.grpcWG.Wait()
+
+	if s.logStore != nil {
+		if stopErr := s.logStore.Stop(); stopErr != nil {
+			logger.Ctx(s.ctx).Warn("log store stop failed during kill", zap.Error(stopErr))
+		}
+	}
+	s.cancel()
+	s.decommWG.Wait()
+	s.gossipWG.Wait()
+
+	logger.Ctx(s.ctx).Info("server killed", zap.String("nodeID", s.serverConfig.NodeID))
+	return nil
+}
+
 const shutdownGracePeriod = 10 * time.Second
 
 // wrappedServerStream wraps a grpc.ServerStream with a custom context.

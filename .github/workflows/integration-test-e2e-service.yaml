@@ -22,7 +22,7 @@ jobs:
   E2E-Service:
     name: E2E Service
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -122,6 +122,22 @@ jobs:
           echo ""
           echo "=== Test Results ==="
           jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-upgrade.json
+          exit $exit_code
+
+      - name: Run e2e service pod stability tests
+        # No -race: these tests assert latency budgets, and the race detector's
+        # slowdown would be measured as stalls.
+        run: |
+          set +e
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output-pod-stability.json \
+            -- -cover -failfast -timeout=30m \
+            -run "^TestServicePodStability" \
+            ./tests/integration/...
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-pod-stability.json
           exit $exit_code
 
       - name: Upload test output on failure

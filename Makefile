@@ -150,10 +150,16 @@ integration-test-e2e-service: ## Run e2e tests with service storage + failover
 		-run "^TestStagedStorageService" \
 		./tests/integration/...
 
+.PHONY: integration-test-pod-stability
+integration-test-pod-stability: ## Run service-mode pod replacement stability tests (latency budgets, so no -race)
+	go test -cover -failfast -timeout=30m -v \
+		-run "^TestServicePodStability" \
+		./tests/integration/...
+
 .PHONY: integration-test-components
 integration-test-components: ## Run component integration tests (non-e2e)
 	go test -race -cover -failfast -timeout=20m -v \
-		-skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService)" \
+		-skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestServicePodStability)" \
 		./tests/integration/...
 
 clean: ## Clean built binaries
