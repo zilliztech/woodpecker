@@ -334,3 +334,81 @@ func TestFenceQuorum_JSONShortfallStillFails(t *testing.T) {
 	require.Equal(t, 1, payload.Fenced)
 	require.Len(t, payload.Nodes, 3, "every targeted node must appear, whatever became of it")
 }
+
+// TestFenceQuorum_RefusesWhatItCannotRead covers the metadata the command depends on being absent
+// or unusable. Each case has to name the thing that was missing: a destructive operation that says
+// only "failed" leaves the operator guessing whether they mistyped a name or lost a record.
+func TestFenceQuorum_RefusesWhatItCannotRead(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	Globals = GlobalFlags{Timeout: 2 * time.Second}
+
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2,
+		[]fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
+
+	put := func(segmentID int64, m *proto.SegmentMetadata) {
+		b, err := pb.Marshal(m)
+		require.NoError(t, err)
+		_, err = cli.Put(context.Background(), kb.BuildSegmentInstanceKey("mylog", fmt.Sprintf("%d", segmentID)), string(b))
+		require.NoError(t, err)
+	}
+	// Segment 4 predates the inline quorum; segment 5 carries one that names no nodes.
+	put(4, &proto.SegmentMetadata{SegNo: 4, State: proto.SegmentState_Active, LastEntryId: -1})
+	put(5, &proto.SegmentMetadata{SegNo: 5, State: proto.SegmentState_Active, LastEntryId: -1,
+		Quorum: &proto.QuorumInfo{Id: 1, Es: 3, Wq: 3, Aq: 2}})
+
+	// wantsNot matters as much as wants: the messages of successive guards overlap, so a case that
+	// only looked for a substring would pass with its own guard removed and the next one answering.
+	cases := []struct {
+		name      string
+		logName   string
+		segmentID int64
+		wants     []string
+		wantsNot  string
+	}{
+		{"unknown log", "nosuchlog", 3, []string{"log nosuchlog", "not found at"}, "segment"},
+		{"unknown segment", "mylog", 99, []string{"segment 99 of log mylog", "not found at"}, "quorum"},
+		{"segment with no quorum", "mylog", 4, []string{"carries no quorum"}, "not found at"},
+		{"quorum naming no nodes", "mylog", 5, []string{"lists no nodes"}, "carries no quorum"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, _, _ := markingTestCmd()
+			err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
+				logName: tc.logName, segmentID: tc.segmentID, reason: "stalled writer", confirmed: true,
+			})
+			require.Error(t, err)
+			for _, want := range tc.wants {
+				require.Contains(t, err.Error(), want)
+			}
+			require.NotContains(t, err.Error(), tc.wantsNot,
+				"a later guard answered, so this one is not what refused")
+		})
+	}
+	for i, c := range counters {
+		require.Zero(t, c.Load(), "node %d must be untouched when the metadata cannot be read", i+1)
+	}
+}
+
+// TestAdminErrorText covers what a refusal is reported as. The node's own message is the useful
+// part, but a peer answering through something that is not the admin endpoint -- a proxy error
+// page, a closed connection mid-body -- must still produce a reason rather than an empty cell.
+func TestAdminErrorText(t *testing.T) {
+	cases := []struct {
+		name   string
+		body   string
+		status int
+		wants  string
+	}{
+		{"the node's own message", `{"error":"segment 7:3 not found"}`, 409, "segment 7:3 not found"},
+		{"a body that is not ours", "<html>502 Bad Gateway</html>", 502, "status 502: <html>502 Bad Gateway</html>"},
+		{"no body at all", "", 503, "status 503"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.wants, adminErrorText([]byte(tc.body), tc.status))
+		})
+	}
+}
