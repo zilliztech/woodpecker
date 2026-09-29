@@ -144,8 +144,7 @@ func deleteLogObjects(ctx context.Context, storage storageclient.ObjectStorage, 
 // removeObjectsConcurrently deletes keys with a bounded worker pool and returns the first
 // error, after every worker has drained. Partial progress is fine: the caller's retry
 // re-enumerates and only sees what is left.
-// objectRequestTimeout bounds ONE object-storage delete. Package var so tests can shrink it,
-// matching the convention appendFirstResponseTimeout established in the logstore client.
+// objectRequestTimeout bounds ONE object-storage delete. Package var so tests can shrink it.
 //
 // Deliberately NOT wired to minio.requestTimeoutMs. That setting has no reader anywhere in
 // the repository, so its 1s default has never been exercised; activating it from here would

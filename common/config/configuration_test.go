@@ -18,10 +18,12 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestNewConfiguration test new Configuration
@@ -89,6 +91,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 268435456, config.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize())
 	assert.Equal(t, 268435456, config.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize())
 	assert.Equal(t, 536870912, config.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
+	assertDefaultCallBounds(t, config)
 	assert.Equal(t, 60, config.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, config.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, config.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
@@ -200,6 +203,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 268435456, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize())
 	assert.Equal(t, 268435456, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize())
 	assert.Equal(t, 536870912, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
+	assertDefaultCallBounds(t, defaultConfig)
 	assert.Equal(t, 60, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
@@ -1363,4 +1367,90 @@ func TestDiskWatermarkPolicyConfig_DefaultsAndValidation(t *testing.T) {
 	// disabled: validation skipped
 	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
 	assert.NoError(t, cfg.Validate())
+}
+
+// assertDefaultCallBounds checks the dial configuration and call bounds the
+// shipped woodpecker.yaml and the built-in defaults must agree on.
+func assertDefaultCallBounds(t *testing.T, cfg *Configuration) {
+	t.Helper()
+	dial := cfg.Woodpecker.Client.GRPC
+	assert.Equal(t, time.Second, dial.DialTimeout.Duration.Duration())
+	assert.Equal(t, 100*time.Millisecond, dial.ConnectBackoff.BaseDelay.Duration.Duration())
+	assert.Equal(t, 1.6, dial.ConnectBackoff.Multiplier)
+	assert.Equal(t, 0.2, dial.ConnectBackoff.Jitter)
+	assert.Equal(t, 3*time.Second, dial.ConnectBackoff.MaxDelay.Duration.Duration())
+	assert.Equal(t, 2*time.Second, cfg.Woodpecker.Client.SegmentAppend.SendTimeout.Duration.Duration())
+	assert.Equal(t, 2*time.Second, cfg.Woodpecker.Client.Quorum.SelectNodesTimeout.Duration.Duration())
+}
+
+func TestCallBoundsConfig_ParseAndValidate(t *testing.T) {
+	t.Run("parses plain milliseconds and unit strings", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "wp.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(`
+woodpecker:
+  client:
+    segmentAppend:
+      sendTimeout: 1500
+    quorum:
+      selectNodesTimeout: 3s
+    grpc:
+      dialTimeout: 200
+      connectBackoff:
+        baseDelay: 50ms
+        multiplier: 2
+        jitter: 0.1
+        maxDelay: 1s
+`), 0o644))
+		cfg, err := NewConfiguration(path)
+		require.NoError(t, err)
+		dial := cfg.Woodpecker.Client.GRPC
+		assert.Equal(t, 200*time.Millisecond, dial.DialTimeout.Duration.Duration())
+		assert.Equal(t, 50*time.Millisecond, dial.ConnectBackoff.BaseDelay.Duration.Duration())
+		assert.Equal(t, 2.0, dial.ConnectBackoff.Multiplier)
+		assert.Equal(t, 0.1, dial.ConnectBackoff.Jitter)
+		assert.Equal(t, time.Second, dial.ConnectBackoff.MaxDelay.Duration.Duration())
+		assert.Equal(t, 1500*time.Millisecond, cfg.Woodpecker.Client.SegmentAppend.SendTimeout.Duration.Duration())
+		assert.Equal(t, 3*time.Second, cfg.Woodpecker.Client.Quorum.SelectNodesTimeout.Duration.Duration())
+	})
+
+	invalid := map[string]struct {
+		mutate func(*Configuration)
+		want   string
+	}{
+		"send timeout negative": {func(c *Configuration) {
+			c.Woodpecker.Client.SegmentAppend.SendTimeout = NewDurationMillisecondsFromInt(-1)
+		}, "send timeout cannot be negative"},
+		"select nodes timeout negative": {func(c *Configuration) {
+			c.Woodpecker.Client.Quorum.SelectNodesTimeout = NewDurationMillisecondsFromInt(-1)
+		}, "select nodes timeout cannot be negative"},
+		"dial timeout negative": {func(c *Configuration) {
+			c.Woodpecker.Client.GRPC.DialTimeout = NewDurationMillisecondsFromInt(-1)
+		}, "dial timeout cannot be negative"},
+		"backoff base negative": {func(c *Configuration) {
+			c.Woodpecker.Client.GRPC.ConnectBackoff.BaseDelay = NewDurationMillisecondsFromInt(-1)
+		}, "base delay cannot be negative"},
+		"backoff max below base": {func(c *Configuration) {
+			c.Woodpecker.Client.GRPC.ConnectBackoff.MaxDelay = NewDurationMillisecondsFromInt(10)
+		}, "must not be below its base delay"},
+		"backoff multiplier below 1": {func(c *Configuration) { c.Woodpecker.Client.GRPC.ConnectBackoff.Multiplier = 0.5 }, "multiplier must be at least 1"},
+		"backoff jitter above 1":     {func(c *Configuration) { c.Woodpecker.Client.GRPC.ConnectBackoff.Jitter = 1.5 }, "jitter must be within [0, 1]"},
+	}
+	for name, tc := range invalid {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := NewConfiguration()
+			require.NoError(t, err)
+			tc.mutate(cfg)
+			assert.ErrorContains(t, cfg.Validate(), tc.want)
+		})
+	}
+
+	t.Run("zero leaves the defaults and stays valid", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		require.NoError(t, err)
+		cfg.Woodpecker.Client.SegmentAppend.SendTimeout = DurationMilliseconds{}
+		cfg.Woodpecker.Client.Quorum.SelectNodesTimeout = DurationMilliseconds{}
+		cfg.Woodpecker.Client.GRPC = GRPCClientConfig{}
+		assert.NoError(t, cfg.Validate())
+	})
 }

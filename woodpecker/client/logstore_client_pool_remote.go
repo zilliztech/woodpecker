@@ -21,12 +21,15 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -52,17 +55,66 @@ type logStoreClientPool struct {
 	sync.RWMutex
 	maxSendMsgSize int
 	maxRecvMsgSize int
+	dial           config.GRPCClientConfig
+	timeouts       CallTimeouts
 	connections    map[string]*grpc.ClientConn
 	clients        map[string]LogStoreClient
 	clientClosed   atomic.Bool
 }
 
-func NewLogStoreClientPool(maxSendMsgSize int, maxRecvMsgSize int) LogStoreClientPool {
+// CallTimeouts bounds the calls a remote client makes on the paths that must
+// not stall. A zero field takes its default.
+type CallTimeouts struct {
+	// AppendSend bounds opening an append stream and receiving its first
+	// (buffered) response. See config.SegmentAppendConfig.SendTimeout.
+	AppendSend time.Duration
+	// SelectNodes bounds one SelectNodes call. See
+	// config.QuorumConfig.SelectNodesTimeout.
+	SelectNodes time.Duration
+}
+
+const (
+	defaultAppendSendTimeout  = 2 * time.Second
+	defaultSelectNodesTimeout = 2 * time.Second
+)
+
+func (t CallTimeouts) appendSend() time.Duration {
+	if t.AppendSend > 0 {
+		return t.AppendSend
+	}
+	return defaultAppendSendTimeout
+}
+
+func (t CallTimeouts) selectNodes() time.Duration {
+	if t.SelectNodes > 0 {
+		return t.SelectNodes
+	}
+	return defaultSelectNodesTimeout
+}
+
+// PoolOption configures a remote LogStoreClientPool.
+type PoolOption func(*logStoreClientPool)
+
+// WithGRPCClientConfig sets how the pool dials logstores. Without it, or for a
+// zero field, the defaults of config.GRPCClientConfig apply.
+func WithGRPCClientConfig(c config.GRPCClientConfig) PoolOption {
+	return func(p *logStoreClientPool) { p.dial = c }
+}
+
+// WithCallTimeouts sets the bounds on the calls the pool's clients make.
+func WithCallTimeouts(t CallTimeouts) PoolOption {
+	return func(p *logStoreClientPool) { p.timeouts = t }
+}
+
+func NewLogStoreClientPool(maxSendMsgSize int, maxRecvMsgSize int, opts ...PoolOption) LogStoreClientPool {
 	p := &logStoreClientPool{
 		maxSendMsgSize: maxSendMsgSize,
 		maxRecvMsgSize: maxRecvMsgSize,
 		connections:    make(map[string]*grpc.ClientConn),
 		clients:        make(map[string]LogStoreClient),
+	}
+	for _, opt := range opts {
+		opt(p)
 	}
 	p.clientClosed.Store(false)
 	return p
@@ -115,8 +167,9 @@ func (p *logStoreClientPool) GetLogStoreClient(ctx context.Context, target strin
 		// the pool when they observe a transport-level failure. This keeps
 		// the Clear-on-error logic inside logstore_client_remote.go and out
 		// of every caller (fence / append / discovery / etc.).
-		pool:   p,
-		target: target,
+		pool:     p,
+		target:   target,
+		timeouts: p.timeouts,
 	}
 	p.clients[target] = client
 	return client, nil
@@ -152,6 +205,34 @@ func (p *logStoreClientPool) getConnectionFromPoolUnsafe(target string) (grpc.Cl
 	return cnx, nil
 }
 
+// connectParams turns the dial configuration into gRPC's connect parameters.
+//
+// A call issued on a connection that is still connecting waits for the attempt
+// to finish, even with WaitForReady(false): fail-fast only applies once the
+// connection has failed. gRPC's default bound on an attempt is 20 seconds, and
+// an attempt against an address that never answers (a replaced pod's reclaimed
+// IP, still resolved from DNS) runs to that bound, stalling every append
+// behind it. The backoff must be set whenever the timeout is: a zero backoff
+// config would retry in a tight loop.
+func connectParams(c config.GRPCClientConfig) grpc.ConnectParams {
+	d := config.DefaultGRPCClientConfig()
+	if c.DialTimeout.Duration.Duration() > 0 {
+		d.DialTimeout = c.DialTimeout
+	}
+	if c.ConnectBackoff.BaseDelay.Duration.Duration() > 0 {
+		d.ConnectBackoff = c.ConnectBackoff
+	}
+	return grpc.ConnectParams{
+		Backoff: backoff.Config{
+			BaseDelay:  d.ConnectBackoff.BaseDelay.Duration.Duration(),
+			Multiplier: d.ConnectBackoff.Multiplier,
+			Jitter:     d.ConnectBackoff.Jitter,
+			MaxDelay:   d.ConnectBackoff.MaxDelay.Duration.Duration(),
+		},
+		MinConnectTimeout: d.DialTimeout.Duration.Duration(),
+	}
+}
+
 func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, error) {
 	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -162,6 +243,7 @@ func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, err
 			grpc.WaitForReady(false),
 		),
 		// NOTE: grpc.WithBlock() is not used here because it will block the connection
+		grpc.WithConnectParams(connectParams(p.dial)),
 		grpc.WithChainUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
 		grpc.WithChainStreamInterceptor(otelgrpc.StreamClientInterceptor()),
 	}

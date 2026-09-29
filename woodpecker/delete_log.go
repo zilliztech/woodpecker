@@ -326,8 +326,7 @@ func markLogDeletedOnNodes(
 	return stats, nil
 }
 
-// Delete-mark bounds. Package vars so tests can shrink them, matching the convention
-// appendFirstResponseTimeout established in logstore_client_remote.go.
+// Delete-mark bounds. Package vars so tests can shrink them.
 var (
 	// markAttempts is how many times one node's delete mark is tried before it counts as
 	// unreachable. Transport failures only: the pool evicts its cached connection on each

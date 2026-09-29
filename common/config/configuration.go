@@ -52,6 +52,13 @@ type SegmentAppendConfig struct {
 	// MaxBatchEntries / MaxBatchBytes is reached first bounds the batch).
 	// 0 = no byte limit. Ignored when MaxBatchEntries <= 1.
 	MaxBatchBytes ByteSize `yaml:"maxBatchBytes"`
+	// SendTimeout bounds sending an append to one replica: opening the stream
+	// and receiving the replica's first (buffered) response. The send runs on
+	// the segment's executor, so every later append of the log waits while it
+	// does. Buffering an entry takes milliseconds; a replica that has not
+	// answered by then is taken as unreachable, so the segment can roll away
+	// from it. Zero means the default, 2s.
+	SendTimeout DurationMilliseconds `yaml:"sendTimeout"`
 }
 
 // DirectReadConfig stores the direct read configuration for sealed segments.
@@ -71,6 +78,9 @@ type ClientConfig struct {
 	Quorum               QuorumConfig               `yaml:"quorum"`
 	SessionMonitor       SessionMonitorConfig       `yaml:"sessionMonitor"`
 	DirectRead           DirectReadConfig           `yaml:"directRead"`
+	// GRPC is how the client dials logstores. The logstore's own gRPC settings
+	// are under logstore.grpc: each process reads its own section.
+	GRPC GRPCClientConfig `yaml:"grpc"`
 }
 
 type AuditorConfig struct {
@@ -129,6 +139,11 @@ type QuorumSelectStrategy struct {
 type QuorumConfig struct {
 	BufferPools    Dynamic[[]QuorumBufferPool] `yaml:"quorumBufferPools"`
 	SelectStrategy QuorumSelectStrategy        `yaml:"quorumSelectStrategy"`
+	// SelectNodesTimeout bounds one SelectNodes call to a seed. New segments are
+	// created on the append path, so a seed that does not answer would stall
+	// appends; when this expires the next seed is asked. Zero means the
+	// default, 2s.
+	SelectNodesTimeout DurationMilliseconds `yaml:"selectNodesTimeout"`
 }
 
 // GetEnsembleSize returns the ensemble size.
@@ -168,6 +183,74 @@ type GRPCConfig struct {
 	ServerMaxRecvSize ByteSize `yaml:"serverMaxRecvSize"` // Maximum size of each RPC request that the server can receive
 	ClientMaxSendSize ByteSize `yaml:"clientMaxSendSize"` // Maximum size of each RPC request that the client can send
 	ClientMaxRecvSize ByteSize `yaml:"clientMaxRecvSize"` // Maximum size of each RPC request that the client can receive
+}
+
+// GRPCClientConfig configures how a client dials logstores. DialTimeout has the
+// meaning of Milvus's grpc.client.dialTimeout, so an embedding Milvus can pass
+// its own value down.
+type GRPCClientConfig struct {
+	// DialTimeout bounds one attempt to establish a connection (gRPC's
+	// MinConnectTimeout, 20s when left unset). A call on a connection that is
+	// still connecting waits for the attempt, even a fail-fast one, so this is
+	// also how long a call to an address that never answers can wait before
+	// it fails: the reclaimed IP of a replaced pod, for one. Connecting to a
+	// live logstore in the same cluster takes milliseconds. Zero means the
+	// default, 1s. Milvus: grpc.client.dialTimeout.
+	DialTimeout DurationMilliseconds `yaml:"dialTimeout"`
+	// ConnectBackoff paces reconnection after a failed connection attempt. A
+	// zero BaseDelay means the default. It is not a call retry backoff, which
+	// is what Milvus's grpc.client.initialBackoff/maxBackoff configure.
+	ConnectBackoff GRPCBackoffConfig `yaml:"connectBackoff"`
+}
+
+// DefaultGRPCClientConfig returns the default client dial configuration.
+func DefaultGRPCClientConfig() GRPCClientConfig {
+	return GRPCClientConfig{
+		DialTimeout: NewDurationMillisecondsFromInt(1000),
+		// The values Milvus uses for its own internal clients.
+		ConnectBackoff: GRPCBackoffConfig{
+			BaseDelay:  NewDurationMillisecondsFromInt(100),
+			Multiplier: 1.6,
+			Jitter:     0.2,
+			MaxDelay:   NewDurationMillisecondsFromInt(3000),
+		},
+	}
+}
+
+// validate checks the dial configuration. A zero dial timeout, or a zero
+// backoff base delay, leaves that part at its default, so a configuration
+// built in code without this section stays valid.
+func (g *GRPCClientConfig) validate() error {
+	if g.DialTimeout.Duration.Duration() < 0 {
+		return fmt.Errorf("grpc client dial timeout cannot be negative, got %v", g.DialTimeout.Duration.Duration())
+	}
+	b := g.ConnectBackoff
+	if b.BaseDelay.Duration.Duration() < 0 {
+		return fmt.Errorf("grpc client connect backoff base delay cannot be negative, got %v", b.BaseDelay.Duration.Duration())
+	}
+	if b.BaseDelay.Duration.Duration() == 0 {
+		return nil
+	}
+	if b.MaxDelay.Duration.Duration() < b.BaseDelay.Duration.Duration() {
+		return fmt.Errorf("grpc client connect backoff max delay %v must not be below its base delay %v", b.MaxDelay.Duration.Duration(), b.BaseDelay.Duration.Duration())
+	}
+	if b.Multiplier < 1 {
+		return fmt.Errorf("grpc client connect backoff multiplier must be at least 1, got %v", b.Multiplier)
+	}
+	if b.Jitter < 0 || b.Jitter > 1 {
+		return fmt.Errorf("grpc client connect backoff jitter must be within [0, 1], got %v", b.Jitter)
+	}
+	return nil
+}
+
+// GRPCBackoffConfig is gRPC's connection backoff: the delay before the next
+// connection attempt starts at BaseDelay and grows by Multiplier, randomised
+// by Jitter, up to MaxDelay.
+type GRPCBackoffConfig struct {
+	BaseDelay  DurationMilliseconds `yaml:"baseDelay"`
+	Multiplier float64              `yaml:"multiplier"`
+	Jitter     float64              `yaml:"jitter"`
+	MaxDelay   DurationMilliseconds `yaml:"maxDelay"`
 }
 
 // GetServerMaxSendSize returns the server max send size in bytes as int.
@@ -661,6 +744,18 @@ func (c *Configuration) validateClientConfig() error {
 	if client.SegmentAppend.MaxRetries < 0 {
 		return fmt.Errorf("segment append max retries cannot be negative, got %d", client.SegmentAppend.MaxRetries)
 	}
+	if err := client.GRPC.validate(); err != nil {
+		return err
+	}
+
+	// Zero leaves these bounds at their defaults, so a configuration built in code
+	// without them stays valid; only a negative bound is a mistake.
+	if client.SegmentAppend.SendTimeout.Duration.Duration() < 0 {
+		return fmt.Errorf("segment append send timeout cannot be negative, got %v", client.SegmentAppend.SendTimeout.Duration.Duration())
+	}
+	if client.Quorum.SelectNodesTimeout.Duration.Duration() < 0 {
+		return fmt.Errorf("quorum select nodes timeout cannot be negative, got %v", client.Quorum.SelectNodesTimeout.Duration.Duration())
+	}
 
 	// Validate SegmentRollingPolicy configuration
 	if client.SegmentRollingPolicy.MaxSize <= 0 {
@@ -949,6 +1044,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				// it adds no latency at low load. Set MaxBatchEntries to 1 to disable.
 				MaxBatchEntries: 1000,
 				MaxBatchBytes:   ByteSize(2000000), // 2MB
+				SendTimeout:     NewDurationMillisecondsFromInt(2000),
 			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
 				MaxSize:     ByteSize(100000000),
@@ -973,6 +1069,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 					Strategy:        NewDynamic("random"),
 					CustomPlacement: NewDynamic([]CustomPlacement{}),
 				},
+				SelectNodesTimeout: NewDurationMillisecondsFromInt(2000),
 			},
 			SessionMonitor: SessionMonitorConfig{
 				CheckInterval: DurationSeconds{Duration: Duration{duration: 3 * time.Second}},
@@ -983,6 +1080,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxBatchSize:    ByteSize(16 * 1024 * 1024), // 16MB
 				MaxFetchThreads: 4,
 			},
+			GRPC: DefaultGRPCClientConfig(),
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{

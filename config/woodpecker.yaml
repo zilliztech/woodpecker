@@ -28,6 +28,7 @@ woodpecker:
       maxRetries: 3 # Maximum number of retries for segment append operations
       maxBatchEntries: 1000 # Client-side group commit: max consecutive appends coalesced into one AddEntries request. Opportunistic (only batches already-queued ops, adds no latency at low load). Set to 1 to disable batching.
       maxBatchBytes: 2000000 # Max total payload (bytes) of a coalesced batch, default 2MB; whichever of maxBatchEntries/maxBatchBytes is hit first bounds the batch. Ignored when maxBatchEntries <= 1.
+      sendTimeout: 2000 # Milliseconds allowed for sending an append to one replica: opening the stream and receiving its first (buffered) response. Every later append of the log waits while a send does, so a replica that has not answered by then is taken as unreachable and the segment rolls away from it. Default 2000.
     segmentRollingPolicy:
       maxSize: 256000000 # Maximum segment size in bytes, default is 256MB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
@@ -52,9 +53,18 @@ woodpecker:
       enabled: true # Whether to enable direct read from object storage for sealed segments in service storage mode, default is true
       maxBatchSize: 16777216 # Maximum batch size in bytes for service-mode direct read operations, default is 16MB
       maxFetchThreads: 4 # Maximum number of concurrent fetch threads for service-mode direct read, default is 4
+    # How this client dials logStores. The logStore's own gRPC settings are under logstore.grpc.
+    grpc:
+      dialTimeout: 1000 # Milliseconds allowed for one attempt to establish a connection (gRPC's MinConnectTimeout, 20s if unset). A call on a connection that is still connecting waits for the attempt, so this also bounds a call to an address that never answers, such as a replaced pod's reclaimed IP. Same meaning as Milvus's grpc.client.dialTimeout. Default 1000.
+      connectBackoff: # Delay before the next connection attempt after a failed one: starts at baseDelay, grows by multiplier with jitter, up to maxDelay. Not a call retry backoff.
+        baseDelay: 100 # Milliseconds, default 100
+        multiplier: 1.6 # Default 1.6
+        jitter: 0.2 # Default 0.2
+        maxDelay: 3000 # Milliseconds, default 3000
     # Advanced Quorum Configuration for Service storage backend mode
     # This configuration supports complex node selection strategies and buffer pools
     quorum:
+      selectNodesTimeout: 2000 # Milliseconds allowed for one SelectNodes call to a seed. New segments are created on the append path, so a seed that does not answer would stall appends; when this expires the next seed is asked. Default 2000.
       # Quorum Buffer Pools: Define groups of nodes for different purposes
       quorumBufferPools:
         - name: default-region-pool # Name of the default region pool
