@@ -521,3 +521,67 @@ func TestSegmentProbe_SamePositionDifferentReasons(t *testing.T) {
 	require.Contains(t, s, "same data, up to entry 99")
 	require.NotContains(t, s, "is behind", "no replica holds less than another here")
 }
+
+// TestSegmentProbe_CapReachedIsNotAShortReplica covers the ordinary case: a sealed segment larger
+// than the probe's own window. Every replica stops at the limit the probe set, which says nothing
+// about the data -- judging it against the segment's end would call every healthy segment above a
+// thousand entries a dead end.
+func TestSegmentProbe_CapReachedIsNotAShortReplica(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 999, "cap_reached", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 999, "cap_reached", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 999, "cap_reached", "")},
+	})
+	sealSegment(t, cli, kb, 4821, quorumNodes(members))
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0)
+
+	require.NoError(t, err, "stopping at the probe's own limit is not a finding")
+	s := out.String()
+	require.NotContains(t, s, "cannot serve")
+	require.NotContains(t, s, "waits forever")
+	require.Contains(t, s, "probe's window ended",
+		"the reader has to know the window ended, not that the data did")
+	require.Contains(t, s, "ends at 4821", "and where the segment actually ends")
+}
+
+// TestSegmentProbe_TruncatedSegmentIsNotAFault covers a segment whose data was deliberately
+// reclaimed. Cleanup deletes each node's data before the metadata, so the metadata still carries the
+// original LastEntryId while the replicas correctly hold nothing.
+func TestSegmentProbe_TruncatedSegmentIsNotAFault(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBodyLocal("none", -1, -1, "no_local_data", "", false, false, false)},
+		{http.StatusOK, probeBodyLocal("none", -1, -1, "no_local_data", "", false, false, false)},
+		{http.StatusOK, probeBody("local_staged", -1, -1, "entry_not_found", "entry not found")},
+	})
+	b, err := pb.Marshal(&proto.SegmentMetadata{
+		SegNo: 3, State: proto.SegmentState_Truncated, LastEntryId: 4821,
+		Quorum: &proto.QuorumInfo{Id: 1, Es: 3, Wq: 3, Aq: 2, Nodes: quorumNodes(members)},
+	})
+	require.NoError(t, err)
+	_, err = cli.Put(context.Background(), kb.BuildSegmentInstanceKey("mylog", "3"), string(b))
+	require.NoError(t, err)
+	cmd, out, _ := markingTestCmd()
+
+	err = runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0)
+
+	require.NoError(t, err, "data removed on purpose is not a replica fault")
+	s := out.String()
+	require.Regexp(t, `(?i)truncated`, s, "the operator has to be told why the replicas hold nothing")
+	require.NotContains(t, s, "waits forever")
+	// Not counting them as a dead end is not enough: no replica may be called a fault at all, or
+	// the report sends an operator after data that was removed on purpose.
+	require.NotContains(t, s, "cannot serve")
+	require.NotContains(t, s, "no data here")
+	require.NotContains(t, s, "up to entry -1",
+		"comparing positions between replicas of reclaimed data says nothing")
+}

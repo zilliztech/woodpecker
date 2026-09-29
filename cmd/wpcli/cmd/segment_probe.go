@@ -111,10 +111,11 @@ const (
 // Per-replica verdicts. The node reports what it saw; only here, with the segment's metadata, can
 // "nothing was written" be told apart from "this copy cannot serve what was written".
 const (
-	probeVerdictServed  = "served"
-	probeVerdictShort   = "cannot serve"
-	probeVerdictNoData  = "no data here"
-	probeVerdictDeleted = "log deleted here"
+	probeVerdictServed    = "served"
+	probeVerdictShort     = "cannot serve"
+	probeVerdictNoData    = "no data here"
+	probeVerdictDeleted   = "log deleted here"
+	probeVerdictReclaimed = "truncated"
 )
 
 func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
@@ -257,29 +258,48 @@ func probeEachNode(ac *client.Client, members *client.Memberlist, quorum *proto.
 	return results
 }
 
-// expectedLastEntry is the last entry the segment provably holds. An Active segment's tail is not
-// known here -- more may be written at any moment -- so nothing can be concluded from a replica
-// stopping short of anything.
-func expectedLastEntry(segMeta *proto.SegmentMetadata) (int64, bool) {
-	if segMeta.GetState() == proto.SegmentState_Active || segMeta.GetLastEntryId() < 0 {
-		return 0, false
+// segmentExpectation is what the segment's metadata says should be readable, and whether that is
+// something a replica can be held to.
+type segmentExpectation struct {
+	lastEntry int64
+	known     bool
+	truncated bool
+}
+
+// expectSegment reads the metadata for what it can be held to. An Active segment's tail is not known
+// here -- more may be written at any moment. A Truncated one is the opposite: cleanup deletes each
+// node's data before the metadata (segment_cleanup_manager.go:169), so the metadata still carries
+// the original last entry while the replicas correctly hold nothing.
+func expectSegment(segMeta *proto.SegmentMetadata) segmentExpectation {
+	if segMeta.GetState() == proto.SegmentState_Truncated {
+		return segmentExpectation{truncated: true}
 	}
-	return segMeta.GetLastEntryId(), true
+	if segMeta.GetState() == proto.SegmentState_Active || segMeta.GetLastEntryId() < 0 {
+		return segmentExpectation{}
+	}
+	return segmentExpectation{lastEntry: segMeta.GetLastEntryId(), known: true}
 }
 
 // judgeReplica reads one answer against what the segment is known to hold. The node cannot do this:
 // a missing file, a block that failed its checksum and a caught-up tail all reach it as the same
 // "entry not found", so only the segment's metadata separates them.
-func judgeReplica(r probeNode, expectedLast int64, expectedKnown bool) (string, string) {
+func judgeReplica(r probeNode, exp segmentExpectation) (string, string) {
 	switch {
 	case r.Outcome == probeOutcomeError:
 		return probeVerdictShort, r.Detail
+	case exp.truncated && r.Outcome != probeOutcomeCapReached:
+		return probeVerdictReclaimed, "the segment is truncated; this data was removed on purpose"
 	case r.Outcome == probeOutcomeNoLocalData && r.DeleteMarked:
 		return probeVerdictDeleted, "the log is marked deleted on this node"
 	case r.Outcome == probeOutcomeNoLocalData:
 		return probeVerdictNoData, "no data.log and no compacted mark: this replica holds none of the segment"
-	case expectedKnown && r.LastEntry < expectedLast:
-		return probeVerdictShort, fmt.Sprintf("stops after %d, but the segment ends at %d", r.LastEntry, expectedLast)
+	case r.Outcome == probeOutcomeCapReached:
+		// The probe stopped where it was told to stop. That is a statement about the request, not
+		// about the replica: judging it against the segment's end would call every healthy segment
+		// longer than the probe window a dead end.
+		return probeVerdictServed, ""
+	case exp.known && r.LastEntry < exp.lastEntry:
+		return probeVerdictShort, fmt.Sprintf("stops after %d, but the segment ends at %d", r.LastEntry, exp.lastEntry)
 	}
 	return probeVerdictServed, ""
 }
@@ -287,7 +307,7 @@ func judgeReplica(r probeNode, expectedLast int64, expectedKnown bool) (string, 
 // readProbeFindings turns the per-node answers into the readings that mean different things, and
 // returns an error for the one that means a reader cannot get past this point.
 func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]string, []probeNode, error) {
-	expectedLast, expectedKnown := expectedLastEntry(segMeta)
+	exp := expectSegment(segMeta)
 
 	answered := make([]probeNode, 0, len(results))
 	failing := make([]probeNode, 0, len(results))
@@ -300,7 +320,7 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 			judged = append(judged, r)
 			continue
 		}
-		verdict, why := judgeReplica(r, expectedLast, expectedKnown)
+		verdict, why := judgeReplica(r, exp)
 		r.Verdict = verdict
 		if why != "" && r.Detail == "" {
 			r.Detail = why
@@ -316,6 +336,11 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 	}
 
 	findings := make([]string, 0, 4)
+	if exp.truncated {
+		findings = append(findings, fmt.Sprintf(
+			"Segment %d is truncated: its data is being, or has been, reclaimed on purpose. A replica holding nothing here is expected.",
+			segMeta.GetSegNo()))
+	}
 	if len(answered) == 0 {
 		findings = append(findings, fmt.Sprintf(
 			"No replica answered (%s), so nothing can be said about this segment.", strings.Join(silent, ", ")))
@@ -355,6 +380,11 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		return findings, judged, nil
 	}
 
+	if exp.truncated {
+		// Comparing positions between replicas of reclaimed data says nothing.
+		return findings, judged, nil
+	}
+
 	samePosition, sameOutcome := true, true
 	for _, r := range answered {
 		if r.LastEntry != answered[0].LastEntry {
@@ -365,6 +395,15 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		}
 	}
 	switch {
+	case samePosition && sameOutcome && answered[0].Outcome == probeOutcomeCapReached:
+		ends := ""
+		if exp.known {
+			ends = fmt.Sprintf(" The segment ends at %d, so this says nothing about entries past %d.",
+				exp.lastEntry, answered[0].LastEntry)
+		}
+		findings = append(findings, fmt.Sprintf(
+			"Every replica served up to entry %d, where this probe's window ended.%s Raise --max-entries or move --from-entry to look further.",
+			answered[0].LastEntry, ends))
 	case samePosition && sameOutcome && answered[0].Outcome == probeOutcomeEntryNotFound:
 		findings = append(findings, fmt.Sprintf(
 			"Every replica that answered stops after entry %d because the data ends there — entry %d has not been written yet.",
