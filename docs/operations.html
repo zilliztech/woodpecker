@@ -596,7 +596,7 @@ server-side, and those do appear.
 <tr><td>Reclaiming an orphaned instance</td><td>Works end to end</td></tr>
 <tr><td>Local disk filling up</td><td>Works end to end</td></tr>
 <tr><td>Writes are not progressing</td><td>Works &mdash; three commands between them; the client&rsquo;s own submit queue is not published</td></tr>
-<tr><td>A reader is not progressing</td><td>Partly &mdash; the tail to measure against exists; the reader&rsquo;s own position is not surfaced</td></tr>
+<tr><td>A reader is not progressing</td><td>Yes &mdash; the reader&rsquo;s position and the tail to measure it against are both readable</td></tr>
 <tr><td>Correcting metadata</td><td>Not yet &mdash; beyond <code>marking confirm</code></td></tr>
 </tbody>
 </table>
@@ -732,21 +732,37 @@ processors have all been evicted cannot be fenced through this path at all.
 
 <h3>A reader is not progressing</h3>
 
-<p>Half of what this needs now exists. <code>wp logstore lac</code> gives the confirmed tail a reader would be
-measured against, so the question is no longer unanswerable in principle:</p>
+<p>Two positions answer this, and both are readable. Where each reader has read to comes from metadata alone,
+so it survives the unreachable node that is often the reason for looking:</p>
+
+<div class="code-block"><pre>wp log readers &lt;logName&gt; --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>Each row carries the position the reader opened at, the position it last read, and how long ago it reported.
+Two of those rows mean something on their own:</p>
+
+<table>
+<tr><th>Reading</th><th>What it means</th></tr>
+<tr><td><code>no read since open</code></td><td>The reader has not reported a read since it opened. Its current
+position is the one it started at, not one it reached.</td></tr>
+<tr><td><code>stale report</code></td><td>The reader has stopped reporting. A reader tailing an idle log keeps
+republishing with an unchanged position, so a fresh report proves it is alive; silence is what a reader blocked
+inside a read looks like.</td></tr>
+</table>
+
+<p>Then the tail to measure a position against:</p>
 
 <div class="code-block"><pre>wp logstore lac &lt;logName&gt; &lt;segmentId&gt; --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
 
-<div class="gap">
-<strong>Gap:</strong> the reader&rsquo;s own position is still not surfaced. Readers publish it into metadata under
-a lease, but no command reads it back, so there is nothing to compare the tail against and a stalled reader still
-looks like a caught-up one.
-<p style="margin-top:0.6rem">Corruption makes this worse: a checksum failure is currently reported as &ldquo;data
-has not arrived yet&rdquo;, which the reader retries indefinitely, so a genuine fault is indistinguishable from an
-idle log. Until that is fixed, the server-side WARN logged at the point of the checksum failure is the only
-signal.</p>
-<p style="margin-top:0.6rem">When the reader side arrives, sample no faster than 30 seconds: positions are
+<p>The two are deliberately separate: the lag is not computed for you, because doing so would make an unreachable
+node fail a question that pure metadata already answers. Sample no faster than 30 seconds &mdash; positions are
 republished on that cadence, and a tighter interval shows every reader frozen and calls them all stuck.</p>
+
+<div class="gap">
+<strong>Gap:</strong> corruption still hides here. A checksum failure is reported as &ldquo;data has not arrived
+yet&rdquo;, which the reader retries indefinitely, so a genuine fault is indistinguishable from an idle log. The
+reader stops reporting while it is blocked, so <code>stale report</code> does catch it &mdash; but it does not say
+why, and the server-side WARN logged at the point of the checksum failure remains the only signal that names the
+cause.
 </div>
 
 <h3>Correcting metadata</h3>
