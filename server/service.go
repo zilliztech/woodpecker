@@ -911,6 +911,12 @@ func (s *Server) ProbeSegment(ctx context.Context, req SegmentProbeRequest) (*Se
 	return s.logStore.(*logStore).ProbeSegment(ctx, req)
 }
 
+// InspectSegment walks this node's copy of a segment block by block and reports what it found at
+// each one. Read-only, and this node only.
+func (s *Server) InspectSegment(ctx context.Context, req SegmentInspectRequest) (*SegmentInspectResult, error) {
+	return s.logStore.(*logStore).InspectSegment(ctx, req)
+}
+
 // GetDecommissionProgress returns the current decommission progress.
 func (s *Server) GetDecommissionProgress() DecommissionProgress {
 	remaining := s.logStore.GetActiveProcessorCount()
