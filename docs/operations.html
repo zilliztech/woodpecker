@@ -719,9 +719,11 @@ rest; interrupting it takes <code>wq - aq + 1</code> nodes &mdash; two of three 
     --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
 
 <p>It reads the quorum from the segment&rsquo;s metadata, states how many nodes must be fenced before it touches
-anything, and without <code>-y</code> stops there. Fencing fewer than required is reported as a conflict rather than
-as success, because the writer can still reach <code>aq</code>. <code>wp logstore fence &lt;node&gt;</code> remains
-for the cases that want exactly one node.</p>
+anything, and without <code>-y</code> stops there. Naming fewer nodes than that with <code>--nodes</code> is refused
+outright rather than half-done: a fenced node fails the writer&rsquo;s append, which rolls the segment, while the
+writer still reaches <code>aq</code> and carries on &mdash; state changed, nothing interrupted. If fewer nodes than
+required could be reached, the outcome is reported as a conflict rather than as success, for the same reason.
+<code>wp logstore fence &lt;node&gt;</code> remains for the cases that want exactly one node.</p>
 
 <div class="gap">
 <strong>Gap:</strong> a node fences through its live segment processor, so a node that has none refuses the
