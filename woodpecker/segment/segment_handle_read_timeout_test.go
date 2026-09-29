@@ -36,6 +36,10 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
+// testStorageType is the storage type of the handles built by these tests. The
+// short active bound only applies in service mode.
+var testStorageType = "service"
+
 // testSegmentRead is the read configuration the handles built by these tests
 // get; zero bounds take the defaults.
 var testSegmentRead config.SegmentReadConfig
@@ -60,6 +64,7 @@ func readTimeoutTestHandleWithNodes(t *testing.T, state proto.SegmentState, pool
 				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
 				SegmentRead:   testSegmentRead,
 			},
+			Storage: config.StorageConfig{Type: testStorageType},
 		},
 	}
 	segmentMeta := &meta.SegmentMeta{
@@ -98,7 +103,6 @@ func TestReadBatchAdv_ActiveSegment_SilentReplicaFailsOver(t *testing.T) {
 	cli2 := mocks_logstore_client.NewLogStoreClient(t)
 	pool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(cli1, nil)
 	pool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(cli2, nil)
-	pool.EXPECT().Clear(mock.Anything, "node1").Return().Once()
 	cli1.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(silentRead)
 	cli2.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -110,6 +114,7 @@ func TestReadBatchAdv_ActiveSegment_SilentReplicaFailsOver(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "node2", result.LastReadState.Node)
 	assert.Less(t, time.Since(start), 2*time.Second, "the silent replica was not bounded by the active read timeout")
+	pool.AssertNotCalled(t, "Clear", mock.Anything, mock.Anything)
 }
 
 // The handle's view of the state can lag: a segment it believes active may be
@@ -123,7 +128,6 @@ func TestReadBatchAdv_ActiveSegment_AllSlowEscalatesToSettledTimeout(t *testing.
 	cli2 := mocks_logstore_client.NewLogStoreClient(t)
 	pool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(cli1, nil)
 	pool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(cli2, nil)
-	pool.EXPECT().Clear(mock.Anything, mock.Anything).Return()
 
 	// Every replica takes 300ms: longer than the short bound, well within the long one.
 	var calls atomic.Int32
@@ -173,24 +177,112 @@ func TestReadBatchAdv_SettledSegment_UsesLongTimeout(t *testing.T) {
 }
 
 // At the tail of an active segment the live replicas answer that the next
-// entry does not exist yet. A replica that cannot be reached must not turn that
-// into a read failure just because it was tried last.
+// entry does not exist yet. With enough of them saying so (here 2 of 3 at an
+// ack quorum of 2), an unreachable replica must not turn that into a read
+// failure.
 func TestReadBatchAdv_NotFoundFromLiveReplicasWinsOverUnreachableOne(t *testing.T) {
 	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+	dead := mocks_logstore_client.NewLogStoreClient(t)
 	live1 := mocks_logstore_client.NewLogStoreClient(t)
 	live2 := mocks_logstore_client.NewLogStoreClient(t)
-	dead := mocks_logstore_client.NewLogStoreClient(t)
-	pool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(live1, nil)
-	pool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(live2, nil)
-	pool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(dead, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(dead, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(live1, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(live2, nil)
+	dead.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, status.Error(codes.Unavailable, "connection refused"))
 	live1.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, werr.ErrEntryNotFound)
 	live2.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, werr.ErrEntryNotFound)
-	dead.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, status.Error(codes.Unavailable, "connection refused"))
 
 	h := readTimeoutTestHandleWithNodes(t, proto.SegmentState_Active, pool, "node1", "node2", "node3")
 	_, err := h.ReadBatchAdv(context.Background(), 5, 10, nil)
 	require.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err), "expected entry-not-found, got %v", err)
+}
+
+// One replica's "not found" does not stand for the segment at an ack quorum of
+// 2 of 3: the entry may be acked on the other two. A restarted replica answers
+// exactly this way for entries it never received. When those two are slow,
+// the read must wait for them with the longer bound rather than report "no
+// data yet", which the reader would poll on forever.
+func TestReadBatchAdv_OneNotFoundDoesNotHideSlowReplicas(t *testing.T) {
+	shrinkReadTimeouts(t, 100*time.Millisecond, 5*time.Second)
+
+	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+	restarted := mocks_logstore_client.NewLogStoreClient(t)
+	slow1 := mocks_logstore_client.NewLogStoreClient(t)
+	slow2 := mocks_logstore_client.NewLogStoreClient(t)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(restarted, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(slow1, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(slow2, nil).Maybe()
+	restarted.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, werr.ErrEntryNotFound)
+	answersAfter300ms := func(ctx context.Context, _ string, _ string, _ int64, _ int64, _ int64, _ int64, _ *proto.LastReadState) (*proto.BatchReadResult, error) {
+		select {
+		case <-time.After(300 * time.Millisecond):
+			return oneEntryResult(), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	slow1.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(answersAfter300ms)
+	slow2.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(answersAfter300ms).Maybe()
+
+	h := readTimeoutTestHandleWithNodes(t, proto.SegmentState_Active, pool, "node1", "node2", "node3")
+	result, err := h.ReadBatchAdv(context.Background(), 0, 10, nil)
+	require.NoError(t, err, "an entry acked on the slow replicas must be read, not reported as missing")
+	assert.Len(t, result.Entries, 1)
+}
+
+// If even the longer bound ends with too few "not found" answers and the rest
+// timed out, the read reports the timeout: an error the reader surfaces, not
+// the "no data yet" it would silently poll on.
+func TestReadBatchAdv_SplitAnswerAfterLongPassIsATimeout(t *testing.T) {
+	shrinkReadTimeouts(t, 50*time.Millisecond, 100*time.Millisecond)
+
+	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+	restarted := mocks_logstore_client.NewLogStoreClient(t)
+	silent1 := mocks_logstore_client.NewLogStoreClient(t)
+	silent2 := mocks_logstore_client.NewLogStoreClient(t)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(restarted, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(silent1, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(silent2, nil)
+	restarted.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, werr.ErrEntryNotFound)
+	silent1.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(silentRead)
+	silent2.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(silentRead)
+
+	h := readTimeoutTestHandleWithNodes(t, proto.SegmentState_Active, pool, "node1", "node2", "node3")
+	_, err := h.ReadBatchAdv(context.Background(), 0, 10, nil)
+	require.Error(t, err)
+	assert.False(t, werr.ErrEntryNotFound.Is(err), "a split answer must not read as 'no data yet': %v", err)
+	assert.True(t, werr.ErrTimeoutError.Is(err), "expected a timeout, got %v", err)
+	pool.AssertNotCalled(t, "Clear", mock.Anything, mock.Anything)
+}
+
+// A replica a read timed out on is asked last from then on, and once enough
+// replicas said "not found" it is not asked at all, so a silent replica does
+// not cost every tail poll the read bound.
+func TestReadBatchAdv_TimedOutReplicaIsAskedLast(t *testing.T) {
+	shrinkReadTimeouts(t, 100*time.Millisecond, 100*time.Millisecond)
+
+	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+	silent := mocks_logstore_client.NewLogStoreClient(t)
+	live1 := mocks_logstore_client.NewLogStoreClient(t)
+	live2 := mocks_logstore_client.NewLogStoreClient(t)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(silent, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(live1, nil)
+	pool.EXPECT().GetLogStoreClient(mock.Anything, "node3").Return(live2, nil)
+	silent.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(silentRead).Once()
+	live1.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, werr.ErrEntryNotFound)
+	live2.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, werr.ErrEntryNotFound)
+
+	h := readTimeoutTestHandleWithNodes(t, proto.SegmentState_Active, pool, "node1", "node2", "node3")
+	_, err := h.ReadBatchAdv(context.Background(), 5, 10, nil)
+	require.True(t, werr.ErrEntryNotFound.Is(err), "%v", err)
+
+	start := time.Now()
+	for i := 0; i < 3; i++ {
+		_, err = h.ReadBatchAdv(context.Background(), 5, 10, nil)
+		require.True(t, werr.ErrEntryNotFound.Is(err), "%v", err)
+	}
+	assert.Less(t, time.Since(start), 100*time.Millisecond, "later polls still waited on the silent replica")
 }
 
 // With no replica answering at all, the read does fail, with the replica's error.
@@ -213,6 +305,14 @@ func TestReadBatchAdv_AllUnreachableStillFails(t *testing.T) {
 // default.
 func TestReadTimeouts_FromConfig(t *testing.T) {
 	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	// Embedded modes read an active segment from this process's own logstore,
+	// possibly from object storage, with no other replica to move to: one pass
+	// with the long bound.
+	testStorageType = "minio"
+	h0 := readTimeoutTestHandle(t, proto.SegmentState_Active, pool).(*segmentHandleImpl)
+	assert.Equal(t, []time.Duration{defaultSettledReadTimeout}, h0.readTimeouts())
+	testStorageType = "service"
 
 	h := readTimeoutTestHandle(t, proto.SegmentState_Active, pool).(*segmentHandleImpl)
 	assert.Equal(t, []time.Duration{defaultActiveReadTimeout, defaultSettledReadTimeout}, h.readTimeouts())

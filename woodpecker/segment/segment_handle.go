@@ -257,6 +257,12 @@ type segmentHandleImpl struct {
 
 	lastAccessTime atomic.Int64
 
+	// slowReadNodes are replicas a quorum read of this segment timed out on,
+	// asked last until one answers again, so a replica that went silent does
+	// not cost every tail poll a full read bound.
+	slowReadMu    sync.Mutex
+	slowReadNodes map[string]struct{}
+
 	// Direct read from object storage for sealed segments
 	objectStorageClient storageclient.ObjectStorage
 	directReader        *objectstorage.MinioFileReaderAdv
@@ -724,10 +730,17 @@ const (
 )
 
 // readTimeouts returns the bounds for successive passes over the replicas.
+//
+// The short bound only applies in service mode, to an active segment: there
+// the replicas serve it from a buffer or local disk, and there are other
+// replicas to move to. In the embedded modes the one "replica" is this
+// process's own logstore, which may read an active segment from object storage,
+// and a short bound would only repeat the same read.
+//
 // The segment state is this handle's cached view and can lag: a segment it
 // still believes active may already have been compacted and be served from
-// object storage. So a pass in which every replica ran out of the short bound
-// is retried once with the long one.
+// object storage. So a pass that the short bound cut short is retried once
+// with the long one.
 func (s *segmentHandleImpl) readTimeouts() []time.Duration {
 	active, settled := defaultActiveReadTimeout, defaultSettledReadTimeout
 	if s.cfg != nil {
@@ -737,6 +750,9 @@ func (s *segmentHandleImpl) readTimeouts() []time.Duration {
 		if d := s.cfg.Woodpecker.Client.SegmentRead.SettledTimeout.Duration.Duration(); d > 0 {
 			settled = d
 		}
+	}
+	if s.cfg == nil || !s.cfg.Woodpecker.Storage.IsStorageService() {
+		return []time.Duration{settled}
 	}
 	if meta := s.segmentMetaCache.Load(); meta != nil && meta.Metadata.GetState() == proto.SegmentState_Active {
 		return []time.Duration{active, settled}
@@ -751,16 +767,16 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 		return nil, err
 	}
 
-	candidates := orderedQuorumReadCandidates(quorumInfo, lastReadState)
+	candidates := s.slowReadNodesLast(orderedQuorumReadCandidates(quorumInfo, lastReadState))
 	nodeCount := len(candidates)
 	var lastError error
 	for _, timeout := range s.readTimeouts() {
-		result, allTimedOut, passErr := s.quorumReadPass(ctx, candidates, timeout, from, maxEntries, lastReadState)
+		result, retryLonger, passErr := s.quorumReadPass(ctx, candidates, notFoundQuorum(len(candidates), quorumInfo.GetAq()), timeout, from, maxEntries, lastReadState)
 		if result != nil {
 			return result, nil
 		}
 		lastError = passErr
-		if !allTimedOut || ctx.Err() != nil {
+		if !retryLonger || ctx.Err() != nil {
 			break
 		}
 	}
@@ -776,21 +792,65 @@ func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, max
 	return nil, werr.ErrFileReaderNoBlockFound.WithCauseErrMsg("all quorum nodes failed to read batch")
 }
 
+// notFoundQuorum is how many replicas must answer that they do not have an
+// entry before that answer stands for the segment. An acked entry is on at
+// least ackQuorum of the nodes replicas, so it can be missing from at most
+// nodes-ackQuorum of them; one more "not here" rules it out.
+func notFoundQuorum(nodes int, ackQuorum int32) int {
+	if ackQuorum <= 0 || int(ackQuorum) > nodes {
+		return nodes
+	}
+	return nodes - int(ackQuorum) + 1
+}
+
+// slowReadNodesLast moves the replicas a read timed out on to the end, keeping
+// the order of the rest.
+func (s *segmentHandleImpl) slowReadNodesLast(candidates []quorumReadCandidate) []quorumReadCandidate {
+	s.slowReadMu.Lock()
+	defer s.slowReadMu.Unlock()
+	if len(s.slowReadNodes) == 0 {
+		return candidates
+	}
+	ordered := make([]quorumReadCandidate, 0, len(candidates))
+	var slow []quorumReadCandidate
+	for _, c := range candidates {
+		if _, ok := s.slowReadNodes[c.node]; ok {
+			slow = append(slow, c)
+			continue
+		}
+		ordered = append(ordered, c)
+	}
+	return append(ordered, slow...)
+}
+
+func (s *segmentHandleImpl) markReadNodeSlow(node string, slow bool) {
+	s.slowReadMu.Lock()
+	defer s.slowReadMu.Unlock()
+	if !slow {
+		delete(s.slowReadNodes, node)
+		return
+	}
+	if s.slowReadNodes == nil {
+		s.slowReadNodes = make(map[string]struct{})
+	}
+	s.slowReadNodes[node] = struct{}{}
+}
+
 // quorumReadPass tries each replica in order, bounding every call by timeout.
-// It returns the first successful batch, or whether every replica tried ran
-// out of the bound and the error that describes the pass.
+// It returns the first successful batch; otherwise whether the pass should be
+// repeated with a longer bound, and the error that describes it.
 //
-// That error is ErrEntryNotFound when any replica answered that it has no such
-// entry yet, whatever the other replicas did. At the tail of an active segment
-// that is the normal answer, and it is authoritative: an acked entry is on at
-// least an ack quorum of replicas, so if the replicas that answered do not have
-// it, a replica that could not be reached cannot be holding an acked entry
-// either. Reporting the unreachable replica's error instead would turn "no new
-// data yet" into a read failure every time that replica happens to be tried
-// last.
-func (s *segmentHandleImpl) quorumReadPass(ctx context.Context, candidates []quorumReadCandidate, timeout time.Duration, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, bool, error) {
-	var lastError, notFoundErr error
-	tried, timedOutCount := 0, 0
+// "Not found" describes the pass only once notFoundQuorum replicas said so.
+// At the tail of an active segment that is the normal answer, and reporting an
+// unreachable replica's error instead would turn "no new data yet" into a read
+// failure. With fewer, a replica that did not answer in time may hold the
+// entry (a restarted replica answers "not found" for entries it never
+// received), so the pass is repeated with the longer bound, and if that one
+// ends the same way it is reported as the timeout it is rather than as "not
+// found", which the reader would take as "no data yet" and poll on silently.
+func (s *segmentHandleImpl) quorumReadPass(ctx context.Context, candidates []quorumReadCandidate, notFoundNeeded int, timeout time.Duration, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, bool, error) {
+	var lastError, notFoundErr, timeoutErr error
+	notFoundCount, timedOutCount := 0, 0
 
 	logIdStr := strconv.FormatInt(s.logId, 10)
 	preferredScope := topology.ScopeUnknown
@@ -818,22 +878,22 @@ func (s *segmentHandleImpl) quorumReadPass(ctx context.Context, candidates []quo
 			nodeLastReadState = lastReadState
 		}
 
-		tried++
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		batchResult, err := cli.ReadEntriesBatchAdv(callCtx, s.bucketName, s.rootPath, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
 		timedOut := err != nil && ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		if timedOut {
-			// The replica did not answer within the bound. Drop its connection:
-			// one that silently stopped answering stays READY to gRPC and would
-			// pin the next read the same way.
+			// The replica did not answer within the bound. Its connection is left
+			// alone: it is shared with this process's writers, and a replica that is
+			// merely slow must not cost them their streams. A transport error still
+			// evicts it; here the replica is only asked last from now on.
 			logger.Ctx(ctx).Warn("read batch timed out on node, trying next",
 				zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId),
 				zap.String("node", node), zap.Duration("timeout", timeout), zap.Error(err))
-			s.ClientPool.Clear(ctx, node)
+			s.markReadNodeSlow(node, true)
 			metrics.WpClientQuorumReadTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope, "error").Inc()
 			timedOutCount++
-			lastError = werr.ErrTimeoutError.WithCauseErrMsg(fmt.Sprintf("read batch from %s timed out after %v: %v", node, timeout, err))
+			timeoutErr = werr.ErrTimeoutError.WithCauseErrMsg(fmt.Sprintf("read batch from %s timed out after %v: %v", node, timeout, err))
 			continue
 		}
 		if err != nil {
@@ -841,10 +901,17 @@ func (s *segmentHandleImpl) quorumReadPass(ctx context.Context, candidates []quo
 				logger.Ctx(ctx).Warn("read batch failed on node",
 					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node), zap.Error(err))
 			}
-			lastError = err
 			if werr.ErrEntryNotFound.Is(err) {
 				notFoundErr = err
+				notFoundCount++
+				if notFoundCount >= notFoundNeeded {
+					// The answer stands; asking the rest, the slow ones last among
+					// them, would only cost the tail poll their bound.
+					break
+				}
+				continue
 			}
+			lastError = err
 			if werr.ErrFileReaderEndOfFile.Is(err) {
 				break
 			}
@@ -854,6 +921,7 @@ func (s *segmentHandleImpl) quorumReadPass(ctx context.Context, candidates []quo
 			continue
 		}
 
+		s.markReadNodeSlow(node, false)
 		if batchResult.LastReadState != nil {
 			batchResult.LastReadState.Node = node
 		}
@@ -876,10 +944,20 @@ func (s *segmentHandleImpl) quorumReadPass(ctx context.Context, candidates []quo
 			zap.Int("count", len(batchResult.Entries)))
 		return batchResult, false, nil
 	}
-	if notFoundErr != nil && !werr.ErrFileReaderEndOfFile.Is(lastError) {
+	switch {
+	case werr.ErrFileReaderEndOfFile.Is(lastError):
+		return nil, false, lastError
+	case notFoundErr != nil && notFoundCount >= notFoundNeeded:
+		return nil, false, notFoundErr
+	case timedOutCount > 0:
+		return nil, true, timeoutErr
+	case lastError != nil:
+		return nil, false, lastError
+	default:
+		// Only "not found", from too few replicas to stand for the segment,
+		// and no other answer at all.
 		return nil, false, notFoundErr
 	}
-	return nil, tried > 0 && timedOutCount == tried, lastError
 }
 
 // GetLastAddConfirmed call by reader
