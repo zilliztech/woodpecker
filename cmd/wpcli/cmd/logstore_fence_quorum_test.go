@@ -356,8 +356,10 @@ func TestFenceQuorum_RefusesWhatItCannotRead(t *testing.T) {
 	}
 	// Segment 4 predates the inline quorum; segment 5 carries one that names no nodes.
 	put(4, &proto.SegmentMetadata{SegNo: 4, State: proto.SegmentState_Active, LastEntryId: -1})
-	put(5, &proto.SegmentMetadata{SegNo: 5, State: proto.SegmentState_Active, LastEntryId: -1,
-		Quorum: &proto.QuorumInfo{Id: 1, Es: 3, Wq: 3, Aq: 2}})
+	put(5, &proto.SegmentMetadata{
+		SegNo: 5, State: proto.SegmentState_Active, LastEntryId: -1,
+		Quorum: &proto.QuorumInfo{Id: 1, Es: 3, Wq: 3, Aq: 2},
+	})
 
 	// wantsNot matters as much as wants: the messages of successive guards overlap, so a case that
 	// only looked for a substring would pass with its own guard removed and the next one answering.
