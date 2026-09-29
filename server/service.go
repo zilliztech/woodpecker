@@ -905,6 +905,12 @@ func (s *Server) GetWriterRegistry() storage.WriterRegistry {
 	return s.logStore.(*logStore)
 }
 
+// ProbeSegment attempts a bounded read of one segment on this node and reports how far it got.
+// Read-only, and this node only: assembling the quorum's view is the caller's job.
+func (s *Server) ProbeSegment(ctx context.Context, req SegmentProbeRequest) (*SegmentProbeResult, error) {
+	return s.logStore.(*logStore).ProbeSegment(ctx, req)
+}
+
 // GetDecommissionProgress returns the current decommission progress.
 func (s *Server) GetDecommissionProgress() DecommissionProgress {
 	remaining := s.logStore.GetActiveProcessorCount()

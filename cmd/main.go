@@ -256,6 +256,13 @@ func main() {
 			ForceCompact: func(logID, segmentID, expectedLastEntryId int64) error {
 				return srv.GetWriterRegistry().ForceCompact(context.Background(), logID, segmentID, expectedLastEntryId)
 			},
+			ProbeSegment: func(bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error) {
+				return srv.ProbeSegment(context.Background(), server.SegmentProbeRequest{
+					Bucket: bucketName, RootPath: rootPath,
+					LogID: logID, SegmentID: segmentID,
+					FromEntry: fromEntry, MaxEntries: maxEntries,
+				})
+			},
 		},
 		Ops: commonhttp.OpsCallbacks{
 			List: func(params map[string]string) any {

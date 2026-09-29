@@ -40,6 +40,8 @@ type LogstoreCallbacks struct {
 	ForceFlush   func(logID, segmentID int64) error
 	ForceFence   func(logID, segmentID int64, reason string) error
 	ForceCompact func(logID, segmentID, expectedLastEntryId int64) error
+	// ProbeSegment attempts a bounded read of one segment on this node and reports how far it got.
+	ProbeSegment func(bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error)
 }
 
 // OpsCallbacks holds callbacks for ops admin endpoints.
@@ -219,6 +221,12 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		Register(&Handler{
 			Path:        AdminLogstoreCompactPath,
 			HandlerFunc: management.NewLogstoreCompactHandler(callbacks.Logstore.ForceCompact),
+		})
+	}
+	if callbacks.Logstore.ProbeSegment != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreProbePath,
+			HandlerFunc: management.NewLogstoreSegmentProbeHandler(callbacks.Logstore.ProbeSegment),
 		})
 	}
 

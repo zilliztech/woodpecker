@@ -13,6 +13,7 @@ Woodpecker exposes an HTTP admin server on each node (default port `9091`, confi
 | GET | `/admin/node/status` | Lifecycle | Node status and membership info |
 | GET | `/admin/log-health` | Health | Node-wide per-log read/write health (optionally filtered by bucket/rootPath) |
 | GET | `/admin/instance/data` | Data | Instances holding node-local data (optionally filtered by bucket/rootPath) |
+| GET | `/admin/logstore/segment/probe` | Data | Bounded read attempt on one segment: how far this node can read it |
 | POST | `/admin/node/decommission` | Lifecycle | Start graceful node decommission |
 | GET | `/admin/node/decommission/progress` | Lifecycle | Decommission progress and safe-to-terminate check |
 | GET | `/debug/pprof/` | Debug | Pprof index page (enabled by default, disable via `PPROF_ENABLE=false`) |
@@ -226,6 +227,54 @@ cluster-wide view is assembled by the caller:
 # From a machine with wp: step 1 across every node, with the completeness check applied
 wp instance data --all --strict
 ```
+
+---
+
+## Segment Read Probe
+
+```
+GET /admin/logstore/segment/probe?log_id=7&segment_id=3
+GET /admin/logstore/segment/probe?log_id=7&segment_id=3&from_entry=4000&max_entries=100
+GET /admin/logstore/segment/probe?log_id=7&segment_id=3&bucket_name=<bucket>&root_path=<root>
+```
+
+The only endpoint that reads segment data. The node attempts a bounded read of its own copy from
+`from_entry` and reports how far it got and what stopped it:
+
+```json
+{
+  "node_id": "10.0.1.7:18080",
+  "bucket_name": "milvus", "root_path": "inst-a",
+  "log_id": 7, "segment_id": 3,
+  "source": "local_staged",
+  "from_entry": 0, "first_entry": 0, "last_entry": 1200,
+  "entries_read": 1201,
+  "stop_reason": "error",
+  "error": "crc mismatch in block 7",
+  "elapsed_ms": 34
+}
+```
+
+`stop_reason` separates three things a reader cannot tell apart from outside: `error` (this copy
+cannot be read past that point), `not_yet_written` (nothing is wrong, the data has not arrived),
+`end_of_segment` (a sealed segment read to its end) and `cap_reached` (the bound, which says
+nothing about the data).
+
+Two cautions:
+
+- **The read is bounded.** `max_entries` defaults to a modest number on the node, so a probe cannot
+  turn into a full scan of a segment holding millions of entries. Raise it deliberately.
+- **`source` decides what agreement between replicas means.** While a segment's local staged copy
+  exists, each replica answers about its own copy. Once compaction has reclaimed the local copy the
+  node serves the object-storage copy that *every* replica shares, and three agreeing answers are
+  then one copy answering three times.
+
+`bucket_name`/`root_path` are only needed when the node neither serves a writer for the segment nor
+holds it locally — without them it answers 404 saying so, which is a per-node state a caller should
+show rather than hide.
+
+This endpoint answers only for the node that serves it, like every other one here. `wp segment
+probe` assembles the quorum's view.
 
 ---
 
