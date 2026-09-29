@@ -78,6 +78,9 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
 ### Diagnostics
 - `wp profile <node> --type cpu --seconds 30` — download pprof profile
 
+### Log metadata
+- `wp log readers <logName>` — where each of a log's readers has read to (etcd only, no node contact)
+
 ### Logstore runtime
 - `wp logstore segments <node>` — list active segments
 - `wp logstore segment-show <node> --log X --seg Y` — detailed segment view
