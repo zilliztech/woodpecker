@@ -1,0 +1,20 @@
+# Service stability (Docker tier) override for deployments/docker-compose.yaml.
+# Disables auto-restart so a killed or stopped container stays down until the
+# test itself starts it again: the test decides when a "pod" comes back.
+# Usage: docker compose -f ../../../deployments/docker-compose.yaml -f docker-compose.stability.yaml -p woodpecker-stability up -d
+
+services:
+  woodpecker-node1:
+    restart: "no"
+  woodpecker-node2:
+    restart: "no"
+  woodpecker-node3:
+    restart: "no"
+  woodpecker-node4:
+    restart: "no"
+  etcd:
+    restart: "no"
+  minio:
+    restart: "no"
+  jaeger:
+    restart: "no"

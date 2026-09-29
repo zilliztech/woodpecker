@@ -231,25 +231,25 @@ func (r Report) String() string {
 	return b.String()
 }
 
-// AssertSmooth fails t unless the log behaved as Milvus needs it to while one
-// pod was replaced: every append completed (retries allowed, as Milvus
-// retries), none took longer than maxStall end to end, and the tail reader got
-// every acked entry once, at its acked position, in order, no later than
-// maxStall after the ack. Read errors the reader read on from are reported by
-// the Report and are not failures here; what they cost shows up as read lag.
+// AssertSmooth asserts both AssertComplete and AssertLatency.
 func AssertSmooth(t *testing.T, r Report, maxStall time.Duration) {
+	t.Helper()
+	AssertComplete(t, r)
+	AssertLatency(t, r, maxStall)
+}
+
+// AssertComplete asserts what must hold however slow the log was: every append
+// completed, and every acked entry reached the tail reader once, at the
+// position it was acked at, in log order. Read errors the reader read on from
+// are reported by the Report and are not failures; what they cost shows up as
+// read lag.
+func AssertComplete(t *testing.T, r Report) {
 	t.Helper()
 	if len(r.Hung) > 0 {
 		t.Errorf("[%s] %d appends never completed (hung, not failed), first seq %d", r.Name, len(r.Hung), r.Hung[0].Seq)
 	}
 	if len(r.Failed) > 0 {
 		t.Errorf("[%s] %d appends were given up: %v", r.Name, len(r.Failed), r.Failed[0].Err)
-	}
-	if r.MaxLatency > maxStall {
-		t.Errorf("[%s] append stalled %v end to end, retries included (budget %v)", r.Name, r.MaxLatency, maxStall)
-	}
-	if r.MaxReadLag > maxStall {
-		t.Errorf("[%s] tail read lagged %v behind the ack (budget %v)", r.Name, r.MaxReadLag, maxStall)
 	}
 	if len(r.Unread) > 0 {
 		t.Errorf("[%s] %d acked entries not delivered to the tail reader within the wait, first seq %d (a delivery check, not a durability check)", r.Name, len(r.Unread), r.Unread[0])
@@ -263,4 +263,39 @@ func AssertSmooth(t *testing.T, r Report, maxStall time.Duration) {
 	if len(r.Misplaced) > 0 {
 		t.Errorf("[%s] %d entries read at a different position than acked, first seq %d", r.Name, len(r.Misplaced), r.Misplaced[0])
 	}
+}
+
+// AssertLatency asserts that no append took longer than maxStall end to end,
+// and no acked entry reached the tail reader later than maxStall after its ack.
+func AssertLatency(t *testing.T, r Report, maxStall time.Duration) {
+	t.Helper()
+	for _, v := range latencyViolations(r, maxStall) {
+		t.Error(v)
+	}
+}
+
+// ReportLatency logs what AssertLatency would fail on, without failing.
+func ReportLatency(t *testing.T, r Report, maxStall time.Duration) {
+	t.Helper()
+	for _, v := range latencyViolations(r, maxStall) {
+		t.Log("[latency budget, report only] " + v)
+	}
+}
+
+func latencyViolations(r Report, maxStall time.Duration) []string {
+	var out []string
+	if r.MaxLatency > maxStall {
+		out = append(out, fmt.Sprintf("[%s] append stalled %v end to end, retries included (budget %v)", r.Name, r.MaxLatency, maxStall))
+	}
+	if r.MaxReadLag > maxStall {
+		out = append(out, fmt.Sprintf("[%s] tail read lagged %v behind the ack (budget %v)", r.Name, r.MaxReadLag, maxStall))
+	}
+	return out
+}
+
+// LatencyReportOnly reports whether WP_STABILITY_LATENCY=report asks for the
+// stall budget to be reported rather than asserted, for environments whose
+// timing is not yet known to be steady enough to gate on.
+func LatencyReportOnly() bool {
+	return os.Getenv("WP_STABILITY_LATENCY") == "report"
 }
