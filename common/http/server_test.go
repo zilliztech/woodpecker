@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -202,7 +203,7 @@ func TestStartAndStop_SegmentProbeIsReachable(t *testing.T) {
 	err := Start(cfg, AdminCallbacks{
 		GetMemberlistStatus: func() string { return "ok" },
 		Logstore: LogstoreCallbacks{
-			ProbeSegment: func(_, _ string, logID, segmentID, _, _ int64) (any, error) {
+			ProbeSegment: func(_ context.Context, _, _ string, logID, segmentID, _, _ int64) (any, error) {
 				gotLogID, gotSegmentID = logID, segmentID
 				return map[string]any{"stop_reason": "not_yet_written", "last_entry": 4821}, nil
 			},

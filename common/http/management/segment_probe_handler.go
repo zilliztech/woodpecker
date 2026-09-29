@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -9,12 +10,14 @@ import (
 // NewLogstoreSegmentProbeHandler handles GET /admin/logstore/segment/probe.
 //
 // Query params: log_id and segment_id (required), from_entry and max_entries (optional, zero leaves
-// the node's own bounds in force), plus the shared bucket_name/root_path tenant filter for a caller
-// that knows which instance it means.
+// the node's own bounds in force), plus bucket_name and root_path for a caller that knows which
+// instance it means. Those two name an instance together, so one without the other is refused
+// rather than quietly widened to "whichever instance this node finds" -- which could be another
+// tenant's.
 //
 // The node attempts a bounded read of its own copy and reports how far it got. It answers for
 // itself and asks no peer; assembling the quorum's view is the caller's job.
-func NewLogstoreSegmentProbeHandler(probe func(bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error)) http.HandlerFunc {
+func NewLogstoreSegmentProbeHandler(probe func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -37,9 +40,16 @@ func NewLogstoreSegmentProbeHandler(probe func(bucketName, rootPath string, logI
 		if !ok {
 			return
 		}
-		bucketName, rootPath := tenantFilter(r)
+		bucketName := r.URL.Query().Get("bucket_name")
+		rootPath := r.URL.Query().Get("root_path")
+		if (bucketName == "") != (rootPath == "") {
+			http.Error(w, `{"error":"bucket_name and root_path must be given together"}`, http.StatusBadRequest)
+			return
+		}
 
-		report, err := probe(bucketName, rootPath, logID, segmentID, fromEntry, maxEntries)
+		// The caller's context: when it gives up, the read on this node stops too, instead of
+		// scanning on for a report nobody will read.
+		report, err := probe(r.Context(), bucketName, rootPath, logID, segmentID, fromEntry, maxEntries)
 		if err != nil {
 			// A node that cannot answer about this segment is a per-node state the caller has to
 			// see per node, carrying the node's own reason.

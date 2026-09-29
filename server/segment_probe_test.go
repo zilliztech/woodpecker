@@ -54,25 +54,27 @@ func TestProbeRead_StopsAtTheCap(t *testing.T) {
 	require.Equal(t, int64(100), got.FirstEntry)
 	require.Equal(t, int64(349), got.LastEntry)
 	require.Equal(t, int64(250), got.EntriesRead, "the cap is a count of entries, not of batches")
-	require.Equal(t, probeStopCapReached, got.StopReason)
+	require.Equal(t, probeOutcomeCapReached, got.Outcome)
 	require.Empty(t, got.Error)
 }
 
-// TestProbeRead_NotYetWrittenIsNotAFault is the distinction the whole command exists for. A tail
-// read that finds nothing is the steady state of a caught-up reader, and reporting it as an error
-// would make every healthy log look damaged.
-func TestProbeRead_NotYetWrittenIsNotAFault(t *testing.T) {
+// TestProbeRead_EntryNotFoundIsReportedNotInterpreted pins the change of vocabulary. A missing
+// data.log, a block that failed its checksum and a caught-up tail all reach this code as
+// ErrEntryNotFound, so calling it "not written yet" would report a damaged replica as healthy. The
+// node reports what the reader said, text and all, and leaves the meaning to the caller.
+func TestProbeRead_EntryNotFoundIsReportedNotInterpreted(t *testing.T) {
 	read := func(_ context.Context, from, _ int64, _ *proto.LastReadState) (*proto.BatchReadResult, error) {
 		if from == 100 {
 			return batchOf(100, 10), nil
 		}
-		return nil, werr.ErrEntryNotFound
+		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
 	}
 	got := probeRead(context.Background(), read, 100, 1000)
 
 	require.Equal(t, int64(109), got.LastEntry)
-	require.Equal(t, probeStopNotYetWritten, got.StopReason)
-	require.Empty(t, got.Error, "nothing failed: the data is not there yet")
+	require.Equal(t, probeOutcomeEntryNotFound, got.Outcome)
+	require.Contains(t, got.Error, "no record extract",
+		"the reader's own words are what distinguishes a damaged block from a tail")
 }
 
 // TestProbeRead_EndOfSegmentIsNotAFault covers a sealed segment read to its end. It is a different
@@ -87,7 +89,7 @@ func TestProbeRead_EndOfSegmentIsNotAFault(t *testing.T) {
 	got := probeRead(context.Background(), read, 0, 1000)
 
 	require.Equal(t, int64(41), got.LastEntry)
-	require.Equal(t, probeStopEndOfSegment, got.StopReason)
+	require.Equal(t, probeOutcomeEndOfFile, got.Outcome)
 	require.Empty(t, got.Error)
 }
 
@@ -103,7 +105,7 @@ func TestProbeRead_ReportsWhereItBroke(t *testing.T) {
 	got := probeRead(context.Background(), read, 0, 10_000)
 
 	require.Equal(t, int64(499), got.LastEntry, "what it could serve is as important as the failure")
-	require.Equal(t, probeStopError, got.StopReason)
+	require.Equal(t, probeOutcomeError, got.Outcome)
 	require.Contains(t, got.Error, "crc mismatch in block 7")
 }
 
@@ -117,9 +119,10 @@ func TestProbeRead_FailingOnTheFirstEntryServesNothing(t *testing.T) {
 	got := probeRead(context.Background(), read, 4821, 1000)
 
 	require.Equal(t, int64(-1), got.FirstEntry)
-	require.Equal(t, int64(-1), got.LastEntry)
+	require.Equal(t, int64(4820), got.LastEntry,
+		"nothing was served, so the position before the one asked for is what it reached")
 	require.Zero(t, got.EntriesRead)
-	require.Equal(t, probeStopError, got.StopReason)
+	require.Equal(t, probeOutcomeError, got.Outcome)
 }
 
 // TestProbeRead_EmptyBatchIsNotAnInfiniteLoop covers a read that answers without entries and without
@@ -138,8 +141,8 @@ func TestProbeRead_EmptyBatchIsNotAnInfiniteLoop(t *testing.T) {
 	got := probeRead(context.Background(), read, 7, 1_000_000)
 
 	require.LessOrEqual(t, calls, 2, "an empty answer means there is nothing more to ask for")
-	require.Equal(t, int64(-1), got.LastEntry)
-	require.Equal(t, probeStopNotYetWritten, got.StopReason)
+	require.Equal(t, int64(6), got.LastEntry)
+	require.Equal(t, probeOutcomeEntryNotFound, got.Outcome)
 }
 
 // probeStore builds a logStore holding nothing but the configuration the resolution and source
@@ -224,11 +227,16 @@ func TestProbeSource_SharedCopyIsNamedAsSuch(t *testing.T) {
 	dir := filepath.Join(cfg.Woodpecker.Storage.RootPath, "bkt", "inst", "7", "3")
 
 	writeSegmentData(t, dir, "staged bytes")
-	require.Equal(t, probeSourceLocalStaged, l.probeSource("bkt", "inst", 7, 3))
+	source, readable := l.probeSource(l.localSegmentFacts("bkt", "inst", 7, 3))
+	require.True(t, readable)
+	require.Equal(t, probeSourceLocalStaged, source)
 
 	// Compacted and reclaimed: the directory and its mark can remain, data.log does not.
 	require.NoError(t, os.Remove(filepath.Join(dir, "data.log")))
-	require.Equal(t, probeSourceObjectStore, l.probeSource("bkt", "inst", 7, 3),
+	require.NoError(t, os.WriteFile(filepath.Join(dir, compactedMarkFileName), nil, 0o644))
+	source, readable = l.probeSource(l.localSegmentFacts("bkt", "inst", 7, 3))
+	require.True(t, readable)
+	require.Equal(t, probeSourceObjectStore, source,
 		"a reclaimed local copy means the answer comes from the copy every replica shares")
 }
 
@@ -239,6 +247,7 @@ func TestProbeSegment_UsesTheNodesOwnBoundWhenNoneWasAsked(t *testing.T) {
 	store.stopped.Store(false)
 	store.cfg.Woodpecker.Storage.Type = "service"
 	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	writeSegmentData(t, store.localSegmentDir(testBucketName, testRootPath, testLogId, 29), "staged bytes")
 	mp := mocks_segment.NewSegmentProcessor(t)
 	mp.EXPECT().GetLogId().Return(testLogId).Maybe()
 	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)] = map[int64]processor.SegmentProcessor{29: mp}
@@ -253,7 +262,7 @@ func TestProbeSegment_UsesTheNodesOwnBoundWhenNoneWasAsked(t *testing.T) {
 	got, err := store.ProbeSegment(context.Background(), SegmentProbeRequest{LogID: testLogId, SegmentID: 29})
 
 	require.NoError(t, err)
-	require.Equal(t, probeStopCapReached, got.StopReason)
+	require.Equal(t, probeOutcomeCapReached, got.Outcome)
 	require.Equal(t, ProbeMaxEntriesDefault, got.EntriesRead,
 		"a request with no bound stops at the node's default, not at no bound at all")
 	require.NotEmpty(t, asked)
@@ -273,6 +282,7 @@ func TestProbeSegment_ResolvesTheInstanceFromALiveProcessor(t *testing.T) {
 	// cannot simply split on every slash.
 	const nestedRoot = "inst/a/b"
 	store.segmentProcessors[GetLogKey(testBucketName, nestedRoot, testLogId)] = map[int64]processor.SegmentProcessor{29: mp}
+	writeSegmentData(t, store.localSegmentDir(testBucketName, nestedRoot, testLogId, 29), "staged bytes")
 	mp.EXPECT().ReadBatchEntriesAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, werr.ErrEntryNotFound).Maybe()
 
@@ -281,7 +291,7 @@ func TestProbeSegment_ResolvesTheInstanceFromALiveProcessor(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, testBucketName, got.Bucket)
 	require.Equal(t, nestedRoot, got.RootPath, "an instance root with slashes must survive the round trip")
-	require.Equal(t, probeStopNotYetWritten, got.StopReason)
+	require.Equal(t, probeOutcomeEntryNotFound, got.Outcome)
 }
 
 // TestProbeSource_NamesTheStoreEachDeploymentReads covers the deployments that are not service mode,
@@ -294,6 +304,133 @@ func TestProbeSource_NamesTheStoreEachDeploymentReads(t *testing.T) {
 		cfg := serviceModeCfg(t)
 		cfg.Woodpecker.Storage.Type = storageType
 		l := probeStore(t, cfg)
-		require.Equal(t, want, l.probeSource("bkt", "inst", 7, 3), "storage type %q", storageType)
+		facts := SegmentLocalFacts{DataLog: true}
+		source, readable := l.probeSource(facts)
+		require.True(t, readable)
+		require.Equal(t, want, source, "storage type %q", storageType)
 	}
+}
+
+// TestProbeSegment_HoldingNothingOpensNothing is the reason the facts are gathered with stat calls
+// before anything is opened. Opening a reader creates the segment directory before it discovers
+// there is nothing to read, and this command resolves an instance by which directories exist -- so
+// a probe that opened a reader for a segment the node does not hold would leave behind the very
+// evidence the next probe reads.
+func TestProbeSegment_HoldingNothingOpensNothing(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	// A live processor resolves the instance, so resolution cannot be what stops the read.
+	mp := mocks_segment.NewSegmentProcessor(t)
+	mp.EXPECT().GetLogId().Return(testLogId).Maybe()
+	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)] = map[int64]processor.SegmentProcessor{29: mp}
+
+	got, err := store.ProbeSegment(context.Background(), SegmentProbeRequest{LogID: testLogId, SegmentID: 29})
+
+	require.NoError(t, err)
+	require.Equal(t, probeOutcomeNoLocalData, got.Outcome)
+	require.Equal(t, probeSourceNone, got.Source)
+	require.False(t, got.Local.DataLog)
+	require.False(t, got.Local.CompactedMark)
+	// mocks_segment fails the test if ReadBatchEntriesAdv is called without an expectation, so the
+	// read was never attempted. The directory is the durable half of the same claim.
+	require.NoDirExists(t, store.localSegmentDir(testBucketName, testRootPath, testLogId, 29),
+		"probing a segment this node does not hold must not create its directory")
+}
+
+// TestProbeSegment_CompactedSegmentIsStillRead covers the segment whose local copy was reclaimed
+// after compaction: the mark says the data is durable in object storage, so there is something to
+// read even with no data.log, and skipping it would report a healthy segment as absent.
+func TestProbeSegment_CompactedSegmentIsStillRead(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	segmentDir := store.localSegmentDir(testBucketName, testRootPath, testLogId, 29)
+	require.NoError(t, os.MkdirAll(segmentDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segmentDir, compactedMarkFileName), nil, 0o644))
+
+	mp := mocks_segment.NewSegmentProcessor(t)
+	mp.EXPECT().GetLogId().Return(testLogId).Maybe()
+	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)] = map[int64]processor.SegmentProcessor{29: mp}
+	mp.EXPECT().ReadBatchEntriesAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, werr.ErrFileReaderEndOfFile).Once()
+
+	got, err := store.ProbeSegment(context.Background(), SegmentProbeRequest{LogID: testLogId, SegmentID: 29})
+
+	require.NoError(t, err)
+	require.Equal(t, probeOutcomeEndOfFile, got.Outcome)
+	require.Equal(t, probeSourceObjectStore, got.Source,
+		"every replica reads that one copy, which is not three independent answers")
+	require.True(t, got.Local.CompactedMark)
+}
+
+// TestProbeSegment_DeleteMarkIsReported covers a log deleted on this node: a replica with no data is
+// then expected rather than damaged, and only the marker says which it is.
+func TestProbeSegment_DeleteMarkIsReported(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	require.NoError(t, writeDeleteMarker(context.Background(), store.cfg.Woodpecker.Storage.RootPath,
+		deleteMarker{Bucket: testBucketName, RootPath: testRootPath, LogId: testLogId}))
+
+	got, err := store.ProbeSegment(context.Background(), SegmentProbeRequest{
+		Bucket: testBucketName, RootPath: testRootPath, LogID: testLogId, SegmentID: 29,
+	})
+
+	require.NoError(t, err)
+	require.True(t, got.Local.DeleteMarked)
+	require.Equal(t, probeOutcomeNoLocalData, got.Outcome)
+}
+
+// TestProbeSegment_AmbiguousLiveProcessorsAreRefused covers two instances on one node holding a
+// processor for the same log and segment. Map order is random, so picking one would answer for a
+// different tenant from one probe to the next.
+func TestProbeSegment_AmbiguousLiveProcessorsAreRefused(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	for _, bucket := range []string{"bkt-a", "bkt-b"} {
+		mp := mocks_segment.NewSegmentProcessor(t)
+		mp.EXPECT().GetLogId().Return(testLogId).Maybe()
+		store.segmentProcessors[GetLogKey(bucket, testRootPath, testLogId)] = map[int64]processor.SegmentProcessor{29: mp}
+	}
+
+	_, err := store.ProbeSegment(context.Background(), SegmentProbeRequest{LogID: testLogId, SegmentID: 29})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bkt-a/"+testRootPath)
+	require.Contains(t, err.Error(), "bkt-b/"+testRootPath)
+}
+
+// TestProbeSegment_ShutdownIsNotAReadOutcome covers a probe during a rolling restart. The node
+// holds the segment, so without the guard the read itself would fail with the shutdown error and be
+// reported as a damaged replica -- counting a healthy replica as broken, and a whole quorum of them
+// as a dead end.
+func TestProbeSegment_ShutdownIsNotAReadOutcome(t *testing.T) {
+	store := createTestLogStore() // starts stopped, as production does
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	writeSegmentData(t, store.localSegmentDir(testBucketName, testRootPath, testLogId, 29), "staged bytes")
+	mp := mocks_segment.NewSegmentProcessor(t)
+	mp.EXPECT().GetLogId().Return(testLogId).Maybe()
+	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)] = map[int64]processor.SegmentProcessor{29: mp}
+
+	got, err := store.ProbeSegment(context.Background(), SegmentProbeRequest{LogID: testLogId, SegmentID: 29})
+
+	require.Error(t, err, "a node that is shutting down cannot answer, which is not a read result")
+	require.True(t, werr.ErrLogStoreShutdown.Is(err), "got %v", err)
+	require.Nil(t, got, "no report at all, rather than one saying this replica is damaged")
+}
+
+// TestProbeBound keeps a probe within bounds the node sets, whatever was asked for.
+func TestProbeBound(t *testing.T) {
+	require.Equal(t, ProbeMaxEntriesDefault, probeBound(0), "an omitted bound is the node's default")
+	require.Equal(t, ProbeMaxEntriesDefault, probeBound(-5))
+	require.Equal(t, int64(50), probeBound(50))
+	require.Equal(t, ProbeMaxEntriesLimit, probeBound(100_000_000),
+		"a caller cannot ask a node to scan a segment whole")
 }

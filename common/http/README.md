@@ -238,40 +238,54 @@ GET /admin/logstore/segment/probe?log_id=7&segment_id=3&from_entry=4000&max_entr
 GET /admin/logstore/segment/probe?log_id=7&segment_id=3&bucket_name=<bucket>&root_path=<root>
 ```
 
-The only endpoint that reads segment data. The node attempts a bounded read of its own copy from
-`from_entry` and reports how far it got and what stopped it:
+The only endpoint that reads segment data. It reports what this node holds for the segment and how
+far it could read it:
 
 ```json
 {
   "node_id": "10.0.1.7:18080",
   "bucket_name": "milvus", "root_path": "inst-a",
   "log_id": 7, "segment_id": 3,
+  "local": { "data_log": true, "data_log_bytes": 4194304,
+             "compacted_mark": false, "delete_marked": false },
   "source": "local_staged",
   "from_entry": 0, "first_entry": 0, "last_entry": 1200,
   "entries_read": 1201,
-  "stop_reason": "error",
-  "error": "crc mismatch in block 7",
+  "outcome": "entry_not_found",
+  "error": "entry not found: no record extract",
   "elapsed_ms": 34
 }
 ```
 
-`stop_reason` separates three things a reader cannot tell apart from outside: `error` (this copy
-cannot be read past that point), `not_yet_written` (nothing is wrong, the data has not arrived),
-`end_of_segment` (a sealed segment read to its end) and `cap_reached` (the bound, which says
-nothing about the data).
+**`outcome` is the read path's own word, not a verdict.** A node cannot tell "nothing has been
+written yet" from "this copy is damaged": both arrive as `ErrEntryNotFound`, from a missing
+`data.log` (`stagedstorage/reader_impl.go:120`), from a block whose data or checksum could not be
+read (`:1199`, `disk/reader_impl.go:783`), and from a caught-up tail. So the node reports what it
+saw — `entry_not_found`, `end_of_file`, `cap_reached`, `error`, or `no_local_data` — together with
+the local facts, and the caller decides what it means. `wp segment probe` does that with the
+segment's metadata: a replica that stops short of a sealed segment's `LastEntryId` cannot serve data
+that provably exists, whatever the read called it.
 
-Two cautions:
+**The local facts are gathered with stat calls before anything is opened**, and a node holding
+neither a `data.log` nor a compacted mark answers `no_local_data` without opening a reader. That is
+not an optimisation: opening a reader creates the segment directory (`reader_impl.go:101`,
+`disk:80`) before it discovers there is nothing to read, and the instance a probe resolves to is
+decided by which directories exist — so probing a segment the node does not hold would leave behind
+the evidence the next probe reads.
 
-- **The read is bounded.** `max_entries` defaults to a modest number on the node, so a probe cannot
-  turn into a full scan of a segment holding millions of entries. Raise it deliberately.
-- **`source` decides what agreement between replicas means.** While a segment's local staged copy
-  exists, each replica answers about its own copy. Once compaction has reclaimed the local copy the
-  node serves the object-storage copy that *every* replica shares, and three agreeing answers are
-  then one copy answering three times.
+**`source` says what agreement between replicas is worth.** While the local staged copy exists each
+replica answers about its own; once compaction has reclaimed it (`compacted_mark`), the node serves
+the object-storage copy that *every* replica shares, and three agreeing answers are one copy
+answering three times.
 
-`bucket_name`/`root_path` are only needed when the node neither serves a writer for the segment nor
-holds it locally — without them it answers 404 saying so, which is a per-node state a caller should
-show rather than hide.
+`max_entries` is bounded by the node whatever the caller asks, so a diagnostic cannot become a full
+scan of a segment holding millions of entries, and the read carries the request's context: a caller
+that gives up stops the scan.
+
+`bucket_name` and `root_path` name an instance together; one without the other is a 400 rather than
+a silent fallback to "whichever instance this node finds", which could be another tenant's. With
+neither, the node resolves the instance from a live processor or from local data, and reports
+ambiguity instead of picking — a 404 whose message says what it could not resolve.
 
 This endpoint answers only for the node that serves it, like every other one here. `wp segment
 probe` assembles the quorum's view.

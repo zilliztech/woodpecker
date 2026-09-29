@@ -256,8 +256,8 @@ func main() {
 			ForceCompact: func(logID, segmentID, expectedLastEntryId int64) error {
 				return srv.GetWriterRegistry().ForceCompact(context.Background(), logID, segmentID, expectedLastEntryId)
 			},
-			ProbeSegment: func(bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error) {
-				return srv.ProbeSegment(context.Background(), server.SegmentProbeRequest{
+			ProbeSegment: func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error) {
+				return srv.ProbeSegment(ctx, server.SegmentProbeRequest{
 					Bucket: bucketName, RootPath: rootPath,
 					LogID: logID, SegmentID: segmentID,
 					FromEntry: fromEntry, MaxEntries: maxEntries,

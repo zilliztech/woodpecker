@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,12 +18,12 @@ type probeCall struct {
 }
 
 func probeHandlerCapturing(got *probeCall, err error) http.HandlerFunc {
-	return NewLogstoreSegmentProbeHandler(func(bucket, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error) {
+	return NewLogstoreSegmentProbeHandler(func(_ context.Context, bucket, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error) {
 		*got = probeCall{bucket, rootPath, logID, segmentID, fromEntry, maxEntries}
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"last_entry": 4821, "stop_reason": "error"}, nil
+		return map[string]any{"last_entry": 4821, "outcome": "error"}, nil
 	})
 }
 
@@ -87,4 +88,38 @@ func TestSegmentProbeHandler_ReadOnly(t *testing.T) {
 	probeHandlerCapturing(&got, nil).ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+// TestSegmentProbeHandler_PartialInstanceIsRefused covers half a tenant filter. Quietly widening it
+// to "whichever instance this node finds" can answer for a different tenant than the caller named.
+func TestSegmentProbeHandler_PartialInstanceIsRefused(t *testing.T) {
+	for _, query := range []string{"&bucket_name=bkt", "&root_path=inst"} {
+		var got probeCall
+		req := httptest.NewRequest(http.MethodGet,
+			"/admin/logstore/segment/probe?log_id=7&segment_id=3"+query, nil)
+		w := httptest.NewRecorder()
+		probeHandlerCapturing(&got, nil).ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code, "query %q", query)
+		assert.Zero(t, got.logID, "query %q reached the node", query)
+	}
+}
+
+// TestSegmentProbeHandler_CarriesTheCallersContext pins that a caller giving up stops the read: the
+// scan is the expensive half, and nobody is left waiting for its report.
+func TestSegmentProbeHandler_CarriesTheCallersContext(t *testing.T) {
+	var gotCtx context.Context
+	handler := NewLogstoreSegmentProbeHandler(func(ctx context.Context, _, _ string, _, _, _, _ int64) (any, error) {
+		gotCtx = ctx
+		return map[string]any{"outcome": "cap_reached"}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/admin/logstore/segment/probe?log_id=7&segment_id=3", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, gotCtx)
+	cancel()
+	require.Error(t, gotCtx.Err(), "the read is given the request's context, not a detached one")
 }

@@ -66,10 +66,43 @@ func probeFixture(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder, answe
 		&client.Memberlist{Members: members}
 }
 
-func probeBody(source string, first, last int64, stop, errText string) string {
-	return fmt.Sprintf(`{"node_id":"n","source":%q,"from_entry":0,"first_entry":%d,"last_entry":%d,`+
-		`"entries_read":%d,"stop_reason":%q,"error":%q,"elapsed_ms":12}`,
-		source, first, last, last-first+1, stop, errText)
+// sealSegment rewrites the fixture's segment as completed with a known last entry, which is what
+// lets the command tell "not written yet" from "this copy cannot serve what exists".
+func sealSegment(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder, lastEntry int64, nodes []string) {
+	t.Helper()
+	b, err := pb.Marshal(&proto.SegmentMetadata{
+		SegNo: 3, State: proto.SegmentState_Completed, LastEntryId: lastEntry,
+		Quorum: &proto.QuorumInfo{Id: 1, Es: 3, Wq: 3, Aq: 2, Nodes: nodes},
+	})
+	require.NoError(t, err)
+	_, err = cli.Put(context.Background(), kb.BuildSegmentInstanceKey("mylog", "3"), string(b))
+	require.NoError(t, err)
+}
+
+// quorumNodes is the fixture's node list, in quorum order.
+func quorumNodes(members *client.Memberlist) []string {
+	nodes := make([]string, 0, len(members.Members))
+	for _, m := range members.Members {
+		nodes = append(nodes, m.ServiceAddr)
+	}
+	return nodes
+}
+
+func probeBody(source string, first, last int64, outcome, errText string) string {
+	return probeBodyLocal(source, first, last, outcome, errText, true, false, false)
+}
+
+// probeBodyLocal is the node's answer including what it holds on disk.
+func probeBodyLocal(source string, first, last int64, outcome, errText string, dataLog, compacted, deleted bool) string {
+	entries := int64(0)
+	if first >= 0 && last >= first {
+		entries = last - first + 1
+	}
+	return fmt.Sprintf(`{"node_id":"n","bucket_name":"bkt","root_path":"inst",`+
+		`"local":{"data_log":%t,"data_log_bytes":4096,"compacted_mark":%t,"delete_marked":%t},`+
+		`"source":%q,"from_entry":0,"first_entry":%d,"last_entry":%d,`+
+		`"entries_read":%d,"outcome":%q,"error":%q,"elapsed_ms":12}`,
+		dataLog, compacted, deleted, source, first, last, entries, outcome, errText)
 }
 
 func probeTestGlobals(t *testing.T) {
@@ -87,9 +120,9 @@ func TestSegmentProbe_OneDamagedReplicaIsNamed(t *testing.T) {
 	probeTestGlobals(t)
 
 	ac, members := probeFixture(t, cli, kb, []probeAnswer{
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
 		{http.StatusOK, probeBody("local_staged", 0, 1200, "error", "crc mismatch in block 7")},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
 	})
 	cmd, out, _ := markingTestCmd()
 
@@ -98,7 +131,7 @@ func TestSegmentProbe_OneDamagedReplicaIsNamed(t *testing.T) {
 	s := out.String()
 	require.Contains(t, s, "node-2", "the damaged replica has to be named")
 	require.Contains(t, s, "crc mismatch in block 7")
-	require.Contains(t, s, "1 of 3 replicas are damaged",
+	require.Contains(t, s, "1 of 3 replicas that answered cannot serve the segment",
 		"a replica stopping early with an error is the finding, not a footnote")
 	require.NotContains(t, s, "not a damaged one",
 		"a failed read is damage; the wording for a replica that is merely behind says the opposite")
@@ -134,16 +167,16 @@ func TestSegmentProbe_AgreementWithoutErrorsIsNotDamage(t *testing.T) {
 	probeTestGlobals(t)
 
 	ac, members := probeFixture(t, cli, kb, []probeAnswer{
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
 	})
 	cmd, out, _ := markingTestCmd()
 
 	require.NoError(t, runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0))
 
 	s := out.String()
-	require.Regexp(t, `(?i)not been written|data ends|nothing is wrong`, s)
+	require.Regexp(t, `(?i)has not been written yet`, s)
 	require.NotRegexp(t, `(?i)damaged`, s)
 }
 
@@ -155,9 +188,9 @@ func TestSegmentProbe_SharedCopyIsNotThreeConfirmations(t *testing.T) {
 	probeTestGlobals(t)
 
 	ac, members := probeFixture(t, cli, kb, []probeAnswer{
-		{http.StatusOK, probeBody("object_storage", 0, 4821, "end_of_segment", "")},
-		{http.StatusOK, probeBody("object_storage", 0, 4821, "end_of_segment", "")},
-		{http.StatusOK, probeBody("object_storage", 0, 4821, "end_of_segment", "")},
+		{http.StatusOK, probeBody("object_storage", 0, 4821, "end_of_file", "")},
+		{http.StatusOK, probeBody("object_storage", 0, 4821, "end_of_file", "")},
+		{http.StatusOK, probeBody("object_storage", 0, 4821, "end_of_file", "")},
 	})
 	cmd, out, _ := markingTestCmd()
 
@@ -175,9 +208,9 @@ func TestSegmentProbe_NodeThatCannotAnswerIsShownNotDropped(t *testing.T) {
 	probeTestGlobals(t)
 
 	ac, members := probeFixture(t, cli, kb, []probeAnswer{
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
 		{http.StatusNotFound, `{"error":"this node holds no local data for log 7 segment 3"}`},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
 	})
 	cmd, out, _ := markingTestCmd()
 
@@ -240,9 +273,9 @@ func TestSegmentProbe_ReplicaBehindIsNotCalledDamaged(t *testing.T) {
 	probeTestGlobals(t)
 
 	ac, members := probeFixture(t, cli, kb, []probeAnswer{
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
-		{http.StatusOK, probeBody("local_staged", 0, 4000, "not_yet_written", "")},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4000, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
 	})
 	cmd, out, _ := markingTestCmd()
 
@@ -251,7 +284,7 @@ func TestSegmentProbe_ReplicaBehindIsNotCalledDamaged(t *testing.T) {
 	s := out.String()
 	require.Contains(t, s, "not a damaged one", "no read failed, so nothing here is damage")
 	require.Contains(t, s, "node-2 (has 4000)", "the replica that is behind has to be named")
-	require.NotContains(t, s, "replicas are damaged")
+	require.NotContains(t, s, "cannot serve the segment")
 }
 
 // TestSegmentProbe_NoReplicaAnsweredClaimsNothing covers every node being unreachable. A report that
@@ -262,9 +295,9 @@ func TestSegmentProbe_NoReplicaAnsweredClaimsNothing(t *testing.T) {
 	probeTestGlobals(t)
 
 	ac, members := probeFixture(t, cli, kb, []probeAnswer{
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
 	})
 	for i := range members.Members {
 		members.Members[i].Tags["admin_port"] = "1" // every node stranded
@@ -317,13 +350,174 @@ func TestSegmentProbe_QuorumMemberMissingFromMemberlistIsReported(t *testing.T) 
 	probeTestGlobals(t)
 
 	ac, members := probeFixture(t, cli, kb, []probeAnswer{
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
-		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
 	})
 	members.Members = members.Members[:1]
 	cmd, out, _ := markingTestCmd()
 
 	require.NoError(t, runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0))
 	require.Contains(t, out.String(), "not in memberlist")
+}
+
+// TestSegmentProbe_SealedSegmentExposesAShortReplica is the reading the node cannot make. A missing
+// file, a block that failed its checksum and a caught-up tail all reach it as "entry not found", so
+// a replica that cannot serve what a sealed segment provably holds would otherwise be reported as
+// healthy -- the exact confusion this command exists to remove.
+func TestSegmentProbe_SealedSegmentExposesAShortReplica(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "end_of_file", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 1200, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "end_of_file", "")},
+	})
+	sealSegment(t, cli, kb, 4821, quorumNodes(members))
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0))
+
+	s := out.String()
+	require.Contains(t, s, "cannot serve the segment", "the replica cannot serve data the segment provably holds")
+	require.Contains(t, s, "stops after 1200, but the segment ends at 4821")
+	require.NotContains(t, s, "has not been written yet",
+		"a sealed segment's data was written; a replica that cannot serve it is not waiting for it")
+}
+
+// TestSegmentProbe_ReplicaHoldingNothingIsNotWaiting covers a replica with neither a data.log nor a
+// compacted mark. Today's read path answers "entry not found" for that, which reads as "nothing has
+// been written"; the local facts say otherwise.
+func TestSegmentProbe_ReplicaHoldingNothingIsNotWaiting(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBodyLocal("none", -1, -1, "no_local_data", "", false, false, false)},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0))
+
+	s := out.String()
+	require.Contains(t, s, "no data here")
+	require.Contains(t, s, "holds none of the segment")
+	require.Contains(t, s, "none", "what the replica holds locally has to be on screen")
+}
+
+// TestSegmentProbe_DeletedLogIsNotDamage covers a replica holding nothing because the log was
+// deleted there. Expected, not a fault, and sending an operator after it would waste their time.
+func TestSegmentProbe_DeletedLogIsNotDamage(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBodyLocal("none", -1, -1, "no_local_data", "", false, false, true)},
+		{http.StatusOK, probeBodyLocal("none", -1, -1, "no_local_data", "", false, false, true)},
+		{http.StatusOK, probeBodyLocal("none", -1, -1, "no_local_data", "", false, false, true)},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0),
+		"a deleted log is not a finding")
+	require.Contains(t, out.String(), "log deleted here")
+}
+
+// TestSegmentProbe_SilentReplicaBlocksWholeQuorumClaims covers replicas that never answered. A
+// reader can still be served by one of them, so the replicas that did answer cannot speak for the
+// quorum and an exit code must not say they can.
+func TestSegmentProbe_SilentReplicaBlocksWholeQuorumClaims(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 1200, "error", "crc mismatch in block 7")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "entry_not_found", "")},
+	})
+	members.Members[1].Tags["admin_port"] = "1" // unreachable
+	members.Members[2].Tags["admin_port"] = "1" // unreachable
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0)
+
+	require.NoError(t, err, "one failing replica out of a quorum only partly asked is not a dead end")
+	s := out.String()
+	require.Contains(t, s, "did not answer")
+	require.NotContains(t, s, "waits forever",
+		"a reader can still be served by a replica that was never asked")
+}
+
+// TestSegmentProbe_StuckPositionIsAfterTheFurthestReplica covers failover: a reader moves to the
+// next replica, so the first entry nobody can serve is the one after the furthest any replica
+// reached, not after the nearest.
+func TestSegmentProbe_StuckPositionIsAfterTheFurthestReplica(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 9, "error", "crc mismatch in block 1")},
+		{http.StatusOK, probeBody("local_staged", 0, 19, "error", "crc mismatch in block 2")},
+		{http.StatusOK, probeBody("local_staged", 0, 14, "error", "crc mismatch in block 3")},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0)
+
+	require.Error(t, err)
+	s := out.String() + err.Error()
+	require.Contains(t, s, "entry 20", "entry 10 is still served by the replica that reached 19")
+	require.NotContains(t, s, "entry 10")
+}
+
+// TestSegmentProbe_StuckPositionRespectsFromEntry covers a probe that starts partway through. A
+// replica that serves nothing from there is stuck at the position asked for, not at entry zero.
+func TestSegmentProbe_StuckPositionRespectsFromEntry(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBodyLocal("local_staged", -1, 499, "error", "crc mismatch in block 7", true, false, false)},
+		{http.StatusOK, probeBodyLocal("local_staged", -1, 499, "error", "crc mismatch in block 7", true, false, false)},
+		{http.StatusOK, probeBodyLocal("local_staged", -1, 499, "error", "crc mismatch in block 7", true, false, false)},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 500, 0)
+
+	require.Error(t, err)
+	s := out.String() + err.Error()
+	require.Contains(t, s, "entry 500")
+	require.NotContains(t, s, "entry 0:")
+}
+
+// TestSegmentProbe_SamePositionDifferentReasons covers replicas agreeing on the data but not on why
+// they stopped. Calling that "a replica that is behind" would name no replica at all, because none
+// of them is.
+func TestSegmentProbe_SamePositionDifferentReasons(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 99, "end_of_file", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 99, "entry_not_found", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 99, "end_of_file", "")},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0))
+
+	s := out.String()
+	require.Contains(t, s, "same data, up to entry 99")
+	require.NotContains(t, s, "is behind", "no replica holds less than another here")
 }

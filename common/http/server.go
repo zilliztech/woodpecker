@@ -41,7 +41,7 @@ type LogstoreCallbacks struct {
 	ForceFence   func(logID, segmentID int64, reason string) error
 	ForceCompact func(logID, segmentID, expectedLastEntryId int64) error
 	// ProbeSegment attempts a bounded read of one segment on this node and reports how far it got.
-	ProbeSegment func(bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error)
+	ProbeSegment func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error)
 }
 
 // OpsCallbacks holds callbacks for ops admin endpoints.

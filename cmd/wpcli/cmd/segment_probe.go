@@ -67,36 +67,54 @@ func newSegmentProbeCommand() *cobra.Command {
 	return cmd
 }
 
-// probeNode is one replica's answer, or the reason it has none. The states are shared with
-// `logstore lac` so the same condition reads the same way in both commands.
+// probeNode is one replica's answer, or the reason it has none. The unreachable/unknown/bad-response
+// states are shared with `logstore lac` so the same condition reads the same way in both commands.
 type probeNode struct {
-	Node       string `json:"node"`
-	NodeID     string `json:"node_id,omitempty"`
-	State      string `json:"state"`
-	Source     string `json:"source,omitempty"`
-	FirstEntry int64  `json:"first_entry"`
-	LastEntry  int64  `json:"last_entry"`
-	Entries    int64  `json:"entries_read"`
-	StopReason string `json:"stop_reason,omitempty"`
-	Detail     string `json:"detail,omitempty"`
-	ElapsedMs  int64  `json:"elapsed_ms,omitempty"`
+	Node          string `json:"node"`
+	NodeID        string `json:"node_id,omitempty"`
+	State         string `json:"state"`
+	Instance      string `json:"instance,omitempty"`
+	Source        string `json:"source,omitempty"`
+	DataLog       bool   `json:"data_log"`
+	CompactedMark bool   `json:"compacted_mark"`
+	DeleteMarked  bool   `json:"delete_marked"`
+	FirstEntry    int64  `json:"first_entry"`
+	LastEntry     int64  `json:"last_entry"`
+	Entries       int64  `json:"entries_read"`
+	Outcome       string `json:"outcome,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	ElapsedMs     int64  `json:"elapsed_ms,omitempty"`
+	// Verdict is this command's reading of the answer, which the node cannot make on its own.
+	Verdict string `json:"verdict,omitempty"`
 }
 
 func (p probeNode) answered() bool { return p.State == posOK }
 
-// Stop reasons, as the node reports them. These are wire values, like the JSON field names beside
-// them: wp talks to a node over HTTP only, so it reads the vocabulary rather than importing the
-// server package, which would couple the CLI to the server it is diagnosing.
+// Outcomes as the node reports them, and the sources it reads from. These are wire values, like the
+// JSON field names beside them: wp talks to a node over HTTP only, so it reads the vocabulary
+// rather than importing the server package, which would couple the CLI to the server it diagnoses.
 const (
-	probeStopError         = "error"
-	probeStopNotYetWritten = "not_yet_written"
-	probeStopEndOfSegment  = "end_of_segment"
+	probeOutcomeError         = "error"
+	probeOutcomeEntryNotFound = "entry_not_found"
+	probeOutcomeEndOfFile     = "end_of_file"
+	probeOutcomeCapReached    = "cap_reached"
+	probeOutcomeNoLocalData   = "no_local_data"
+
 	probeSourceObjectStore = "object_storage"
 
-	// probeStateCannotAnswer is this command's own: a node that answered the request but holds
-	// nothing it could read for this segment. lac's "no writer" would be the wrong word, because
-	// nothing here is about writers.
+	// probeStateCannotAnswer is this command's own: a node that answered the request but cannot
+	// say anything about this segment. lac's "no writer" would be the wrong word, because nothing
+	// here is about writers.
 	probeStateCannotAnswer = "cannot answer"
+)
+
+// Per-replica verdicts. The node reports what it saw; only here, with the segment's metadata, can
+// "nothing was written" be told apart from "this copy cannot serve what was written".
+const (
+	probeVerdictServed  = "served"
+	probeVerdictShort   = "cannot serve"
+	probeVerdictNoData  = "no data here"
+	probeVerdictDeleted = "log deleted here"
 )
 
 func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
@@ -121,7 +139,7 @@ func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 	}
 
 	results := probeEachNode(ac, members, quorum, logMeta.LogId, segmentID, fromEntry, maxEntries)
-	findings, unreadable := readProbeFindings(results)
+	findings, results, unreadable := readProbeFindings(results, segMeta)
 
 	w := cmd.OutOrStdout()
 	if renderedOutput() {
@@ -148,20 +166,20 @@ func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 
 	rows := make([][]string, 0, len(results))
 	for _, r := range results {
-		served, stop := "-", r.StopReason
+		served, outcome, verdict := "-", r.Outcome, r.Verdict
 		if r.answered() {
-			if r.Entries > 0 {
+			if r.Entries > 0 && r.FirstEntry >= 0 {
 				served = fmt.Sprintf("%d-%d (%d)", r.FirstEntry, r.LastEntry, r.Entries)
 			} else {
 				served = "nothing"
 			}
 		} else {
-			stop = r.State
+			outcome, verdict = r.State, "-"
 		}
-		rows = append(rows, []string{r.Node, r.NodeID, r.Source, served, stop, r.Detail})
+		rows = append(rows, []string{r.Node, r.NodeID, localFacts(r), r.Source, served, outcome, verdict, r.Detail})
 	}
 	if err := output.RenderRowTable(w,
-		[]string{"NODE", "NODE_ID", "SOURCE", "SERVED", "STOP", "DETAIL"}, rows); err != nil {
+		[]string{"NODE", "NODE_ID", "LOCAL", "SOURCE", "SERVED", "OUTCOME", "VERDICT", "DETAIL"}, rows); err != nil {
 		return err
 	}
 
@@ -206,11 +224,19 @@ func probeEachNode(ac *client.Client, members *client.Memberlist, quorum *proto.
 			continue
 		}
 		var resp struct {
+			Bucket   string `json:"bucket_name"`
+			RootPath string `json:"root_path"`
+			Local    struct {
+				DataLog       bool  `json:"data_log"`
+				DataLogBytes  int64 `json:"data_log_bytes"`
+				CompactedMark bool  `json:"compacted_mark"`
+				DeleteMarked  bool  `json:"delete_marked"`
+			} `json:"local"`
 			Source     string `json:"source"`
 			FirstEntry int64  `json:"first_entry"`
 			LastEntry  int64  `json:"last_entry"`
 			Entries    int64  `json:"entries_read"`
-			StopReason string `json:"stop_reason"`
+			Outcome    string `json:"outcome"`
 			Error      string `json:"error"`
 			ElapsedMs  int64  `json:"elapsed_ms"`
 		}
@@ -220,83 +246,143 @@ func probeEachNode(ac *client.Client, members *client.Memberlist, quorum *proto.
 			continue
 		}
 		r.State = posOK
+		// The instance the node answered for: with no bucket and root path given, the node picks
+		// the one it associates with the segment, and which one that was has to be visible.
+		r.Instance = resp.Bucket + "/" + resp.RootPath
+		r.DataLog, r.CompactedMark, r.DeleteMarked = resp.Local.DataLog, resp.Local.CompactedMark, resp.Local.DeleteMarked
 		r.Source, r.FirstEntry, r.LastEntry = resp.Source, resp.FirstEntry, resp.LastEntry
-		r.Entries, r.StopReason, r.Detail, r.ElapsedMs = resp.Entries, resp.StopReason, resp.Error, resp.ElapsedMs
+		r.Entries, r.Outcome, r.Detail, r.ElapsedMs = resp.Entries, resp.Outcome, resp.Error, resp.ElapsedMs
 		results = append(results, r)
 	}
 	return results
 }
 
+// expectedLastEntry is the last entry the segment provably holds. An Active segment's tail is not
+// known here -- more may be written at any moment -- so nothing can be concluded from a replica
+// stopping short of anything.
+func expectedLastEntry(segMeta *proto.SegmentMetadata) (int64, bool) {
+	if segMeta.GetState() == proto.SegmentState_Active || segMeta.GetLastEntryId() < 0 {
+		return 0, false
+	}
+	return segMeta.GetLastEntryId(), true
+}
+
+// judgeReplica reads one answer against what the segment is known to hold. The node cannot do this:
+// a missing file, a block that failed its checksum and a caught-up tail all reach it as the same
+// "entry not found", so only the segment's metadata separates them.
+func judgeReplica(r probeNode, expectedLast int64, expectedKnown bool) (string, string) {
+	switch {
+	case r.Outcome == probeOutcomeError:
+		return probeVerdictShort, r.Detail
+	case r.Outcome == probeOutcomeNoLocalData && r.DeleteMarked:
+		return probeVerdictDeleted, "the log is marked deleted on this node"
+	case r.Outcome == probeOutcomeNoLocalData:
+		return probeVerdictNoData, "no data.log and no compacted mark: this replica holds none of the segment"
+	case expectedKnown && r.LastEntry < expectedLast:
+		return probeVerdictShort, fmt.Sprintf("stops after %d, but the segment ends at %d", r.LastEntry, expectedLast)
+	}
+	return probeVerdictServed, ""
+}
+
 // readProbeFindings turns the per-node answers into the readings that mean different things, and
 // returns an error for the one that means a reader cannot get past this point.
-func readProbeFindings(results []probeNode) ([]string, error) {
+func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]string, []probeNode, error) {
+	expectedLast, expectedKnown := expectedLastEntry(segMeta)
+
 	answered := make([]probeNode, 0, len(results))
 	failing := make([]probeNode, 0, len(results))
+	silent := make([]string, 0, len(results))
 	shared := 0
+	judged := make([]probeNode, 0, len(results))
 	for _, r := range results {
 		if !r.answered() {
+			silent = append(silent, fmt.Sprintf("%s (%s)", nodeLabel(r), r.State))
+			judged = append(judged, r)
 			continue
 		}
+		verdict, why := judgeReplica(r, expectedLast, expectedKnown)
+		r.Verdict = verdict
+		if why != "" && r.Detail == "" {
+			r.Detail = why
+		}
+		judged = append(judged, r)
 		answered = append(answered, r)
 		if r.Source == probeSourceObjectStore {
 			shared++
 		}
-		if r.StopReason == probeStopError {
+		if verdict == probeVerdictShort || verdict == probeVerdictNoData {
 			failing = append(failing, r)
 		}
 	}
 
-	findings := make([]string, 0, 3)
+	findings := make([]string, 0, 4)
 	if len(answered) == 0 {
-		findings = append(findings, "No replica answered, so nothing can be said about this segment.")
-		return findings, wperrors.NewNetworkError("no replica answered the probe")
+		findings = append(findings, fmt.Sprintf(
+			"No replica answered (%s), so nothing can be said about this segment.", strings.Join(silent, ", ")))
+		return findings, judged, wperrors.NewNetworkError("no replica answered the probe")
+	}
+	if len(silent) > 0 {
+		// Whatever the replicas that answered agree on, they are not the whole quorum: a reader
+		// can still be served by one that did not answer here.
+		findings = append(findings, fmt.Sprintf(
+			"%d of %d replicas did not answer (%s). Nothing below is a statement about the whole quorum.",
+			len(silent), len(results), strings.Join(silent, ", ")))
 	}
 	if shared == len(answered) && len(answered) > 1 {
 		findings = append(findings, fmt.Sprintf(
-			"All %d replicas served this from object storage — one shared copy answering %d times, not %d independent confirmations.",
+			"All %d replicas that answered served this from object storage — one shared copy answering %d times, not %d independent confirmations.",
 			len(answered), len(answered), len(answered)))
 	}
 
 	switch {
-	case len(failing) == len(answered):
-		// Every replica stopped with an error. A reader here has nowhere to fail over to.
-		stuckAt := firstUnreadable(failing)
+	case len(failing) == len(answered) && len(silent) == 0:
+		// No replica can serve past this point, and every replica was asked: a reader here has
+		// nowhere to fail over to.
+		stuck := firstUnreadable(failing)
 		findings = append(findings, fmt.Sprintf(
-			"No replica can read entry %d: %s. A reader at that position waits forever.",
-			stuckAt, describeStops(failing)))
-		return findings, wperrors.NewRedFindingError(fmt.Sprintf(
-			"entry %d is unreadable on every replica", stuckAt))
+			"No replica can serve entry %d: %s. A reader at that position waits forever.",
+			stuck, describeStops(failing)))
+		return findings, judged, wperrors.NewRedFindingError(fmt.Sprintf(
+			"entry %d cannot be served by any replica", stuck))
 	case len(failing) > 0:
 		names := make([]string, 0, len(failing))
 		for _, r := range failing {
-			names = append(names, fmt.Sprintf("%s (stops after %d)", nodeLabel(r), r.LastEntry))
+			names = append(names, fmt.Sprintf("%s (%s)", nodeLabel(r), r.Verdict))
 		}
 		findings = append(findings, fmt.Sprintf(
-			"%d of %d replicas are damaged: %s. Failover is covering for them, so reads still work and nothing else reports this.",
+			"%d of %d replicas that answered cannot serve the segment: %s. Failover covers for them, so reads still work and nothing else reports this.",
 			len(failing), len(answered), strings.Join(names, ", ")))
-		return findings, nil
+		return findings, judged, nil
 	}
 
-	reason := answered[0].StopReason
-	sameStop := true
+	samePosition, sameOutcome := true, true
 	for _, r := range answered {
-		if r.LastEntry != answered[0].LastEntry || r.StopReason != reason {
-			sameStop = false
-			break
+		if r.LastEntry != answered[0].LastEntry {
+			samePosition = false
+		}
+		if r.Outcome != answered[0].Outcome {
+			sameOutcome = false
 		}
 	}
 	switch {
-	case sameStop && reason == probeStopNotYetWritten:
+	case samePosition && sameOutcome && answered[0].Outcome == probeOutcomeEntryNotFound:
 		findings = append(findings, fmt.Sprintf(
-			"Every replica stops after entry %d because the data ends there — nothing is wrong with this segment; entry %d has not been written yet.",
+			"Every replica that answered stops after entry %d because the data ends there — entry %d has not been written yet.",
 			answered[0].LastEntry, answered[0].LastEntry+1))
-	case sameStop && reason == probeStopEndOfSegment:
+	case samePosition && sameOutcome && answered[0].Outcome == probeOutcomeEndOfFile:
 		findings = append(findings, fmt.Sprintf(
-			"Every replica reads to entry %d and the segment ends there — nothing is wrong with this segment.",
-			answered[0].LastEntry))
-	case sameStop:
+			"Every replica that answered reads to entry %d and the segment ends there.", answered[0].LastEntry))
+	case samePosition && sameOutcome:
 		findings = append(findings, fmt.Sprintf(
-			"Every replica stopped at entry %d (%s).", answered[0].LastEntry, reason))
+			"Every replica that answered stopped at entry %d (%s).", answered[0].LastEntry, answered[0].Outcome))
+	case samePosition:
+		reasons := make([]string, 0, len(answered))
+		for _, r := range answered {
+			reasons = append(reasons, fmt.Sprintf("%s (%s)", nodeLabel(r), r.Outcome))
+		}
+		findings = append(findings, fmt.Sprintf(
+			"Every replica that answered holds the same data, up to entry %d, but gave different reasons for stopping: %s.",
+			answered[0].LastEntry, strings.Join(reasons, ", ")))
 	default:
 		behind := make([]string, 0, len(answered))
 		furthest := furthestServed(answered)
@@ -306,17 +392,18 @@ func readProbeFindings(results []probeNode) ([]string, error) {
 			}
 		}
 		findings = append(findings, fmt.Sprintf(
-			"Replicas hold different amounts, the furthest reaching entry %d: %s. No read failed, so this is a replica that is behind, not a damaged one.",
+			"Replicas hold different amounts, the furthest reaching entry %d: %s. No read failed and the segment is still being written, so this is a replica that is behind, not a damaged one.",
 			furthest, strings.Join(behind, ", ")))
 	}
-	return findings, nil
+	return findings, judged, nil
 }
 
-// firstUnreadable is the lowest entry no replica could serve: the position a reader stops at.
+// firstUnreadable is the first entry no replica can serve. A reader fails over, so it is the entry
+// after the furthest any replica reached -- not after the nearest.
 func firstUnreadable(failing []probeNode) int64 {
 	stuck := failing[0].LastEntry + 1
 	for _, r := range failing {
-		if r.LastEntry+1 < stuck {
+		if r.LastEntry+1 > stuck {
 			stuck = r.LastEntry + 1
 		}
 	}
@@ -341,7 +428,7 @@ func describeStops(failing []probeNode) string {
 	for _, r := range failing {
 		detail := r.Detail
 		if detail == "" {
-			detail = r.StopReason
+			detail = r.Outcome
 		}
 		if _, ok := seen[detail]; ok {
 			continue
@@ -351,6 +438,28 @@ func describeStops(failing []probeNode) string {
 	}
 	sort.Strings(reasons)
 	return strings.Join(reasons, "; ")
+}
+
+// localFacts renders what the node holds, which is what separates "nothing was written" from "this
+// copy is gone".
+func localFacts(r probeNode) string {
+	if !r.answered() {
+		return "-"
+	}
+	parts := make([]string, 0, 3)
+	if r.DataLog {
+		parts = append(parts, "data.log")
+	}
+	if r.CompactedMark {
+		parts = append(parts, "compacted")
+	}
+	if r.DeleteMarked {
+		parts = append(parts, "deleted")
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, "+")
 }
 
 func nodeLabel(r probeNode) string {
