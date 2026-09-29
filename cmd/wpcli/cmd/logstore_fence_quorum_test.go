@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -313,7 +312,7 @@ func TestFenceQuorum_JSONShortfallStillFails(t *testing.T) {
 
 	ac, members, _ := fenceFixture(t, cli, kb, 3, 3, 2,
 		[]fenceNodeBehaviour{nodeFences, nodeDown, nodeDown})
-	cmd, out, _ := markingTestCmd()
+	cmd, out, errOut := markingTestCmd()
 
 	err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
 		logName: "mylog", segmentID: 3, reason: "stalled writer", confirmed: true,
@@ -327,12 +326,68 @@ func TestFenceQuorum_JSONShortfallStillFails(t *testing.T) {
 			State string `json:"state"`
 		} `json:"nodes"`
 	}
-	// The preview lines precede the payload, so decode from where the object starts.
-	s := out.String()
-	require.NoError(t, json.Unmarshal([]byte(s[strings.Index(s, "{"):]), &payload))
+	require.NoError(t, json.Unmarshal(out.Bytes(), &payload),
+		"stdout has to be the payload alone, or a caller cannot pipe it anywhere")
 	require.Equal(t, 2, payload.Required)
 	require.Equal(t, 1, payload.Fenced)
 	require.Len(t, payload.Nodes, 3, "every targeted node must appear, whatever became of it")
+	require.Contains(t, errOut.String(), "must be fenced",
+		"the plan is still worth showing a human, on the stream that is not being piped")
+}
+
+// TestFenceQuorum_DuplicateNamesAreOneNode covers the same node named twice -- its ID and its
+// address are both accepted, so this is easy to do by accident. Fencing is idempotent server-side,
+// so a repeated node answers 200 again; counting that twice would report a quorum interrupted when
+// one node was fenced.
+func TestFenceQuorum_DuplicateNamesAreOneNode(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	Globals = GlobalFlags{Timeout: 2 * time.Second}
+
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2,
+		[]fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
+	cmd, _, _ := markingTestCmd()
+
+	// node-2 by id and by address: one node, two names.
+	err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
+		logName: "mylog", segmentID: 3, reason: "stalled writer", confirmed: true,
+		nodes: []string{members.Members[1].ID, members.Members[1].ServiceAddr},
+	})
+
+	require.Error(t, err, "one node cannot satisfy a requirement of two")
+	for i, c := range counters {
+		require.Zero(t, c.Load(), "node %d was fenced for a request that could not reach the required count", i+1)
+	}
+}
+
+// TestFenceQuorum_TooFewTargetsIsRefusedBeforeAnythingIsSent covers a request that cannot succeed
+// as stated. A partial fence is not a no-op: the fenced node fails the client's append, which marks
+// the segment rolling. Both numbers are known before the first request, so the request is refused
+// while it can still be refused.
+func TestFenceQuorum_TooFewTargetsIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	Globals = GlobalFlags{Timeout: 2 * time.Second}
+
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2,
+		[]fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
+	cmd, out, _ := markingTestCmd()
+
+	err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
+		logName: "mylog", segmentID: 3, reason: "stalled writer", confirmed: true,
+		nodes: []string{members.Members[0].ServiceAddr},
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "2")
+	for i, c := range counters {
+		require.Zero(t, c.Load(), "node %d was fenced although the request could not reach the required count", i+1)
+	}
+	require.Contains(t, out.String(), "must be fenced", "the numbers behind the refusal must be on screen")
 }
 
 // TestFenceQuorum_RefusesWhatItCannotRead covers the metadata the command depends on being absent

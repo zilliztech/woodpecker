@@ -130,15 +130,32 @@ func runFenceQuorum(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilde
 	}
 
 	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "Segment %d of log %s — state %s, quorum %d (es %d, wq %d, aq %d)\n",
+	// The plan is for a human. When stdout carries a payload it goes to stderr instead, so the
+	// payload can be piped.
+	plan := w
+	if renderedOutput() {
+		plan = cmd.ErrOrStderr()
+	}
+	fmt.Fprintf(plan, "Segment %d of log %s — state %s, quorum %d (es %d, wq %d, aq %d)\n",
 		req.segmentID, req.logName, segMeta.State.String(), quorum.Id, quorum.Es, quorum.Wq, quorum.Aq)
-	fmt.Fprintf(w, "A write completes at aq=%d acknowledgements, so %d of %d nodes must be fenced to interrupt one.\n",
+	fmt.Fprintf(plan, "A write completes at aq=%d acknowledgements, so %d of %d nodes must be fenced to interrupt one.\n",
 		quorum.Aq, required, quorum.Wq)
-	fmt.Fprintf(w, "About to fence %d node(s): %s. Reason: %s\n",
+	fmt.Fprintf(plan, "About to fence %d node(s): %s. Reason: %s\n",
 		len(targets), strings.Join(targets, ", "), req.reason)
 
+	// Fencing part of a quorum is not a partial success: the fenced node fails the client's append,
+	// which marks the segment rolling, while the writer still reaches aq and carries on. Both
+	// numbers are known here, so a request that cannot reach the required count is refused before
+	// any of it is sent.
+	if len(targets) < required {
+		return wperrors.NewUsageError(fmt.Sprintf(
+			"%d node(s) named, but %d of %d are required to interrupt writes; "+
+				"to fence a single node deliberately, use 'wp logstore fence <node>'",
+			len(targets), required, quorum.Wq))
+	}
+
 	if !req.confirmed {
-		fmt.Fprintf(w, "This is a destructive operation. Use -y to skip confirmation.\n")
+		fmt.Fprintf(plan, "This is a destructive operation. Use -y to skip confirmation.\n")
 		return wperrors.NewUserAbortError()
 	}
 
@@ -160,7 +177,7 @@ func runFenceQuorum(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilde
 			fenced, required, quorum.Aq))
 	}
 
-	if Globals.Output == "json" || Globals.Output == "yaml" {
+	if renderedOutput() {
 		payload := map[string]any{
 			"log_name": req.logName, "log_id": logMeta.LogId, "segment_id": req.segmentID,
 			"state": segMeta.State.String(), "quorum_id": quorum.Id,
@@ -201,7 +218,7 @@ func resolveFenceTargets(quorum *proto.QuorumInfo, members *client.Memberlist, n
 		if len(quorum.Nodes) == 0 {
 			return nil, wperrors.NewStateConflictError("the segment's quorum lists no nodes")
 		}
-		return quorum.Nodes, nil
+		return dedupe(quorum.Nodes), nil
 	}
 	targets := make([]string, 0, len(named))
 	for _, name := range named {
@@ -219,7 +236,29 @@ func resolveFenceTargets(quorum *proto.QuorumInfo, members *client.Memberlist, n
 		}
 		targets = append(targets, matched)
 	}
-	return targets, nil
+	// A node answers to its id, its service address and its gossip address, so two names can be one
+	// node. Fencing is idempotent, so the repeat would answer with the same success and be counted
+	// again: a quorum reported as interrupted on the strength of one fenced node.
+	return dedupe(targets), nil
+}
+
+// dedupe keeps the first occurrence of each address, preserving order.
+func dedupe(addrs []string) []string {
+	seen := make(map[string]struct{}, len(addrs))
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if _, ok := seen[a]; ok {
+			continue
+		}
+		seen[a] = struct{}{}
+		out = append(out, a)
+	}
+	return out
+}
+
+// renderedOutput reports whether stdout carries a machine-readable payload rather than a report.
+func renderedOutput() bool {
+	return Globals.Output == "json" || Globals.Output == "yaml"
 }
 
 // fenceEachNode posts the fence to every target in turn. A node absent from the memberlist is not
