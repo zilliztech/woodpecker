@@ -557,7 +557,7 @@ caught up still cannot be told apart.</p>
 every 30 seconds, so any comparison sampling faster than that sees every reader frozen and calls them all stuck.</p>
 </div>
 
-<h3>Client-side writers and readers <span class="lvl none">out of reach</span></h3>
+<h3>Client-side writers and readers <span class="lvl">partial</span></h3>
 
 <p>The client library runs inside the embedding application, so its queue depth, submitted and confirmed
 positions and append latencies are published to <em>that</em> process&rsquo;s metrics endpoint, not to any
@@ -569,16 +569,17 @@ does, so the client side can be read without a dashboard:</p>
 
 <div class="code-block"><pre>wp metrics list &lt;milvus-pod-ip&gt;:9091 --filter woodpecker_client</pre></div>
 
-<p>The pair that matters is <code>submitted_frontier_entry</code> against <code>write_frontier_entry</code>. The
-second is the confirmed position despite its name; the first is what has been submitted. Equal means idle.
-Submitted running ahead of a confirmed position that has stopped moving is a writer that is wedged rather than
-quiet, and <code>pending_append_ops</code> with <code>oldest_pending_append_seconds</code> says how much is behind
-it and for how long.</p>
+<p>Useful ones are <code>write_frontier_segment</code> and <code>write_frontier_entry</code> — the position the
+quorum has <em>confirmed</em>, despite the name — together with the read frontier per reader, the compaction and
+truncation frontiers, and append latency.</p>
 
-<div class="note">
-<strong>These are sampled every 10 seconds, on purpose.</strong> They are published from the client&rsquo;s auditor
-tick rather than from the append path, because the acknowledgement path stops running exactly when a writer wedges
-— anything published from there would freeze at the moment it started to matter.
+<div class="gap">
+<strong>Gap:</strong> how much the client has submitted but not yet had confirmed is not published, so the client
+side cannot say on its own whether a writer is backed up or simply idle. Read it from the node side instead:
+<code>wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</code> names the appends the server has
+been holding too long, and their age is what an outstanding queue looks like from outside. A queue that never
+reached a node is not visible at all, but a full one only happens because the appends ahead of it are stuck
+server-side, and those do appear.
 </div>
 
 </div>
@@ -594,7 +595,7 @@ tick rather than from the append path, because the acknowledgement path stops ru
 <tr><td>A node will not drain</td><td>Works end to end</td></tr>
 <tr><td>Reclaiming an orphaned instance</td><td>Works end to end</td></tr>
 <tr><td>Local disk filling up</td><td>Works end to end</td></tr>
-<tr><td>Writes are not progressing</td><td>Works end to end &mdash; server-side stage, confirmed tail and client-side queue are all readable</td></tr>
+<tr><td>Writes are not progressing</td><td>Works &mdash; three commands between them; the client&rsquo;s own submit queue is not published</td></tr>
 <tr><td>A reader is not progressing</td><td>Partly &mdash; the tail to measure against exists; the reader&rsquo;s own position is not surfaced</td></tr>
 <tr><td>Correcting metadata</td><td>Not yet &mdash; beyond <code>marking confirm</code></td></tr>
 </tbody>
@@ -671,21 +672,43 @@ listed in Part 1.</p>
 <p>A single slow replica is not a reason to intervene. A write completes once the ack quorum is satisfied, so one
 lagging node is absorbed; a write only fails when enough replicas fail that the ack quorum cannot be reached.</p>
 
-<p>To tell &ldquo;stuck&rdquo; from &ldquo;idle&rdquo;, compare what has been submitted against what has been
-confirmed. Both halves are client metrics, so one scrape answers it:</p>
+<p>Three commands answer this between them; there is no single view that assembles them, and none is needed,
+because each one rules out a different explanation.</p>
 
-<div class="code-block"><pre>wp metrics list &lt;milvus-pod-ip&gt;:9091 --filter frontier</pre></div>
+<table class="config-table">
+<thead><tr><th>Question</th><th>Command</th><th>What the answer means</th></tr></thead>
+<tbody>
+<tr>
+<td>Is anything outstanding, and for how long?</td>
+<td><code>wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</code></td>
+<td>Nothing listed and nothing long-running: the writers are quiet, not stuck. An append held past 30s is the
+node&rsquo;s own admission that it has not finished one.</td>
+</tr>
+<tr>
+<td>Which stage is it held at?</td>
+<td><code>wp logstore segment-show</code></td>
+<td>Buffer, flush queue and scheduler counts separate a writer nothing is arriving at from one whose flushing
+has stopped. The readings and what each combination means are in Part 1.</td>
+</tr>
+<tr>
+<td>Is the quorum still confirming, and which replica lags?</td>
+<td><code>wp logstore lac &lt;logName&gt; &lt;segmentId&gt;</code></td>
+<td>A confirmed position that advances between two runs means writing is working. One node trailing is a lagging
+replica the quorum absorbs; fewer than <code>aq</code> answering is a quorum that cannot confirm at all.</td>
+</tr>
+</tbody>
+</table>
 
-<p>Equal positions mean the writer has nothing outstanding — it is idle, and the place to look next is upstream.
-Submitted running ahead of a confirmed position that has stopped moving is a stall, and
-<code>oldest_pending_append_seconds</code> says how long it has lasted.</p>
+<p>Run <code>lac</code> twice a little apart. The single most useful fact is whether the confirmed position moved,
+and one reading cannot tell you that.</p>
 
-<p>Then find which replica is responsible:</p>
-
-<div class="code-block"><pre>wp logstore lac &lt;logName&gt; &lt;segmentId&gt; --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
-
-<p>The per-node positions show whether one replica is trailing or the quorum has lost enough nodes to stop
-confirming at all.</p>
+<div class="gap">
+<strong>Gap:</strong> how far the client has submitted is not published, so &ldquo;submitted is ahead of confirmed&rdquo;
+cannot be read directly. The outstanding appends in <code>wp ops list</code> are the substitute: they are the same
+backlog seen from the node that is holding it. Appends still queued inside the client, which never reached a node,
+are invisible — though a client queue only fills because what is ahead of it is stuck server-side, and that part
+does show.
+</div>
 
 <p>When a writer has to be made to start over, fencing is the mechanism: a fenced segment fails the next append,
 and the application is expected to reopen its writer, which re-establishes state through the normal path. Note that
