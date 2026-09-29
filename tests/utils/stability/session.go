@@ -216,13 +216,13 @@ func (s *Session) Finish(settle time.Duration) []Report {
 			}
 		})
 
-		lastAcked := int64(-1)
+		acked := make(map[int64]bool)
 		for _, w := range writes {
-			if w.Err == nil && !w.Hung && w.Seq > lastAcked {
-				lastAcked = w.Seq
+			if w.Err == nil && !w.Hung {
+				acked[w.Seq] = true
 			}
 		}
-		reads, readErrs := l.R.WaitFor(lastAcked, 30*time.Second)
+		reads, readErrs := l.R.WaitFor(acked, 30*time.Second)
 		Bounded(t, l.Name+" reader close", 30*time.Second, func() {
 			closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

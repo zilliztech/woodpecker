@@ -271,14 +271,21 @@ func (rd *Reader) loop(ctx context.Context) {
 	}
 }
 
-// lastSeq returns the highest sequence read so far, or -1.
-func (rd *Reader) lastSeq() int64 {
+// missing returns how many of want have not been read yet.
+func (rd *Reader) missing(want map[int64]bool) int {
 	rd.mu.Lock()
 	defer rd.mu.Unlock()
-	if len(rd.records) == 0 {
-		return -1
+	seen := make(map[int64]bool, len(rd.records))
+	for _, r := range rd.records {
+		seen[r.Seq] = true
 	}
-	return rd.records[len(rd.records)-1].Seq
+	n := 0
+	for seq := range want {
+		if !seen[seq] {
+			n++
+		}
+	}
+	return n
 }
 
 // SlowReads returns the ReadNext calls that took longer than slowReadThreshold.
@@ -288,10 +295,13 @@ func (rd *Reader) SlowReads() []SlowRead {
 	return append([]SlowRead(nil), rd.slow...)
 }
 
-// WaitFor waits up to wait for the reader to deliver seq, then stops it.
-func (rd *Reader) WaitFor(seq int64, wait time.Duration) ([]ReadRecord, []ReadError) {
+// WaitFor waits up to wait for the reader to deliver every sequence in acked,
+// then stops it. It waits for the set, not for the last sequence: a retried
+// append lands after appends submitted later, so the entry read last need not
+// be the highest sequence, and the highest need not be read last.
+func (rd *Reader) WaitFor(acked map[int64]bool, wait time.Duration) ([]ReadRecord, []ReadError) {
 	deadline := time.Now().Add(wait)
-	for time.Now().Before(deadline) && rd.lastSeq() < seq {
+	for time.Now().Before(deadline) && rd.missing(acked) > 0 {
 		time.Sleep(50 * time.Millisecond)
 	}
 	rd.cancel()
