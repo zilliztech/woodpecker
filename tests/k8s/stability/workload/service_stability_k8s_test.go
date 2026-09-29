@@ -170,7 +170,7 @@ func TestServiceStabilityK8s_VanishQuorumPod(t *testing.T) {
 // client of their own.
 func TestServiceStabilityK8s_VanishReadPod_SeparateReader(t *testing.T) {
 	env := startK8sEnv(t, harness.DefaultLogs, true)
-	env.ExtraStall = harness.VanishDetection
+	env.ExtraStall = harness.VanishReadDetection
 	env.fault(env.BusiestReadAddr())
 	env.finish()
 }

@@ -155,7 +155,7 @@ func TestServiceStabilityDocker_VanishQuorumPod(t *testing.T) {
 // client of their own, so only the read path's own bounds can move them.
 func TestServiceStabilityDocker_VanishReadPod_SeparateReader(t *testing.T) {
 	env := startDockerEnv(t, harness.DefaultLogs, true)
-	env.ExtraStall = harness.VanishDetection
+	env.ExtraStall = harness.VanishReadDetection
 	n := env.busiestReadNode()
 	env.cluster.Pause(t, n)
 	time.Sleep(replacementDelay)

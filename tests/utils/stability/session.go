@@ -45,6 +45,12 @@ const (
 // does not assume.
 const VanishDetection = 2 * time.Second
 
+// VanishReadDetection is what a vanished replica costs a tail reader reading
+// from it: the read is given up only when the bound on a read of an active
+// segment expires (woodpecker.client.segmentRead.activeTimeout, 3s by
+// default), and the next replica is asked after that.
+const VanishReadDetection = 3 * time.Second
+
 // SessionConfig says what workload a Session runs.
 type SessionConfig struct {
 	Logs     int           // logs, each with a writer and a tail reader; DefaultLogs if 0

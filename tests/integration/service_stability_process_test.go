@@ -219,7 +219,7 @@ func TestServiceStabilityProcess_VanishQuorumPod(t *testing.T) {
 // another replica.
 func TestServiceStabilityProcess_VanishReadPod_SeparateReader(t *testing.T) {
 	env := startProcessEnv(t, stability.DefaultLogs, true)
-	env.ExtraStall = stability.VanishDetection
+	env.ExtraStall = stability.VanishReadDetection
 	env.cluster.PodRestart(t, env.busiestReadNode(), utils.PodPlan{
 		Vanish: true, BlackholeFor: 10 * time.Second,
 	})
