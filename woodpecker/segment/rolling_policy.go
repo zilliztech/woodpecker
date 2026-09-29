@@ -40,6 +40,20 @@ type RollingPolicy interface {
 	ShouldRollover(ctx context.Context, currentSegmentSize int64, currentBlocksCount int64, lastRolloverTimeMs int64) (bool, string)
 }
 
+// IntervalElapsed reports whether a segment opened at lastRolloverTimeMs has been open for at
+// least intervalMs. A non-positive timestamp means no segment has been rolled yet, and a negative
+// elapsed time means the clock moved backwards; neither is a reason to roll.
+func IntervalElapsed(lastRolloverTimeMs, intervalMs int64) bool {
+	if lastRolloverTimeMs <= 0 {
+		return false
+	}
+	elapsed := time.Now().UnixMilli() - lastRolloverTimeMs
+	if elapsed < 0 {
+		return false
+	}
+	return elapsed >= intervalMs
+}
+
 func NewDefaultRollingPolicy(rolloverIntervalMs int64, rolloverSizeBytes int64, rolloverBlocksCount int64) RollingPolicy {
 	// Validate parameters
 	if rolloverIntervalMs <= 0 {
@@ -118,7 +132,7 @@ func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmen
 			return false, ""
 		}
 
-		if timeSinceLastRollover >= p.rolloverIntervalMs {
+		if IntervalElapsed(lastRolloverTimeMs, p.rolloverIntervalMs) {
 			logger.Ctx(ctx).Debug("Rolling by time interval",
 				zap.Int64("rolloverIntervalMs", p.rolloverIntervalMs),
 				zap.Int64("actualIntervalMs", timeSinceLastRollover),
