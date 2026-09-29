@@ -35,25 +35,6 @@ import (
 
 var _ LogStoreClient = (*logStoreClientRemote)(nil)
 
-// appendFirstResponseTimeout bounds the synchronous part of AddEntry /
-// AddEntries: opening the stream and reading its first (Buffered) response.
-// The caller passes a deadline-less context, and the send runs on the
-// per-segment executor, so while it waits every later append of the log waits
-// too (#232). Opening waits for the connection to be READY, which an address
-// that never answers never becomes; a peer that accepted the stream and went
-// silent never sends the first frame. Buffering an entry takes milliseconds,
-// so two seconds without it is a peer that is gone, and failing fast is the
-// point: until the replica is given up and the segment rolls, the log is either
-// stalled behind it or writing with one copy less.
-// Package var so tests can shrink it. TODO make configurable; tracked with the
-// timeout audit (#229).
-var appendFirstResponseTimeout = 2 * time.Second
-
-// selectNodesTimeout bounds one SelectNodes call to a seed. The seed answers
-// from its in-memory membership view; a seed that does not answer in time is
-// skipped by the caller's retry, which tries another seed.
-var selectNodesTimeout = 2 * time.Second
-
 // errCallTimedOut reports that a bound this client puts on a call expired. It
 // is Unavailable on purpose: a peer that cannot open a stream or answer within
 // the bound is as good as unreachable, so it takes the same path as a refused
@@ -67,12 +48,13 @@ func errCallTimedOut(what string, bound time.Duration, cause error) error {
 // appendTimedOut logs an expired append bound and returns the error that makes
 // the send fail like an unreachable replica.
 func (l *logStoreClientRemote) appendTimedOut(ctx context.Context, what string, logId int64, segId int64, cause error, fields ...zap.Field) error {
+	bound := l.timeouts.appendSend()
 	logger.Ctx(ctx).Warn(what+" timed out",
 		append([]zap.Field{
 			zap.String("target", l.target), zap.Int64("logId", logId), zap.Int64("segId", segId),
-			zap.Duration("timeout", appendFirstResponseTimeout), zap.Error(cause),
+			zap.Duration("timeout", bound), zap.Error(cause),
 		}, fields...)...)
-	return errCallTimedOut(what, appendFirstResponseTimeout, cause)
+	return errCallTimedOut(what, bound, cause)
 }
 
 // logStoreClientRemote is a remote implementation of LogStoreClient,
@@ -93,6 +75,8 @@ type logStoreClientRemote struct {
 	// directly; the helper is a no-op in that case.
 	pool   LogStoreClientPool
 	target string
+	// timeouts bounds the calls on the paths that must not stall.
+	timeouts CallTimeouts
 	// per-log subscription and pending routing
 	mu     sync.RWMutex
 	closed bool
@@ -143,7 +127,7 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 	// the first Recv does. Only the synchronous part is bounded here; the async
 	// ack phase keeps its own budget (receivedAckCallback / batch drain).
 	streamCtx, streamCancel := context.WithCancel(ctx)
-	firstRespTimer := time.AfterFunc(appendFirstResponseTimeout, streamCancel)
+	firstRespTimer := time.AfterFunc(l.timeouts.appendSend(), streamCancel)
 
 	// Send unary append request first to get the actual entryId
 	respStream, err := l.innerClient.AddEntry(streamCtx, &proto.AddEntryRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, Entry: entry})
@@ -236,7 +220,7 @@ func (l *logStoreClientRemote) AppendEntries(ctx context.Context, bucketName str
 	// Bound opening the stream and phase 1 with one timer, armed before the
 	// stream is opened, the same way as the single-entry path (#232).
 	streamCtx, streamCancel := context.WithCancel(ctx)
-	firstRespTimer := time.AfterFunc(appendFirstResponseTimeout, streamCancel)
+	firstRespTimer := time.AfterFunc(l.timeouts.appendSend(), streamCancel)
 	segId := entries[0].SegId
 	respStream, err := l.innerClient.AddEntries(streamCtx, &proto.AddEntriesRequest{
 		BucketName: bucketName,
@@ -454,7 +438,8 @@ func (l *logStoreClientRemote) SelectNodes(ctx context.Context, strategyType pro
 	defer func() { l.maybeDropCachedConn(err) }()
 	// New segments are created on the append path, so a seed that does not
 	// answer would stall appends; bound the call and let the caller try another.
-	callCtx, cancel := context.WithTimeout(ctx, selectNodesTimeout)
+	bound := l.timeouts.selectNodes()
+	callCtx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 	resp, err := l.innerClient.SelectNodes(callCtx, &proto.SelectNodesRequest{
 		Strategy:     strategyType,
@@ -463,7 +448,7 @@ func (l *logStoreClientRemote) SelectNodes(ctx context.Context, strategyType pro
 	})
 	if err != nil {
 		if ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-			return nil, errCallTimedOut("select nodes", selectNodesTimeout, err)
+			return nil, errCallTimedOut("select nodes", bound, err)
 		}
 		return nil, err
 	}

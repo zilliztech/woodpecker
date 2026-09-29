@@ -854,6 +854,13 @@ fmt.<span class="hl-fn">Println</span>(<span class="hl-kw">string</span>(msg.Pay
                 <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
                 <tr><td>segmentAppend.queueSize</td><td>Maximum queued segment append requests</td><td>100</td></tr>
                 <tr><td>segmentAppend.maxRetries</td><td>Maximum retries for append operations</td><td>2</td></tr>
+                <tr><td>segmentAppend.sendTimeout</td><td>Time allowed for sending an append to one replica (opening the stream and its first response), in ms; a replica that misses it is treated as unreachable</td><td>2000</td></tr>
+                <tr><td>grpc.dialTimeout</td><td>Time allowed for one connection attempt to a logstore, in ms (gRPC MinConnectTimeout); also bounds a call to an address that never answers</td><td>1000</td></tr>
+                <tr><td>grpc.connectBackoff.baseDelay</td><td>First delay before reconnecting after a failed attempt, in ms</td><td>100</td></tr>
+                <tr><td>grpc.connectBackoff.multiplier</td><td>Growth factor of the reconnect delay</td><td>1.6</td></tr>
+                <tr><td>grpc.connectBackoff.jitter</td><td>Randomisation of the reconnect delay</td><td>0.2</td></tr>
+                <tr><td>grpc.connectBackoff.maxDelay</td><td>Longest reconnect delay, in ms</td><td>3000</td></tr>
+                <tr><td>quorum.selectNodesTimeout</td><td>Time allowed for one SelectNodes call to a seed, in ms; the next seed is asked when it expires</td><td>2000</td></tr>
                 <tr><td>segmentRollingPolicy.maxSize</td><td>Maximum segment size in bytes</td><td>100MB</td></tr>
                 <tr><td>segmentRollingPolicy.maxInterval</td><td>Maximum interval between segment rolls (seconds)</td><td>800</td></tr>
                 <tr><td>segmentRollingPolicy.maxBlocks</td><td>Maximum blocks per segment</td><td>1000</td></tr>

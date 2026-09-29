@@ -139,7 +139,12 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
 	}
 	reportClientPlacement(ctx)
-	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
+	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize(),
+		client.WithGRPCClientConfig(cfg.Woodpecker.Client.GRPC),
+		client.WithCallTimeouts(client.CallTimeouts{
+			AppendSend:  cfg.Woodpecker.Client.SegmentAppend.SendTimeout.Duration.Duration(),
+			SelectNodes: cfg.Woodpecker.Client.Quorum.SelectNodesTimeout.Duration.Duration(),
+		}))
 	c := &woodpeckerClient{
 		cfg:        cfg,
 		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg),
