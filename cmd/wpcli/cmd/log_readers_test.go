@@ -199,3 +199,41 @@ func readersRowFor(t *testing.T, out, readerName string) string {
 	t.Fatalf("no row for %s in:\n%s", readerName, out)
 	return ""
 }
+
+// TestLogReaders_UnparseableRecordDoesNotHideTheRest covers one corrupt record among good ones. The
+// readers are separate keys, so one bad value says nothing about the others, and abandoning the
+// listing would hide every reader behind the first damaged record.
+func TestLogReaders_UnparseableRecordDoesNotHideTheRest(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	Globals = GlobalFlags{Timeout: 2 * time.Second}
+
+	putLogForReaders(t, cli, kb)
+	nowMs := uint64(time.Now().UnixMilli())
+	putReader(t, cli, kb, &proto.ReaderTempInfo{
+		ReaderName: "reader-good", LogId: readersTestLogID,
+		OpenTimestamp: nowMs - 60_000, OpenSegmentId: 3, OpenEntryId: 100,
+		RecentReadSegmentId: 5, RecentReadEntryId: 4821, RecentReadTimestamp: nowMs - 5_000,
+	})
+	_, err := cli.Put(context.Background(),
+		kb.BuildLogReaderTempInfoKey(readersTestLogID, "reader-corrupt"), "not a protobuf at all")
+	require.NoError(t, err)
+
+	cmd, out, errOut := markingTestCmd()
+	require.NoError(t, runLogReaders(cmd, cli, kb, readersTestLog))
+
+	require.Contains(t, out.String(), "5:4821", "the readable records must still be listed")
+	require.Contains(t, errOut.String(), "reader-corrupt",
+		"the record that could not be read has to be named, not silently dropped")
+}
+
+// TestFormatAge covers a published timestamp ahead of this host's clock. The two clocks are
+// different machines' and need not agree; rendering the difference as negative time would read as a
+// reader that reported in the future.
+func TestFormatAge(t *testing.T) {
+	require.Equal(t, "0s", formatAge(-4_000), "a clock difference is not time running backwards")
+	require.Equal(t, "20s", formatAge(20_000))
+	require.Equal(t, "30m5s", formatAge(1_805_000))
+}
