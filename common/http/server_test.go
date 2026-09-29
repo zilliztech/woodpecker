@@ -188,3 +188,38 @@ func TestStartAndStop_WithInstanceDataEndpoint(t *testing.T) {
 
 	assert.NoError(t, Stop())
 }
+
+// TestStartAndStop_SegmentProbeIsReachable pins the wiring rather than the handler: providing the
+// callback has to publish the route. A handler that is never registered answers 404 with nothing to
+// show for it, and no test of the handler itself would notice.
+func TestStartAndStop_SegmentProbeIsReachable(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+	t.Setenv(ListenPortEnvKey, "19096")
+
+	cfg, _ := config.NewConfiguration()
+	var gotLogID, gotSegmentID int64
+	err := Start(cfg, AdminCallbacks{
+		GetMemberlistStatus: func() string { return "ok" },
+		Logstore: LogstoreCallbacks{
+			ProbeSegment: func(_, _ string, logID, segmentID, _, _ int64) (any, error) {
+				gotLogID, gotSegmentID = logID, segmentID
+				return map[string]any{"stop_reason": "not_yet_written", "last_entry": 4821}, nil
+			},
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = Stop() }()
+	time.Sleep(50 * time.Millisecond)
+
+	resp, httpErr := http.Get("http://127.0.0.1:19096" + AdminLogstoreProbePath + "?log_id=7&segment_id=3")
+	require.NoError(t, httpErr)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var payload map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&payload))
+	assert.Equal(t, "not_yet_written", payload["stop_reason"])
+	assert.Equal(t, int64(7), gotLogID)
+	assert.Equal(t, int64(3), gotSegmentID)
+}
