@@ -711,9 +711,24 @@ does show.
 </div>
 
 <p>When a writer has to be made to start over, fencing is the mechanism: a fenced segment fails the next append,
-and the application is expected to reopen its writer, which re-establishes state through the normal path. Note that
-fencing a single node is not enough to trigger it — a write survives on the remaining replicas until enough of the
-quorum is fenced to break the ack quorum.</p>
+and the application is expected to reopen its writer, which re-establishes state through the normal path. A write
+completes at <code>aq</code> acknowledgements, so fencing one node removes one and the write carries on through the
+rest; interrupting it takes <code>wq - aq + 1</code> nodes &mdash; two of three on the default quorum.</p>
+
+<div class="code-block"><pre>wp logstore fence-quorum &lt;logName&gt; &lt;segmentId&gt; --reason "stalled writer" \
+    --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>It reads the quorum from the segment&rsquo;s metadata, states how many nodes must be fenced before it touches
+anything, and without <code>-y</code> stops there. Fencing fewer than required is reported as a conflict rather than
+as success, because the writer can still reach <code>aq</code>. <code>wp logstore fence &lt;node&gt;</code> remains
+for the cases that want exactly one node.</p>
+
+<div class="gap">
+<strong>Gap:</strong> a node fences through its live segment processor, so a node that has none refuses the
+request. It is reported with the node&rsquo;s own reason and does not count towards the required number. For a stuck
+write the nodes holding the pending appends are the ones with live processors, so this rarely bites; a quorum whose
+processors have all been evicted cannot be fenced through this path at all.
+</div>
 
 <h3>A reader is not progressing</h3>
 
