@@ -1225,36 +1225,40 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 		w.headerWritten.Store(true)
 	}
 
-	// Write all index records
+	// Write the index records and the footer with one write. A segment holds
+	// one index record per block, and a block can be as small as one entry, so
+	// writing them one at a time costs a syscall per block: thousands of them
+	// on a busy disk, which is what completing a segment used to spend its
+	// time on while readers waited for its end.
 	indexStartOffset := w.writtenBytes
-
-	// Lock to read blockIndexes safely
-	blockIndexesCopy := make([]*codec.IndexRecord, len(w.blockIndexes))
-	copy(blockIndexesCopy, w.blockIndexes)
 	blockIndexesLen := len(w.blockIndexes)
 
-	for _, indexRecord := range blockIndexesCopy {
-		if err := w.writeRecord(ctx, indexRecord); err != nil {
-			return w.lastEntryID.Load(), fmt.Errorf("write index record: %w", err)
-		}
+	var tail bytes.Buffer
+	for _, indexRecord := range w.blockIndexes {
+		tail.Write(codec.EncodeRecord(indexRecord))
 	}
-	indexLength := uint32(w.writtenBytes - indexStartOffset)
+	indexLength := uint32(tail.Len())
 
-	// Write footer record
 	footer := &codec.FooterRecord{
 		TotalBlocks:  int32(blockIndexesLen),
-		TotalRecords: uint32(blockIndexesLen),  // Simplified - each block is one record for index
-		TotalSize:    uint64(w.writtenBytes),   // Total size of the file
-		IndexOffset:  uint64(indexStartOffset), // Will be calculated by the codec
-		IndexLength:  indexLength,              // Will be calculated by the codec
+		TotalRecords: uint32(blockIndexesLen),                        // Simplified - each block is one record for index
+		TotalSize:    uint64(indexStartOffset) + uint64(indexLength), // Total size of the file before the footer
+		IndexOffset:  uint64(indexStartOffset),
+		IndexLength:  indexLength,
 		Version:      codec.FormatVersion,
 		Flags:        0,
 		LAC:          lac, // Last add confirmed ID acknowledged by majority of replicas
 	}
+	tail.Write(codec.EncodeRecord(footer))
 
-	if err := w.writeRecord(ctx, footer); err != nil {
-		return w.lastEntryID.Load(), fmt.Errorf("write footer: %w", err)
+	n, err := w.file.Write(tail.Bytes())
+	if err != nil {
+		return w.lastEntryID.Load(), fmt.Errorf("write index and footer: %w", err)
 	}
+	if n != tail.Len() {
+		return w.lastEntryID.Load(), fmt.Errorf("incomplete index and footer write: wrote %d of %d bytes", n, tail.Len())
+	}
+	w.writtenBytes += int64(n)
 
 	// Final sync
 	if err := w.file.Sync(); err != nil {
