@@ -312,7 +312,9 @@ number, offset, size, the entries it holds, and whether it verified:
     "blocks": [
       {"block": 0, "offset": 25, "bytes": 2048, "first_entry_id": 0, "last_entry_id": 9, "status": "ok"},
       {"block": 1, "offset": 2110, "bytes": 2048, "first_entry_id": 10, "last_entry_id": 19,
-       "status": "checksum_failed", "detail": "block CRC mismatch: expected 1a2b3c4d, got 5e6f7a8b"},
+       "records_ok": 6, "last_good_entry_id": 15,
+       "status": "checksum_failed",
+       "detail": "block CRC mismatch: expected 1a2b3c4d, got 5e6f7a8b; record_checksum_failed at record offset 384 (record checksum mismatch)"},
       {"block": 2, "offset": 4195, "bytes": 2048, "first_entry_id": 20, "last_entry_id": 29, "status": "ok"}
     ],
     "sealed": true, "total_blocks_known": 3, "lac": 29,
@@ -332,6 +334,13 @@ active segment has only the chain: block N+1 begins where block N's header says 
 body is stepped over there too, but a header that cannot be read ends the walk, reported as
 `stop_reason: chain_broken` — the blocks beyond it have not been looked at, which is not the same as
 their being damaged.
+
+**A damaged block is still walked record by record.** A block's checksum covers all of it, so one
+flipped byte condemns the whole block and a reader abandons it — but every record inside carries its
+own checksum, so the damage can be placed at a record. `records_ok` and `last_good_entry_id` say how
+far into the block the data is still readable, which turns "this block's ten entries are lost" into
+"entries 16 to 19 are lost". That is the range a skip would have to cover, and it is the reason the
+record walk is a separate function from `DecodeRecordList` rather than a use of it.
 
 There is no "undecodable" status: `DecodeRecordList` answers corruption by stopping and returning
 the records it already has, never by erroring, so a damaged block header presents as no block header

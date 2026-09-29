@@ -67,9 +67,14 @@ func surveyBody(stopReason string, statuses ...string) string {
 		if status != "ok" {
 			detail = "block CRC mismatch"
 		}
+		lastGood := int64(i*10 + 9)
+		if status != "ok" {
+			lastGood = int64(i*10 + 5) // six records survived inside the damaged block
+		}
 		blocks = append(blocks, fmt.Sprintf(
-			`{"block":%d,"offset":%d,"bytes":100,"first_entry_id":%d,"last_entry_id":%d,"status":%q,"detail":%q}`,
-			i, i*100, i*10, i*10+9, status, detail))
+			`{"block":%d,"offset":%d,"bytes":100,"first_entry_id":%d,"last_entry_id":%d,`+
+				`"records_ok":6,"last_good_entry_id":%d,"status":%q,"detail":%q}`,
+			i, i*100, i*10, i*10+9, lastGood, status, detail))
 	}
 	stoppedEarly := stopReason != "end_of_segment"
 	return fmt.Sprintf(`{"node_id":"n","source":"local_staged","survey":{"blocks":[%s],`+
@@ -137,7 +142,8 @@ func TestSegmentInspect_BlockBadEverywhereIsALoss(t *testing.T) {
 	require.Error(t, err)
 	s := out.String() + err.Error()
 	require.Contains(t, s, "No replica holds a readable copy of block(s) 1")
-	require.Contains(t, s, "entries 10-19", "the cost of skipping has to be stated in entries")
+	require.Contains(t, s, "entries 16-19",
+		"the block's own records survive its checksum, so the loss is narrower than the block")
 	require.Contains(t, s, "Readable data resumes at entry 20 (block 2)",
 		"where reading resumes is what a skip range has to cover")
 }

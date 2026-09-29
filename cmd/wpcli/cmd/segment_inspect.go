@@ -74,6 +74,10 @@ type inspectBlock struct {
 	LastEntryID  int64  `json:"last_entry_id"`
 	Status       string `json:"status"`
 	Detail       string `json:"detail,omitempty"`
+	// RecordsOK and LastGoodEntryID come from the block's own records, which carry their own
+	// checksums and so survive the block checksum failure that makes a reader abandon the block.
+	RecordsOK       int   `json:"records_ok"`
+	LastGoodEntryID int64 `json:"last_good_entry_id"`
 }
 
 // inspectNode is one replica's survey, or the reason it has none.
@@ -141,25 +145,33 @@ func runSegmentInspect(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 	rows := make([][]string, 0, len(results)*4)
 	for _, n := range results {
 		if !n.answered() {
-			rows = append(rows, []string{n.Node, n.NodeID, "-", "-", "-", n.State, n.Detail})
+			rows = append(rows, []string{n.Node, n.NodeID, "-", "-", "-", "-", n.State, n.Detail})
 			continue
 		}
 		if len(n.Blocks) == 0 {
-			rows = append(rows, []string{n.Node, n.NodeID, "-", "-", "-", n.StopReason, n.Detail})
+			rows = append(rows, []string{n.Node, n.NodeID, "-", "-", "-", "-", n.StopReason, n.Detail})
 			continue
 		}
 		for _, b := range n.Blocks {
+			readable := "all"
+			if b.Status != blockStatusOK {
+				readable = "none"
+				if b.LastGoodEntryID >= b.FirstEntryID {
+					readable = fmt.Sprintf("%d-%d", b.FirstEntryID, b.LastGoodEntryID)
+				}
+			}
 			rows = append(rows, []string{
 				n.Node, n.NodeID,
 				strconv.FormatInt(b.Number, 10),
 				fmt.Sprintf("%d-%d", b.FirstEntryID, b.LastEntryID),
+				readable,
 				strconv.FormatInt(b.Bytes, 10),
 				b.Status, b.Detail,
 			})
 		}
 	}
 	if err := output.RenderRowTable(w,
-		[]string{"NODE", "NODE_ID", "BLOCK", "ENTRIES", "BYTES", "STATUS", "DETAIL"}, rows); err != nil {
+		[]string{"NODE", "NODE_ID", "BLOCK", "ENTRIES", "READABLE", "BYTES", "STATUS", "DETAIL"}, rows); err != nil {
 		return err
 	}
 
@@ -355,8 +367,9 @@ func resumePoint(answered []inspectNode, unreadable []int64) (int64, int64, bool
 	return entry, block, found
 }
 
-// entriesLostIn names the entry range the unreadable blocks cover, taken from whichever replica
-// could still read their headers.
+// entriesLostIn names the entry range the unreadable blocks cover. A block's checksum condemns all
+// of it, but its records carry their own, so the loss starts after the last entry some replica
+// could still read inside the block -- which is narrower, and is what a skip range has to cover.
 func entriesLostIn(answered []inspectNode, unreadable []int64) string {
 	first, last := int64(-1), int64(-1)
 	for _, n := range answered {
@@ -364,15 +377,19 @@ func entriesLostIn(answered []inspectNode, unreadable []int64) string {
 			if !containsInt(unreadable, b.Number) || b.FirstEntryID < 0 {
 				continue
 			}
-			if first < 0 || b.FirstEntryID < first {
-				first = b.FirstEntryID
+			lostFrom := b.FirstEntryID
+			if b.LastGoodEntryID >= b.FirstEntryID {
+				lostFrom = b.LastGoodEntryID + 1
+			}
+			if first < 0 || lostFrom < first {
+				first = lostFrom
 			}
 			if b.LastEntryID > last {
 				last = b.LastEntryID
 			}
 		}
 	}
-	if first < 0 {
+	if first < 0 || last < first {
 		return ""
 	}
 	return fmt.Sprintf("%d-%d", first, last)

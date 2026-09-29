@@ -19,6 +19,9 @@ package codec
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
+	"hash/crc32"
 	"io"
 )
 
@@ -46,6 +49,76 @@ const (
 	SurveyStopCancelled   = "cancelled"
 )
 
+// Why a record-by-record walk stopped.
+const (
+	RecordStopEnd         = "end_of_buffer"
+	RecordStopTruncated   = "record_truncated"
+	RecordStopChecksum    = "record_checksum_failed"
+	RecordStopUnparseable = "record_unparseable"
+)
+
+// RecordSurvey is what a record-by-record walk found. DecodeRecordList answers all of these the
+// same way -- it stops and returns the records it already has -- which is enough to serve data and
+// not enough to say what is wrong or where.
+type RecordSurvey struct {
+	Records       int    `json:"records"`
+	DataRecords   int    `json:"data_records"`
+	BytesConsumed int    `json:"bytes_consumed"`
+	Stopped       bool   `json:"stopped"`
+	StopOffset    int    `json:"stop_offset"`
+	StopReason    string `json:"stop_reason"`
+	StopDetail    string `json:"stop_detail,omitempty"`
+}
+
+// InspectRecords walks a buffer record by record and reports how far it is readable and what ended
+// the walk. A block's checksum covers all of it, so one damaged byte condemns the whole block;
+// every record carries its own checksum, so the damage can be placed at a record -- the difference
+// between losing a block's worth of entries and losing the tail of one.
+//
+// It does not step over a damaged record: a record's length is part of what the checksum protects,
+// so after a failure nothing reliable says where the next record begins.
+func InspectRecords(buf []byte) RecordSurvey {
+	survey := RecordSurvey{StopReason: RecordStopEnd}
+	offset := 0
+	for offset < len(buf) {
+		if offset+RecordHeaderSize > len(buf) {
+			survey.Stopped, survey.StopOffset = true, offset
+			survey.StopReason = RecordStopTruncated
+			survey.StopDetail = fmt.Sprintf("%d bytes left, a record header needs %d", len(buf)-offset, RecordHeaderSize)
+			return survey
+		}
+		crc := binary.LittleEndian.Uint32(buf[offset : offset+4])
+		recordType := buf[offset+4]
+		payloadLength := binary.LittleEndian.Uint32(buf[offset+5 : offset+9])
+		total := RecordHeaderSize + int(payloadLength)
+		if offset+total > len(buf) {
+			survey.Stopped, survey.StopOffset = true, offset
+			survey.StopReason = RecordStopTruncated
+			survey.StopDetail = fmt.Sprintf("record claims %d bytes, %d remain", total, len(buf)-offset)
+			return survey
+		}
+		if crc != crc32.ChecksumIEEE(buf[offset+4:offset+total]) {
+			survey.Stopped, survey.StopOffset = true, offset
+			survey.StopReason = RecordStopChecksum
+			survey.StopDetail = "record checksum mismatch"
+			return survey
+		}
+		if _, err := ParseRecord(recordType, buf[offset+RecordHeaderSize:offset+total]); err != nil {
+			survey.Stopped, survey.StopOffset = true, offset
+			survey.StopReason = RecordStopUnparseable
+			survey.StopDetail = err.Error()
+			return survey
+		}
+		survey.Records++
+		if recordType == DataRecordType {
+			survey.DataRecords++
+		}
+		offset += total
+		survey.BytesConsumed = offset
+	}
+	return survey
+}
+
 // BlockReport is one block as the survey found it.
 type BlockReport struct {
 	Number       int64  `json:"block"`
@@ -55,6 +128,10 @@ type BlockReport struct {
 	LastEntryID  int64  `json:"last_entry_id"`
 	Status       string `json:"status"`
 	Detail       string `json:"detail,omitempty"`
+	// RecordsOK and LastGoodEntryID come from walking the block's own records, which survive a
+	// block checksum failure that makes a reader abandon the block whole.
+	RecordsOK       int   `json:"records_ok"`
+	LastGoodEntryID int64 `json:"last_good_entry_id"`
 }
 
 // SegmentSurvey is every block the walk reached, and why it ended.
@@ -157,7 +234,7 @@ func surveyByChain(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 func inspectOneBlock(r io.ReaderAt, offset, blockNumber int64, first bool) (BlockReport, int64) {
 	report := BlockReport{
 		Number: blockNumber, Offset: offset,
-		Bytes: -1, FirstEntryID: -1, LastEntryID: -1,
+		Bytes: -1, FirstEntryID: -1, LastEntryID: -1, LastGoodEntryID: -1,
 	}
 
 	headersLen := RecordHeaderSize + BlockHeaderRecordSize
@@ -179,7 +256,12 @@ func inspectOneBlock(r io.ReaderAt, offset, blockNumber int64, first bool) (Bloc
 		}
 	}
 	if header == nil {
-		report.Status, report.Detail = BlockHeaderMissing, "no block header record at this offset"
+		detail := "no block header record at this offset"
+		if headerSurvey := InspectRecords(headers); headerSurvey.Stopped {
+			detail = fmt.Sprintf("%s: %s at offset %d (%s)", detail,
+				headerSurvey.StopReason, offset+int64(headerSurvey.StopOffset), headerSurvey.StopDetail)
+		}
+		report.Status, report.Detail = BlockHeaderMissing, detail
 		return report, offset
 	}
 	report.FirstEntryID, report.LastEntryID = header.FirstEntryID, header.LastEntryID
@@ -192,13 +274,25 @@ func inspectOneBlock(r io.ReaderAt, offset, blockNumber int64, first bool) (Bloc
 		report.Status, report.Detail = BlockDataUnreadable, err.Error()
 		return report, next
 	}
+	// Walk the records whatever the block's checksum says. They carry their own checksums, so a
+	// damaged block still reports how far into it the data is readable.
+	body := InspectRecords(data)
+	report.RecordsOK = body.DataRecords
+	if body.DataRecords > 0 {
+		report.LastGoodEntryID = header.FirstEntryID + int64(body.DataRecords) - 1
+	}
+
 	if err := VerifyBlockDataIntegrity(header, data); err != nil {
 		report.Status, report.Detail = BlockChecksumFailed, err.Error()
+		if body.Stopped {
+			report.Detail = fmt.Sprintf("%s; %s at record offset %d (%s)",
+				report.Detail, body.StopReason, body.StopOffset, body.StopDetail)
+		}
 		return report, next
 	}
 	// The checksum matched, so the bytes are the ones that were written; records that still do not
 	// decode mean the block is internally inconsistent rather than damaged in transit.
-	if records, _ := DecodeRecordList(data); len(records) == 0 && header.BlockLength > 0 {
+	if body.Records == 0 && header.BlockLength > 0 {
 		report.Status, report.Detail = BlockRecordsUndecodable, "no records decoded from a block whose checksum matched"
 		return report, next
 	}
