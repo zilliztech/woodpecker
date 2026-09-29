@@ -837,8 +837,9 @@ func (s *segmentHandleImpl) markReadNodeSlow(node string, slow bool) {
 }
 
 // quorumReadPass tries each replica in order, bounding every call by timeout.
-// It returns the first successful batch; otherwise whether the pass should be
-// repeated with a longer bound, and the error that describes it.
+// It returns the first successful batch; otherwise, having asked every
+// replica, whether the pass should be repeated with a longer bound, and the
+// error that describes it.
 //
 // "Not found" describes the pass only once notFoundQuorum replicas said so.
 // At the tail of an active segment that is the normal answer, and reporting an
@@ -902,13 +903,11 @@ func (s *segmentHandleImpl) quorumReadPass(ctx context.Context, candidates []quo
 					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node), zap.Error(err))
 			}
 			if werr.ErrEntryNotFound.Is(err) {
+				// Not an early answer: a replica only serves entries up to its own
+				// LAC, so one that holds the entry but has not learned it is
+				// committed yet also answers "not found". Keep asking the rest.
 				notFoundErr = err
 				notFoundCount++
-				if notFoundCount >= notFoundNeeded {
-					// The answer stands; asking the rest, the slow ones last among
-					// them, would only cost the tail poll their bound.
-					break
-				}
 				continue
 			}
 			lastError = err
