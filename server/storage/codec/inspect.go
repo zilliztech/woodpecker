@@ -151,6 +151,8 @@ type SegmentSurvey struct {
 	LAC          int64  `json:"lac"`
 	StoppedEarly bool   `json:"stopped_early"`
 	StopReason   string `json:"stop_reason"`
+	// SurveyStopOffset is where the walk gave up, when it gave up part way.
+	SurveyStopOffset int64 `json:"stop_offset,omitempty"`
 }
 
 // InspectBlocks walks a segment's blocks and reports what it finds at each one, continuing past a
@@ -175,6 +177,7 @@ func InspectBlocks(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 		maxBlocks = 1
 	}
 
+	dataEnd := size
 	if footer, indexes := readFooterAndIndexes(r, size); footer != nil {
 		survey.Sealed = true
 		survey.TotalBlocksKnown = footer.TotalBlocks
@@ -186,8 +189,14 @@ func InspectBlocks(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 			surveyByIndex(ctx, r, size, indexes, fromBlock, maxBlocks, &survey)
 			return survey
 		}
+		// Falling back to the chain, but the footer still says where the blocks end. Without that,
+		// a walk whose first trailer record is itself damaged cannot tell the index region from a
+		// block and reports one that does not exist.
+		if end := trailerStart(size, footer.TotalBlocks); end > 0 {
+			dataEnd = end
+		}
 	}
-	surveyByChain(ctx, r, size, fromBlock, maxBlocks, &survey)
+	surveyByChain(ctx, r, dataEnd, fromBlock, maxBlocks, &survey)
 	return survey
 }
 
@@ -240,6 +249,15 @@ func surveyByChain(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 			// as damaged ones would invent damage.
 			return
 		}
+		if report.Status == BlockHeaderUnreadable || report.Status == BlockHeaderMissing {
+			// Here a block's existence is inferred from the previous block's header. With no header
+			// at this offset, nothing says whether it holds a damaged block, the trailer, or the
+			// end of what was written -- so the walk reports where it stopped and does not assert a
+			// block it cannot see.
+			survey.StoppedEarly, survey.StopReason = true, SurveyStopChainBroken
+			survey.SurveyStopOffset = offset
+			return
+		}
 		if blockNumber >= fromBlock {
 			survey.Blocks = append(survey.Blocks, report)
 		}
@@ -247,6 +265,7 @@ func surveyByChain(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 			// Nothing says where the next block begins. The blocks beyond this one have not been
 			// looked at, which is not the same as their being damaged.
 			survey.StoppedEarly, survey.StopReason = true, SurveyStopChainBroken
+			survey.SurveyStopOffset = offset
 			return
 		}
 		offset = next
@@ -342,6 +361,19 @@ func inspectOneBlock(r io.ReaderAt, size, offset, blockNumber int64, first bool)
 	return report, next
 }
 
+// trailerStart is where the index records begin, which is where the blocks end. The footer's own
+// IndexOffset is not used: a compacted footer leaves it at zero, while this holds for every layout
+// the walk reads, and is how the reader locates the index too.
+func trailerStart(size int64, totalBlocks int32) int64 {
+	footerSize := int64(RecordHeaderSize + GetFooterRecordSize(FormatVersion))
+	indexSize := int64(totalBlocks) * int64(RecordHeaderSize+IndexRecordSize)
+	start := size - footerSize - indexSize
+	if start <= 0 {
+		return 0
+	}
+	return start
+}
+
 // readFooterAndIndexes returns a sealed segment's footer and index records, or nil when there is no
 // footer to read -- which is how an active segment presents.
 func readFooterAndIndexes(r io.ReaderAt, size int64) (*FooterRecord, []*IndexRecord) {
@@ -363,8 +395,8 @@ func readFooterAndIndexes(r io.ReaderAt, size int64) (*FooterRecord, []*IndexRec
 	}
 
 	indexSize := int64(footer.TotalBlocks) * int64(RecordHeaderSize+IndexRecordSize)
-	indexStart := size - footerSize - indexSize
-	if indexStart < 0 {
+	indexStart := trailerStart(size, footer.TotalBlocks)
+	if indexStart <= 0 {
 		return footer, nil
 	}
 	indexData := make([]byte, indexSize)

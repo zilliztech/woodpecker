@@ -3,6 +3,7 @@ package codec
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"hash/crc32"
 	"testing"
 
@@ -13,10 +14,11 @@ import (
 // header followed by its data records per block, then (for a sealed file) the index records and the
 // footer.
 type segmentBuilder struct {
-	buf     bytes.Buffer
-	indexes []*IndexRecord
-	blocks  int32
-	lastID  int64
+	buf             bytes.Buffer
+	indexes         []*IndexRecord
+	blocks          int32
+	lastID          int64
+	entriesPerBlock int
 }
 
 func (b *segmentBuilder) addBlock(entries int) {
@@ -63,7 +65,7 @@ func (b *segmentBuilder) seal() {
 
 func newSegment(t *testing.T, blocks, entriesPerBlock int, sealed bool) *segmentBuilder {
 	t.Helper()
-	b := &segmentBuilder{}
+	b := &segmentBuilder{entriesPerBlock: entriesPerBlock}
 	b.buf.Write(EncodeRecord(&HeaderRecord{Version: FormatVersion, FirstEntryID: 0}))
 	for i := 0; i < blocks; i++ {
 		b.addBlock(entriesPerBlock)
@@ -142,13 +144,12 @@ func TestInspectBlocks_ActiveSegmentStopsAtABrokenChain(t *testing.T) {
 
 	got := b.survey(0, 100)
 
+	require.Len(t, got.Blocks, 1, "only a block that was actually read may be reported")
 	require.Equal(t, BlockOK, got.Blocks[0].Status)
-	require.Len(t, got.Blocks, 2, "block 1 is reported; nothing past it can be located")
-	// DecodeRecordList answers corruption by stopping rather than erroring, so a damaged header
-	// presents as none being found at that offset.
-	require.Equal(t, BlockHeaderMissing, got.Blocks[1].Status)
 	require.True(t, got.StoppedEarly)
 	require.Equal(t, SurveyStopChainBroken, got.StopReason)
+	require.Equal(t, b.indexes[1].StartOffset, got.SurveyStopOffset,
+		"where the walk gave up is what an operator needs, not a block asserted to be there")
 }
 
 // TestInspectBlocks_SealedSegmentWalksPastABrokenHeader covers the same damage on a sealed segment,
@@ -290,164 +291,274 @@ func (b *segmentBuilder) truncateTo(n int) {
 	b.buf.Truncate(n)
 }
 
-// TestInspectBlocks_DamageMatrix covers where the damage lands as well as what it is: the first
-// block shares its read with the file header, the last one ends the walk, and a sealed segment's
-// footer and index are structures a survey depends on rather than data it reports.
-func TestInspectBlocks_DamageMatrix(t *testing.T) {
-	const blocks, entries = 4, 3
-	blockBody := func(b *segmentBuilder, block int) int {
-		return int(b.indexes[block].StartOffset) + RecordHeaderSize + BlockHeaderRecordSize + 1
+// --- damage matrix -----------------------------------------------------------------------------
+//
+// Two dimensions decide what a survey should do: how big the damage is, and what it lands on.
+// Enumerating raw byte offsets would be endless and mostly redundant, so the location is named by
+// the structures the format is made of -- the file header, a block header, a data record, an index
+// record, the footer -- each taken at its first, middle and last occurrence, because a survey
+// navigates by exactly those. Segment form multiplies both: a sealed segment can locate blocks
+// through its index, an active one only through the chain.
+
+type damageKind string
+
+const (
+	damageFlip     damageKind = "flip"     // bytes corrupted, every length still intact
+	damageZero     damageKind = "zero"     // bytes cleared, which takes the lengths with them
+	damageTruncate damageKind = "truncate" // bytes gone
+)
+
+type damageSite struct {
+	where   string // file_header | block_header | data_record | index_record | footer
+	ordinal string // first | middle | last -- which occurrence of that structure
+	record  string // for data_record: which record inside the chosen block
+}
+
+type damageSpec struct {
+	site  damageSite
+	kind  damageKind
+	bytes int
+}
+
+// locate resolves a named structure to its offset in the built file.
+func (b *segmentBuilder) locate(t *testing.T, site damageSite) int {
+	t.Helper()
+	pick := func(n int) int {
+		switch site.ordinal {
+		case "first":
+			return 0
+		case "last":
+			return n - 1
+		default:
+			return n / 2
+		}
 	}
-	blockHeader := func(b *segmentBuilder, block int) int {
-		return int(b.indexes[block].StartOffset) + 2
+	switch site.where {
+	case "file_header":
+		return 2 // inside the file header record's payload
+	case "block_header":
+		return int(b.indexes[pick(len(b.indexes))].StartOffset) + 2
+	case "data_record":
+		block := pick(len(b.indexes))
+		blockStart := int(b.indexes[block].StartOffset) + RecordHeaderSize + BlockHeaderRecordSize
+		// Which record inside the block matters as much as which block: damage to the first record
+		// leaves nothing decodable, while damage to a later one leaves the entries before it
+		// readable -- which is the difference between losing a block and losing its tail.
+		perRecord := RecordHeaderSize + 1 // the builder writes one-byte payloads
+		index := 0
+		switch site.record {
+		case "last":
+			index = b.entriesPerBlock - 1
+		case "middle":
+			index = b.entriesPerBlock / 2
+		}
+		return blockStart + index*perRecord + RecordHeaderSize
+	case "index_record":
+		indexStart := b.buf.Len() - (RecordHeaderSize + GetFooterRecordSize(FormatVersion)) -
+			len(b.indexes)*(RecordHeaderSize+IndexRecordSize)
+		return indexStart + pick(len(b.indexes))*(RecordHeaderSize+IndexRecordSize) + 2
+	case "footer":
+		return b.buf.Len() - GetFooterRecordSize(FormatVersion) + 2
+	}
+	t.Fatalf("unknown damage site %q", site.where)
+	return 0
+}
+
+// apply damages the file as described, clamped to what is there.
+func (b *segmentBuilder) apply(t *testing.T, spec damageSpec) {
+	t.Helper()
+	at := b.locate(t, spec.site)
+	switch spec.kind {
+	case damageTruncate:
+		if at < b.buf.Len() {
+			b.truncateTo(at)
+		}
+	default:
+		raw := b.buf.Bytes()
+		for i := at; i < at+spec.bytes && i < len(raw); i++ {
+			if spec.kind == damageZero {
+				raw[i] = 0
+			} else {
+				raw[i] ^= 0xFF
+			}
+		}
+	}
+}
+
+// assertSurveyInvariants holds for every damaged file, whatever was damaged. They are what makes a
+// report worth acting on: it may not invent damage, may not pass over what it did not look at, and
+// may not call a block readable without it being so.
+func assertSurveyInvariants(t *testing.T, b *segmentBuilder, got SegmentSurvey, bound int64) {
+	t.Helper()
+	raw := b.buf.Bytes()
+
+	// I4: bounded and terminating. Reaching here at all covers termination.
+	require.LessOrEqual(t, int64(len(got.Blocks)), bound, "the survey exceeded the bound it was given")
+
+	// The end of the data region: anything at or past it is the index and footer, which are not
+	// blocks and must never be reported as damaged ones.
+	dataEnd := len(raw)
+	if len(b.indexes) > 0 {
+		last := b.indexes[len(b.indexes)-1]
+		if end := int(last.StartOffset) + int(last.BlockSize); end < dataEnd {
+			dataEnd = end
+		}
 	}
 
+	for _, block := range got.Blocks {
+		// I1: a block in the report was actually looked at, so it must lie inside the file, and
+		// inside the part of it that holds blocks.
+		require.GreaterOrEqual(t, block.Offset, int64(0))
+		require.Less(t, block.Offset, int64(len(raw)), "block %d is reported from beyond the file", block.Number)
+		require.Less(t, block.Offset, int64(dataEnd),
+			"block %d is reported from the index or footer region, which holds no blocks", block.Number)
+
+		if block.Status != BlockOK {
+			continue
+		}
+		// I3: a block called readable must be readable, verified here rather than believed.
+		start := block.Offset + RecordHeaderSize + BlockHeaderRecordSize
+		if block.Offset == 0 {
+			start += RecordHeaderSize + HeaderRecordSize
+		}
+		require.LessOrEqual(t, start+block.Bytes, int64(len(raw)),
+			"block %d is called readable but runs past the file", block.Number)
+		body := raw[start : start+block.Bytes]
+		survey := InspectRecords(body)
+		require.False(t, survey.Stopped,
+			"block %d is called readable but its records stop: %s", block.Number, survey.StopDetail)
+	}
+
+	// I2: no silent gaps. Calling it the end of the segment is only allowed when what follows
+	// cannot be a block at all -- a tail too short to hold a block header, which on a segment still
+	// being written is where the writer has got to. Anything longer than that was passed over.
+	if got.StopReason == SurveyStopEnd && len(got.Blocks) < len(b.indexes) {
+		next := int(b.indexes[len(got.Blocks)].StartOffset)
+		require.Less(t, len(raw)-next, RecordHeaderSize+BlockHeaderRecordSize,
+			"the survey stopped after block %d and called it the end, while a whole block header still follows at %d of %d bytes",
+			len(got.Blocks)-1, next, len(raw))
+	}
+}
+
+func recordPart(site damageSite) string {
+	if site.record == "" {
+		return ""
+	}
+	return " record:" + site.record
+}
+
+// TestInspectBlocks_DamageMatrix runs every (size, location) pair over both segment forms and holds
+// the invariants for all of them.
+func TestInspectBlocks_DamageMatrix(t *testing.T) {
+	const blocks, entries = 5, 4
+	sites := []damageSite{
+		{"file_header", "first", ""},
+		{"block_header", "first", ""},
+		{"block_header", "middle", ""},
+		{"block_header", "last", ""},
+		{"data_record", "first", "first"},
+		{"data_record", "middle", "first"},
+		{"data_record", "last", "first"},
+		{"data_record", "middle", "middle"},
+		{"data_record", "middle", "last"},
+		{"data_record", "last", "last"},
+		{"index_record", "first", ""},
+		{"index_record", "middle", ""},
+		{"index_record", "last", ""},
+		{"footer", "first", ""},
+	}
+	sizes := []struct {
+		name  string
+		kind  damageKind
+		bytes int
+	}{
+		{"1 byte flipped", damageFlip, 1},
+		{"64 bytes flipped", damageFlip, 64},
+		{"4KB flipped", damageFlip, 4096},
+		{"4KB cleared", damageZero, 4096},
+		{"truncated here", damageTruncate, 0},
+	}
+
+	for _, sealed := range []bool{true, false} {
+		form := "active"
+		if sealed {
+			form = "sealed"
+		}
+		for _, site := range sites {
+			if !sealed && (site.where == "index_record" || site.where == "footer") {
+				continue // an active segment has neither
+			}
+			for _, size := range sizes {
+				name := fmt.Sprintf("%s/%s %s%s/%s", form, site.where, site.ordinal, recordPart(site), size.name)
+				t.Run(name, func(t *testing.T) {
+					b := newSegment(t, blocks, entries, sealed)
+					b.apply(t, damageSpec{site: site, kind: size.kind, bytes: size.bytes})
+
+					assertSurveyInvariants(t, b, b.survey(0, 100), 100)
+					// Again under a bound that binds: damage must not let a survey run past what
+					// the caller allowed it to read.
+					assertSurveyInvariants(t, b, b.survey(0, 2), 2)
+				})
+			}
+		}
+	}
+}
+
+// TestInspectBlocks_MixedDamage covers damage that is not a single event: a corrupted record in one
+// block, a cleared header in another, healthy blocks in between. Interleaving is what tells whether
+// the accounting survives repeated failures rather than one.
+func TestInspectBlocks_MixedDamage(t *testing.T) {
 	cases := []struct {
 		name   string
 		sealed bool
-		damage func(b *segmentBuilder)
-		assert func(t *testing.T, got SegmentSurvey)
+		specs  []damageSpec
 	}{
 		{
-			name: "byte in the first block's body, sealed", sealed: true,
-			damage: func(b *segmentBuilder) { b.corruptAt(blockBody(b, 0)) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Len(t, got.Blocks, blocks)
-				require.Equal(t, BlockChecksumFailed, got.Blocks[0].Status)
-				require.Equal(t, BlockOK, got.Blocks[1].Status, "damage at the start hides nothing after it")
+			name: "a record in one block and a header in another", sealed: true,
+			specs: []damageSpec{
+				{damageSite{"data_record", "first", "first"}, damageFlip, 1},
+				{damageSite{"block_header", "last", ""}, damageZero, 64},
 			},
 		},
 		{
-			name: "byte in the last block's body, sealed", sealed: true,
-			damage: func(b *segmentBuilder) { b.corruptAt(blockBody(b, blocks-1)) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Len(t, got.Blocks, blocks)
-				require.Equal(t, BlockOK, got.Blocks[0].Status)
-				require.Equal(t, BlockChecksumFailed, got.Blocks[blocks-1].Status)
+			name: "every block header cleared", sealed: true,
+			specs: []damageSpec{
+				{damageSite{"block_header", "first", ""}, damageZero, 40},
+				{damageSite{"block_header", "middle", ""}, damageZero, 40},
+				{damageSite{"block_header", "last", ""}, damageZero, 40},
 			},
 		},
 		{
-			name: "byte in the first block's header, sealed", sealed: true,
-			damage: func(b *segmentBuilder) { b.corruptAt(blockHeader(b, 0)) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Len(t, got.Blocks, blocks, "the index locates the rest without that header")
-				require.Equal(t, BlockHeaderMissing, got.Blocks[0].Status)
-				require.Equal(t, BlockOK, got.Blocks[1].Status)
+			name: "a record and the index", sealed: true,
+			specs: []damageSpec{
+				{damageSite{"data_record", "middle", "middle"}, damageFlip, 1},
+				{damageSite{"index_record", "middle", ""}, damageFlip, 1},
 			},
 		},
 		{
-			name:   "byte in the first block's header, active",
-			damage: func(b *segmentBuilder) { b.corruptAt(blockHeader(b, 0)) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Len(t, got.Blocks, 1, "nothing after the first block can be located")
-				require.True(t, got.StoppedEarly)
-				require.Equal(t, SurveyStopChainBroken, got.StopReason)
+			name: "a record in one block and a header in another, active",
+			specs: []damageSpec{
+				{damageSite{"data_record", "first", "first"}, damageFlip, 1},
+				{damageSite{"block_header", "last", ""}, damageZero, 64},
 			},
 		},
 		{
-			name: "byte in the file header, sealed", sealed: true,
-			damage: func(b *segmentBuilder) { b.corruptAt(2) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Len(t, got.Blocks, blocks)
-				for i, block := range got.Blocks {
-					require.Equal(t, BlockOK, block.Status,
-						"block %d: the file header carries version and flags, not block data", i)
-				}
-			},
-		},
-		{
-			name:   "byte in the file header, active",
-			damage: func(b *segmentBuilder) { b.corruptAt(2) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				// The first block is read together with the file header, so a damaged one takes the
-				// block header with it and nothing can be located after it.
-				require.True(t, got.StoppedEarly)
-				require.Equal(t, SurveyStopChainBroken, got.StopReason)
-			},
-		},
-		{
-			name: "byte in the footer, sealed", sealed: true,
-			damage: func(b *segmentBuilder) { b.corruptAt(b.buf.Len() - 3) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.False(t, got.Sealed, "an unreadable footer is not a sealed segment to a survey")
-				require.Len(t, got.Blocks, blocks, "the chain still walks every block")
-				for i, block := range got.Blocks {
-					require.Equal(t, BlockOK, block.Status, "block %d", i)
-				}
-			},
-		},
-		{
-			name: "byte in an index record, sealed", sealed: true,
-			damage: func(b *segmentBuilder) {
-				indexStart := b.buf.Len() - (RecordHeaderSize + GetFooterRecordSize(FormatVersion)) -
-					blocks*(RecordHeaderSize+IndexRecordSize)
-				b.corruptAt(indexStart + (RecordHeaderSize + IndexRecordSize) + 2) // the second index record
-			},
-			assert: func(t *testing.T, got SegmentSurvey) {
-				// Only the index records before the damaged one decode. Walking just those and
-				// calling it a complete survey would report blocks nobody looked at as fine.
-				require.Len(t, got.Blocks, blocks, "every block must still be reached")
-			},
-		},
-		{
-			name: "file cut inside the last block's data, active",
-			damage: func(b *segmentBuilder) {
-				// The block header survives and promises data that is no longer there.
-				b.truncateTo(int(b.indexes[blocks-1].StartOffset) + RecordHeaderSize + BlockHeaderRecordSize + 2)
-			},
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Equal(t, BlockOK, got.Blocks[0].Status)
-				last := got.Blocks[len(got.Blocks)-1]
-				require.Equal(t, BlockDataUnreadable, last.Status,
-					"the data a header promised is missing, which is not a checksum failure")
-			},
-		},
-		{
-			name:   "file cut a few bytes into a block header, active",
-			damage: func(b *segmentBuilder) { b.truncateTo(int(b.indexes[blocks-1].StartOffset) + 6) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				// Too little left to be a block at all. On a segment still being written that is
-				// where the writer has got to, not damage.
-				require.Len(t, got.Blocks, blocks-1)
-				for i, block := range got.Blocks {
-					require.Equal(t, BlockOK, block.Status, "block %d", i)
-				}
-				require.Equal(t, SurveyStopEnd, got.StopReason)
-			},
-		},
-		{
-			name:   "file cut to whole blocks, active",
-			damage: func(b *segmentBuilder) { b.truncateTo(int(b.indexes[blocks-1].StartOffset)) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Len(t, got.Blocks, blocks-1, "the blocks that remain are all there is")
-				for i, block := range got.Blocks {
-					require.Equal(t, BlockOK, block.Status, "block %d is intact and must not be blamed", i)
-				}
-				require.Equal(t, SurveyStopEnd, got.StopReason)
-			},
-		},
-		{
-			name:   "empty file",
-			damage: func(b *segmentBuilder) { b.truncateTo(0) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Empty(t, got.Blocks)
-				require.Equal(t, SurveyStopEnd, got.StopReason, "nothing to walk is not damage")
-			},
-		},
-		{
-			name:   "header only, no blocks",
-			damage: func(b *segmentBuilder) { b.truncateTo(RecordHeaderSize + HeaderRecordSize) },
-			assert: func(t *testing.T, got SegmentSurvey) {
-				require.Empty(t, got.Blocks)
+			name: "4KB across a block boundary, active",
+			specs: []damageSpec{
+				{damageSite{"data_record", "middle", "middle"}, damageFlip, 4096},
 			},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := newSegment(t, blocks, entries, tc.sealed)
-			tc.damage(b)
-			tc.assert(t, b.survey(0, 100))
+			b := newSegment(t, 5, 4, tc.sealed)
+			for _, spec := range tc.specs {
+				b.apply(t, spec)
+			}
+
+			assertSurveyInvariants(t, b, b.survey(0, 100), 100)
+			assertSurveyInvariants(t, b, b.survey(0, 2), 2)
 		})
 	}
 }
