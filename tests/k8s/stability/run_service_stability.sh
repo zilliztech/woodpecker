@@ -20,12 +20,20 @@
 # of workload/ in a client pod while this script faults a pod from outside:
 #
 #   RestartIdlePod, RestartQuorumPod   kubectl delete pod (graceful)
-#   KillQuorumPod                      kubectl delete pod --grace-period=0 --force
-#   KillQuorumPod_NeverReturns         Chaos Mesh PodChaos pod-failure, lifted after the workload ends
+#   KillQuorumPod                      SIGKILL the server process; the container restarts in place
+#   KillQuorumPod_NeverReturns         SIGKILL, then Chaos Mesh PodChaos pod-failure, lifted after the workload ends
 #   VanishQuorumPod, VanishReadPod_*   Chaos Mesh NetworkChaos partition for 10s
 #   RollingRestartAllPods              graceful delete of every pod, highest ordinal first
 #
-# A replaced pod keeps its DNS name and gets a new IP, as in production.
+# A deleted pod is replaced under its DNS name with a new IP, as in production.
+# A killed one is not deleted: its container restarts in the same pod, as after
+# an OOM kill or a crash.
+#
+# "Kill" means SIGKILL to the server process (pkill -KILL -x woodpecker): no
+# gossip leave, no drain. Deleting the pod, even with --grace-period=0 --force,
+# would not do: the kubelet still sends SIGTERM first, which the server handles
+# with a graceful stop. PID 1 is tini, which the kernel does not let a SIGKILL
+# from inside the pod's namespace reach, so the server itself is killed.
 #
 # The workload writes the address of the pod to fault to <case>.target and
 # waits for <case>.done; everything in between is this script's.
@@ -223,12 +231,41 @@ wait_target() {
   return 1
 }
 
+restart_count() { kubectl get pod "$1" -o jsonpath='{.status.containerStatuses[0].restartCount}'; }
+
+# SIGKILLs the server in pod $1 and waits until its container has restarted
+# (the restart count moved), so a later readiness wait does not see the old
+# container still marked Ready.
+kill_server() {
+  local pod="$1" before deadline=$((SECONDS + 120))
+  before=$(restart_count "$pod") || return 1
+  kubectl exec "$pod" -- pkill -KILL -x woodpecker || return 1
+  while [ $SECONDS -lt $deadline ]; do
+    [ "$(restart_count "$pod")" -gt "$before" ] && return 0
+    sleep 1
+  done
+  warn "container of $pod did not restart within 120s after SIGKILL"
+  return 1
+}
+
 collect_artifacts() {  # $1 = case
   local out="$ARTIFACTS/$1" i; mkdir -p "$out"
   for i in $(seq 0 $((REPLICAS-1))); do kubectl logs "${CR_NAME}-server-$i" >"$out/server-$i.log" 2>&1 || true; done
   kubectl get podchaos,networkchaos -A -o yaml >"$out/chaos.yaml" 2>&1 || true
   kubectl get events -A --sort-by=.lastTimestamp >"$out/events.txt" 2>&1 || true
   kubectl get pods -o wide >"$out/pods.txt" 2>&1 || true
+  [ -n "${2:-}" ] && kubectl logs "$2" --previous >"$out/$2-previous.log" 2>&1 || true
+}
+
+# A fault could not be injected: stop the workload waiting for it and fail the
+# case, rather than let an uninjected case pass.
+abort_case() {  # $1 = case, $2 = workload pid, $3 = what failed
+  kill "$2" 2>/dev/null || true
+  marker sh -c "pkill -f service_stability.test" 2>/dev/null || true
+  wait "$2" 2>/dev/null || true
+  collect_artifacts "$1"
+  warn "CASE $1 FAILED: $3"
+  return 1
 }
 
 run_case() {  # $1 = case name
@@ -251,9 +288,15 @@ run_case() {  # $1 = case name
   local lift_after=""
   case "$c" in
     Baseline) sleep 10 ;;
-    RestartIdlePod|RestartQuorumPod) kubectl delete pod "$pod" --wait=true ;;
-    KillQuorumPod) kubectl delete pod "$pod" --grace-period=0 --force --wait=true ;;
+    RestartIdlePod|RestartQuorumPod)
+      kubectl delete pod "$pod" --wait=true || { abort_case "$c" "$wl" "kubectl delete pod $pod"; return 1; } ;;
+    KillQuorumPod)
+      kill_server "$pod" || { abort_case "$c" "$wl" "SIGKILL of $pod"; return 1; } ;;
     KillQuorumPod_NeverReturns)
+      # Kill abruptly first; pod-failure then keeps the restarted container
+      # from serving. The kubelet may start the server again for a moment
+      # before pod-failure takes effect.
+      kubectl exec "$pod" -- pkill -KILL -x woodpecker || { abort_case "$c" "$wl" "SIGKILL of $pod"; return 1; }
       apply_chaos PodChaos stability-pod-failure "  action: pod-failure
   mode: one
   selector: { pods: { ${NAMESPACE}: [$pod] } }
@@ -263,7 +306,8 @@ run_case() {  # $1 = case name
     VanishQuorumPod|VanishReadPod_SeparateReader) partition_pod "$pod" ;;
     RollingRestartAllPods)
       for i in $(seq $((REPLICAS-1)) -1 0); do
-        kubectl delete pod "${CR_NAME}-server-$i" --wait=true
+        kubectl delete pod "${CR_NAME}-server-$i" --wait=true \
+          || { abort_case "$c" "$wl" "kubectl delete pod ${CR_NAME}-server-$i"; return 1; }
         wait_pods_ready; wait_converged
         sleep 2
       done ;;
@@ -280,7 +324,8 @@ run_case() {  # $1 = case name
   fi
 
   grep -E '^\s+\[.*\] submitted=|^\s+\[.*\] read=|append stalled|tail read lagged|report only|--- (PASS|FAIL)' "$out/workload.log" || true
-  if [ $rc -ne 0 ]; then collect_artifacts "$c"; warn "CASE $c FAILED"; return 1; fi
+  case "$c" in KillQuorumPod*) collect_artifacts "$c" "$pod" ;; esac  # the killed server's last log, as evidence
+  if [ $rc -ne 0 ]; then collect_artifacts "$c" "$pod"; warn "CASE $c FAILED"; return 1; fi
   log "CASE $c PASSED"
 }
 

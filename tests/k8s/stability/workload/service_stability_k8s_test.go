@@ -19,7 +19,7 @@
 // against a woodpecker StatefulSet, with the workload running in a client pod
 // and the fault injected from outside by run_service_stability.sh.
 //
-// Here a replaced pod comes back with a new IP behind the same DNS name, the
+// Here a deleted pod comes back with a new IP behind the same DNS name, the
 // window the process tier can only model with its proxies.
 //
 // One test per case. Each starts the workload, writes the address of the node
@@ -142,15 +142,16 @@ func TestServiceStabilityK8s_RestartQuorumPod(t *testing.T) {
 	env.finish()
 }
 
-// A quorum pod is force-deleted (SIGKILL, no gossip leave) and replaced.
+// A quorum pod's server is SIGKILLed (no gossip leave, no drain), as by an OOM
+// kill or a crash, and its container restarts in place.
 func TestServiceStabilityK8s_KillQuorumPod(t *testing.T) {
 	env := startK8sEnv(t, harness.DefaultLogs, false)
 	env.fault(env.BusiestQuorumAddr())
 	env.finish()
 }
 
-// A quorum pod's container is taken down (Chaos Mesh pod-failure) and does not
-// run again while the workload does.
+// A quorum pod's server is SIGKILLed, and Chaos Mesh pod-failure keeps its
+// container from serving again while the workload runs.
 func TestServiceStabilityK8s_KillQuorumPod_NeverReturns(t *testing.T) {
 	env := startK8sEnv(t, harness.DefaultLogs, false)
 	env.fault(env.BusiestQuorumAddr())

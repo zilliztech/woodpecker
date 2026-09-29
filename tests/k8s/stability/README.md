@@ -5,15 +5,19 @@ K8s tier of the service stability suite, run nightly (`.github/workflows/nightly
 - Chaos Mesh;
 - a client pod running `workload/`.
 
-A replaced pod keeps its DNS name and gets a new IP, as in production.
+A deleted pod keeps its DNS name and gets a new IP, as in production. A killed one restarts in place, as after an OOM kill.
+
+"Kill" is a SIGKILL of the server process: no gossip leave, no drain.
+- Deleting the pod, even with `--grace-period=0 --force`, is not a kill. The kubelet still sends SIGTERM first, and the server handles SIGTERM with a graceful stop.
+- PID 1 is tini, which the kernel does not let a SIGKILL from inside the pod reach. So the server process itself is killed.
 
 | Case | Fault (by `run_service_stability.sh`) |
 |---|---|
 | `Baseline` | none |
 | `RestartIdlePod` | `kubectl delete pod` of a pod in no writable quorum |
 | `RestartQuorumPod` | `kubectl delete pod` (graceful) of the busiest quorum pod |
-| `KillQuorumPod` | `kubectl delete pod --grace-period=0 --force` |
-| `KillQuorumPod_NeverReturns` | PodChaos `pod-failure`, lifted only after the workload has finished |
+| `KillQuorumPod` | SIGKILL of the server process (`pkill -KILL -x woodpecker`); the container restarts in place |
+| `KillQuorumPod_NeverReturns` | SIGKILL, then PodChaos `pod-failure`, lifted only after the workload has finished |
 | `VanishQuorumPod` | NetworkChaos `partition` (both directions, every pod) for 10s |
 | `VanishReadPod_SeparateReader` | the same on the pod the tail readers use, readers in their own client |
 | `RollingRestartAllPods` | graceful delete of every pod, highest ordinal first, waiting for Ready and gossip |
