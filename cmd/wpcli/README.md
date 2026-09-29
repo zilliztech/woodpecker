@@ -84,7 +84,9 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
 - `wp logstore buffer <node>` — buffer bytes summary
 - `wp logstore flush-queue <node>` — flush queue depth summary
 - `wp logstore force-flush <node>` — force sync
-- `wp logstore fence <node> --log X --seg Y --reason "..." -y` — force fence
+- `wp logstore lac <logName> <segmentId>` — quorum view of how far a segment is confirmed readable
+- `wp logstore fence <node> --log X --seg Y --reason "..." -y` — fence one node; on a multi-node quorum this alone does not stop a write
+- `wp logstore fence-quorum <logName> <segmentId> --reason "..." -y` — fence enough of the quorum (wq-aq+1 nodes) to interrupt a write
 - `wp logstore compact <node> --log X --seg Y` — force compaction
 
 ### Metrics analysis

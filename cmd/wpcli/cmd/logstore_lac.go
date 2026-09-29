@@ -238,11 +238,16 @@ func memberByAddr(members *client.Memberlist, addr string) (client.Member, bool)
 		return client.Member{}, false
 	}
 	for _, m := range members.Members {
-		if m.ID == addr || m.ServiceAddr == addr || m.GossipAddr == addr {
+		if memberMatchesAddr(m, addr) {
 			return m, true
 		}
 	}
 	return client.Member{}, false
+}
+
+// memberMatchesAddr reports whether a memberlist entry is the node an address names.
+func memberMatchesAddr(m client.Member, addr string) bool {
+	return m.ID == addr || m.ServiceAddr == addr || m.GossipAddr == addr
 }
 
 // quorumLAC is the aq-th highest durable position: the furthest point aq nodes have all reached.
