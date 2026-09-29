@@ -73,7 +73,30 @@ bringup() {
   preload_image "$MINIO_IMG"
   wp_deploy_operator; wp_build_wp_image
   wp_deploy_deps; wp_create_cr; wp_wait_healthy
-  wp_launch_client_pod; write_client_config
+  launch_client_pod; write_client_config
+}
+
+# The workload is a static binary, so the client pod needs only a shell: it
+# runs the woodpecker image, already loaded into the node, instead of the
+# golang image wp_launch_client_pod pulls.
+launch_client_pod() {
+  kubectl get pod "$CLIENT_POD" &>/dev/null && return 0
+  kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${CLIENT_POD}
+  labels: { role: wp-client }
+spec:
+  containers:
+    - name: test
+      image: ${WP_IMG}
+      imagePullPolicy: Never
+      command: ["/bin/bash","-c","sleep infinity"]
+      resources: { requests: { cpu: "500m", memory: "1Gi" } }
+  restartPolicy: Never
+EOF
+  kubectl wait --for=condition=Ready pod/"$CLIENT_POD" --timeout=300s
 }
 
 # The seeds are the pods' full names, the form each pod advertises, so the
