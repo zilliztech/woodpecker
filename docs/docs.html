@@ -861,6 +861,8 @@ fmt.<span class="hl-fn">Println</span>(<span class="hl-kw">string</span>(msg.Pay
                 <tr><td>grpc.connectBackoff.jitter</td><td>Randomisation of the reconnect delay</td><td>0.2</td></tr>
                 <tr><td>grpc.connectBackoff.maxDelay</td><td>Longest reconnect delay, in ms</td><td>3000</td></tr>
                 <tr><td>quorum.selectNodesTimeout</td><td>Time allowed for one SelectNodes call to a seed, in ms; the next seed is asked when it expires</td><td>2000</td></tr>
+                <tr><td>segmentRead.activeTimeout</td><td>Time allowed for one quorum read of an active segment from one replica, in ms; the reader moves to the next replica when it expires</td><td>3000</td></tr>
+                <tr><td>segmentRead.settledTimeout</td><td>Time allowed for one quorum read of any other segment, which may be served from object storage, in ms</td><td>20000</td></tr>
                 <tr><td>segmentRollingPolicy.maxSize</td><td>Maximum segment size in bytes</td><td>100MB</td></tr>
                 <tr><td>segmentRollingPolicy.maxInterval</td><td>Maximum interval between segment rolls (seconds)</td><td>800</td></tr>
                 <tr><td>segmentRollingPolicy.maxBlocks</td><td>Maximum blocks per segment</td><td>1000</td></tr>

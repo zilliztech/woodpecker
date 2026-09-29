@@ -717,20 +717,10 @@ func orderedQuorumReadCandidates(quorumInfo *proto.QuorumInfo, lastReadState *pr
 	return append(localCandidates, remainingCandidates...)
 }
 
-// quorumReadBatch reads a batch of entries from quorum nodes with intelligent node selection.
-// Bounds on one quorum read call. A read that sees no answer is most often a
-// replica that vanished with its connection still looking healthy, and until it
-// returns, the reader cannot move on to the next replica.
-//
-// An active segment is read from the replica's memory buffer or local disk, so
-// the bound is short. Any other segment may be served from object storage,
-// where one request alone may take up to its own timeout (minio.requestTimeoutMs,
-// 10s by default); there a slow answer is the storage, not the replica, and the
-// next replica would read the same storage, so the bound is long.
-// Package vars so tests can shrink them. TODO make configurable.
-var (
-	activeReadTimeout  = 3 * time.Second
-	settledReadTimeout = 20 * time.Second
+// Default bounds on one quorum read call; see config.SegmentReadConfig.
+const (
+	defaultActiveReadTimeout  = 3 * time.Second
+	defaultSettledReadTimeout = 20 * time.Second
 )
 
 // readTimeouts returns the bounds for successive passes over the replicas.
@@ -739,12 +729,22 @@ var (
 // object storage. So a pass in which every replica ran out of the short bound
 // is retried once with the long one.
 func (s *segmentHandleImpl) readTimeouts() []time.Duration {
-	if meta := s.segmentMetaCache.Load(); meta != nil && meta.Metadata.GetState() == proto.SegmentState_Active {
-		return []time.Duration{activeReadTimeout, settledReadTimeout}
+	active, settled := defaultActiveReadTimeout, defaultSettledReadTimeout
+	if s.cfg != nil {
+		if d := s.cfg.Woodpecker.Client.SegmentRead.ActiveTimeout.Duration.Duration(); d > 0 {
+			active = d
+		}
+		if d := s.cfg.Woodpecker.Client.SegmentRead.SettledTimeout.Duration.Duration(); d > 0 {
+			settled = d
+		}
 	}
-	return []time.Duration{settledReadTimeout}
+	if meta := s.segmentMetaCache.Load(); meta != nil && meta.Metadata.GetState() == proto.SegmentState_Active {
+		return []time.Duration{active, settled}
+	}
+	return []time.Duration{settled}
 }
 
+// quorumReadBatch reads a batch of entries from quorum nodes with intelligent node selection.
 func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {

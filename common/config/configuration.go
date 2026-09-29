@@ -70,6 +70,24 @@ type DirectReadConfig struct {
 	MaxFetchThreads int      `yaml:"maxFetchThreads"` // default: 4
 }
 
+// SegmentReadConfig bounds one quorum read call to one replica. A read that
+// gets no answer is most often a replica that vanished with its connection
+// still looking healthy, and until the call returns the reader cannot move on
+// to the next replica.
+type SegmentReadConfig struct {
+	// ActiveTimeout applies to an active segment, served from the replica's
+	// memory buffer or local disk, so it is short. Zero means the default, 3s.
+	ActiveTimeout DurationMilliseconds `yaml:"activeTimeout"`
+	// SettledTimeout applies to any other segment, which may be served from
+	// object storage, where one request alone may take up to its own timeout
+	// (minio.requestTimeoutMs). A slow answer there is the storage rather than
+	// the replica, and the next replica would read the same storage, so it is
+	// long. It is also the retry bound when every replica ran out of the active
+	// bound, in case the segment was no longer active. Zero means the default,
+	// 20s.
+	SettledTimeout DurationMilliseconds `yaml:"settledTimeout"`
+}
+
 // ClientConfig stores the client configuration.
 type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
@@ -80,7 +98,8 @@ type ClientConfig struct {
 	DirectRead           DirectReadConfig           `yaml:"directRead"`
 	// GRPC is how the client dials logstores. The logstore's own gRPC settings
 	// are under logstore.grpc: each process reads its own section.
-	GRPC GRPCClientConfig `yaml:"grpc"`
+	GRPC        GRPCClientConfig  `yaml:"grpc"`
+	SegmentRead SegmentReadConfig `yaml:"segmentRead"`
 }
 
 type AuditorConfig struct {
@@ -757,6 +776,16 @@ func (c *Configuration) validateClientConfig() error {
 		return fmt.Errorf("quorum select nodes timeout cannot be negative, got %v", client.Quorum.SelectNodesTimeout.Duration.Duration())
 	}
 
+	// Zero leaves a read bound at its default, so a configuration built in code
+	// without them stays valid.
+	active, settled := client.SegmentRead.ActiveTimeout.Duration.Duration(), client.SegmentRead.SettledTimeout.Duration.Duration()
+	if active < 0 || settled < 0 {
+		return fmt.Errorf("segment read timeouts cannot be negative, got active %v, settled %v", active, settled)
+	}
+	if active > 0 && settled > 0 && active > settled {
+		return fmt.Errorf("segment read active timeout %v must not exceed the settled timeout %v", active, settled)
+	}
+
 	// Validate SegmentRollingPolicy configuration
 	if client.SegmentRollingPolicy.MaxSize <= 0 {
 		return fmt.Errorf("segment rolling policy max size must be positive, got %d", client.SegmentRollingPolicy.MaxSize.Int64())
@@ -1081,6 +1110,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxFetchThreads: 4,
 			},
 			GRPC: DefaultGRPCClientConfig(),
+			SegmentRead: SegmentReadConfig{
+				ActiveTimeout:  NewDurationMillisecondsFromInt(3000),
+				SettledTimeout: NewDurationMillisecondsFromInt(20000),
+			},
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{

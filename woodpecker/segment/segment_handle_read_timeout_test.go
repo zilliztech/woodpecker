@@ -36,10 +36,17 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
+// testSegmentRead is the read configuration the handles built by these tests
+// get; zero bounds take the defaults.
+var testSegmentRead config.SegmentReadConfig
+
 func shrinkReadTimeouts(t *testing.T, active, settled time.Duration) {
-	oldActive, oldSettled := activeReadTimeout, settledReadTimeout
-	activeReadTimeout, settledReadTimeout = active, settled
-	t.Cleanup(func() { activeReadTimeout, settledReadTimeout = oldActive, oldSettled })
+	old := testSegmentRead
+	testSegmentRead = config.SegmentReadConfig{
+		ActiveTimeout:  config.NewDurationMillisecondsFromInt(int(active.Milliseconds())),
+		SettledTimeout: config.NewDurationMillisecondsFromInt(int(settled.Milliseconds())),
+	}
+	t.Cleanup(func() { testSegmentRead = old })
 }
 
 func readTimeoutTestHandle(t *testing.T, state proto.SegmentState, pool *mocks_logstore_client.LogStoreClientPool) SegmentHandle {
@@ -51,6 +58,7 @@ func readTimeoutTestHandleWithNodes(t *testing.T, state proto.SegmentState, pool
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+				SegmentRead:   testSegmentRead,
 			},
 		},
 	}
@@ -199,4 +207,20 @@ func TestReadBatchAdv_AllUnreachableStillFails(t *testing.T) {
 	_, err := h.ReadBatchAdv(context.Background(), 5, 10, nil)
 	require.Error(t, err)
 	assert.Equal(t, codes.Unavailable, status.Code(err))
+}
+
+// The bounds come from the client configuration, and a zero bound takes its
+// default.
+func TestReadTimeouts_FromConfig(t *testing.T) {
+	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	h := readTimeoutTestHandle(t, proto.SegmentState_Active, pool).(*segmentHandleImpl)
+	assert.Equal(t, []time.Duration{defaultActiveReadTimeout, defaultSettledReadTimeout}, h.readTimeouts())
+
+	shrinkReadTimeouts(t, 150*time.Millisecond, 900*time.Millisecond)
+	h = readTimeoutTestHandle(t, proto.SegmentState_Active, pool).(*segmentHandleImpl)
+	assert.Equal(t, []time.Duration{150 * time.Millisecond, 900 * time.Millisecond}, h.readTimeouts())
+
+	h = readTimeoutTestHandle(t, proto.SegmentState_Completed, pool).(*segmentHandleImpl)
+	assert.Equal(t, []time.Duration{900 * time.Millisecond}, h.readTimeouts())
 }
