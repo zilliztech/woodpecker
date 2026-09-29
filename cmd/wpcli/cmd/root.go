@@ -48,6 +48,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newLoggingCommand())
 	root.AddCommand(newLogCommand())
 	root.AddCommand(newLogstoreCommand())
+	root.AddCommand(newSegmentCommand())
 	root.AddCommand(newInstanceCommand())
 	root.AddCommand(newMarkingCommand())
 	root.AddCommand(newOpsCommand())

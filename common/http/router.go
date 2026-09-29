@@ -55,6 +55,7 @@ const (
 	AdminLogstoreFlushPath    = "/admin/logstore/flush"
 	AdminLogstoreFencePath    = "/admin/logstore/fence"
 	AdminLogstoreCompactPath  = "/admin/logstore/compact"
+	AdminLogstoreProbePath    = "/admin/logstore/segment/probe"
 )
 
 // AdminLogDeletePath marks a single log deleted: POST {bucketName, rootPath, logId}.

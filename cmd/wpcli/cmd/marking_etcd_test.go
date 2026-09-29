@@ -23,18 +23,52 @@ import (
 // startTestEtcd starts a self-contained embedded etcd on random free ports (so it cannot
 // collide with other packages' embedded etcd singletons under parallel `go test ./...`)
 // and returns an in-process client.
+//
+// A port is chosen by binding :0 and closing again, so anything else on the machine can take it in
+// the window before etcd binds it for real. This package starts an etcd per test, which makes that
+// window wide enough to lose in CI, so a start that fails that way is retried on fresh ports rather
+// than failing the test that happened to be running.
 func startTestEtcd(t *testing.T) *clientv3.Client {
 	t.Helper()
-	freePort := func() int {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
-		defer l.Close()
-		return l.Addr().(*net.TCPAddr).Port
+	const attempts = 5
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		cli, err := tryStartTestEtcd(t)
+		if err == nil {
+			return cli
+		}
+		lastErr = err
 	}
-	clientURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", freePort()))
-	require.NoError(t, err)
-	peerURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", freePort()))
-	require.NoError(t, err)
+	t.Fatalf("embedded etcd did not start in %d attempts: %v", attempts, lastErr)
+	return nil
+}
+
+func tryStartTestEtcd(t *testing.T) (*clientv3.Client, error) {
+	t.Helper()
+	freePort := func() (int, error) {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return 0, err
+		}
+		defer l.Close()
+		return l.Addr().(*net.TCPAddr).Port, nil
+	}
+	clientPort, err := freePort()
+	if err != nil {
+		return nil, err
+	}
+	peerPort, err := freePort()
+	if err != nil {
+		return nil, err
+	}
+	clientURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", clientPort))
+	if err != nil {
+		return nil, err
+	}
+	peerURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", peerPort))
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := embed.NewConfig()
 	cfg.Dir = t.TempDir()
@@ -46,15 +80,17 @@ func startTestEtcd(t *testing.T) *clientv3.Client {
 	cfg.LogLevel = "error"
 
 	srv, err := embed.StartEtcd(cfg)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 	select {
 	case <-srv.Server.ReadyNotify():
 	case <-time.After(15 * time.Second):
 		srv.Close()
-		t.Fatal("embedded etcd did not become ready")
+		return nil, fmt.Errorf("embedded etcd did not become ready on port %d", clientPort)
 	}
 	t.Cleanup(srv.Close)
-	return v3client.New(srv.Server)
+	return v3client.New(srv.Server), nil
 }
 
 func putMarkingRecord(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder, s *proto.SegmentCompactedNotifyStatus) {
