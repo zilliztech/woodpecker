@@ -351,6 +351,12 @@ There is no "undecodable" status: `DecodeRecordList` answers corruption by stopp
 the records it already has, never by erroring, so a damaged block header presents as no block header
 record being found at that offset.
 
+A segment finalized with no entries is complete, not broken: `Finalize` writes the header and the
+footer with nothing between, and it is reported as sealed with no blocks. On a segment nobody has
+finalized, a block whose header is written and whose data is not — the writer puts them out in two
+separate writes — is reported as `data_incomplete` rather than as damage: those entries have not been
+written yet.
+
 `max_blocks` is bounded by the node whatever the caller asks — a full survey reads every byte of the
 segment — and the read carries the request's context. A node with no local `data.log` answers
 `no_local_blocks` without opening anything: a compacted segment's blocks are objects every replica
@@ -359,6 +365,11 @@ shares, so surveying that per replica would be one copy answered repeatedly.
 This endpoint answers only for the node that serves it. `wp segment inspect` assembles the quorum's
 view and states the readings no single replica can: entries damaged here but readable there, entries
 no replica can read, and where readable data resumes.
+
+`lac` is the entry the quorum confirmed, from the replica's own footer, and a finalized replica may
+intentionally hold less than that (`stagedstorage/writer_impl.go:1173`). So a sealed replica that
+walked to the end and stops short of its own `lac` is missing entries that are known to exist, which
+is a different answer from not having looked.
 
 It compares replicas **by entry, never by block number**. Each node flushes on its own timer and
 size (`writer_impl.go:475`, `:509`), so the same entries land in different blocks on different

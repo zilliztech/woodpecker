@@ -63,6 +63,9 @@ const (
 	surveyStopChainBroken = "chain_broken"
 	surveyStopBound       = "bound"
 	surveyStopNoBlocks    = "no_local_blocks"
+	surveyStopEnd         = "end_of_segment"
+
+	blockStatusIncomplete = "data_incomplete"
 )
 
 // inspectBlock is one block as one replica found it.
@@ -87,6 +90,8 @@ type inspectNode struct {
 	State        string         `json:"state"`
 	Source       string         `json:"source,omitempty"`
 	Sealed       bool           `json:"sealed"`
+	IndexUsable  bool           `json:"index_usable"`
+	LAC          int64          `json:"lac"`
 	TotalBlocks  int32          `json:"total_blocks_known"`
 	StoppedEarly bool           `json:"stopped_early"`
 	StopReason   string         `json:"stop_reason,omitempty"`
@@ -223,6 +228,8 @@ func inspectEachNode(ac *client.Client, members *client.Memberlist, quorum *prot
 				Blocks           []inspectBlock `json:"blocks"`
 				Sealed           bool           `json:"sealed"`
 				TotalBlocksKnown int32          `json:"total_blocks_known"`
+				IndexUsable      bool           `json:"index_usable"`
+				LAC              int64          `json:"lac"`
 				StoppedEarly     bool           `json:"stopped_early"`
 				StopReason       string         `json:"stop_reason"`
 				StopOffset       int64          `json:"stop_offset"`
@@ -237,6 +244,7 @@ func inspectEachNode(ac *client.Client, members *client.Memberlist, quorum *prot
 		n.Blocks, n.Sealed, n.TotalBlocks = resp.Survey.Blocks, resp.Survey.Sealed, resp.Survey.TotalBlocksKnown
 		n.StoppedEarly, n.StopReason = resp.Survey.StoppedEarly, resp.Survey.StopReason
 		n.StopOffset = resp.Survey.StopOffset
+		n.IndexUsable, n.LAC = resp.Survey.IndexUsable, resp.Survey.LAC
 		results = append(results, n)
 	}
 	return results
@@ -349,6 +357,12 @@ type replicaView struct {
 	node     inspectNode
 	examined rangeSet
 	readable rangeSet
+	// absent is what the segment is confirmed to hold and this replica does not. A finalized
+	// replica may intentionally be behind the quorum, and its footer carries the LAC the majority
+	// acknowledged (stagedstorage/writer_impl.go:1173, :1250) -- so once such a replica has walked
+	// to the end, everything between its last entry and that LAC is known to exist and known to be
+	// missing here. Counting it as "not examined" instead would drop a real loss out of the report.
+	absent rangeSet
 	// recoverable is the prefix of a damaged block whose own records still verify. No reader serves
 	// it: every backend drops a block whose integrity check fails, without returning the records
 	// that passed (stagedstorage/reader_impl.go:1090, disk:705, objectstorage:763). It is what a
@@ -358,11 +372,20 @@ type replicaView struct {
 
 func viewOf(n inspectNode) replicaView {
 	view := replicaView{node: n}
+	highest := int64(-1)
 	for _, b := range n.Blocks {
 		if b.FirstEntryID < 0 {
 			continue
 		}
+		if b.Status == blockStatusIncomplete {
+			// A header whose data has not been written yet. Those entries are not part of what this
+			// replica holds, and they are not damage either.
+			continue
+		}
 		view.examined = view.examined.add(entryRange{b.FirstEntryID, b.LastEntryID})
+		if b.LastEntryID > highest {
+			highest = b.LastEntryID
+		}
 		if b.Status == blockStatusOK {
 			view.readable = view.readable.add(entryRange{b.FirstEntryID, b.LastEntryID})
 			continue
@@ -371,8 +394,20 @@ func viewOf(n inspectNode) replicaView {
 			view.recoverable = view.recoverable.add(entryRange{b.FirstEntryID, b.LastGoodEntryID})
 		}
 	}
+	// Only a replica that finished looking can say it does not have something, and only a sealed
+	// segment's footer says what the segment holds. An active segment may still be receiving writes,
+	// so a shorter replica there is behind rather than missing anything.
+	if n.Sealed && n.LAC >= 0 && (n.StopReason == surveyStopEnd || n.StopReason == surveyStopNoBlocks) {
+		if highest < n.LAC {
+			view.absent = view.absent.add(entryRange{highest + 1, n.LAC})
+		}
+	}
 	return view
 }
+
+// accounted is everything this replica has spoken about: what it looked at, and what its footer says
+// it should have and does not.
+func (v replicaView) accounted() rangeSet { return v.examined.union(v.absent) }
 
 // readInspectFindings states the readings a per-replica survey cannot make on its own, and returns
 // an error only for entries no replica can read that every replica actually looked at.
@@ -404,9 +439,13 @@ func readInspectFindings(results []inspectNode) ([]string, error) {
 	for _, view := range views {
 		switch view.node.StopReason {
 		case surveyStopChainBroken:
+			why := "this segment has no index to locate the next block"
+			if view.node.Sealed && !view.node.IndexUsable {
+				why = "this segment's index could not be read in full, so the walk fell back to the block chain"
+			}
 			findings = append(findings, fmt.Sprintf(
-				"%s could not walk past offset %d: no block header could be read there, and this segment has no index to locate the next block. Entries beyond %s have not been looked at on that replica.",
-				inspectLabel(view.node), view.node.StopOffset, examinedHorizon(view)))
+				"%s could not walk past offset %d: no block header could be read there, and %s. Entries beyond %s have not been looked at on that replica.",
+				inspectLabel(view.node), view.node.StopOffset, why, examinedHorizon(view)))
 		case surveyStopBound:
 			findings = append(findings, fmt.Sprintf(
 				"%s stopped at the block limit, not at the end of the segment — raise --max-blocks or move --from-block to look further.",
@@ -420,18 +459,26 @@ func readInspectFindings(results []inspectNode) ([]string, error) {
 	readableSomewhere := rangeSet{}
 	recoverableSomewhere := rangeSet{}
 	examinedByAny := rangeSet{}
-	examinedByAll := views[0].examined
+	examinedByAll := views[0].accounted()
 	for _, view := range views {
 		readableSomewhere = readableSomewhere.union(view.readable)
 		recoverableSomewhere = recoverableSomewhere.union(view.recoverable)
-		examinedByAny = examinedByAny.union(view.examined)
-		examinedByAll = examinedByAll.intersect(view.examined)
+		examinedByAny = examinedByAny.union(view.accounted())
+		examinedByAll = examinedByAll.intersect(view.accounted())
 	}
 
-	// Entries a replica looked at and could not read, that another replica still holds.
+	for _, view := range views {
+		if len(view.absent) > 0 {
+			findings = append(findings, fmt.Sprintf(
+				"%s does not hold entries %s at all, though its own footer says the quorum confirmed them — that replica needs resyncing.",
+				inspectLabel(view.node), view.absent))
+		}
+	}
+
+	// Entries a replica looked at or should have had and cannot read, that another replica still holds.
 	atRisk := make([]string, 0, len(views))
 	for _, view := range views {
-		lostHere := view.examined.subtract(view.readable)
+		lostHere := view.accounted().subtract(view.readable)
 		if held := lostHere.intersect(readableSomewhere); len(held) > 0 {
 			atRisk = append(atRisk, fmt.Sprintf("%s lost %s", inspectLabel(view.node), held))
 		}

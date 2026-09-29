@@ -312,3 +312,146 @@ func TestSegmentInspect_ChainBreakNamesWhereItStopped(t *testing.T) {
 	require.Contains(t, s, "offset 2110", "where the walk gave up is the actionable part")
 	require.NotContains(t, s, "block -1", "there is no block to name when none could be read there")
 }
+
+// blocksBodyFull is blocksBody with the footer facts a sealed replica carries: the quorum-confirmed
+// tail, and whether its index could be read in full.
+func blocksBodyFull(sealed bool, lac int64, indexUsable bool, stopReason string, stopOffset int64, blocks ...[4]int64) string {
+	parts := make([]string, 0, len(blocks))
+	for i, blk := range blocks {
+		status, detail := "ok", ""
+		if blk[3] == 0 {
+			status, detail = "checksum_failed", "block CRC mismatch"
+		}
+		parts = append(parts, fmt.Sprintf(
+			`{"block":%d,"offset":%d,"bytes":100,"first_entry_id":%d,"last_entry_id":%d,`+
+				`"records_ok":0,"last_good_entry_id":%d,"status":%q,"detail":%q}`,
+			i, i*100, blk[0], blk[1], blk[2], status, detail))
+	}
+	return fmt.Sprintf(`{"node_id":"n","source":"local_staged","survey":{"blocks":[%s],`+
+		`"sealed":%t,"total_blocks_known":%d,"index_usable":%t,"lac":%d,`+
+		`"stopped_early":%t,"stop_reason":%q,"stop_offset":%d}}`,
+		joinComma(parts), sealed, len(blocks), indexUsable, lac,
+		stopReason != "end_of_segment", stopReason, stopOffset)
+}
+
+// TestSegmentInspect_LaggingSealedReplicaConfirmsTheLoss covers a finalized replica that holds less
+// than the quorum confirmed. Its footer carries the LAC the majority acknowledged, so the entries it
+// does not have are known to exist and known to be absent there -- not "unexamined". Treating them
+// as unexamined shrinks the intersection and the loss disappears from the report entirely.
+func TestSegmentInspect_LaggingSealedReplicaConfirmsTheLoss(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	inspectTestGlobals(t)
+
+	ac, members := inspectFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, blocksBodyFull(true, 19, true, "end_of_segment", 0, [4]int64{0, 9, 9, 1}, [4]int64{10, 19, -1, 0})},
+		{http.StatusOK, blocksBodyFull(true, 19, true, "end_of_segment", 0, [4]int64{0, 9, 9, 1}, [4]int64{10, 19, -1, 0})},
+		// node-3 finalized behind the quorum: its blocks stop at entry 9, its footer says 19.
+		{http.StatusOK, blocksBodyFull(true, 19, true, "end_of_segment", 0, [4]int64{0, 9, 9, 1})},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentInspect(cmd, cli, kb, ac, members, "mylog", 3, 0, 0)
+
+	require.Error(t, err, "entries 10-19 exist and no replica can read them")
+	s := out.String() + err.Error()
+	require.Contains(t, s, "10-19")
+	require.Regexp(t, `(?i)no replica can read`, s)
+}
+
+// TestSegmentInspect_ReplicaWithNoLocalBlocksStillCounts covers a replica whose local data is gone.
+// It answered, and its footer says what the segment holds, so it has told us it has none of it --
+// which must not weaken the conclusion the other replicas support.
+func TestSegmentInspect_ReplicaWithNoLocalBlocksStillCounts(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	inspectTestGlobals(t)
+
+	ac, members := inspectFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, blocksBodyFull(true, 19, true, "end_of_segment", 0, [4]int64{0, 9, 9, 1}, [4]int64{10, 19, -1, 0})},
+		{http.StatusOK, blocksBodyFull(true, 19, true, "end_of_segment", 0, [4]int64{0, 9, 9, 1}, [4]int64{10, 19, -1, 0})},
+		{http.StatusOK, `{"node_id":"n","source":"none","survey":{"blocks":[],"sealed":true,` +
+			`"total_blocks_known":2,"index_usable":true,"lac":19,"stopped_early":true,"stop_reason":"no_local_blocks","stop_offset":0}}`},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentInspect(cmd, cli, kb, ac, members, "mylog", 3, 0, 0)
+
+	require.Error(t, err, "a replica holding nothing does not make the other two inconclusive")
+	s := out.String() + err.Error()
+	require.Contains(t, s, "10-19")
+}
+
+// TestSegmentInspect_SealedButIndexUnreadableIsNotAnActiveSegment covers the wording for a sealed
+// replica whose index is damaged. Calling it a segment with no index describes an active one, and an
+// operator would wait for writes to finish instead of resyncing the replica.
+func TestSegmentInspect_SealedButIndexUnreadableIsNotAnActiveSegment(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	inspectTestGlobals(t)
+
+	ac, members := inspectFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, blocksBodyFull(true, 19, false, "chain_broken", 2110, [4]int64{0, 9, 9, 1})},
+		{http.StatusOK, blocksBodyFull(true, 19, true, "end_of_segment", 0, [4]int64{0, 9, 9, 1}, [4]int64{10, 19, 19, 1})},
+		{http.StatusOK, blocksBodyFull(true, 19, true, "end_of_segment", 0, [4]int64{0, 9, 9, 1}, [4]int64{10, 19, 19, 1})},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentInspect(cmd, cli, kb, ac, members, "mylog", 3, 0, 0))
+
+	s := out.String()
+	require.Contains(t, s, "index could not be read in full")
+	require.NotContains(t, s, "has no index",
+		"a sealed replica with a damaged trailer is not an active segment")
+}
+
+// TestSegmentInspect_BoundedSurveyDoesNotConfirmAbsence covers a sealed replica that stopped at the
+// block limit. Its footer says what the segment holds, but it did not finish looking, so the entries
+// beyond its horizon are unexamined -- not missing. Claiming otherwise would turn a small
+// --max-blocks into a report of data loss.
+func TestSegmentInspect_BoundedSurveyDoesNotConfirmAbsence(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	inspectTestGlobals(t)
+
+	ac, members := inspectFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, blocksBodyFull(true, 19, true, "bound", 0, [4]int64{0, 9, 9, 1})},
+		{http.StatusOK, blocksBodyFull(true, 19, true, "bound", 0, [4]int64{0, 9, 9, 1})},
+		{http.StatusOK, blocksBodyFull(true, 19, true, "bound", 0, [4]int64{0, 9, 9, 1})},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentInspect(cmd, cli, kb, ac, members, "mylog", 3, 0, 0),
+		"nobody looked past the limit, so nothing is known to be missing")
+	s := out.String()
+	require.NotContains(t, s, "needs resyncing")
+	require.NotContains(t, s, "No replica can read")
+	require.Contains(t, s, "stopped at the block limit")
+}
+
+// TestSegmentInspect_IncompleteTailIsNotALoss covers the block whose header is written and whose data
+// is not. Those entries are not written yet; counting them as data the replica holds and cannot read
+// would report a writer in flight as damage.
+func TestSegmentInspect_IncompleteTailIsNotALoss(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	inspectTestGlobals(t)
+
+	tail := `{"node_id":"n","source":"local_staged","survey":{"blocks":[` +
+		`{"block":0,"offset":25,"bytes":100,"first_entry_id":0,"last_entry_id":9,"records_ok":10,"last_good_entry_id":9,"status":"ok"},` +
+		`{"block":1,"offset":200,"bytes":100,"first_entry_id":10,"last_entry_id":19,"records_ok":0,"last_good_entry_id":-1,` +
+		`"status":"data_incomplete","detail":"header promises 100 bytes of data, the file ends 100 short"}],` +
+		`"sealed":false,"total_blocks_known":-1,"index_usable":false,"lac":-1,` +
+		`"stopped_early":false,"stop_reason":"end_of_segment","stop_offset":0}}`
+
+	ac, members := inspectFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, tail}, {http.StatusOK, tail}, {http.StatusOK, tail},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentInspect(cmd, cli, kb, ac, members, "mylog", 3, 0, 0),
+		"a header whose data has not landed yet is not damage")
+	s := out.String()
+	require.NotContains(t, s, "No replica can read")
+	require.NotContains(t, s, "lost 10-19")
+}

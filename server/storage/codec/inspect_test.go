@@ -562,3 +562,68 @@ func TestInspectBlocks_MixedDamage(t *testing.T) {
 		})
 	}
 }
+
+// TestInspectBlocks_ZeroBlockSealedSegment covers a segment finalized with no entries at all. The
+// format documents it as valid -- Finalize writes the header and the footer with nothing between --
+// and reporting it as corrupt would leave a segment that can never be fenced or read again.
+func TestInspectBlocks_ZeroBlockSealedSegment(t *testing.T) {
+	b := &segmentBuilder{}
+	b.buf.Write(EncodeRecord(&HeaderRecord{Version: FormatVersion, FirstEntryID: 0}))
+	b.seal() // no blocks between the header and the footer
+
+	data := b.buf.Bytes()
+	got := InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), 0, 100)
+
+	require.True(t, got.Sealed, "the footer decoded, so the segment is sealed")
+	require.Empty(t, got.Blocks)
+	require.Equal(t, SurveyStopEnd, got.StopReason, "an empty sealed segment is complete, not broken")
+	require.False(t, got.StoppedEarly)
+}
+
+// TestInspectBlocks_ActiveTailBetweenTheTwoWrites covers the window the writer leaves open: the block
+// header goes out in one write and the block data in the next, so a survey can arrive between them,
+// and a crash leaves that state on disk for good. Those entries are not written yet, which is not
+// the same as damaged.
+func TestInspectBlocks_ActiveTailBetweenTheTwoWrites(t *testing.T) {
+	b := newSegment(t, 3, 4, false)
+	// Keep the last block's header, drop its data.
+	b.truncateTo(int(b.indexes[2].StartOffset) + RecordHeaderSize + BlockHeaderRecordSize)
+
+	data := b.buf.Bytes()
+	got := InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), 0, 100)
+
+	require.Len(t, got.Blocks, 3, "the partial block is still worth reporting")
+	require.Equal(t, BlockOK, got.Blocks[1].Status)
+	require.Equal(t, BlockDataIncomplete, got.Blocks[2].Status,
+		"a header whose data has not been written yet is a tail, not corruption")
+	require.Equal(t, SurveyStopEnd, got.StopReason)
+}
+
+// TestInspectBlocks_SealedDamagedDataIsDamage is the same shape on a sealed segment, where the
+// writer is finished: data that fails its checksum is damage, with no question of it arriving later.
+func TestInspectBlocks_SealedDamagedDataIsDamage(t *testing.T) {
+	b := newSegment(t, 3, 4, true)
+	b.corruptAt(int(b.indexes[2].StartOffset) + RecordHeaderSize + BlockHeaderRecordSize + 1)
+
+	got := b.survey(0, 100)
+
+	require.Equal(t, BlockChecksumFailed, got.Blocks[2].Status)
+	require.NotEqual(t, BlockDataIncomplete, got.Blocks[2].Status,
+		"a finalized segment is not waiting for more data")
+}
+
+// TestInspectBlocks_FromBlockIsAPositionOnBothPaths keeps --from-block selecting the same block
+// whether the index or the chain located it. The recorded block number may differ from the position
+// after a recovery, so the two paths must agree on which one they count.
+func TestInspectBlocks_FromBlockIsAPositionOnBothPaths(t *testing.T) {
+	sealed := newSegment(t, 5, 2, true)
+	active := newSegment(t, 5, 2, false)
+
+	fromIndex := sealed.survey(2, 100)
+	fromChain := active.survey(2, 100)
+
+	require.Len(t, fromIndex.Blocks, 3)
+	require.Len(t, fromChain.Blocks, 3)
+	require.Equal(t, fromChain.Blocks[0].FirstEntryID, fromIndex.Blocks[0].FirstEntryID,
+		"--from-block 2 must mean the same block on both paths")
+}
