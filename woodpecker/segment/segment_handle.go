@@ -24,6 +24,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -241,6 +242,12 @@ type segmentHandleImpl struct {
 	executor      *SequentialExecutor
 	completionMgr *completionManager // nil for readonly segments
 
+	// unreachable holds the endpoints of replicas this segment failed to reach,
+	// so the next segment's quorum can be selected without them. Guarded by its
+	// own mutex: it is read by the log handle while it rolls the segment.
+	unreachableMu sync.Mutex
+	unreachable   map[string]struct{}
+
 	// LAC sync coalescing: instead of spawning a fresh syncLACToQuorumAsync
 	// goroutine (which fans out an UpdateLastAddConfirmed RPC per quorum node)
 	// on every ack round, one background syncer pushes only the LATEST LAC.
@@ -418,7 +425,52 @@ func (s *segmentHandleImpl) findAppendOpById(ctx context.Context, triggerEntryId
 	return nil
 }
 
+// isReplicaUnreachable reports whether an append failure says the replica
+// itself cannot be reached, rather than that it refused the entry.
+func isReplicaUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if werr.IsTransportError(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// A connection torn down because another call to the same replica failed.
+	return strings.Contains(err.Error(), "client connection is closing")
+}
+
+// markUnreachable records a replica this segment could not reach. It is kept
+// for the segment's lifetime only: the next segment is selected without it, and
+// the segment after that sees the membership afresh.
+func (s *segmentHandleImpl) markUnreachable(endpoint string) {
+	s.unreachableMu.Lock()
+	defer s.unreachableMu.Unlock()
+	if s.unreachable == nil {
+		s.unreachable = make(map[string]struct{})
+	}
+	s.unreachable[endpoint] = struct{}{}
+}
+
+// UnreachableReplicas returns the endpoints of replicas this segment failed to
+// reach, for the log handle to exclude when it selects the next segment's
+// quorum.
+func (s *segmentHandleImpl) UnreachableReplicas() []string {
+	s.unreachableMu.Lock()
+	defer s.unreachableMu.Unlock()
+	out := make([]string, 0, len(s.unreachable))
+	for endpoint := range s.unreachable {
+		out = append(out, endpoint)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, triggerEntryId int64, err error, serverIndex int, serverAddr string) {
+	// Recorded before anything else, including for an entry that has already
+	// completed on the other replicas: a replica that cannot be reached is worth
+	// avoiding in the next segment however its failure arrived.
+	if isReplicaUnreachable(err) && serverAddr != "" {
+		s.markUnreachable(serverAddr)
+	}
 	s.Lock()
 	defer s.Unlock()
 	s.updateAccessTime()
