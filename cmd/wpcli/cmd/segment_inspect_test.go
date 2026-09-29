@@ -455,3 +455,57 @@ func TestSegmentInspect_IncompleteTailIsNotALoss(t *testing.T) {
 	require.NotContains(t, s, "No replica can read")
 	require.NotContains(t, s, "lost 10-19")
 }
+
+// TestSegmentInspect_FromBlockPastTheEndIsNotALoss covers a page that starts past a replica's last
+// block. The server returns no blocks for it, which says nothing about what the replica holds --
+// only that this page is empty there. Deriving absence from a replica's footer needs a survey that
+// started at the beginning, or a healthy segment reads as total loss the moment an operator pages
+// forward.
+func TestSegmentInspect_FromBlockPastTheEndIsNotALoss(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	inspectTestGlobals(t)
+
+	// A healthy sealed segment: every replica holds three blocks and confirms LAC 99.
+	empty := `{"node_id":"n","source":"local_staged","survey":{"blocks":[],"sealed":true,` +
+		`"total_blocks_known":3,"index_usable":true,"lac":99,` +
+		`"stopped_early":false,"stop_reason":"end_of_segment","stop_offset":0}}`
+	ac, members := inspectFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, empty}, {http.StatusOK, empty}, {http.StatusOK, empty},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentInspect(cmd, cli, kb, ac, members, "mylog", 3, 5, 0)
+
+	require.NoError(t, err, "paging past the last block is not data loss")
+	s := out.String()
+	require.NotContains(t, s, "No replica can read")
+	require.NotContains(t, s, "needs resyncing")
+}
+
+// TestSegmentInspect_PagedSurveyDoesNotBlameAShorterReplica covers the case the report's own advice
+// leads to: replicas hold different numbers of blocks, so paging forward empties one of them while
+// the others still have data on that page.
+func TestSegmentInspect_PagedSurveyDoesNotBlameAShorterReplica(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	inspectTestGlobals(t)
+
+	ac, members := inspectFixture(t, cli, kb, []probeAnswer{
+		// node-1 has nothing on this page; the others still do, and one of their blocks is damaged.
+		{http.StatusOK, `{"node_id":"n","source":"local_staged","survey":{"blocks":[],"sealed":true,` +
+			`"total_blocks_known":3,"index_usable":true,"lac":99,` +
+			`"stopped_early":false,"stop_reason":"end_of_segment","stop_offset":0}}`},
+		{http.StatusOK, blocksBodyFull(true, 99, true, "end_of_segment", 0, [4]int64{50, 59, -1, 0})},
+		{http.StatusOK, blocksBodyFull(true, 99, true, "end_of_segment", 0, [4]int64{50, 59, 59, 1})},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentInspect(cmd, cli, kb, ac, members, "mylog", 3, 5, 0)
+
+	require.NoError(t, err)
+	s := out.String()
+	require.NotContains(t, s, "needs resyncing", "an empty page is not a missing replica")
+	require.NotContains(t, s, "No replica can read",
+		"one replica was not asked about these entries at all on this page")
+}

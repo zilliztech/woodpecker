@@ -124,7 +124,7 @@ func runSegmentInspect(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 	}
 
 	results := inspectEachNode(ac, members, quorum, logMeta.LogId, segmentID, fromBlock, maxBlocks)
-	findings, damaged := readInspectFindings(results)
+	findings, damaged := readInspectFindings(results, fromBlock)
 
 	w := cmd.OutOrStdout()
 	if renderedOutput() {
@@ -370,7 +370,10 @@ type replicaView struct {
 	recoverable rangeSet
 }
 
-func viewOf(n inspectNode) replicaView {
+// viewOf reads one replica's survey. fromBlock matters: a survey that started part way through is a
+// page of the segment, and a page says nothing about what lies before it -- least of all that the
+// replica is missing it.
+func viewOf(n inspectNode, fromBlock int64) replicaView {
 	view := replicaView{node: n}
 	highest := int64(-1)
 	for _, b := range n.Blocks {
@@ -396,8 +399,10 @@ func viewOf(n inspectNode) replicaView {
 	}
 	// Only a replica that finished looking can say it does not have something, and only a sealed
 	// segment's footer says what the segment holds. An active segment may still be receiving writes,
-	// so a shorter replica there is behind rather than missing anything.
-	if n.Sealed && n.LAC >= 0 && (n.StopReason == surveyStopEnd || n.StopReason == surveyStopNoBlocks) {
+	// so a shorter replica there is behind rather than missing anything. And only a survey that
+	// began at the start of the segment can be compared against that footer: a page that starts
+	// later is empty on a replica with fewer blocks, which says nothing about what it holds.
+	if fromBlock == 0 && n.Sealed && n.LAC >= 0 && (n.StopReason == surveyStopEnd || n.StopReason == surveyStopNoBlocks) {
 		if highest < n.LAC {
 			view.absent = view.absent.add(entryRange{highest + 1, n.LAC})
 		}
@@ -411,14 +416,14 @@ func (v replicaView) accounted() rangeSet { return v.examined.union(v.absent) }
 
 // readInspectFindings states the readings a per-replica survey cannot make on its own, and returns
 // an error only for entries no replica can read that every replica actually looked at.
-func readInspectFindings(results []inspectNode) ([]string, error) {
+func readInspectFindings(results []inspectNode, fromBlock int64) ([]string, error) {
 	findings := make([]string, 0, 6)
 
 	views := make([]replicaView, 0, len(results))
 	silent := make([]string, 0, len(results))
 	for _, n := range results {
 		if n.answered() {
-			views = append(views, viewOf(n))
+			views = append(views, viewOf(n, fromBlock))
 			continue
 		}
 		silent = append(silent, fmt.Sprintf("%s (%s)", inspectLabel(n), n.State))
