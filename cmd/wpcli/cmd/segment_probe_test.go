@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -228,4 +229,101 @@ func TestSegmentProbe_PassesTheBoundsThrough(t *testing.T) {
 	require.Contains(t, gotQuery, "max_entries=100")
 	require.Contains(t, gotQuery, "log_id=7")
 	require.Contains(t, gotQuery, "segment_id=3")
+}
+
+// TestSegmentProbe_ReplicaBehindIsNotCalledDamaged covers replicas holding different amounts with no
+// read failing. A replica that is simply behind gets repaired by the normal path; calling it damaged
+// would send an operator after a fault that is not there.
+func TestSegmentProbe_ReplicaBehindIsNotCalledDamaged(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4000, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0))
+
+	s := out.String()
+	require.Contains(t, s, "not a damaged one", "no read failed, so nothing here is damage")
+	require.Contains(t, s, "node-2 (has 4000)", "the replica that is behind has to be named")
+	require.NotContains(t, s, "replicas are damaged")
+}
+
+// TestSegmentProbe_NoReplicaAnsweredClaimsNothing covers every node being unreachable. A report that
+// drew a conclusion from zero answers would be inventing one.
+func TestSegmentProbe_NoReplicaAnsweredClaimsNothing(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+	})
+	for i := range members.Members {
+		members.Members[i].Tags["admin_port"] = "1" // every node stranded
+	}
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0)
+
+	require.Error(t, err)
+	require.Contains(t, out.String(), "No replica answered")
+	require.NotRegexp(t, `(?i)damaged|data ends`, out.String(),
+		"nothing answered, so nothing can be concluded about the data")
+}
+
+// TestSegmentProbe_JSONFindingStillFails covers the machine-readable path: a caller reading the
+// payload must not be told by the exit code that a position no replica can read is fine.
+func TestSegmentProbe_JSONFindingStillFails(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	Globals = GlobalFlags{Timeout: 2 * time.Second, Output: "json"}
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 1200, "error", "crc mismatch in block 7")},
+		{http.StatusOK, probeBody("local_staged", 0, 1200, "error", "crc mismatch in block 7")},
+		{http.StatusOK, probeBody("local_staged", 0, 1200, "error", "crc mismatch in block 7")},
+	})
+	cmd, out, _ := markingTestCmd()
+
+	err := runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0)
+
+	require.Error(t, err)
+	var payload struct {
+		Findings []string `json:"findings"`
+		Nodes    []struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"nodes"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &payload), "stdout has to be the payload alone")
+	require.Len(t, payload.Nodes, 3)
+	require.NotEmpty(t, payload.Findings, "the reading is part of the payload, not only of the table")
+}
+
+// TestSegmentProbe_QuorumMemberMissingFromMemberlistIsReported keeps the command from dialling a
+// service address as though it were an admin one, as lac and fence-quorum do.
+func TestSegmentProbe_QuorumMemberMissingFromMemberlistIsReported(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	probeTestGlobals(t)
+
+	ac, members := probeFixture(t, cli, kb, []probeAnswer{
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+		{http.StatusOK, probeBody("local_staged", 0, 4821, "not_yet_written", "")},
+	})
+	members.Members = members.Members[:1]
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSegmentProbe(cmd, cli, kb, ac, members, "mylog", 3, 0, 0))
+	require.Contains(t, out.String(), "not in memberlist")
 }

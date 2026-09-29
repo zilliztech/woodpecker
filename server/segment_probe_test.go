@@ -24,10 +24,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_segment"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
 )
@@ -228,4 +230,70 @@ func TestProbeSource_SharedCopyIsNamedAsSuch(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(dir, "data.log")))
 	require.Equal(t, probeSourceObjectStore, l.probeSource("bkt", "inst", 7, 3),
 		"a reclaimed local copy means the answer comes from the copy every replica shares")
+}
+
+// TestProbeSegment_UsesTheNodesOwnBoundWhenNoneWasAsked keeps an unbounded request from scanning a
+// whole segment: the caller passing zero gets the node's default, not no limit at all.
+func TestProbeSegment_UsesTheNodesOwnBoundWhenNoneWasAsked(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	mp := mocks_segment.NewSegmentProcessor(t)
+	mp.EXPECT().GetLogId().Return(testLogId).Maybe()
+	store.segmentProcessors[GetLogKey(testBucketName, testRootPath, testLogId)] = map[int64]processor.SegmentProcessor{29: mp}
+
+	var asked []int64
+	mp.EXPECT().ReadBatchEntriesAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, from, max int64, _ *proto.LastReadState) (*proto.BatchReadResult, error) {
+			asked = append(asked, max)
+			return batchOf(from, max), nil
+		})
+
+	got, err := store.ProbeSegment(context.Background(), SegmentProbeRequest{LogID: testLogId, SegmentID: 29})
+
+	require.NoError(t, err)
+	require.Equal(t, probeStopCapReached, got.StopReason)
+	require.Equal(t, ProbeMaxEntriesDefault, got.EntriesRead,
+		"a request with no bound stops at the node's default, not at no bound at all")
+	require.NotEmpty(t, asked)
+}
+
+// TestProbeSegment_ResolvesTheInstanceFromALiveProcessor covers the primary resolution route: the
+// instance is recovered from the key the node already files the segment under, so a caller that
+// does not know the bucket and root path still gets an answer about the right instance.
+func TestProbeSegment_ResolvesTheInstanceFromALiveProcessor(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+	store.cfg.Woodpecker.Storage.Type = "service"
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	mp := mocks_segment.NewSegmentProcessor(t)
+	mp.EXPECT().GetLogId().Return(testLogId).Maybe()
+	// A nested instance root: the key is bucket/root/logId, so recovering the two parts from it
+	// cannot simply split on every slash.
+	const nestedRoot = "inst/a/b"
+	store.segmentProcessors[GetLogKey(testBucketName, nestedRoot, testLogId)] = map[int64]processor.SegmentProcessor{29: mp}
+	mp.EXPECT().ReadBatchEntriesAdv(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, werr.ErrEntryNotFound).Maybe()
+
+	got, err := store.ProbeSegment(context.Background(), SegmentProbeRequest{LogID: testLogId, SegmentID: 29})
+
+	require.NoError(t, err)
+	require.Equal(t, testBucketName, got.Bucket)
+	require.Equal(t, nestedRoot, got.RootPath, "an instance root with slashes must survive the round trip")
+	require.Equal(t, probeStopNotYetWritten, got.StopReason)
+}
+
+// TestProbeSource_NamesTheStoreEachDeploymentReads covers the deployments that are not service mode,
+// where there is no staged copy to distinguish.
+func TestProbeSource_NamesTheStoreEachDeploymentReads(t *testing.T) {
+	for storageType, want := range map[string]string{
+		"local": probeSourceLocalDisk,
+		"minio": probeSourceObjectStore,
+	} {
+		cfg := serviceModeCfg(t)
+		cfg.Woodpecker.Storage.Type = storageType
+		l := probeStore(t, cfg)
+		require.Equal(t, want, l.probeSource("bkt", "inst", 7, 3), "storage type %q", storageType)
+	}
 }
