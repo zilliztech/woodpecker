@@ -81,6 +81,9 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
 ### Log metadata
 - `wp log readers <logName>` — where each of a log's readers has read to (etcd only, no node contact)
 
+### Segment across its quorum
+- `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
+
 ### Logstore runtime
 - `wp logstore segments <node>` — list active segments
 - `wp logstore segment-show <node> --log X --seg Y` — detailed segment view
