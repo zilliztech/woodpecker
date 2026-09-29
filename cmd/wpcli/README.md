@@ -83,7 +83,7 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
 
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
-- `wp segment inspect <logName> <segmentId>` — walk the blocks on every replica: which block is damaged where, whether the damage is bounded, and what a skip would cost
+- `wp segment inspect <logName> <segmentId>` — walk the blocks on every replica: which entries are damaged where, whether the damage is bounded, and what a skip would cost
 
 ### Logstore runtime
 - `wp logstore segments <node>` — list active segments

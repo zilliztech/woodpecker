@@ -90,6 +90,7 @@ type inspectNode struct {
 	TotalBlocks  int32          `json:"total_blocks_known"`
 	StoppedEarly bool           `json:"stopped_early"`
 	StopReason   string         `json:"stop_reason,omitempty"`
+	StopOffset   int64          `json:"stop_offset,omitempty"`
 	Blocks       []inspectBlock `json:"blocks,omitempty"`
 	Detail       string         `json:"detail,omitempty"`
 }
@@ -221,6 +222,7 @@ func inspectEachNode(ac *client.Client, members *client.Memberlist, quorum *prot
 				TotalBlocksKnown int32          `json:"total_blocks_known"`
 				StoppedEarly     bool           `json:"stopped_early"`
 				StopReason       string         `json:"stop_reason"`
+				StopOffset       int64          `json:"stop_offset"`
 			} `json:"survey"`
 		}
 		if jsonErr := json.Unmarshal(body, &resp); jsonErr != nil {
@@ -231,26 +233,155 @@ func inspectEachNode(ac *client.Client, members *client.Memberlist, quorum *prot
 		n.State, n.Source = posOK, resp.Source
 		n.Blocks, n.Sealed, n.TotalBlocks = resp.Survey.Blocks, resp.Survey.Sealed, resp.Survey.TotalBlocksKnown
 		n.StoppedEarly, n.StopReason = resp.Survey.StoppedEarly, resp.Survey.StopReason
+		n.StopOffset = resp.Survey.StopOffset
 		results = append(results, n)
 	}
 	return results
 }
 
-// readInspectFindings states the readings a per-replica survey cannot make on its own, and returns
-// an error when a block is unreadable everywhere.
-func readInspectFindings(results []inspectNode) ([]string, error) {
-	findings := make([]string, 0, 4)
+// entryRange is an inclusive range of entry ids. Replicas are compared by these rather than by
+// block number: each node flushes on its own timer and size, so the same entries land in different
+// blocks on different nodes, and a block number means nothing across them.
+type entryRange struct {
+	From int64 `json:"from"`
+	To   int64 `json:"to"`
+}
 
-	answered := make([]inspectNode, 0, len(results))
+// rangeSet is a sorted set of non-overlapping ranges.
+type rangeSet []entryRange
+
+func (s rangeSet) add(r entryRange) rangeSet {
+	if r.To < r.From {
+		return s
+	}
+	out := append(rangeSet{}, s...)
+	out = append(out, r)
+	sort.Slice(out, func(i, j int) bool { return out[i].From < out[j].From })
+	merged := make(rangeSet, 0, len(out))
+	for _, item := range out {
+		if n := len(merged); n > 0 && item.From <= merged[n-1].To+1 {
+			if item.To > merged[n-1].To {
+				merged[n-1].To = item.To
+			}
+			continue
+		}
+		merged = append(merged, item)
+	}
+	return merged
+}
+
+func (s rangeSet) union(o rangeSet) rangeSet {
+	out := s
+	for _, r := range o {
+		out = out.add(r)
+	}
+	return out
+}
+
+// subtract removes every entry in o from s.
+func (s rangeSet) subtract(o rangeSet) rangeSet {
+	out := append(rangeSet{}, s...)
+	for _, cut := range o {
+		next := make(rangeSet, 0, len(out)+1)
+		for _, r := range out {
+			if cut.To < r.From || cut.From > r.To {
+				next = append(next, r)
+				continue
+			}
+			if cut.From > r.From {
+				next = append(next, entryRange{r.From, cut.From - 1})
+			}
+			if cut.To < r.To {
+				next = append(next, entryRange{cut.To + 1, r.To})
+			}
+		}
+		out = next
+	}
+	return out
+}
+
+func (s rangeSet) intersect(o rangeSet) rangeSet {
+	out := make(rangeSet, 0, len(s))
+	for _, a := range s {
+		for _, b := range o {
+			from, to := max64(a.From, b.From), min64(a.To, b.To)
+			if from <= to {
+				out = out.add(entryRange{from, to})
+			}
+		}
+	}
+	return out
+}
+
+func (s rangeSet) String() string {
+	parts := make([]string, 0, len(s))
+	for _, r := range s {
+		if r.From == r.To {
+			parts = append(parts, strconv.FormatInt(r.From, 10))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%d-%d", r.From, r.To))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// replicaView is what one replica looked at and what of it it could read. The two are different:
+// a replica that stopped early examined less than the segment holds, and its silence about the rest
+// is not evidence about the rest.
+type replicaView struct {
+	node     inspectNode
+	examined rangeSet
+	readable rangeSet
+}
+
+func viewOf(n inspectNode) replicaView {
+	view := replicaView{node: n}
+	for _, b := range n.Blocks {
+		if b.FirstEntryID < 0 {
+			continue
+		}
+		view.examined = view.examined.add(entryRange{b.FirstEntryID, b.LastEntryID})
+		switch {
+		case b.Status == blockStatusOK:
+			view.readable = view.readable.add(entryRange{b.FirstEntryID, b.LastEntryID})
+		case b.LastGoodEntryID >= b.FirstEntryID:
+			// The block's checksum failed, but its own records say how far into it the data is
+			// still readable.
+			view.readable = view.readable.add(entryRange{b.FirstEntryID, b.LastGoodEntryID})
+		}
+	}
+	return view
+}
+
+// readInspectFindings states the readings a per-replica survey cannot make on its own, and returns
+// an error only for entries no replica can read that every replica actually looked at.
+func readInspectFindings(results []inspectNode) ([]string, error) {
+	findings := make([]string, 0, 6)
+
+	views := make([]replicaView, 0, len(results))
 	silent := make([]string, 0, len(results))
 	for _, n := range results {
 		if n.answered() {
-			answered = append(answered, n)
+			views = append(views, viewOf(n))
 			continue
 		}
 		silent = append(silent, fmt.Sprintf("%s (%s)", inspectLabel(n), n.State))
 	}
-	if len(answered) == 0 {
+	if len(views) == 0 {
 		findings = append(findings, fmt.Sprintf(
 			"No replica answered (%s), so nothing can be said about this segment's blocks.", strings.Join(silent, ", ")))
 		return findings, wperrors.NewNetworkError("no replica answered")
@@ -261,145 +392,102 @@ func readInspectFindings(results []inspectNode) ([]string, error) {
 			len(silent), len(results), strings.Join(silent, ", ")))
 	}
 
-	// Which replicas hold a good copy of each block, and which do not.
-	good := make(map[int64][]string)
-	bad := make(map[int64][]string)
-	surveyed := make(map[int64]struct{})
-	for _, n := range answered {
-		for _, b := range n.Blocks {
-			surveyed[b.Number] = struct{}{}
-			if b.Status == blockStatusOK {
-				good[b.Number] = append(good[b.Number], inspectLabel(n))
-			} else {
-				bad[b.Number] = append(bad[b.Number], fmt.Sprintf("%s (%s)", inspectLabel(n), b.Status))
-			}
-		}
-	}
-
-	for _, n := range answered {
-		if n.StopReason == surveyStopChainBroken {
+	// Why a replica saw less than the others, which is the difference between "it is not there" and
+	// "it was not looked at".
+	for _, view := range views {
+		switch view.node.StopReason {
+		case surveyStopChainBroken:
 			findings = append(findings, fmt.Sprintf(
-				"%s could not walk past block %d: its header cannot be read, and this segment has no index to locate the next one. The blocks beyond it have not been looked at — that is not the same as their being damaged.",
-				inspectLabel(n), lastBlockNumber(n)))
-		}
-		if n.StopReason == surveyStopNoBlocks {
-			findings = append(findings, fmt.Sprintf(
-				"%s holds no local blocks to walk (source %s).", inspectLabel(n), n.Source))
-		}
-		if n.StopReason == surveyStopBound {
+				"%s could not walk past offset %d: no block header could be read there, and this segment has no index to locate the next block. Entries beyond %s have not been looked at on that replica.",
+				inspectLabel(view.node), view.node.StopOffset, examinedHorizon(view)))
+		case surveyStopBound:
 			findings = append(findings, fmt.Sprintf(
 				"%s stopped at the block limit, not at the end of the segment — raise --max-blocks or move --from-block to look further.",
-				inspectLabel(n)))
+				inspectLabel(view.node)))
+		case surveyStopNoBlocks:
+			findings = append(findings, fmt.Sprintf(
+				"%s holds no local blocks to walk (source %s).", inspectLabel(view.node), view.node.Source))
 		}
 	}
 
-	unreadable := make([]int64, 0)
-	repairable := make([]int64, 0)
-	for number := range surveyed {
-		if len(bad[number]) == 0 {
-			continue
-		}
-		if len(good[number]) > 0 {
-			repairable = append(repairable, number)
-		} else {
-			unreadable = append(unreadable, number)
+	readableSomewhere := rangeSet{}
+	examinedByAny := rangeSet{}
+	examinedByAll := views[0].examined
+	for _, view := range views {
+		readableSomewhere = readableSomewhere.union(view.readable)
+		examinedByAny = examinedByAny.union(view.examined)
+		examinedByAll = examinedByAll.intersect(view.examined)
+	}
+
+	// Entries a replica looked at and could not read, that another replica still holds.
+	atRisk := make([]string, 0, len(views))
+	for _, view := range views {
+		lostHere := view.examined.subtract(view.readable)
+		if held := lostHere.intersect(readableSomewhere); len(held) > 0 {
+			atRisk = append(atRisk, fmt.Sprintf("%s lost %s", inspectLabel(view.node), held))
 		}
 	}
-	sort.Slice(repairable, func(i, j int) bool { return repairable[i] < repairable[j] })
-	sort.Slice(unreadable, func(i, j int) bool { return unreadable[i] < unreadable[j] })
-
-	for _, number := range repairable {
+	if len(atRisk) > 0 {
 		findings = append(findings, fmt.Sprintf(
-			"Block %d is damaged on %s but intact on %s — the data exists, and failover is already serving it.",
-			number, strings.Join(bad[number], ", "), strings.Join(good[number], ", ")))
+			"%s — those entries are readable on another replica, so the data exists and failover is already serving it.",
+			strings.Join(atRisk, "; ")))
 	}
-	if len(unreadable) == 0 {
-		if len(repairable) == 0 && len(findings) == 0 {
+
+	// Entries that every replica looked at and none can read. Only what all of them examined counts:
+	// a replica that never got that far has said nothing about it.
+	lost := examinedByAll.subtract(readableSomewhere)
+	if len(silent) > 0 && len(lost) > 0 {
+		findings = append(findings, fmt.Sprintf(
+			"Entries %s could not be read on any replica that answered, but %d did not answer and may still hold them.",
+			lost, len(silent)))
+		return findings, nil
+	}
+	if len(lost) == 0 {
+		if unexamined := examinedByAny.subtract(examinedByAll); len(unexamined) > 0 {
+			findings = append(findings, fmt.Sprintf(
+				"Entries %s were looked at by some replicas and not others, so nothing about them holds for the whole quorum.",
+				unexamined))
+		}
+		if len(findings) == 0 {
 			findings = append(findings, "Every block every replica walked verified.")
 		}
 		return findings, nil
 	}
 
-	names := make([]string, 0, len(unreadable))
-	for _, number := range unreadable {
-		names = append(names, fmt.Sprintf("%d (%s)", number, strings.Join(bad[number], ", ")))
-	}
-	if len(silent) > 0 {
-		// A replica that was never asked may hold these blocks intact, so nothing here is a loss
-		// yet -- the same reason the whole-quorum conclusions above are withheld.
-		findings = append(findings, fmt.Sprintf(
-			"Block(s) %s are damaged on every replica that answered. The %d that did not may still hold them; ask again when they are reachable.",
-			strings.Join(names, "; "), len(silent)))
-		return findings, nil
-	}
 	findings = append(findings, fmt.Sprintf(
-		"No replica holds a readable copy of block(s) %s. Those entries cannot be read anywhere; only skipping them gets a reader past.",
-		strings.Join(names, "; ")))
-	if entries := entriesLostIn(answered, unreadable); entries != "" {
-		findings = append(findings, fmt.Sprintf("That is entries %s.", entries))
-	}
-	if resume, block, ok := resumePoint(answered, unreadable); ok {
+		"No replica can read entries %s, and every replica looked. Only skipping them gets a reader past.", lost))
+	if resume, ok := resumeAfter(readableSomewhere, lost); ok {
 		findings = append(findings, fmt.Sprintf(
-			"Readable data resumes at entry %d (block %d), so the damage is bounded — that range is what a skip would have to cover.",
-			resume, block))
+			"Readable data resumes at entry %d, so the damage is bounded — %s is what a skip would have to cover.",
+			resume, lost))
 	} else {
-		findings = append(findings, "No replica reads anything after the damage, so it is not known to end within the blocks surveyed.")
+		findings = append(findings, "No replica reads anything after those entries, so the damage is not known to end within the blocks surveyed.")
 	}
-	return findings, wperrors.NewRedFindingError(fmt.Sprintf(
-		"block(s) %s are unreadable on every replica", joinInts(unreadable)))
+	return findings, wperrors.NewRedFindingError(fmt.Sprintf("entries %s are unreadable on every replica", lost))
 }
 
-// resumePoint is the first entry readable again after the damage: the first block past the last
-// unreadable one that some replica could read. It is what a skip range would have to reach.
-func resumePoint(answered []inspectNode, unreadable []int64) (int64, int64, bool) {
-	lastBad := unreadable[len(unreadable)-1]
-	entry, block, found := int64(0), int64(0), false
-	for _, n := range answered {
-		for _, b := range n.Blocks {
-			if b.Number <= lastBad || b.Status != blockStatusOK || b.FirstEntryID < 0 {
-				continue
-			}
-			if !found || b.Number < block {
-				entry, block, found = b.FirstEntryID, b.Number, true
-			}
+// examinedHorizon is the furthest entry a replica looked at, for saying what its silence covers.
+func examinedHorizon(view replicaView) string {
+	if len(view.examined) == 0 {
+		return "the start of the segment"
+	}
+	return fmt.Sprintf("entry %d", view.examined[len(view.examined)-1].To)
+}
+
+// resumeAfter is the first entry readable again after the lost range, which is what a skip range has
+// to reach.
+func resumeAfter(readable rangeSet, lost rangeSet) (int64, bool) {
+	after := lost[len(lost)-1].To
+	for _, r := range readable {
+		if r.To <= after {
+			continue
 		}
-	}
-	return entry, block, found
-}
-
-// entriesLostIn names the entry range the unreadable blocks cover. A block's checksum condemns all
-// of it, but its records carry their own, so the loss starts after the last entry some replica
-// could still read inside the block -- which is narrower, and is what a skip range has to cover.
-func entriesLostIn(answered []inspectNode, unreadable []int64) string {
-	first, last := int64(-1), int64(-1)
-	for _, n := range answered {
-		for _, b := range n.Blocks {
-			if !containsInt(unreadable, b.Number) || b.FirstEntryID < 0 {
-				continue
-			}
-			lostFrom := b.FirstEntryID
-			if b.LastGoodEntryID >= b.FirstEntryID {
-				lostFrom = b.LastGoodEntryID + 1
-			}
-			if first < 0 || lostFrom < first {
-				first = lostFrom
-			}
-			if b.LastEntryID > last {
-				last = b.LastEntryID
-			}
+		if r.From > after {
+			return r.From, true
 		}
+		return after + 1, true
 	}
-	if first < 0 || last < first {
-		return ""
-	}
-	return fmt.Sprintf("%d-%d", first, last)
-}
-
-func lastBlockNumber(n inspectNode) int64 {
-	if len(n.Blocks) == 0 {
-		return -1
-	}
-	return n.Blocks[len(n.Blocks)-1].Number
+	return 0, false
 }
 
 func inspectLabel(n inspectNode) string {

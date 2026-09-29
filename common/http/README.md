@@ -352,8 +352,14 @@ segment — and the read carries the request's context. A node with no local `da
 shares, so surveying that per replica would be one copy answered repeatedly.
 
 This endpoint answers only for the node that serves it. `wp segment inspect` assembles the quorum's
-view, and states the readings no single replica can: a block damaged here but intact there, a block
+view and states the readings no single replica can: entries damaged here but readable there, entries
 no replica can read, and where readable data resumes.
+
+It compares replicas **by entry, never by block number**. Each node flushes on its own timer and
+size (`writer_impl.go:475`, `:509`), so the same entries land in different blocks on different
+nodes and a block number means nothing across them. It also distinguishes what a replica could not
+read from what it never looked at: a replica that stopped early has said nothing about the entries
+beyond its horizon, and its silence is not evidence that they are lost.
 
 ---
 
