@@ -118,8 +118,8 @@ func TestSegmentInspect_DamageOnOneReplicaIsRepairable(t *testing.T) {
 		"a block that is intact somewhere is not a dead end")
 
 	s := out.String()
-	require.Contains(t, s, "node-2 lost 16-19",
-		"replicas are compared by the entries they hold, not by block numbers that do not line up")
+	require.Contains(t, s, "node-2 lost 10-19",
+		"a reader drops a block that fails its checksum whole, so the whole block's entries are lost there")
 	require.Contains(t, s, "readable on another replica")
 	require.Contains(t, s, "the data exists")
 	require.NotContains(t, s, "Block 1", "a block number means nothing across replicas")
@@ -143,8 +143,10 @@ func TestSegmentInspect_BlockBadEverywhereIsALoss(t *testing.T) {
 
 	require.Error(t, err)
 	s := out.String() + err.Error()
-	require.Contains(t, s, "No replica can read entries 16-19",
-		"the block's own records survive its checksum, so the loss is narrower than the block")
+	require.Contains(t, s, "No replica can read entries 10-19",
+		"every backend drops a block that fails its checksum whole, so the skip has to cover all of it")
+	require.Contains(t, s, "entries 10-15 are still intact at record level",
+		"what a repair could salvage is worth knowing, and is not what a reader can serve")
 	require.Contains(t, s, "every replica looked",
 		"the claim is only allowed because every replica examined those entries")
 	require.Contains(t, s, "Readable data resumes at entry 20",
@@ -259,7 +261,8 @@ func TestSegmentInspect_ReplicasPackEntriesIntoDifferentBlocks(t *testing.T) {
 
 	require.NoError(t, err, "every entry is readable on some replica")
 	s := out.String()
-	require.Contains(t, s, "12-19", "the entries node-1 lost are what matters, not its block numbers")
+	require.Contains(t, s, "node-1 lost 10-19",
+		"the entries node-1 lost are what matters, not its block numbers")
 	require.NotContains(t, s, "cannot be read anywhere")
 }
 

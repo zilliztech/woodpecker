@@ -146,33 +146,36 @@ func runSegmentInspect(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 	rows := make([][]string, 0, len(results)*4)
 	for _, n := range results {
 		if !n.answered() {
-			rows = append(rows, []string{n.Node, n.NodeID, "-", "-", "-", "-", n.State, n.Detail})
+			rows = append(rows, []string{n.Node, n.NodeID, "-", "-", "-", "-", "-", n.State, n.Detail})
 			continue
 		}
 		if len(n.Blocks) == 0 {
-			rows = append(rows, []string{n.Node, n.NodeID, "-", "-", "-", "-", n.StopReason, n.Detail})
+			rows = append(rows, []string{n.Node, n.NodeID, "-", "-", "-", "-", "-", n.StopReason, n.Detail})
 			continue
 		}
 		for _, b := range n.Blocks {
-			readable := "all"
+			// A reader drops a block that fails its checksum whole, so nothing in it is readable.
+			// What its records still hold is a separate column: a repair could use it, a read
+			// cannot.
+			readable, recoverable := "all", "-"
 			if b.Status != blockStatusOK {
 				readable = "none"
 				if b.LastGoodEntryID >= b.FirstEntryID {
-					readable = fmt.Sprintf("%d-%d", b.FirstEntryID, b.LastGoodEntryID)
+					recoverable = fmt.Sprintf("%d-%d", b.FirstEntryID, b.LastGoodEntryID)
 				}
 			}
 			rows = append(rows, []string{
 				n.Node, n.NodeID,
 				strconv.FormatInt(b.Number, 10),
 				fmt.Sprintf("%d-%d", b.FirstEntryID, b.LastEntryID),
-				readable,
+				readable, recoverable,
 				strconv.FormatInt(b.Bytes, 10),
 				b.Status, b.Detail,
 			})
 		}
 	}
 	if err := output.RenderRowTable(w,
-		[]string{"NODE", "NODE_ID", "BLOCK", "ENTRIES", "READABLE", "BYTES", "STATUS", "DETAIL"}, rows); err != nil {
+		[]string{"NODE", "NODE_ID", "BLOCK", "ENTRIES", "READABLE", "RECOVERABLE", "BYTES", "STATUS", "DETAIL"}, rows); err != nil {
 		return err
 	}
 
@@ -346,6 +349,11 @@ type replicaView struct {
 	node     inspectNode
 	examined rangeSet
 	readable rangeSet
+	// recoverable is the prefix of a damaged block whose own records still verify. No reader serves
+	// it: every backend drops a block whose integrity check fails, without returning the records
+	// that passed (stagedstorage/reader_impl.go:1090, disk:705, objectstorage:763). It is what a
+	// repair could salvage, which is a different question from what a reader can serve today.
+	recoverable rangeSet
 }
 
 func viewOf(n inspectNode) replicaView {
@@ -355,13 +363,12 @@ func viewOf(n inspectNode) replicaView {
 			continue
 		}
 		view.examined = view.examined.add(entryRange{b.FirstEntryID, b.LastEntryID})
-		switch {
-		case b.Status == blockStatusOK:
+		if b.Status == blockStatusOK {
 			view.readable = view.readable.add(entryRange{b.FirstEntryID, b.LastEntryID})
-		case b.LastGoodEntryID >= b.FirstEntryID:
-			// The block's checksum failed, but its own records say how far into it the data is
-			// still readable.
-			view.readable = view.readable.add(entryRange{b.FirstEntryID, b.LastGoodEntryID})
+			continue
+		}
+		if b.LastGoodEntryID >= b.FirstEntryID {
+			view.recoverable = view.recoverable.add(entryRange{b.FirstEntryID, b.LastGoodEntryID})
 		}
 	}
 	return view
@@ -411,10 +418,12 @@ func readInspectFindings(results []inspectNode) ([]string, error) {
 	}
 
 	readableSomewhere := rangeSet{}
+	recoverableSomewhere := rangeSet{}
 	examinedByAny := rangeSet{}
 	examinedByAll := views[0].examined
 	for _, view := range views {
 		readableSomewhere = readableSomewhere.union(view.readable)
+		recoverableSomewhere = recoverableSomewhere.union(view.recoverable)
 		examinedByAny = examinedByAny.union(view.examined)
 		examinedByAll = examinedByAll.intersect(view.examined)
 	}
@@ -456,6 +465,11 @@ func readInspectFindings(results []inspectNode) ([]string, error) {
 
 	findings = append(findings, fmt.Sprintf(
 		"No replica can read entries %s, and every replica looked. Only skipping them gets a reader past.", lost))
+	if salvage := recoverableSomewhere.intersect(lost); len(salvage) > 0 {
+		findings = append(findings, fmt.Sprintf(
+			"Of those, entries %s are still intact at record level on some replica — no reader serves them, because a block that fails its checksum is dropped whole, but a repair could recover them.",
+			salvage))
+	}
 	if resume, ok := resumeAfter(readableSomewhere, lost); ok {
 		findings = append(findings, fmt.Sprintf(
 			"Readable data resumes at entry %d, so the damage is bounded — %s is what a skip would have to cover.",
@@ -495,21 +509,4 @@ func inspectLabel(n inspectNode) string {
 		return n.NodeID
 	}
 	return n.Node
-}
-
-func containsInt(list []int64, v int64) bool {
-	for _, item := range list {
-		if item == v {
-			return true
-		}
-	}
-	return false
-}
-
-func joinInts(list []int64) string {
-	parts := make([]string, 0, len(list))
-	for _, item := range list {
-		parts = append(parts, strconv.FormatInt(item, 10))
-	}
-	return strings.Join(parts, ", ")
 }

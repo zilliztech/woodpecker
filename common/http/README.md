@@ -336,11 +336,16 @@ body is stepped over there too, but a header that cannot be read ends the walk, 
 their being damaged.
 
 **A damaged block is still walked record by record.** A block's checksum covers all of it, so one
-flipped byte condemns the whole block and a reader abandons it — but every record inside carries its
-own checksum, so the damage can be placed at a record. `records_ok` and `last_good_entry_id` say how
-far into the block the data is still readable, which turns "this block's ten entries are lost" into
-"entries 16 to 19 are lost". That is the range a skip would have to cover, and it is the reason the
-record walk is a separate function from `DecodeRecordList` rather than a use of it.
+flipped byte condemns the whole block — but every record inside carries its own checksum, so the
+damage can be placed at a record. `records_ok` and `last_good_entry_id` say how far into the block
+the records still verify.
+
+That is a statement about what could be **recovered**, not about what can be **read**. Every backend
+drops a block whose integrity check fails without returning the records that passed
+(`stagedstorage/reader_impl.go:1090`, `disk:705`, `objectstorage:763`), so a skip range still has to
+cover the whole block's entries. What the record walk adds is that a repair could salvage the
+prefix, which `wp segment inspect` reports on its own line rather than folding into what a reader
+can serve.
 
 There is no "undecodable" status: `DecodeRecordList` answers corruption by stopping and returning
 the records it already has, never by erroring, so a damaged block header presents as no block header
