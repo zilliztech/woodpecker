@@ -15,6 +15,7 @@ func newLogstoreCommand() *cobra.Command {
 		newLogstoreFlushQueueCommand(),
 		newLogstoreForceFlushCommand(),
 		newLogstoreFenceCommand(),
+		newLogstoreFenceQuorumCommand(),
 		newLogstoreCompactCommand(),
 	)
 	return cmd

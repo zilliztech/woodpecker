@@ -35,14 +35,18 @@ func newLogstoreFenceCommand() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "fence <node>",
-		Short: "Force fence on a segment (high-risk, requires --reason)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Force fence on a segment on one node (high-risk, requires --reason)",
+		Long: "Fence a segment on a single node.\n\n" +
+			"On a multi-node quorum this removes one acknowledgement and the write carries on through " +
+			"the rest; interrupting a write takes wq-aq+1 nodes, which is what `fence-quorum` does.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if reason == "" {
 				return wperrors.NewUsageError("--reason is required for fence operations")
 			}
 			if !yes {
 				fmt.Fprintf(cmd.OutOrStdout(), "About to fence log %d segment %d on %s. Reason: %s\n", logID, segID, args[0], reason)
+				fmt.Fprintf(cmd.OutOrStdout(), "One node only: on a multi-node quorum this does not stop a write. Use fence-quorum for that.\n")
 				fmt.Fprintf(cmd.OutOrStdout(), "This is a destructive operation. Use -y to skip confirmation.\n")
 				return wperrors.NewUserAbortError()
 			}

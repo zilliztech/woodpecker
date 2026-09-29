@@ -136,6 +136,24 @@ func TestLogstoreFence_WithYes(t *testing.T) {
 	assert.Contains(t, out, "fence completed")
 }
 
+// fence-quorum rejects both of these before it reaches etcd or any node, which is why they can be
+// driven through the root command with no metadata in place.
+func TestLogstoreFenceQuorum_RejectsAnUnparseableSegmentId(t *testing.T) {
+	srv := logstoreTestServer(t)
+	defer srv.Close()
+	_, err := runLogstoreCmd(t, srv, "logstore", "fence-quorum", "mylog", "seven", "--reason", "test", "-y")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid segmentId "seven"`)
+}
+
+func TestLogstoreFenceQuorum_RequiresReason(t *testing.T) {
+	srv := logstoreTestServer(t)
+	defer srv.Close()
+	_, err := runLogstoreCmd(t, srv, "logstore", "fence-quorum", "mylog", "3", "-y")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--reason is required")
+}
+
 func TestLogstoreCompact(t *testing.T) {
 	payloadCh := make(chan map[string]any, 1)
 	srv := logstoreTestServer(t, func(payload map[string]any) {
