@@ -18,9 +18,11 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,10 +36,18 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
+// How one stub node answers a fence request.
+type fenceNodeBehaviour int
+
+const (
+	nodeFences  fenceNodeBehaviour = iota // answers 200
+	nodeDown                              // admin port points at nothing
+	nodeRefuses                           // answers 409 with a reason, as a node with no live segment processor does
+)
+
 // fenceFixture writes a segment whose quorum has the given shape and stands up one node per
-// member. Each node counts the fence requests it received, and reachable[i] false leaves its
-// admin port pointing at nothing.
-func fenceFixture(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder, es, wq, aq int32, reachable []bool) (*client.Client, *client.Memberlist, []*atomic.Int64) {
+// member, each counting the fence requests it received.
+func fenceFixture(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder, es, wq, aq int32, behaviours []fenceNodeBehaviour) (*client.Client, *client.Memberlist, []*atomic.Int64) {
 	t.Helper()
 	const logName, logID, segID = "mylog", int64(7), int64(3)
 
@@ -49,23 +59,29 @@ func fenceFixture(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder, es, w
 	}
 	put(kb.BuildLogKey(logName), &proto.LogMeta{LogId: logID})
 
-	nodes := make([]string, 0, len(reachable))
-	members := make([]client.Member, 0, len(reachable))
-	counters := make([]*atomic.Int64, 0, len(reachable))
-	for i, ok := range reachable {
+	nodes := make([]string, 0, len(behaviours))
+	members := make([]client.Member, 0, len(behaviours))
+	counters := make([]*atomic.Int64, 0, len(behaviours))
+	for i, behaviour := range behaviours {
 		counter := &atomic.Int64{}
 		counters = append(counters, counter)
+		refuses := behaviour == nodeRefuses
 		mux := http.NewServeMux()
 		mux.HandleFunc("/admin/logstore/fence", func(w http.ResponseWriter, r *http.Request) {
 			counter.Add(1)
 			w.Header().Set("Content-Type", "application/json")
+			if refuses {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"error":"segment 7:3 not found"}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"status":"fence completed"}`))
 		})
 		srv := httptest.NewServer(mux)
 		t.Cleanup(srv.Close)
 
 		port := "1"
-		if ok {
+		if behaviour != nodeDown {
 			port = extractPort(t, srv.URL)
 		}
 		svcAddr := fmt.Sprintf("127.0.0.1:1808%d", i)
@@ -93,7 +109,7 @@ func TestFenceQuorum_FencesEnoughNodesToBreakTheAckQuorum(t *testing.T) {
 	defer func() { Globals = oldGlobals }()
 	Globals = GlobalFlags{Timeout: 2 * time.Second}
 
-	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2, []bool{true, true, true})
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2, []fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
 	cmd, out, _ := markingTestCmd()
 
 	require.NoError(t, runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
@@ -121,7 +137,7 @@ func TestFenceQuorum_SaysWhenItCouldNotReachEnough(t *testing.T) {
 	Globals = GlobalFlags{Timeout: 2 * time.Second}
 
 	// Only one of three answers; two are required.
-	ac, members, _ := fenceFixture(t, cli, kb, 3, 3, 2, []bool{true, false, false})
+	ac, members, _ := fenceFixture(t, cli, kb, 3, 3, 2, []fenceNodeBehaviour{nodeFences, nodeDown, nodeDown})
 	cmd, out, _ := markingTestCmd()
 
 	err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
@@ -141,7 +157,7 @@ func TestFenceQuorum_HonoursAnExplicitNodeList(t *testing.T) {
 	defer func() { Globals = oldGlobals }()
 	Globals = GlobalFlags{Timeout: 2 * time.Second}
 
-	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2, []bool{true, true, true})
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2, []fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
 	cmd, _, _ := markingTestCmd()
 
 	// Name the third and second members only.
@@ -165,7 +181,7 @@ func TestFenceQuorum_ReportsAQuorumMemberMissingFromTheMemberlist(t *testing.T) 
 	defer func() { Globals = oldGlobals }()
 	Globals = GlobalFlags{Timeout: 2 * time.Second}
 
-	ac, members, _ := fenceFixture(t, cli, kb, 3, 3, 2, []bool{true, true, true})
+	ac, members, _ := fenceFixture(t, cli, kb, 3, 3, 2, []fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
 	members.Members = members.Members[:1] // two quorum members are no longer known
 	cmd, out, _ := markingTestCmd()
 
@@ -187,7 +203,7 @@ func TestFenceQuorum_StatesTheCostBeforeActing(t *testing.T) {
 	defer func() { Globals = oldGlobals }()
 	Globals = GlobalFlags{Timeout: 2 * time.Second}
 
-	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2, []bool{true, true, true})
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2, []fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
 	cmd, out, _ := markingTestCmd()
 
 	err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
@@ -213,7 +229,7 @@ func TestFenceQuorum_RefusesANodeOutsideTheQuorum(t *testing.T) {
 	defer func() { Globals = oldGlobals }()
 	Globals = GlobalFlags{Timeout: 2 * time.Second}
 
-	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2, []bool{true, true, true})
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2, []fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
 	members.Members = append(members.Members, client.Member{
 		ID: "node-9", ServiceAddr: "127.0.0.1:18099", Tags: map[string]string{"admin_port": "1"},
 	})
@@ -229,4 +245,92 @@ func TestFenceQuorum_RefusesANodeOutsideTheQuorum(t *testing.T) {
 	for i, c := range counters {
 		require.Zero(t, c.Load(), "node %d must be untouched when the target list is rejected", i+1)
 	}
+}
+
+// TestFenceQuorum_ARefusingNodeDoesNotCount covers a node that answers but does not fence: it
+// resolves the segment through its live segment processor, and one that has none refuses. Counting
+// that towards the required number would report an interruption that did not happen, and dropping
+// the node's own reason would leave the operator without the one fact that explains it.
+func TestFenceQuorum_ARefusingNodeDoesNotCount(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	Globals = GlobalFlags{Timeout: 2 * time.Second}
+
+	// One fences, two refuse; two are required.
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 2,
+		[]fenceNodeBehaviour{nodeFences, nodeRefuses, nodeRefuses})
+	cmd, out, _ := markingTestCmd()
+
+	err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
+		logName: "mylog", segmentID: 3, reason: "stalled writer", confirmed: true,
+	})
+
+	require.Error(t, err, "a node that answered without fencing has not interrupted anything")
+	for i, c := range counters {
+		require.Positive(t, c.Load(), "node %d was never asked", i+1)
+	}
+	s := out.String()
+	require.Contains(t, s, "refused")
+	require.Contains(t, s, "segment 7:3 not found", "the node's own reason is what explains the refusal")
+}
+
+// TestFenceQuorum_RefusesAnUnusableQuorumShape covers metadata that cannot say how many nodes must
+// be fenced. Treating aq=0 as a number would produce a target derived from nothing, and reporting
+// success against it would be meaningless.
+func TestFenceQuorum_RefusesAnUnusableQuorumShape(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	Globals = GlobalFlags{Timeout: 2 * time.Second}
+
+	ac, members, counters := fenceFixture(t, cli, kb, 3, 3, 0,
+		[]fenceNodeBehaviour{nodeFences, nodeFences, nodeFences})
+	cmd, _, _ := markingTestCmd()
+
+	err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
+		logName: "mylog", segmentID: 3, reason: "stalled writer", confirmed: true,
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "aq=0")
+	for i, c := range counters {
+		require.Zero(t, c.Load(), "node %d must be untouched when the quorum shape is unusable", i+1)
+	}
+}
+
+// TestFenceQuorum_JSONShortfallStillFails covers the machine-readable path: a script reads the
+// counts from the payload, and the exit code has to agree with them. Rendering a payload and
+// returning success would tell a caller checking only the status that the write was interrupted.
+func TestFenceQuorum_JSONShortfallStillFails(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	oldGlobals := Globals
+	defer func() { Globals = oldGlobals }()
+	Globals = GlobalFlags{Timeout: 2 * time.Second, Output: "json"}
+
+	ac, members, _ := fenceFixture(t, cli, kb, 3, 3, 2,
+		[]fenceNodeBehaviour{nodeFences, nodeDown, nodeDown})
+	cmd, out, _ := markingTestCmd()
+
+	err := runFenceQuorum(cmd, cli, kb, ac, members, fenceQuorumRequest{
+		logName: "mylog", segmentID: 3, reason: "stalled writer", confirmed: true,
+	})
+
+	require.Error(t, err)
+	var payload struct {
+		Required int `json:"required"`
+		Fenced   int `json:"fenced"`
+		Nodes    []struct {
+			State string `json:"state"`
+		} `json:"nodes"`
+	}
+	// The preview lines precede the payload, so decode from where the object starts.
+	s := out.String()
+	require.NoError(t, json.Unmarshal([]byte(s[strings.Index(s, "{"):]), &payload))
+	require.Equal(t, 2, payload.Required)
+	require.Equal(t, 1, payload.Fenced)
+	require.Len(t, payload.Nodes, 3, "every targeted node must appear, whatever became of it")
 }
