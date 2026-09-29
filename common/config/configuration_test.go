@@ -1454,3 +1454,44 @@ woodpecker:
 		assert.NoError(t, cfg.Validate())
 	})
 }
+
+func TestSegmentReadConfig(t *testing.T) {
+	defaults, err := NewConfiguration()
+	require.NoError(t, err)
+	assert.Equal(t, 3*time.Second, defaults.Woodpecker.Client.SegmentRead.ActiveTimeout.Duration.Duration())
+	assert.Equal(t, 20*time.Second, defaults.Woodpecker.Client.SegmentRead.SettledTimeout.Duration.Duration())
+
+	shipped, err := NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, defaults.Woodpecker.Client.SegmentRead, shipped.Woodpecker.Client.SegmentRead,
+		"the shipped yaml and the built-in defaults must agree")
+
+	path := filepath.Join(t.TempDir(), "wp.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+woodpecker:
+  client:
+    segmentRead:
+      activeTimeout: 1500
+      settledTimeout: 30s
+`), 0o644))
+	cfg, err := NewConfiguration(path)
+	require.NoError(t, err)
+	assert.Equal(t, 1500*time.Millisecond, cfg.Woodpecker.Client.SegmentRead.ActiveTimeout.Duration.Duration())
+	assert.Equal(t, 30*time.Second, cfg.Woodpecker.Client.SegmentRead.SettledTimeout.Duration.Duration())
+
+	t.Run("negative is rejected", func(t *testing.T) {
+		cfg, _ := NewConfiguration()
+		cfg.Woodpecker.Client.SegmentRead.ActiveTimeout = NewDurationMillisecondsFromInt(-1)
+		assert.ErrorContains(t, cfg.Validate(), "segment read timeouts cannot be negative")
+	})
+	t.Run("active above settled is rejected", func(t *testing.T) {
+		cfg, _ := NewConfiguration()
+		cfg.Woodpecker.Client.SegmentRead.ActiveTimeout = NewDurationMillisecondsFromInt(30000)
+		assert.ErrorContains(t, cfg.Validate(), "must not exceed the settled timeout")
+	})
+	t.Run("zero stays valid", func(t *testing.T) {
+		cfg, _ := NewConfiguration()
+		cfg.Woodpecker.Client.SegmentRead = SegmentReadConfig{}
+		assert.NoError(t, cfg.Validate())
+	})
+}

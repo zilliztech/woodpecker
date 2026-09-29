@@ -61,6 +61,10 @@ woodpecker:
         multiplier: 1.6 # Default 1.6
         jitter: 0.2 # Default 0.2
         maxDelay: 3000 # Milliseconds, default 3000
+    # Bounds on one quorum read call to one replica. A replica that vanished with its connection still looking healthy never answers, and until the call returns the reader cannot move on to the next replica.
+    segmentRead:
+      activeTimeout: 3000 # Milliseconds, for an active segment, served from the replica's buffer or local disk. Default 3000.
+      settledTimeout: 20000 # Milliseconds, for any other segment, which may be served from object storage (a slow answer there is the storage, and the next replica would read the same storage); also the retry bound when every replica ran out of activeTimeout. Default 20000.
     # Advanced Quorum Configuration for Service storage backend mode
     # This configuration supports complex node selection strategies and buffer pools
     quorum:
