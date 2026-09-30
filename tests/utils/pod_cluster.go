@@ -18,6 +18,7 @@ package utils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -256,8 +257,64 @@ func (c *PodCluster) PodRestart(t *testing.T, idx int, plan PodPlan) {
 	require.NoError(t, err)
 	require.NoError(t, c.startNode(t, idx, gossipPort, c.liveGossipSeeds()))
 	phase("replacement pod serving")
+	c.waitReadmitted(t, idx, gossipPort)
+	phase("replacement pod readmitted by every peer")
 	waitClusterReady(t, c.MiniCluster, c.GetActiveNodes())
 	phase("replacement pod rejoined")
+}
+
+// ReadmitBudget is how long every live peer may take to list a replacement pod
+// alive at its new address. A pod that died without leaving is refused at a
+// new address while its old entry is alive or suspect, so this covers declaring
+// that entry dead (memberlist's suspicion, at most 3s x 2) with slack; before
+// #395 was fixed it took 30-50s.
+const ReadmitBudget = 12 * time.Second
+
+// waitReadmitted waits until every other live node lists node idx alive at the
+// gossip port it was restarted on, and fails the test after ReadmitBudget.
+// Member counts do not show this: a peer still holding the old address counts
+// the node as present.
+func (c *PodCluster) waitReadmitted(t *testing.T, idx int, gossipPort int) {
+	t.Helper()
+	name := fmt.Sprintf("node%d", idx)
+	want := fmt.Sprintf("127.0.0.1:%d", gossipPort)
+	view := func(srv *server.Server) string {
+		var list struct {
+			Members []struct {
+				ID         string `json:"id"`
+				GossipAddr string `json:"gossip_addr"`
+				State      int    `json:"state"`
+			} `json:"members"`
+		}
+		if err := json.Unmarshal(srv.GetServerNodeMemberlistJSON(), &list); err != nil {
+			return "unreadable: " + err.Error()
+		}
+		for _, m := range list.Members {
+			if m.ID == name {
+				return fmt.Sprintf("%s state %d", m.GossipAddr, m.State)
+			}
+		}
+		return "absent"
+	}
+	deadline := time.Now().Add(ReadmitBudget)
+	for {
+		var pending []string
+		for i, srv := range c.Servers {
+			if srv == nil || i == idx {
+				continue
+			}
+			if v := view(srv); v != want+" state 0" {
+				pending = append(pending, fmt.Sprintf("node%d sees %s", i, v))
+			}
+		}
+		if len(pending) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s not readmitted at %s within %v: %s", name, want, ReadmitBudget, strings.Join(pending, "; "))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (c *PodCluster) refuse(t *testing.T, proxy *faultproxy.Proxy, plan PodPlan) {
