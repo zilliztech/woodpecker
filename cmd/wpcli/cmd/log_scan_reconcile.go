@@ -19,6 +19,16 @@ const (
 	scanVerdictReclaimed = "reclaimed"
 )
 
+// A segment's outcome. Inconclusive is its own answer: a sweep that established nothing about a
+// segment has not shown the log reads through, and must not be reported as having found no problem.
+type segmentOutcome int
+
+const (
+	outcomeSound segmentOutcome = iota
+	outcomeProblem
+	outcomeInconclusive
+)
+
 // gapProbeBudget bounds the fan-out when metadata is missing many ids. The quorum lives in the
 // metadata that is missing, so each id has to be asked of every node; a log that lost a long run of
 // records would otherwise turn one scan into thousands of requests.
@@ -38,10 +48,26 @@ type scanNode struct {
 	// survey that reached the end of the segment makes the coverage a claim about what this replica
 	// holds, and any other ending makes it a lower bound.
 	stopped string
+	// compactedMark is the durable tombstone the cleanup writes before it drops a compacted
+	// segment's local data.log, so "serve this from object storage" is distinguishable from "no
+	// data here". It is the only reliable signal for that: the cleanup keys off the object-storage
+	// footer and this mark, never off the segment's metadata state, and the metadata update after
+	// compaction is only warned about when it fails.
+	compactedMark bool
 }
 
-// completeClaim reports whether this replica's coverage may be read as everything it holds.
-func (n scanNode) completeClaim() bool { return n.stopped == surveyStopEnd }
+// completeClaim reports whether this replica's coverage may be read as everything it holds. A
+// replica that found no local data and carries no compacted mark has looked and has nothing, which
+// is as much a claim as a survey that walked to the end.
+func (n scanNode) completeClaim() bool {
+	return n.stopped == surveyStopEnd || (n.stopped == surveyStopNoBlocks && !n.compactedMark)
+}
+
+// servedElsewhere reports whether this replica's local copy is gone by design, its data now being
+// the object every replica shares.
+func (n scanNode) servedElsewhere() bool {
+	return n.stopped == surveyStopNoBlocks && n.compactedMark
+}
 
 // scanSegment is one segment as metadata describes it, with what the replicas reported.
 type scanSegment struct {
@@ -71,20 +97,24 @@ type scanRow struct {
 type gapProbe func(segmentID int64) (holders []string, asked bool)
 
 func reconcileScan(segments []scanSegment, truncatedThrough, fromSegment int64) ([]scanRow, []string, error) {
-	return reconcileScanWithGaps(segments, truncatedThrough, fromSegment, nil)
+	return reconcileScanWithGaps(segments, truncatedThrough, fromSegment, nil, false)
 }
 
-func reconcileScanWithGaps(segments []scanSegment, truncatedThrough, fromSegment int64, probe gapProbe) ([]scanRow, []string, error) {
+func reconcileScanWithGaps(segments []scanSegment, truncatedThrough, fromSegment int64, probe gapProbe, strict bool) ([]scanRow, []string, error) {
 	rows := make([]scanRow, 0, len(segments))
 	findings := make([]string, 0, 4)
-	problems := 0
+	problems, inconclusive := 0, 0
 
 	for _, segment := range segments {
-		row, segFindings, bad := reconcileSegment(segment)
+		row, segFindings, outcome := reconcileSegment(segment)
 		rows = append(rows, row)
 		findings = append(findings, segFindings...)
-		if bad {
+		switch outcome {
+		case outcomeProblem:
 			problems++
+		case outcomeInconclusive:
+			inconclusive++
+		case outcomeSound:
 		}
 	}
 
@@ -94,21 +124,34 @@ func reconcileScanWithGaps(segments []scanSegment, truncatedThrough, fromSegment
 
 	findings = append(findings, checkSegmentStates(segments)...)
 
-	if problems == 0 {
-		findings = append(findings, fmt.Sprintf(
-			"%d segments scanned; the log reads through with no problem found.", len(segments),
+	if problems > 0 {
+		return rows, findings, wperrors.NewRedFindingError(fmt.Sprintf(
+			"%s found across %d segments scanned", plural(problems, "problem"), len(segments),
 		))
-		return rows, findings, nil
 	}
-	return rows, findings, wperrors.NewRedFindingError(fmt.Sprintf(
-		"%s found across %d segments scanned", plural(problems, "problem"), len(segments),
+	// No problem was found, but a sweep that could not establish a segment has not shown the log
+	// reads through, and saying so would be the report claiming an answer it does not have.
+	if inconclusive > 0 {
+		summary := fmt.Sprintf(
+			"%d of %d segments scanned could not be established, so the log was not shown to read through; nothing wrong was found in the others.",
+			inconclusive, len(segments),
+		)
+		findings = append(findings, summary)
+		if strict {
+			return rows, findings, wperrors.NewRedFindingError(summary)
+		}
+		return rows, findings, wperrors.NewYellowFindingError(summary)
+	}
+	findings = append(findings, fmt.Sprintf(
+		"%d segments scanned; the log reads through with no problem found.", len(segments),
 	))
+	return rows, findings, nil
 }
 
 // reconcileSegment judges one segment. A read is served by any replica, so the segment is sound when
 // some replica holds all of it; a replica holding less than the others is a separate finding,
 // because nothing else would ever mention it.
-func reconcileSegment(segment scanSegment) (scanRow, []string, bool) {
+func reconcileSegment(segment scanSegment) (scanRow, []string, segmentOutcome) {
 	row := scanRow{
 		SegmentID: segment.id, State: segment.state.String(), MetaLast: segment.metaLast,
 		Reaches: "-", Verdict: scanVerdictUnknown, verdict: scanVerdictUnknown,
@@ -116,7 +159,7 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, bool) {
 	findings := make([]string, 0, 2)
 
 	held := rangeSet{}
-	answered, settled := 0, false
+	answered, settled, elsewhere := 0, false, false
 	silent := make([]string, 0, len(segment.nodes))
 	for _, node := range segment.nodes {
 		if !node.answered {
@@ -127,6 +170,9 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, bool) {
 		if node.completeClaim() {
 			settled = true
 		}
+		if node.servedElsewhere() {
+			elsewhere = true
+		}
 		held = held.union(node.coverage)
 	}
 	row.Replicas = fmt.Sprintf("%d/%d", answered, len(segment.nodes))
@@ -135,7 +181,7 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, bool) {
 			"segment %d: no replica answered (%s), so nothing is known about it.",
 			segment.id, strings.Join(silent, ", "),
 		))
-		return row, findings, false
+		return row, findings, outcomeInconclusive
 	}
 	if len(held) > 0 {
 		row.Reaches = held.String()
@@ -144,19 +190,20 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, bool) {
 	// A compacted segment is one object every replica shares, and the replicas reclaim their staged
 	// copies once the mark is distributed. So what a replica holds locally is not what the segment
 	// holds, in either direction: emptiness is the expected steady state, and a surviving partial
-	// copy is not a shortfall. This scan does not read the object, so it says so rather than
-	// guessing from the local copies.
-	if segment.state == proto.SegmentState_Sealed {
+	// copy is not a shortfall. The mark is what says so; the metadata state is a second, weaker
+	// signal for the case where a replica's whole directory is gone and there is no mark left to
+	// read. This sweep does not read the object, so it says that rather than guessing.
+	if elsewhere || segment.state == proto.SegmentState_Sealed {
 		row.Verdict, row.verdict = scanVerdictCompacted, scanVerdictCompacted
 		row.Detail = "served from object storage; local replica copies are not the authority"
-		return row, findings, false
+		return row, findings, outcomeSound
 	}
 	// Retention is deleting this segment's data on purpose. Between the state change and the
 	// reclaim finishing, a replica answers with nothing.
 	if segment.state == proto.SegmentState_Truncated {
 		row.Verdict, row.verdict = scanVerdictReclaimed, scanVerdictReclaimed
 		row.Detail = "being reclaimed by retention"
-		return row, findings, false
+		return row, findings, outcomeSound
 	}
 
 	// A replica holding less than another is not a fault in the segment, but it is a replica that
@@ -188,15 +235,16 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, bool) {
 				"segment %d is open and its coverage has a gap at %s — entries are missing in the middle of what was written.",
 				segment.id, span.subtract(held),
 			))
+			return row, findings, outcomeProblem
 		}
-		return row, findings, len(held) > 1
+		return row, findings, outcomeSound
 	}
 
 	expected := rangeSet{}.add(entryRange{0, segment.metaLast})
 	missing := expected.subtract(held)
 	if len(missing) == 0 {
 		row.Verdict, row.verdict = scanVerdictOK, scanVerdictOK
-		return row, findings, false
+		return row, findings, outcomeSound
 	}
 
 	// Every replica stopped before the end of its own copy, so the coverage is a lower bound and the
@@ -205,10 +253,10 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, bool) {
 	if !settled {
 		row.Detail = "survey bounded; coverage is a lower bound"
 		findings = append(findings, fmt.Sprintf(
-			"segment %d: no replica surveyed to the end of the segment (%s), so nothing is known about %s. Run `wp segment inspect <logName> %d` to survey it without a whole-log sweep's bound.",
+			"segment %d: no replica surveyed to the end of the segment (%s), so nothing could be established about %s. Run `wp segment inspect <logName> %d` to survey it without a whole-log sweep's bound.",
 			segment.id, boundedReasons(segment.nodes), missing, segment.id,
 		))
-		return row, findings, false
+		return row, findings, outcomeInconclusive
 	}
 
 	row.Verdict, row.verdict = scanVerdictShort, scanVerdictShort
@@ -221,7 +269,7 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, bool) {
 		"segment %d: metadata says 0-%d, the replicas together reach %s — no replica has %s. Run `wp segment inspect <logName> %d` to see whether that is damage or data that was never written.",
 		segment.id, segment.metaLast, reached, missing, segment.id,
 	))
-	return row, findings, true
+	return row, findings, outcomeProblem
 }
 
 // boundedReasons names where each answering replica's survey stopped, so a bounded verdict says

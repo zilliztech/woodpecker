@@ -91,8 +91,19 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
   Per-segment verdicts: `ok`, `short` (no replica has some of what metadata claims), `open` (still
   being written), `compacted` (served from one shared object-storage copy, which this sweep does
   not read), `reclaimed` (retention is deleting it), `unknown` (no replica answered, or every
-  replica's survey stopped before the end of the segment, so nothing was learned). Only `short` and
-  a hole inside an open segment are failures — a sweep that learned nothing does not claim loss.
+  replica's survey stopped before the end of the segment, so nothing could be established).
+
+  Exit codes follow what the sweep established: `0` only when every segment was established and
+  sound, `9` when a segment is short or an open segment has a hole in the middle of what was
+  written, and `8` when something could not be established — a sweep that learned nothing neither
+  claims loss nor claims the log reads through. `--strict` promotes `8` to `9` for a script that
+  wants an unestablished segment to fail the gate.
+
+  A replica that reports no local data is read through the compacted mark, the tombstone cleanup
+  writes before dropping a compacted segment's `data.log`: with the mark the copy was reclaimed and
+  the object is the authority, without it the replica looked and holds nothing, which is loss. The
+  segment's metadata state is a weaker second signal, since cleanup keys off the object-storage
+  footer and the metadata update after compaction is only warned about when it fails.
 
   Log-level findings: ids missing from metadata at or above the truncation point (the segment *at*
   the point is kept by truncation, so its absence is a loss), and the Active segments, reported

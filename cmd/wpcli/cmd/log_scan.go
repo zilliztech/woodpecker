@@ -102,7 +102,7 @@ func runLogScan(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
 	rows, findings, problems := reconcileScanWithGaps(segments, logMeta.GetTruncatedSegmentId(), from,
 		func(segmentID int64) ([]string, bool) {
 			return probeGapForData(ac, members, logMeta.LogId, segmentID)
-		})
+		}, Globals.Strict)
 
 	w := cmd.OutOrStdout()
 	if renderedOutput() {
@@ -257,6 +257,11 @@ func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentM
 			continue
 		}
 		var resp struct {
+			// compacted_mark is the durable tombstone that separates "this replica's copy was
+			// reclaimed after compaction" from "this replica has lost the data".
+			Local struct {
+				CompactedMark bool `json:"compacted_mark"`
+			} `json:"local"`
 			Survey struct {
 				Blocks []struct {
 					FirstEntryID int64  `json:"first_entry_id"`
@@ -272,6 +277,7 @@ func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentM
 			continue
 		}
 		node.answered, node.stopped = true, resp.Survey.StopReason
+		node.compactedMark = resp.Local.CompactedMark
 		for _, block := range resp.Survey.Blocks {
 			if block.FirstEntryID < 0 || block.LastEntryID < block.FirstEntryID {
 				continue

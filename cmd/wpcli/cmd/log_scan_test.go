@@ -46,10 +46,19 @@ func boundedReplica(label string, from, to int64) scanNode {
 	return n
 }
 
-// noLocalDataReplica answered that it holds no local copy at all -- the shape a compacted segment
-// takes once the replicas have reclaimed their staged data.
+// noLocalDataReplica answered that it holds no local copy and carries no compacted mark: it looked
+// and has nothing, which is a claim about the data, not an absence of information.
 func noLocalDataReplica(label string) scanNode {
 	return scanNode{label: label, answered: true, stopped: surveyStopNoBlocks}
+}
+
+// compactedReplica answered that it holds no local copy and carries the compacted mark, the durable
+// tombstone cleanup writes before dropping data.log so a reader can tell "served from object
+// storage" from "no data here".
+func compactedReplica(label string) scanNode {
+	n := noLocalDataReplica(label)
+	n.compactedMark = true
+	return n
 }
 
 func silentReplica(label, why string) scanNode {
@@ -215,7 +224,7 @@ func TestReconcileScan_ManyMissingIdsAreNamedWithoutFanningOutPerId(t *testing.T
 		return nil, true
 	}
 
-	_, findings, err := reconcileScanWithGaps(segments, 0, 0, probe)
+	_, findings, err := reconcileScanWithGaps(segments, 0, 0, probe, false)
 
 	require.Error(t, err)
 	require.LessOrEqual(t, asked, gapProbeBudget,
@@ -273,7 +282,7 @@ func TestReconcileScan_ActiveBehindTheNewestIsAlsoTheRollWindow(t *testing.T) {
 func TestReconcileScan_CompactedSegmentIsNotShort(t *testing.T) {
 	segments := []scanSegment{
 		seg(3, proto.SegmentState_Sealed, 99,
-			noLocalDataReplica("node-1"), noLocalDataReplica("node-2")),
+			compactedReplica("node-1"), compactedReplica("node-2")),
 	}
 
 	rows, findings, err := reconcileWholeLog(segments)
@@ -292,7 +301,7 @@ func TestReconcileScan_CompactedSegmentIsNotShort(t *testing.T) {
 func TestReconcileScan_CompactedSegmentWithOneLocalCopyLeftIsStillNotJudgedLocally(t *testing.T) {
 	segments := []scanSegment{
 		seg(3, proto.SegmentState_Sealed, 99,
-			replica("node-1", 0, 40), noLocalDataReplica("node-2")),
+			replica("node-1", 0, 40), compactedReplica("node-2")),
 	}
 
 	_, findings, err := reconcileWholeLog(segments)
@@ -320,6 +329,102 @@ func TestReconcileScan_TruncatedSegmentIsNotShort(t *testing.T) {
 	require.NotContains(t, joinFindings(findings), "no replica has")
 }
 
+// TestReconcileScan_NoLocalDataWithoutTheMarkIsLoss is the case the compacted rule must not
+// swallow. A replica that answers "no local blocks" and carries no compacted mark has looked and
+// has nothing: cleanup writes the mark before dropping data.log precisely so this is
+// distinguishable. With every replica in that state a Completed segment is gone, and reporting it
+// as merely unknown would exit 0 on a segment a reader will hang on forever.
+func TestReconcileScan_NoLocalDataWithoutTheMarkIsLoss(t *testing.T) {
+	segments := []scanSegment{
+		seg(3, proto.SegmentState_Completed, 19,
+			noLocalDataReplica("node-1"), noLocalDataReplica("node-2")),
+	}
+
+	rows, findings, err := reconcileWholeLog(segments)
+
+	require.Error(t, err, "no replica holds any of it and every replica said so")
+	require.Equal(t, scanVerdictShort, rows[0].verdict)
+	require.Contains(t, joinFindings(findings), "0-19")
+	require.NotContains(t, joinFindings(findings), "no problem found")
+}
+
+// TestReconcileScan_CompactedMarkOutranksMetadataState covers a segment compacted on disk while its
+// metadata still says Completed. Cleanup keys off the object-storage footer and the mark, never off
+// the metadata state, and the metadata update after compaction is only warned about when it fails
+// -- so the state can lag reality, and the mark is the signal that does not.
+func TestReconcileScan_CompactedMarkOutranksMetadataState(t *testing.T) {
+	segments := []scanSegment{
+		seg(3, proto.SegmentState_Completed, 99,
+			compactedReplica("node-1"), compactedReplica("node-2")),
+	}
+
+	rows, findings, err := reconcileWholeLog(segments)
+
+	require.NoError(t, err, "the data is in object storage; the metadata state merely lagged")
+	require.Equal(t, scanVerdictCompacted, rows[0].verdict)
+	require.NotContains(t, joinFindings(findings), "no replica has")
+}
+
+// TestReconcileScan_SealedStateAlsoSettlesItWithoutAMark keeps the second signal honest. The mark
+// is the reliable one, but it can be unreadable -- a Sealed segment whose local copies were wiped
+// rather than reclaimed leaves no tombstone behind. Sealed means compaction finished and the object
+// is the authority, so a missing local copy is not a shortfall whatever the disk looks like.
+func TestReconcileScan_SealedStateAlsoSettlesItWithoutAMark(t *testing.T) {
+	segments := []scanSegment{
+		seg(3, proto.SegmentState_Sealed, 99,
+			noLocalDataReplica("node-1"), noLocalDataReplica("node-2")),
+	}
+
+	rows, _, err := reconcileWholeLog(segments)
+
+	require.NoError(t, err, "the authoritative copy is the object, not the staged one")
+	require.Equal(t, scanVerdictCompacted, rows[0].verdict)
+}
+
+// TestReconcileScan_InconclusiveIsNotNoProblemFound covers the summary. A segment nothing could be
+// established about must not be followed by a line saying the log reads through -- that is the
+// sweep claiming an answer it does not have.
+func TestReconcileScan_InconclusiveIsNotNoProblemFound(t *testing.T) {
+	cases := map[string][]scanNode{
+		"no replica answered": {
+			silentReplica("node-1", "unreachable"), silentReplica("node-2", "unreachable"),
+		},
+		"every survey bounded": {
+			boundedReplica("node-1", 0, 9), boundedReplica("node-2", 0, 9),
+		},
+	}
+	for name, nodes := range cases {
+		t.Run(name, func(t *testing.T) {
+			segments := []scanSegment{seg(3, proto.SegmentState_Completed, 99, nodes...)}
+
+			rows, findings, err := reconcileWholeLog(segments)
+
+			joined := joinFindings(findings)
+			require.NotContains(t, joined, "no problem found",
+				"nothing was established, so the log was not shown to read through")
+			require.Regexp(t, `(?i)could not be established|not established`, joined)
+			require.Equal(t, scanVerdictUnknown, rows[0].verdict)
+			require.Error(t, err, "a caller has to be able to tell this from a clean scan")
+			require.Equal(t, 8, wperrors.ExitCodeFor(err),
+				"inconclusive is a yellow finding, not the red one that means data is gone")
+		})
+	}
+}
+
+// TestReconcileScan_StrictPromotesInconclusiveToRed covers the gate a script needs: --strict turns
+// "could not establish" into a hard failure rather than a warning.
+func TestReconcileScan_StrictPromotesInconclusiveToRed(t *testing.T) {
+	segments := []scanSegment{
+		seg(3, proto.SegmentState_Completed, 99,
+			silentReplica("node-1", "unreachable"), silentReplica("node-2", "unreachable")),
+	}
+
+	_, _, err := reconcileScanWithGaps(segments, segments[0].id, 0, nil, true)
+
+	require.Error(t, err)
+	require.Equal(t, 9, wperrors.ExitCodeFor(err))
+}
+
 // TestReconcileScan_BoundedSurveyIsNotAShortSegment covers the premise behind every `short` verdict:
 // that the replica reported all of its coverage. A node bounds the survey at its own block limit, so
 // a segment larger than that bound comes back with a prefix and nothing about the rest. Reading that
@@ -332,10 +437,11 @@ func TestReconcileScan_BoundedSurveyIsNotAShortSegment(t *testing.T) {
 
 	rows, findings, err := reconcileWholeLog(segments)
 
-	require.NoError(t, err, "nothing was learned about 100-199, which is not a claim that it is gone")
 	require.Equal(t, scanVerdictUnknown, rows[0].verdict)
 	require.NotContains(t, joinFindings(findings), "no replica has")
 	require.Regexp(t, `(?i)bound`, joinFindings(findings), "the report has to say why it stopped")
+	require.Equal(t, 8, wperrors.ExitCodeFor(err),
+		"nothing was learned about 100-199, which is not the red that claims it is gone")
 }
 
 // TestReconcileScan_OneCompleteSurveyIsEnoughToCallItShort is the other side of the bound: a read
@@ -378,9 +484,10 @@ func TestReconcileScan_NoReplicaAnsweredClaimsNothing(t *testing.T) {
 
 	rows, findings, err := reconcileWholeLog(segments)
 
-	require.NoError(t, err, "nothing was learned, which is not a finding about the data")
 	require.Equal(t, scanVerdictUnknown, rows[0].verdict)
 	require.Contains(t, joinFindings(findings), "node-1")
+	require.Equal(t, 8, wperrors.ExitCodeFor(err),
+		"nothing was learned, which is not the red that means data is gone -- but not a clean scan either")
 }
 
 func joinFindings(findings []string) string {
@@ -460,6 +567,10 @@ type scanFixtureSegment struct {
 	metaLast int64
 	// perReplica[i] is that replica's blocks as [firstEntry, lastEntry, okFlag].
 	perReplica [][][3]int64
+	// noLocalBlocks makes each replica answer that it has no local data.log, and compactedMark
+	// makes it carry the tombstone that says the data moved to object storage.
+	noLocalBlocks bool
+	compactedMark bool
 }
 
 func (s scanFixtureSegment) bodyFor(replica int, verified bool) string {
@@ -481,10 +592,16 @@ func (s scanFixtureSegment) bodyFor(replica int, verified bool) string {
 				`"records_ok":0,"last_good_entry_id":-1,"status":%q}`, i, i*100, b[0], b[1], status,
 		))
 	}
-	return fmt.Sprintf(`{"node_id":"n","source":"local_staged","survey":{"blocks":[%s],`+
+	stopReason := "end_of_segment"
+	if s.noLocalBlocks {
+		stopReason = "no_local_blocks"
+	}
+	return fmt.Sprintf(`{"node_id":"n","source":"local_staged",`+
+		`"local":{"data_log":%t,"data_log_bytes":0,"compacted_mark":%t,"delete_marked":false},`+
+		`"survey":{"blocks":[%s],`+
 		`"sealed":true,"total_blocks_known":%d,"index_usable":true,"lac":%d,`+
-		`"stopped_early":false,"stop_reason":"end_of_segment","stop_offset":0}}`,
-		strings.Join(parts, ","), len(blocks), s.metaLast)
+		`"stopped_early":false,"stop_reason":%q,"stop_offset":0}}`,
+		!s.noLocalBlocks, s.compactedMark, strings.Join(parts, ","), len(blocks), s.metaLast, stopReason)
 }
 
 func scanTestGlobals(t *testing.T) {
@@ -598,6 +715,52 @@ func TestLogScan_RawModeCountsOnlyVerifiedBlocks(t *testing.T) {
 		require.Contains(t, s, "10-19", "the entries a read cannot get are the finding")
 		require.Contains(t, s, "wp segment inspect")
 	})
+}
+
+// TestLogScan_ReadsTheCompactedMarkFromTheNode covers the parse, not the judgement. The node ships
+// the tombstone in `local.compacted_mark` and it is the only reliable way to tell a replica whose
+// copy was reclaimed after compaction from one that lost the data: metadata state is not, because
+// cleanup keys off the object-storage footer and the metadata update after compaction is only
+// warned about when it fails. Dropping the field from the response struct turns every compacted
+// segment red again, so the sweep has to read it.
+func TestLogScan_ReadsTheCompactedMarkFromTheNode(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	scanTestGlobals(t)
+
+	// Completed in metadata, compacted on disk: the state lagged, the mark did not.
+	ac, members, _ := scanFixture(t, cli, kb, []scanFixtureSegment{{
+		id: 0, state: proto.SegmentState_Completed, metaLast: 19,
+		perReplica: [][][3]int64{{}}, noLocalBlocks: true, compactedMark: true,
+	}}, 2)
+	cmd, out, _ := markingTestCmd()
+
+	err := runLogScan(cmd, cli, kb, ac, members, "mylog", scanModeQuick, 0, -1)
+
+	require.NoError(t, err, "the data is in object storage, and the node said so")
+	require.Contains(t, out.String(), scanVerdictCompacted)
+	require.NotContains(t, out.String(), scanVerdictShort)
+}
+
+// TestLogScan_NoLocalDataWithoutTheMarkIsReportedRed is the same response without the tombstone:
+// the replicas looked and hold nothing, so the segment is gone and the sweep must fail rather than
+// call it unknown.
+func TestLogScan_NoLocalDataWithoutTheMarkIsReportedRed(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	scanTestGlobals(t)
+
+	ac, members, _ := scanFixture(t, cli, kb, []scanFixtureSegment{{
+		id: 0, state: proto.SegmentState_Completed, metaLast: 19,
+		perReplica: [][][3]int64{{}}, noLocalBlocks: true,
+	}}, 2)
+	cmd, out, _ := markingTestCmd()
+
+	err := runLogScan(cmd, cli, kb, ac, members, "mylog", scanModeQuick, 0, -1)
+
+	require.Error(t, err)
+	require.Equal(t, 9, wperrors.ExitCodeFor(err))
+	require.Contains(t, out.String(), scanVerdictShort)
 }
 
 // TestLogScan_NoSegmentsIsNotAnError covers a log that has never been written to.
@@ -755,12 +918,13 @@ func TestLogScanNodes_ReportsWhyAReplicaDidNotAnswer(t *testing.T) {
 	require.Equal(t, posUnreachable, byLabel[down.ID].state)
 
 	// What an operator reads: the row says nothing is known, and names each reason.
-	row, findings, problem := reconcileSegment(scanSegment{
+	row, findings, outcome := reconcileSegment(scanSegment{
 		id: 4, state: proto.SegmentState_Completed, metaLast: 9, nodes: nodes,
 	})
 	require.Equal(t, "0/4", row.Replicas)
 	require.Equal(t, "-", row.Reaches, "no replica answered, so no range may be claimed")
-	require.False(t, problem, "nothing is known about the segment, which is not the same as it being short")
+	require.Equal(t, outcomeInconclusive, outcome,
+		"nothing is known about the segment, which is neither a problem nor a clean result")
 	require.Len(t, findings, 1)
 	for _, want := range []string{posUnknownNode, probeStateCannotAnswer, posBadResponse, posUnreachable} {
 		require.Contains(t, findings[0], want)
