@@ -107,17 +107,66 @@ func testSkipRangesUndecodableRecordIsAnError(t *testing.T) {
 	require.Error(t, err, "a record that cannot be parsed is not a record with nothing in it")
 }
 
-// testSkipRangesCachedReadHoldsForItsWindow covers the read path's cost. A reader consults this
-// while it is making no progress, which can be every report tick and for many readers per log, so
-// the read has to be shared for a window rather than made each time. The window is short because
-// an operator who has just declared a range is waiting to watch the reader move.
+// testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd is the property the read path depends on.
+// The state that makes a reader ask -- a position that has not moved since its last report -- is
+// also what a reader that has simply caught up with the tail of its log looks like, so this runs
+// for every parked reader. Reading inline put an etcd round trip inside ReadNext and showed up as a
+// second of tail-read lag in the stability suite.
+//
+// Asserted by what comes back rather than by how long it took: a stale entry that disagrees with
+// etcd is answered from the entry, which an implementation that read inline could not do. A timing
+// assertion would pass against an inline read whenever etcd happened to be quick.
+func testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+
+	// etcd holds nothing; the stale entry holds a range. They disagree on purpose.
+	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
+		set:    &AllSkipRanges{Metadata: rangesFor(7, 3, 10, 19)},
+		readAt: time.Now().Add(-2 * SkipRangeCacheTTL),
+	})
+
+	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7),
+		"the caller is answered from the cache, so it cannot have waited for etcd")
+
+	// And the refresh it started does land, so the staleness is bounded rather than permanent.
+	require.Eventually(t, func() bool { return provider.GetAllSkipRangesCached(ctx).For(7) == nil },
+		2*time.Second, 20*time.Millisecond, "the background refresh replaces what was held")
+}
+
+// testSkipRangesRefreshIsSingleFlighted covers what makes "answer from the cache" cheap. Every
+// parked reader asks on its own report tick, so a burst of them all seeing the same stale entry
+// would each pay for a read of the same record if nothing held them to one.
+func testSkipRangesRefreshIsSingleFlighted(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+
+	// Stand in for a refresh already running, deterministically.
+	require.True(t, etcdProvider.skipRangeRefreshing.CompareAndSwap(false, true))
+	require.False(t, etcdProvider.refreshSkipRangesInBackground(ctx),
+		"a second asker joins the refresh in flight rather than starting another")
+
+	etcdProvider.skipRangeRefreshing.Store(false)
+	require.True(t, etcdProvider.refreshSkipRangesInBackground(ctx),
+		"and once it is done the next asker does start one")
+}
+
+// testSkipRangesCachedReadHoldsForItsWindow covers the window. A reader consults this while it is
+// making no progress, which can be every report tick and for many readers per log, so the answer is
+// shared for a few seconds rather than re-read each time.
 func testSkipRangesCachedReadHoldsForItsWindow(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 	ctx := context.Background()
 
-	first := provider.GetAllSkipRangesCached(ctx)
-	require.NotNil(t, first)
-	require.Empty(t, first.Metadata.GetByLogId())
+	// Prime the cache and let the first refresh land.
+	provider.GetAllSkipRangesCached(ctx)
+	require.Eventually(t, func() bool {
+		return provider.GetAllSkipRangesCached(ctx) != nil
+	}, 2*time.Second, 20*time.Millisecond)
 
 	// Write a range straight through the uncached path, so only the cache can hide it.
 	write, err := provider.GetAllSkipRanges(ctx)
@@ -134,32 +183,34 @@ func testSkipRangesCachedReadHoldsForItsWindow(t *testing.T) {
 
 // testSkipRangesCachedReadSurvivesAnUnreadableRecord covers what a reader does when the record
 // cannot be read: it keeps behaving as it did. Answering "no ranges" on a failed read would make a
-// reader that had been skipping stop, and answering an error would give the read path a failure to
-// handle over something most clusters never have.
+// reader that had been skipping stop, over a record most clusters never have.
 func testSkipRangesCachedReadSurvivesAnUnreadableRecord(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 	ctx := context.Background()
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
 
 	write, err := provider.GetAllSkipRanges(ctx)
 	require.NoError(t, err)
 	write.Metadata = rangesFor(7, 3, 10, 19)
 	require.NoError(t, provider.UpdateAllSkipRanges(ctx, write))
-	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7), "cached while it is readable")
+	require.Eventually(t, func() bool { return provider.GetAllSkipRangesCached(ctx).For(7) != nil },
+		2*time.Second, 20*time.Millisecond, "the background refresh picks the range up")
 
-	// Age the cache past its window, so the next call really attempts a read rather than
-	// answering from a fresh entry -- otherwise this asserts the cache, not the fallback.
-	etcdProvider, ok := provider.(*metadataProviderEtcd)
-	require.True(t, ok)
+	// Make the record unparseable and age the entry, so the next refresh fails.
+	_, err = etcdProvider.client.Put(ctx, etcdProvider.keyBuilder.AllSkipRangesKey(), "not a proto")
+	require.NoError(t, err)
 	held := etcdProvider.skipRangeCache.Load()
 	require.NotNil(t, held)
 	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
 		set: held.set, readAt: time.Now().Add(-2 * SkipRangeCacheTTL),
 	})
 
-	cancelled, cancel := context.WithCancel(ctx)
-	cancel()
-	require.NotNil(t, provider.GetAllSkipRangesCached(cancelled).For(7),
-		"a read that cannot be made answers with what was already held")
+	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7),
+		"a refresh that fails leaves the reader with what it had")
+	time.Sleep(200 * time.Millisecond) // let the failing refresh finish
+	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7),
+		"and it stays that way rather than being cleared")
 }
 
 // testSkipRangesStaleWriteIsRefused is what keeps two operators from losing each
