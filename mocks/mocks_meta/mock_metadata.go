@@ -977,6 +977,54 @@ func (_c *MetadataProvider_GetAllSkipRanges_Call) RunAndReturn(run func(context.
 	return _c
 }
 
+// GetAllSkipRangesCached provides a mock function with given fields: ctx
+func (_m *MetadataProvider) GetAllSkipRangesCached(ctx context.Context) *meta.AllSkipRanges {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllSkipRangesCached")
+	}
+
+	var r0 *meta.AllSkipRanges
+	if rf, ok := ret.Get(0).(func(context.Context) *meta.AllSkipRanges); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.AllSkipRanges)
+		}
+	}
+
+	return r0
+}
+
+// MetadataProvider_GetAllSkipRangesCached_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllSkipRangesCached'
+type MetadataProvider_GetAllSkipRangesCached_Call struct {
+	*mock.Call
+}
+
+// GetAllSkipRangesCached is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MetadataProvider_Expecter) GetAllSkipRangesCached(ctx interface{}) *MetadataProvider_GetAllSkipRangesCached_Call {
+	return &MetadataProvider_GetAllSkipRangesCached_Call{Call: _e.mock.On("GetAllSkipRangesCached", ctx)}
+}
+
+func (_c *MetadataProvider_GetAllSkipRangesCached_Call) Run(run func(ctx context.Context)) *MetadataProvider_GetAllSkipRangesCached_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_GetAllSkipRangesCached_Call) Return(_a0 *meta.AllSkipRanges) *MetadataProvider_GetAllSkipRangesCached_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_GetAllSkipRangesCached_Call) RunAndReturn(run func(context.Context) *meta.AllSkipRanges) *MetadataProvider_GetAllSkipRangesCached_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetConditionWriteResult provides a mock function with given fields: ctx
 func (_m *MetadataProvider) GetConditionWriteResult(ctx context.Context) (bool, error) {
 	ret := _m.Called(ctx)

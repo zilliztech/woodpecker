@@ -93,6 +93,8 @@ func TestAll(t *testing.T) {
 	t.Run("test skip ranges: the accessor is nil-safe at every level", testSkipRangesAccessorIsNilSafeAtEveryLevel)
 	t.Run("test skip ranges: round trips by log and segment", testSkipRangesRoundTripsByLogAndSegment)
 	t.Run("test skip ranges: an undecodable record is an error", testSkipRangesUndecodableRecordIsAnError)
+	t.Run("test skip ranges: a cached read holds for its window", testSkipRangesCachedReadHoldsForItsWindow)
+	t.Run("test skip ranges: a cached read survives an unreadable record", testSkipRangesCachedReadSurvivesAnUnreadableRecord)
 	t.Run("test skip ranges: a stale write is refused", testSkipRangesStaleWriteIsRefused)
 	t.Run("test skip ranges: a first write refuses if someone else created it", testSkipRangesFirstWriteRefusesIfSomeoneElseCreatedIt)
 	t.Run("test skip ranges: an oversized record is refused", testSkipRangesOversizedRecordIsRefused)

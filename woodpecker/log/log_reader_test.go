@@ -38,6 +38,9 @@ import (
 // testLogHandleMock is an in-package mock for LogHandle to avoid circular imports.
 type testLogHandleMock struct {
 	mock.Mock
+	// skipRanges is what GetSkipRanges answers, and skipRangeReads counts how often it was asked.
+	skipRanges     config.LogSkipRanges
+	skipRangeReads atomic.Int32
 }
 
 func (m *testLogHandleMock) GetName() string {
@@ -85,6 +88,15 @@ func (m *testLogHandleMock) GetLastRecordId(ctx context.Context) (*LogMessageId,
 func (m *testLogHandleMock) Truncate(ctx context.Context, recordId *LogMessageId) error {
 	args := m.Called(ctx, recordId)
 	return args.Error(0)
+}
+
+// GetSkipRanges answers from a field rather than through the expectation machinery. Nothing
+// declared is the state every test that does not care about skip ranges is in, and making each of
+// them stub a call they have no opinion about would say nothing. The counter is there because one
+// property is worth asserting directly: a reader making progress must never ask.
+func (m *testLogHandleMock) GetSkipRanges(ctx context.Context) config.LogSkipRanges {
+	m.skipRangeReads.Add(1)
+	return m.skipRanges
 }
 
 func (m *testLogHandleMock) GetTruncatedRecordId(ctx context.Context) (*LogMessageId, error) {

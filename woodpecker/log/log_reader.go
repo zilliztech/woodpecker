@@ -87,6 +87,16 @@ type logBatchReaderImpl struct {
 	batch                *proto.BatchReadResult
 	next                 int
 	lastRead             int64
+	// reportedSegmentId/reportedEntryId are the position at the last report. A position that has
+	// not moved since is what "stuck" means here, and it is the only state in which the skip
+	// ranges are consulted: ErrEntryNotFound is also the steady state of a reader tailing an idle
+	// log, so asking on every one of those would put a metadata read on every poll.
+	reportedSegmentId int64
+	reportedEntryId   int64
+	// skips is what this reader has been told to pass over, held across reads. Looking it up costs
+	// one map lookup, so it is checked on every segment resolved; re-reading it costs a metadata
+	// read, so that happens only while stuck.
+	skips config.LogSkipRanges
 	// lastReported is when the read position was last written to metadata. It is
 	// tracked separately from lastRead because lastRead only advances when an
 	// entry is actually returned: an idle reader parked on an active segment
@@ -139,6 +149,15 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		next:                 0,
 		lastRead:             now,
 		lastReported:         now,
+		// The position at open counts as reported: the first tick then compares against it, so a
+		// reader that has not moved by then is recognised as stuck without a spare cycle.
+		reportedSegmentId: from.SegmentId,
+		reportedEntryId:   from.EntryId,
+		// skips is deliberately empty here. A reader that is making progress never asks for the
+		// ranges and so can never jump one, which means a range declared over data that is in fact
+		// readable costs nothing -- and that property only holds if the ranges enter the reader
+		// through the stall alone. A reader that opens inside a declared range stalls like any
+		// other and moves past it on the next tick.
 	}
 	// Publish where the reader opens, so one that never delivers a first entry -
 	// waiting out ErrSegmentNotFound, or parked at the tail of an idle log - is
@@ -220,6 +239,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// the position is unchanged - but at its own interval, not once per poll.
 		now := time.Now().UnixMilli()
 		if segId > l.pendingReadSegmentId || l.lastReported+UpdateReaderInfoIntervalMs < now {
+			l.refreshSkipRangesIfStuck(ctx, segId, entryId)
 			l.lastReported = now
 			// update reader info with the session this reader owns
 			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.readerTempSession, segId, entryId)
@@ -227,6 +247,12 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 				metrics.WpLogReaderTempInfoErrorsTotal.WithLabelValues(l.logNs, l.logIdStr, "update").Inc()
 				logger.Ctx(ctx).Warn("update reader info failed", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("nextReadSegmentId", segId), zap.Error(updateReaderErr))
 			}
+		}
+
+		// Checked on every resolved position, not only when stuck: the lookup is one map probe on
+		// a map that is nil unless an operator has declared something for this log.
+		if l.skipPast(ctx, segId, entryId) {
+			continue
 		}
 
 		// assert segHandle != nil, and read the next batch
@@ -302,6 +328,42 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return logMsg, nil
 	}
+}
+
+// refreshSkipRangesIfStuck re-reads what this reader should pass over, but only when the position
+// has not moved since the last report. That condition is the whole cost discipline: ErrEntryNotFound
+// is the steady state of a reader tailing an idle log, so asking on every one of them would put a
+// metadata read on every poll of every healthy reader. It is also what keeps a range declared over
+// data that is in fact readable from costing anything, since a reader that never asks cannot jump.
+func (l *logBatchReaderImpl) refreshSkipRangesIfStuck(ctx context.Context, segmentId, entryId int64) {
+	if segmentId == l.reportedSegmentId && entryId == l.reportedEntryId {
+		l.skips = l.logHandle.GetSkipRanges(ctx)
+	}
+	l.reportedSegmentId, l.reportedEntryId = segmentId, entryId
+}
+
+// skipPast moves the read position past a declared range covering the current position, and
+// reports whether it moved. Giving up entries is never silent: the range is logged and counted.
+func (l *logBatchReaderImpl) skipPast(ctx context.Context, segmentId, entryId int64) bool {
+	span, found := skipSpanFor(l.skips, segmentId, entryId)
+	if !found {
+		return false
+	}
+	l.pendingReadSegmentId, l.pendingReadEntryId = segmentId, span.ToEntryID+1
+	// LastReadState caches a physical location -- block, offset, node -- and the test that reuses
+	// it compares only the segment id, so a jump within one segment would otherwise resume from a
+	// stale block offset.
+	l.batch, l.next = nil, 0
+	logger.Ctx(ctx).Warn("reader moved past an operator-declared skip range; those entries are not delivered",
+		zap.String("logName", l.logName),
+		zap.Int64("logId", l.logId),
+		zap.String("readerName", l.readerName),
+		zap.Int64("segmentId", segmentId),
+		zap.Int64("fromEntryId", span.FromEntryID),
+		zap.Int64("toEntryId", span.ToEntryID),
+		zap.Int64("resumeEntryId", span.ToEntryID+1))
+	metrics.WpLogReaderSkipRangeSkipsTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
+	return true
 }
 
 func (l *logBatchReaderImpl) Close(ctx context.Context) error {

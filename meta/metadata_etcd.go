@@ -110,6 +110,10 @@ func (sl *SessionLock) GetSession() *concurrency.Session {
 //
 // The two locks that remain each carry their reason at the field.
 type metadataProviderEtcd struct {
+	// skipRangeCache keeps the read path off etcd: a stuck reader asks on every report tick, and
+	// there may be many readers per log.
+	skipRangeCache atomic.Pointer[cachedSkipRanges]
+
 	// instanceMu serializes the two operations that write instance-level keys
 	// shared by every log: CreateLog, which allocates from the log id
 	// generator, and ClearMeta, which wipes and re-seeds it. Both are rare and
@@ -603,6 +607,38 @@ func (e *metadataProviderEtcd) GetAllSkipRanges(ctx context.Context) (*AllSkipRa
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return set, nil
+}
+
+// SkipRangeCacheTTL bounds how stale a reader's view of the skip ranges may be. It is short
+// because the record only changes when an operator acts on an incident and is then waiting to see
+// the reader move; it is not zero because a reader consults it while stuck, which can be every
+// poll.
+const SkipRangeCacheTTL = 5 * time.Second
+
+type cachedSkipRanges struct {
+	set    *AllSkipRanges
+	readAt time.Time
+}
+
+// GetAllSkipRangesCached returns the record, re-reading it at most once per SkipRangeCacheTTL.
+// A read that fails answers with whatever was cached, or with an empty record: a reader that
+// cannot reach etcd should keep behaving as it did, not start or stop skipping.
+func (e *metadataProviderEtcd) GetAllSkipRangesCached(ctx context.Context) *AllSkipRanges {
+	if held := e.skipRangeCache.Load(); held != nil && time.Since(held.readAt) < SkipRangeCacheTTL {
+		return held.set
+	}
+	set, err := e.GetAllSkipRanges(ctx)
+	if err != nil {
+		if held := e.skipRangeCache.Load(); held != nil {
+			return held.set
+		}
+		logger.Ctx(ctx).Warn("read skip ranges failed; continuing with none", zap.Error(err))
+		return &AllSkipRanges{Metadata: &proto.AllSkipRanges{}}
+	}
+	// The whole value is replaced rather than mutated: one provider hands the same record to every
+	// reader of every log, and nothing may write through it.
+	e.skipRangeCache.Store(&cachedSkipRanges{set: set, readAt: time.Now()})
+	return set
 }
 
 func (e *metadataProviderEtcd) UpdateAllSkipRanges(ctx context.Context, set *AllSkipRanges) error {

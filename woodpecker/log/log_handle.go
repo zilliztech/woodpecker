@@ -57,6 +57,9 @@ type LogHandle interface {
 	Truncate(ctx context.Context, recordId *LogMessageId) error
 	// GetTruncatedRecordId returns the last truncated record ID of the log.
 	GetTruncatedRecordId(ctx context.Context) (*LogMessageId, error)
+	// GetSkipRanges returns the entry ranges an operator has declared unreadable for this log,
+	// indexed by segment id. Nil when there are none, which is the normal case.
+	GetSkipRanges(ctx context.Context) config.LogSkipRanges
 	// CheckAndSetSegmentTruncatedIfNeed checks if the segment needs to be truncated and sets the truncated flag accordingly.
 	CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) error
 	// GetNextSegmentId returns the next new segment ID for the log.
@@ -828,7 +831,8 @@ func (l *logHandleImpl) advanceLastSegmentId(segmentID int64) error {
 	if !l.LastSegmentId.CompareAndSwap(current, segmentID) {
 		return werr.ErrInternalError.WithCauseErrMsg(
 			fmt.Sprintf("last segment id changed concurrently for logName:%s logId:%d expected:%d target:%d actual:%d",
-				l.Name, l.Id, current, segmentID, l.LastSegmentId.Load()))
+				l.Name, l.Id, current, segmentID, l.LastSegmentId.Load()),
+		)
 	}
 	return nil
 }
@@ -964,7 +968,8 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 		metrics.WpLogHandleOperationLatency.WithLabelValues(l.logNs, logIdStr, "truncate", "error").Observe(float64(time.Since(start).Milliseconds()))
 		invalidErr := werr.ErrLogHandleTruncateFailed.WithCauseErrMsg(
 			fmt.Sprintf("truncation entry ID %d exceeds last entry ID %d for segment %d",
-				recordId.EntryId, segMeta.Metadata.LastEntryId, recordId.SegmentId))
+				recordId.EntryId, segMeta.Metadata.LastEntryId, recordId.SegmentId),
+		)
 		return invalidErr
 	}
 
@@ -1184,6 +1189,49 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 		SegmentId: logMeta.Metadata.TruncatedSegmentId,
 		EntryId:   logMeta.Metadata.TruncatedEntryId,
 	}, nil
+}
+
+// GetSkipRanges returns what this log's readers should pass over. An embedding application that
+// supplies its own takes precedence -- that is the whole point of the hook -- and otherwise they
+// come from woodpecker's own record, read through a short-lived cache.
+//
+// A nil result is the normal case and costs the caller one map lookup, so a reader can consult this
+// on every segment it resolves without thinking about it.
+func (l *logHandleImpl) GetSkipRanges(ctx context.Context) config.LogSkipRanges {
+	if byLog := l.cfg.Woodpecker.Client.SkipRanges.Get(); byLog != nil {
+		return byLog[l.Id]
+	}
+	return skipRangesOf(l.Metadata.GetAllSkipRangesCached(ctx).For(l.Id))
+}
+
+// skipRangesOf converts the stored record into the shape both sources share, so the reader has one
+// thing to consult whichever supplied it.
+func skipRangesOf(held *proto.LogSkipRanges) config.LogSkipRanges {
+	bySegment := held.GetBySegmentId()
+	if len(bySegment) == 0 {
+		return nil
+	}
+	out := make(config.LogSkipRanges, len(bySegment))
+	for segmentID, ranges := range bySegment {
+		spans := make([]config.SkipSpan, 0, len(ranges.GetRanges()))
+		for _, r := range ranges.GetRanges() {
+			spans = append(spans, config.SkipSpan{FromEntryID: r.GetFromEntryId(), ToEntryID: r.GetToEntryId()})
+		}
+		out[segmentID] = spans
+	}
+	return out
+}
+
+// skipSpanFor returns the span covering an entry, if any. Ranges within a segment are kept sorted
+// and coalesced by the write path, but correctness does not rest on that: scanning a handful
+// answers the same however they are ordered, and an overlap only costs a second hop.
+func skipSpanFor(ranges config.LogSkipRanges, segmentID, entryID int64) (config.SkipSpan, bool) {
+	for _, span := range ranges[segmentID] {
+		if entryID >= span.FromEntryID && entryID <= span.ToEntryID {
+			return span, true
+		}
+	}
+	return config.SkipSpan{}, false
 }
 
 // completeAllSegmentHandlesUnsafe completes all segment handles. Must be called with lock held.

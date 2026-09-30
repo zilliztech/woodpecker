@@ -131,6 +131,14 @@ All three read and write one record for the whole metadata root, under
 `<meta-prefix>/skipranges`, indexed by log id and then segment id. A write refuses if the record
 moved since it was read, so two operators cannot drop each other's ranges.
 
+A reader consults that record **only while it is making no progress** — a position unchanged since
+its last report — and then moves past a range covering its position, logging a warning and counting
+it. A reader that is advancing never reads the record at all, so a range declared over data that is
+in fact readable costs nothing: nothing acts on it unless a reader is genuinely stuck there. An
+embedding application can supply the ranges itself instead, through a runtime hook that nothing
+binds by default; when it does, `wp log skip-range list` is not the source a reader is using, which
+is why the listing names the source it read.
+
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
 - `wp segment inspect <logName> <segmentId>` — walk the blocks on every replica: which entries are damaged where, whether the damage is bounded, and what a skip would cost

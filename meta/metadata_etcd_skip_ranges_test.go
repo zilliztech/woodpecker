@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -104,6 +105,61 @@ func testSkipRangesUndecodableRecordIsAnError(t *testing.T) {
 
 	_, err = provider.GetAllSkipRanges(ctx)
 	require.Error(t, err, "a record that cannot be parsed is not a record with nothing in it")
+}
+
+// testSkipRangesCachedReadHoldsForItsWindow covers the read path's cost. A reader consults this
+// while it is making no progress, which can be every report tick and for many readers per log, so
+// the read has to be shared for a window rather than made each time. The window is short because
+// an operator who has just declared a range is waiting to watch the reader move.
+func testSkipRangesCachedReadHoldsForItsWindow(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+
+	first := provider.GetAllSkipRangesCached(ctx)
+	require.NotNil(t, first)
+	require.Empty(t, first.Metadata.GetByLogId())
+
+	// Write a range straight through the uncached path, so only the cache can hide it.
+	write, err := provider.GetAllSkipRanges(ctx)
+	require.NoError(t, err)
+	write.Metadata = rangesFor(7, 3, 10, 19)
+	require.NoError(t, provider.UpdateAllSkipRanges(ctx, write))
+
+	require.Nil(t, provider.GetAllSkipRangesCached(ctx).For(7),
+		"within the window the reader keeps the answer it already had")
+	uncached, err := provider.GetAllSkipRanges(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, uncached.For(7), "and the uncached read sees it, so the write really did land")
+}
+
+// testSkipRangesCachedReadSurvivesAnUnreadableRecord covers what a reader does when the record
+// cannot be read: it keeps behaving as it did. Answering "no ranges" on a failed read would make a
+// reader that had been skipping stop, and answering an error would give the read path a failure to
+// handle over something most clusters never have.
+func testSkipRangesCachedReadSurvivesAnUnreadableRecord(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+
+	write, err := provider.GetAllSkipRanges(ctx)
+	require.NoError(t, err)
+	write.Metadata = rangesFor(7, 3, 10, 19)
+	require.NoError(t, provider.UpdateAllSkipRanges(ctx, write))
+	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7), "cached while it is readable")
+
+	// Age the cache past its window, so the next call really attempts a read rather than
+	// answering from a fresh entry -- otherwise this asserts the cache, not the fallback.
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+	held := etcdProvider.skipRangeCache.Load()
+	require.NotNil(t, held)
+	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
+		set: held.set, readAt: time.Now().Add(-2 * SkipRangeCacheTTL),
+	})
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.NotNil(t, provider.GetAllSkipRangesCached(cancelled).For(7),
+		"a read that cannot be made answers with what was already held")
 }
 
 // testSkipRangesStaleWriteIsRefused is what keeps two operators from losing each
