@@ -495,8 +495,9 @@ func TestInspectBlocks_DamageMatrix(t *testing.T) {
 					b.apply(t, damageSpec{site: site, kind: size.kind, bytes: size.bytes})
 
 					assertSurveyInvariants(t, b, b.survey(0, 100), 100)
-					// Again under a bound that binds: damage must not let a survey run past what
-					// the caller allowed it to read.
+					// Again with a bound below the number of blocks, so the bound actually stops
+					// the walk. With a bound of 100 over five blocks the check can never fail,
+					// and removing the bound from the production walk went unnoticed.
 					assertSurveyInvariants(t, b, b.survey(0, 2), 2)
 				})
 			}
