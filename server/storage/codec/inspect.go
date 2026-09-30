@@ -34,6 +34,7 @@ import (
 // record being found at that offset.
 const (
 	BlockOK                 = "ok"
+	BlockNotVerified        = "not_verified"
 	BlockHeaderUnreadable   = "header_unreadable"
 	BlockHeaderMissing      = "header_missing"
 	BlockDataUnreadable     = "data_unreadable"
@@ -124,6 +125,20 @@ func InspectRecords(buf []byte) RecordSurvey {
 	return survey
 }
 
+// SurveyMode decides how much of each block the walk reads.
+//
+// SurveyVerify reads every block's data and checks it, which is the only way to tell damage from
+// data that is simply not there. SurveyCoverage reads only what says where the entries are -- a
+// sealed segment's index, or each block's own header -- so the cost of a whole segment is a few
+// kilobytes whatever its size. Coverage cannot report damage, and says so: its blocks come back
+// not verified rather than ok.
+type SurveyMode int
+
+const (
+	SurveyVerify SurveyMode = iota
+	SurveyCoverage
+)
+
 // BlockReport is one block as the survey found it.
 type BlockReport struct {
 	Number       int64  `json:"block"`
@@ -167,7 +182,7 @@ type SegmentSurvey struct {
 // damaged body is stepped over there too, but a header that cannot be read ends the walk -- and
 // that is reported as the walk stopping, never as the blocks beyond it being damaged, which the
 // survey has not looked at.
-func InspectBlocks(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlocks int64) SegmentSurvey {
+func InspectBlocks(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlocks int64, mode SurveyMode) SegmentSurvey {
 	survey := SegmentSurvey{
 		Blocks:           make([]BlockReport, 0, 16),
 		TotalBlocksKnown: -1,
@@ -190,7 +205,7 @@ func InspectBlocks(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 		// simply empty.
 		survey.IndexUsable = int32(len(indexes)) == footer.TotalBlocks
 		if survey.IndexUsable {
-			surveyByIndex(ctx, r, size, indexes, fromBlock, maxBlocks, &survey)
+			surveyByIndex(ctx, r, size, indexes, fromBlock, maxBlocks, mode, &survey)
 			return survey
 		}
 		// Falling back to the chain, but the footer still says where the blocks end. Without that,
@@ -200,13 +215,13 @@ func InspectBlocks(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 			dataEnd = end
 		}
 	}
-	surveyByChain(ctx, r, dataEnd, fromBlock, maxBlocks, survey.Sealed, &survey)
+	surveyByChain(ctx, r, dataEnd, fromBlock, maxBlocks, survey.Sealed, mode, &survey)
 	return survey
 }
 
 // surveyByIndex walks the blocks a sealed segment's index locates, which is every block regardless
 // of what any one of them contains.
-func surveyByIndex(ctx context.Context, r io.ReaderAt, size int64, indexes []*IndexRecord, fromBlock, maxBlocks int64, survey *SegmentSurvey) {
+func surveyByIndex(ctx context.Context, r io.ReaderAt, size int64, indexes []*IndexRecord, fromBlock, maxBlocks int64, mode SurveyMode, survey *SegmentSurvey) {
 	for position, idx := range indexes {
 		// Count positions, not the numbers recorded in the records: a recovery can leave a header
 		// whose BlockNumber differs from its position, and the chain path counts positions, so
@@ -222,8 +237,22 @@ func surveyByIndex(ctx context.Context, r io.ReaderAt, size int64, indexes []*In
 			survey.StoppedEarly, survey.StopReason = true, SurveyStopCancelled
 			return
 		}
+		if mode == SurveyCoverage {
+			// The index record already says which entries the block holds and how large it is, so
+			// coverage needs nothing from the block itself. That is what keeps a sealed segment's
+			// coverage at one trailer read whatever its size.
+			survey.Blocks = append(survey.Blocks, BlockReport{
+				Number: int64(idx.BlockNumber), Offset: idx.StartOffset,
+				Bytes:           int64(idx.BlockSize),
+				FirstEntryID:    idx.FirstEntryID,
+				LastEntryID:     idx.LastEntryID,
+				LastGoodEntryID: -1,
+				Status:          BlockNotVerified,
+			})
+			continue
+		}
 		// The file header sits at offset 0 only; a block's index entry already points past it.
-		report, _ := inspectOneBlock(r, size, idx.StartOffset, int64(idx.BlockNumber), idx.StartOffset == 0, true)
+		report, _ := inspectOneBlock(r, size, idx.StartOffset, int64(idx.BlockNumber), idx.StartOffset == 0, true, mode)
 		if report.FirstEntryID < 0 {
 			// The header could not be read; the index still knows what the block should hold.
 			report.FirstEntryID, report.LastEntryID = idx.FirstEntryID, idx.LastEntryID
@@ -234,7 +263,7 @@ func surveyByIndex(ctx context.Context, r io.ReaderAt, size int64, indexes []*In
 }
 
 // surveyByChain walks an active segment, where block N+1 is found only through block N's header.
-func surveyByChain(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlocks int64, sealed bool, survey *SegmentSurvey) {
+func surveyByChain(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlocks int64, sealed bool, mode SurveyMode, survey *SegmentSurvey) {
 	offset := int64(0)
 	for blockNumber := int64(0); offset < size; blockNumber++ {
 		if size-offset < int64(RecordHeaderSize+BlockHeaderRecordSize) {
@@ -250,7 +279,7 @@ func surveyByChain(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 			survey.StoppedEarly, survey.StopReason = true, SurveyStopBound
 			return
 		}
-		report, next := inspectOneBlock(r, size, offset, blockNumber, offset == 0, sealed)
+		report, next := inspectOneBlock(r, size, offset, blockNumber, offset == 0, sealed, mode)
 		if report.Status == blockIsTrailer {
 			// The index and footer follow the last block. They are not blocks, and reporting them
 			// as damaged ones would invent damage.
@@ -281,7 +310,7 @@ func surveyByChain(ctx context.Context, r io.ReaderAt, size, fromBlock, maxBlock
 
 // inspectOneBlock reads and verifies one block, and returns where the next one begins -- or an
 // offset no greater than this one when that cannot be known.
-func inspectOneBlock(r io.ReaderAt, size, offset, blockNumber int64, first, sealed bool) (BlockReport, int64) {
+func inspectOneBlock(r io.ReaderAt, size, offset, blockNumber int64, first, sealed bool, mode SurveyMode) (BlockReport, int64) {
 	report := BlockReport{
 		Number: blockNumber, Offset: offset,
 		Bytes: -1, FirstEntryID: -1, LastEntryID: -1, LastGoodEntryID: -1,
@@ -336,6 +365,13 @@ func inspectOneBlock(r io.ReaderAt, size, offset, blockNumber int64, first, seal
 	report.Bytes = int64(header.BlockLength)
 	// The header is intact, so the next block's position is known even if this block's body is not.
 	next := offset + int64(headersLen) + int64(header.BlockLength)
+
+	if mode == SurveyCoverage {
+		// The header has said which entries the block holds and where the next one begins, which is
+		// all coverage asks for. Nothing was verified, and the status says that rather than ok.
+		report.Status = BlockNotVerified
+		return report, next
+	}
 
 	data := make([]byte, header.BlockLength)
 	if _, err := r.ReadAt(data, offset+int64(headersLen)); err != nil {

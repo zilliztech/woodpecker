@@ -4,16 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 )
 
 // NewLogstoreSegmentInspectHandler handles GET /admin/logstore/segment/inspect.
 //
 // Query params: log_id and segment_id (required), from_block and max_blocks (optional, zero leaves
-// the node's own bounds in force), plus bucket_name and root_path, which name an instance together.
+// the node's own bounds in force), bucket_name and root_path, which name an instance together, and
+// verify (default true).
+//
+// verify=false reads only what says where the entries are — a sealed segment's index, or each
+// block's own header — and checks nothing, so a whole segment costs a few kilobytes whatever its
+// size. Its blocks come back not verified rather than ok. The default verifies, because that is
+// what asking a node to inspect a segment means.
 //
 // The node walks its own copy of the segment block by block and reports what it found at each one,
 // continuing past a block it could not read. It answers for itself and asks no peer.
-func NewLogstoreSegmentInspectHandler(inspect func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromBlock, maxBlocks int64) (any, error)) http.HandlerFunc {
+func NewLogstoreSegmentInspectHandler(inspect func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromBlock, maxBlocks int64, coverageOnly bool) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -43,7 +50,17 @@ func NewLogstoreSegmentInspectHandler(inspect func(ctx context.Context, bucketNa
 			return
 		}
 
-		report, err := inspect(r.Context(), bucketName, rootPath, logID, segmentID, fromBlock, maxBlocks)
+		verify := true
+		if raw := r.URL.Query().Get("verify"); raw != "" {
+			parsed, parseErr := strconv.ParseBool(raw)
+			if parseErr != nil {
+				http.Error(w, `{"error":"invalid verify"}`, http.StatusBadRequest)
+				return
+			}
+			verify = parsed
+		}
+
+		report, err := inspect(r.Context(), bucketName, rootPath, logID, segmentID, fromBlock, maxBlocks, !verify)
 		if err != nil {
 			// A node that cannot answer about this segment is a per-node state the caller has to
 			// see per node, carrying the node's own reason.

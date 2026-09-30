@@ -81,6 +81,34 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
 ### Log metadata
 - `wp log readers <logName>` — where each of a log's readers has read to (etcd only, no node contact)
 
+### Log end to end
+- `wp log scan <logName> [--mode quick|raw] [--from-segment N] [--to-segment N]` — sweep every
+  segment of a log and reconcile what metadata claims against what the replicas hold. `quick`
+  (default) reads structure only — one trailer read per sealed segment — and answers "does the
+  shape add up". `raw` reads through the normal path with codec and CRC and answers "how far does
+  a reader actually get". Reports one line per segment plus the log-level findings.
+
+  Per-segment verdicts: `ok`, `short` (no replica has some of what metadata claims), `open` (still
+  being written), `compacted` (served from one shared object-storage copy, which this sweep does
+  not read), `reclaimed` (retention is deleting it), `unknown` (no replica answered, or every
+  replica's survey stopped before the end of the segment, so nothing could be established).
+
+  Exit codes follow what the sweep established: `0` only when every segment was established and
+  sound, `9` when a segment is short or an open segment has a hole in the middle of what was
+  written, and `8` when something could not be established — a sweep that learned nothing neither
+  claims loss nor claims the log reads through. `--strict` promotes `8` to `9` for a script that
+  wants an unestablished segment to fail the gate.
+
+  A replica that reports no local data is read through the compacted mark, the tombstone cleanup
+  writes before dropping a compacted segment's `data.log`: with the mark the copy was reclaimed and
+  the object is the authority, without it the replica looked and holds nothing, which is loss. The
+  segment's metadata state is a weaker second signal, since cleanup keys off the object-storage
+  footer and the metadata update after compaction is only warned about when it fails.
+
+  Log-level findings: ids missing from metadata at or above the truncation point (the segment *at*
+  the point is kept by truncation, so its absence is a loss), and the Active segments, reported
+  without failing on them because a roll with queued appends legitimately leaves two Active.
+
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
 - `wp segment inspect <logName> <segmentId>` — walk the blocks on every replica: which entries are damaged where, whether the damage is bounded, and what a skip would cost

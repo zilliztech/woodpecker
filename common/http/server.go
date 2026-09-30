@@ -44,7 +44,7 @@ type LogstoreCallbacks struct {
 	ProbeSegment func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromEntry, maxEntries int64) (any, error)
 	// InspectSegment walks this node's copy of a segment block by block, continuing past a block it
 	// could not read.
-	InspectSegment func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromBlock, maxBlocks int64) (any, error)
+	InspectSegment func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromBlock, maxBlocks int64, coverageOnly bool) (any, error)
 }
 
 // OpsCallbacks holds callbacks for ops admin endpoints.
