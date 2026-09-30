@@ -115,14 +115,17 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
   never reused, so such a range can never apply again, but it stays until it is removed.
 - `wp log skip-range add <logName> <segmentId> --from-entry N --to-entry M --reason "..." [-y] [--force]`
   — declare an entry range unreadable so readers move past it. **This gives up data.** It asks the
-  quorum first and refuses, naming the replica, if any replica can still read part of the range —
-  a read is served by any one replica, so such a range is not lost. A replica that could not be
-  asked is reported rather than counted as agreement. `--force` overrides the refusal; without
-  `-y` nothing is written.
+  quorum first and refuses in two cases: a replica that can still read part of the range (a read is
+  served by any one replica, so such a range is not lost), and a replica that **said nothing** about
+  part of it. The second is the one that matters most — a survey reports only what it walked, so an
+  unread range is not an empty one, which is what a bounded survey, a broken chain, a compacted
+  segment or an unwritten tail all produce. A segment naming no replica refuses too. `--force`
+  carries any of those decisions and says so; without `-y` nothing is written.
 - `wp log skip-range remove <logName> <segmentId> --from-entry N --to-entry M` — withdraw a range,
   so readers try those entries again. Withdrawing part of a range splits it, so the boundaries do
   not have to match the original declaration. It restores nothing, and a reader that already moved
-  past the range does not come back for it.
+  past the range does not come back for it. Use `--log-id N <segmentId>` instead of the name to
+  withdraw a range whose log has been deleted.
 
 All three read and write one record for the whole metadata root, under
 `<meta-prefix>/skipranges`, indexed by log id and then segment id. A write refuses if the record

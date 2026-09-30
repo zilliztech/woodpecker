@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -27,6 +28,13 @@ import (
 func skipFixture(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder,
 	segmentID int64, perReplica [][][3]int64,
 ) (*client.Client, *client.Memberlist) {
+	ac, members, _ := skipFixtureWithQueries(t, cli, kb, segmentID, perReplica)
+	return ac, members
+}
+
+func skipFixtureWithQueries(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder,
+	segmentID int64, perReplica [][][3]int64,
+) (*client.Client, *client.Memberlist, *[]string) {
 	t.Helper()
 	const logName, logID = "mylog", int64(7)
 
@@ -38,16 +46,28 @@ func skipFixture(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder,
 	}
 	put(kb.BuildLogKey(logName), &proto.LogMeta{LogId: logID, TruncatedSegmentId: -1, TruncatedEntryId: -1})
 
+	queries := &[]string{}
 	nodes := make([]string, 0, len(perReplica))
 	members := make([]client.Member, 0, len(perReplica))
 	for i := range perReplica {
 		blocks := perReplica[i]
 		mux := http.NewServeMux()
 		mux.HandleFunc("/admin/logstore/segment/inspect", func(w http.ResponseWriter, r *http.Request) {
+			*queries = append(*queries, r.URL.RawQuery)
 			w.Header().Set("Content-Type", "application/json")
 			if blocks == nil {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"error":"this node holds no data for it"}`))
+				return
+			}
+			if skipFixtureStopReason != "" {
+				// A survey that did not reach the end of the segment: the node stopped at its own
+				// block bound, or the chain broke, or it holds no local copy at all.
+				_, _ = w.Write([]byte(fmt.Sprintf(
+					`{"node_id":"n","source":"local_staged","survey":{"blocks":[],"sealed":false,`+
+						`"total_blocks_known":-1,"index_usable":false,"lac":-1,"stopped_early":true,`+
+						`"stop_reason":%q,"stop_offset":0}}`, skipFixtureStopReason,
+				)))
 				return
 			}
 			parts := make([]string, 0, len(blocks))
@@ -84,8 +104,13 @@ func skipFixture(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder,
 		},
 	})
 	return client.New("http://127.0.0.1:1", client.ClientOpts{Timeout: 2 * time.Second}),
-		&client.Memberlist{Members: members}
+		&client.Memberlist{Members: members}, queries
 }
+
+// skipFixtureStopReason makes every replica answer with a survey that stopped before the end of
+// the segment, which is what a node's own block bound, a broken chain, or no local copy all look
+// like to the caller.
+var skipFixtureStopReason string
 
 func skipTestGlobals(t *testing.T) {
 	t.Helper()
@@ -128,6 +153,270 @@ func TestSkipRangeAdd_RefusesWhenAReplicaCanStillRead(t *testing.T) {
 		"the refusal comes before the warning, so an operator is not told data was given up")
 }
 
+// TestSkipRangeAdd_RefusesWhenAReplicaDidNotLookAtTheWholeRange is the gate's real premise. A
+// replica reports only what it surveyed, and a survey stops at the node's own block bound -- 64 by
+// default, which a full segment exceeds at about 128. Entries past that never appear as readable,
+// so a gate that rejects only on what came back as readable would wave through a range on a
+// perfectly healthy segment. The same shape covers a broken chain, a compacted segment served from
+// object storage, and a deployment with no local copies at all.
+func TestSkipRangeAdd_RefusesWhenAReplicaDidNotLookAtTheWholeRange(t *testing.T) {
+	for _, stop := range []string{"bound", "chain_broken", "no_local_blocks"} {
+		t.Run(stop, func(t *testing.T) {
+			cli := startTestEtcd(t)
+			kb := meta.NewKeyBuilder("wptest")
+			skipTestGlobals(t)
+			skipFixtureStopReason = stop
+			t.Cleanup(func() { skipFixtureStopReason = "" })
+
+			ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{{{0, 9, 1}}, {{0, 9, 1}}})
+			cmd, _, _ := markingTestCmd()
+
+			err := runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+				logName: "mylog", segmentID: 3, from: 5000, to: 5099, reason: "bad disk", confirmed: true,
+			})
+
+			require.Error(t, err)
+			require.Equal(t, 4, wperrors.ExitCodeFor(err))
+			require.Regexp(t, `(?i)did not|could not`, err.Error(),
+				"the refusal has to say the range was never looked at, not that it is readable")
+			require.Empty(t, declaredRanges(t, cli, kb, 7, 3), "nothing was written")
+		})
+	}
+}
+
+// TestSkipRangeAdd_HungReplicaDoesNotEatTheWriteBudget covers the one deadline this command has to
+// split. Asking the replicas goes over HTTP on the same budget the command was given, and that
+// client takes no context, so a replica that accepts the connection and never answers spends the
+// whole budget before the record is even read -- the write would then fail with a deadline error
+// that has nothing to do with etcd, and raising --timeout would not help because both budgets
+// scale together.
+func TestSkipRangeAdd_HungReplicaDoesNotEatTheWriteBudget(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	old := Globals
+	t.Cleanup(func() { Globals = old })
+	Globals = GlobalFlags{Timeout: time.Second}
+
+	hung := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1200 * time.Millisecond) // longer than the budget, so the client gives up first
+	}))
+	t.Cleanup(hung.Close)
+	members := &client.Memberlist{Members: []client.Member{{
+		ID: "node-hung", ServiceAddr: hung.Listener.Addr().String(),
+		Tags: map[string]string{"admin_port": extractPort(t, hung.URL)},
+	}}}
+	put := func(key string, m pb.Message) {
+		b, err := pb.Marshal(m)
+		require.NoError(t, err)
+		_, err = cli.Put(context.Background(), key, string(b))
+		require.NoError(t, err)
+	}
+	put(kb.BuildLogKey("mylog"), &proto.LogMeta{LogId: 7, TruncatedSegmentId: -1, TruncatedEntryId: -1})
+	put(kb.BuildSegmentInstanceKey("mylog", "3"), &proto.SegmentMetadata{
+		SegNo: 3, State: proto.SegmentState_Completed, LastEntryId: 99,
+		Quorum: &proto.QuorumInfo{Id: 1, Es: 1, Wq: 1, Aq: 1, Nodes: []string{members.Members[0].ServiceAddr}},
+	})
+	ac := client.New("http://127.0.0.1:1", client.ClientOpts{Timeout: time.Second})
+	cmd, _, _ := markingTestCmd()
+
+	// --force carries the decision past the refusal the silence earns, so the write is reached.
+	err := runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk",
+		confirmed: true, force: true,
+	})
+
+	require.NoError(t, err, "the metadata write must not inherit what the inspection spent")
+	require.Len(t, declaredRanges(t, cli, kb, 7, 3), 1)
+}
+
+// TestSkipRangeAdd_AsksForTheWholeSegment pins the request, not the judgement. A verifying survey
+// takes the node's own bound of 64 blocks when none is asked for, and a full segment holds about
+// 128, so a declaration that inherited that default would have most of the segment unaccounted for
+// on every call -- and the refusal it triggers would fire on healthy segments instead of the ones
+// it is for.
+func TestSkipRangeAdd_AsksForTheWholeSegment(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	ac, members, queries := skipFixtureWithQueries(t, cli, kb, 3, [][][3]int64{{{0, 99, 0}}, {{0, 99, 0}}})
+	cmd, _, _ := markingTestCmd()
+
+	require.NoError(t, runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk", confirmed: true,
+	}))
+
+	require.NotEmpty(t, *queries)
+	for _, q := range *queries {
+		require.Contains(t, q, fmt.Sprintf("max_blocks=%d", skipRangeMaxBlocks),
+			"without asking, the node stops at 64 blocks and most of a segment goes unaccounted for")
+	}
+}
+
+// TestSkipRangeAdd_RefusesWhenNoReplicaAnswers covers the state a rolling restart produces. All
+// three replicas may hold the data intact; nothing was established, so nothing may be declared.
+// `wp segment inspect` already refuses this state, and two standards in one tool is worse than
+// either.
+func TestSkipRangeAdd_RefusesWhenNoReplicaAnswers(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{nil, nil})
+	cmd, _, _ := markingTestCmd()
+
+	err := runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk", confirmed: true,
+	})
+
+	require.Error(t, err)
+	require.Empty(t, declaredRanges(t, cli, kb, 7, 3))
+}
+
+// TestSkipRangeAdd_RefusesBeyondWhatTheReplicasAccountFor is the typo that would otherwise abandon
+// data not yet written: entries above what any replica surveyed are not established as gone, and
+// once a reader honours the record every entry later written into that range becomes invisible.
+func TestSkipRangeAdd_RefusesBeyondWhatTheReplicasAccountFor(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	// The replicas hold 0-99 and vouch for nothing above it.
+	ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{{{0, 99, 0}}, {{0, 99, 0}}})
+	cmd, _, _ := markingTestCmd()
+
+	err := runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 1999, reason: "typed 1999 for 199", confirmed: true,
+	})
+
+	require.Error(t, err)
+	require.Empty(t, declaredRanges(t, cli, kb, 7, 3))
+
+	// Within what they accounted for, the same declaration is accepted.
+	require.NoError(t, runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 99, reason: "bad disk", confirmed: true,
+	}))
+	require.Len(t, declaredRanges(t, cli, kb, 7, 3), 1)
+}
+
+// TestSkipRangeAdd_EmptyQuorumIsNotAgreement covers a segment whose metadata names no replica:
+// nobody was consulted, which is not the same as nobody objecting.
+func TestSkipRangeAdd_EmptyQuorumIsNotAgreement(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{{{0, 99, 0}}})
+	// Rewrite the segment metadata with no quorum at all.
+	b, err := pb.Marshal(&proto.SegmentMetadata{
+		SegNo: 3, State: proto.SegmentState_Completed, LastEntryId: 99,
+	})
+	require.NoError(t, err)
+	_, err = cli.Put(context.Background(), kb.BuildSegmentInstanceKey("mylog", "3"), string(b))
+	require.NoError(t, err)
+	cmd, _, _ := markingTestCmd()
+
+	err = runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk", confirmed: true,
+	})
+
+	require.Error(t, err)
+	require.Empty(t, declaredRanges(t, cli, kb, 7, 3))
+}
+
+// TestSkipRangeAdd_OnlyReplicasThatCanReadTheRangeAreNamed keeps the refusal actionable. Naming a
+// replica whose readable entries lie outside the range sends the operator to inspect the wrong one.
+func TestSkipRangeAdd_OnlyReplicasThatCanReadTheRangeAreNamed(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	// node-1 reads 0-9 and fails 10-19; node-2 reads both.
+	ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{
+		{{0, 9, 1}, {10, 19, 0}},
+		{{0, 9, 1}, {10, 19, 1}},
+	})
+	cmd, _, _ := markingTestCmd()
+
+	err := runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk", confirmed: true,
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "node-2")
+	require.NotContains(t, err.Error(), "node-1",
+		"node-1 cannot read the range, so naming it points at the wrong replica")
+}
+
+// TestSkipRangeAdd_PreviewCountsWhatIsNewlyGivenUp covers the line an operator decides on. The
+// preview is computed from the record as it stands, and the merge that produces the new record
+// rewrites those same objects, so a preview taken afterwards reports nothing newly lost.
+func TestSkipRangeAdd_PreviewCountsWhatIsNewlyGivenUp(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{{{0, 99, 0}}, {{0, 99, 0}}})
+	cmd, _, _ := markingTestCmd()
+	require.NoError(t, runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "first", confirmed: true,
+	}))
+
+	// Extending the range upward: 20-30 is newly given up.
+	second, _, errOut := markingTestCmd()
+	require.NoError(t, runSkipRangeAdd(second, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 15, to: 30, reason: "wider", confirmed: true,
+	}))
+
+	s := errOut.String()
+	require.Contains(t, s, "20-30", "the entries that are newly abandoned have to be named")
+	require.NotContains(t, s, "nothing more becomes unreachable",
+		"20-30 was not declared before, so this is not a no-op")
+}
+
+// TestSkipRangeAdd_ReasonTruncatesOnARuneBoundary covers a reason in a language whose characters
+// are multi-byte. Cutting at a byte count can land mid-character, and protobuf refuses to marshal
+// a string field that is not valid UTF-8, so the command would fail after printing its preview.
+func TestSkipRangeAdd_ReasonTruncatesOnARuneBoundary(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{{{0, 99, 0}}, {{0, 99, 0}}})
+	cmd, _, _ := markingTestCmd()
+
+	err := runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19,
+		reason: strings.Repeat("\u4e2d", 90), confirmed: true, // 270 bytes, 90 runes
+	})
+
+	require.NoError(t, err, "a reason over the budget is truncated, not a reason to fail the write")
+	got := declaredRanges(t, cli, kb, 7, 3)
+	require.Len(t, got, 1)
+	require.True(t, utf8.ValidString(got[0].Reason), "the stored reason has to be valid UTF-8")
+	require.LessOrEqual(t, len(got[0].Reason), meta.MaxSkipRangeReasonBytes)
+}
+
+// TestSkipRangeRemove_ByLogIdReachesADeletedLogsRanges is what makes the over-limit error's advice
+// possible. Ranges outlive their log by design -- log ids are never reused, so they are inert --
+// but `list` says they stay until removed and the size refusal says to remove them, so something
+// has to be able to.
+func TestSkipRangeRemove_ByLogIdReachesADeletedLogsRanges(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	rec, err := readSkipRanges(context.Background(), cli, kb)
+	require.NoError(t, err)
+	putSegmentRanges(rec.set, 99, 1, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 5, Reason: "gone log"}})
+	require.NoError(t, writeSkipRanges(context.Background(), cli, kb, rec))
+	cmd, _, _ := markingTestCmd()
+
+	require.NoError(t, runSkipRangeRemove(cmd, cli, kb, "", 99, 1, 0, 5))
+
+	require.Empty(t, declaredRanges(t, cli, kb, 99, 1))
+}
+
 // TestSkipRangeAdd_ForceOverridesTheRefusal keeps the override explicit: an operator who has
 // decided anyway can proceed, but only by saying so.
 func TestSkipRangeAdd_ForceOverridesTheRefusal(t *testing.T) {
@@ -148,8 +437,10 @@ func TestSkipRangeAdd_ForceOverridesTheRefusal(t *testing.T) {
 }
 
 // TestSkipRangeAdd_UnreachableReplicaIsNotAgreement covers the incomplete view. A replica that
-// could not be asked has not said the data is gone, and the same rule as `wp instance data
-// --strict` applies: an incomplete picture does not support a destructive decision silently.
+// could not be asked has not said the data is gone, so it must not stand in for one that did: the
+// same rule as `wp instance data --strict`, an incomplete picture does not support a destructive
+// decision. Warning and writing anyway was the first version of this, and it was wrong -- a silent
+// replica and an examined-and-unreadable one were indistinguishable to the gate.
 func TestSkipRangeAdd_UnreachableReplicaIsNotAgreement(t *testing.T) {
 	cli := startTestEtcd(t)
 	kb := meta.NewKeyBuilder("wptest")
@@ -163,10 +454,20 @@ func TestSkipRangeAdd_UnreachableReplicaIsNotAgreement(t *testing.T) {
 		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk", confirmed: true,
 	})
 
-	require.NoError(t, err, "no replica contradicted the operator, so the declaration stands")
-	require.Contains(t, errOut.String(), "could not be asked",
-		"but the operator has to be told the view was incomplete")
-	require.Contains(t, errOut.String(), "node-2")
+	require.Error(t, err, "one replica never answered, so the range is not established as unreadable")
+	require.Equal(t, 4, wperrors.ExitCodeFor(err))
+	require.Contains(t, err.Error(), "node-2", "the replica that could not be asked has to be named")
+	require.Empty(t, declaredRanges(t, cli, kb, 7, 3))
+
+	// --force carries the decision, and says that it is doing so.
+	forced, _, forcedErr := markingTestCmd()
+	require.NoError(t, runSkipRangeAdd(forced, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk",
+		confirmed: true, force: true,
+	}))
+	require.Contains(t, forcedErr.String(), "--force is overriding")
+	require.Len(t, declaredRanges(t, cli, kb, 7, 3), 1)
+	_ = errOut
 }
 
 // TestSkipRangeAdd_WithoutConfirmationWritesNothing covers the prompt. This is the only wp
@@ -282,7 +583,7 @@ func TestSkipRangeRemove_WithdrawingTheMiddleSplitsTheRange(t *testing.T) {
 		logName: "mylog", segmentID: 3, from: 10, to: 29, reason: "bad disk", confirmed: true,
 	}))
 
-	require.NoError(t, runSkipRangeRemove(cmd, cli, kb, "mylog", 3, 15, 19))
+	require.NoError(t, runSkipRangeRemove(cmd, cli, kb, "mylog", -1, 3, 15, 19))
 
 	got := declaredRanges(t, cli, kb, 7, 3)
 	require.Len(t, got, 2)
@@ -306,7 +607,7 @@ func TestSkipRangeRemove_WithdrawingEverythingClearsTheSegment(t *testing.T) {
 		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk", confirmed: true,
 	}))
 
-	require.NoError(t, runSkipRangeRemove(cmd, cli, kb, "mylog", 3, 0, 99))
+	require.NoError(t, runSkipRangeRemove(cmd, cli, kb, "mylog", -1, 3, 0, 99))
 
 	require.Empty(t, declaredRanges(t, cli, kb, 7, 3))
 	rec, err := readSkipRanges(context.Background(), cli, kb)
@@ -327,7 +628,7 @@ func TestSkipRangeRemove_NonOverlappingWithdrawalIsNotFound(t *testing.T) {
 		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "bad disk", confirmed: true,
 	}))
 
-	err := runSkipRangeRemove(cmd, cli, kb, "mylog", 3, 40, 50)
+	err := runSkipRangeRemove(cmd, cli, kb, "mylog", -1, 3, 40, 50)
 
 	require.Error(t, err)
 	require.Equal(t, 3, wperrors.ExitCodeFor(err))
