@@ -140,3 +140,46 @@ message SegmentCompactedNotifyStatus {
   string error_message = 7;  // Why the record went PENDING_MANUAL
 }
 
+/**
+ * SkipRange is one span of entries an operator has declared unreadable. Both ends are
+ * inclusive, matching truncated_entry_id and the [first, last] a block header carries,
+ * so the numbers an inspect report prints copy across unchanged.
+ */
+message SkipRange{
+  int64 from_entry_id = 1;
+  int64 to_entry_id = 2;
+  fixed64 creation_timestamp = 3;
+  string reason = 4;
+}
+
+/**
+ * SegmentSkipRanges is what to skip inside one segment. The write path sorts by
+ * from_entry_id and merges overlaps, to keep the record canonical and its listing
+ * stable -- not because a reader depends on it: scanning a handful of ranges answers
+ * correctly however they are ordered, and an overlap only costs a second hop.
+ */
+message SegmentSkipRanges{
+  repeated SkipRange ranges = 1;
+}
+
+/**
+ * LogSkipRanges indexes one log's ranges by segment id, so a reader that has just
+ * resolved a segment answers "is any of this skipped" with one lookup.
+ */
+message LogSkipRanges{
+  map<int64, SegmentSkipRanges> by_segment_id = 1;
+}
+
+/**
+ * AllSkipRanges is every log's skip ranges in one record, keyed by log id because log
+ * ids are never reused: an entry left behind by a deleted log can never apply to a
+ * later log of the same name. The two wrapper messages are forced -- a protobuf map
+ * value may not itself be a map.
+ *
+ * Appended rather than grouped with LogMeta so the generated message indices of every
+ * existing message stay put: inserting here renumbers them and rewrites a line per
+ * message per generated method.
+ */
+message AllSkipRanges{
+  map<int64, LogSkipRanges> by_log_id = 1;
+}
