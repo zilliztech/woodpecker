@@ -89,7 +89,8 @@ func newNodeLogHealthCommand() *cobra.Command {
 			if jsonErr := json.Unmarshal(body, &report); jsonErr != nil {
 				if status != http.StatusOK {
 					return wperrors.NewNetworkError(
-						fmt.Sprintf("%s returned status %d: %s", path, status, strings.TrimSpace(string(body))))
+						fmt.Sprintf("%s returned status %d: %s", path, status, strings.TrimSpace(string(body))),
+					)
 				}
 				return wperrors.NewNetworkError(fmt.Sprintf("invalid response: %v", jsonErr))
 			}

@@ -919,6 +919,64 @@ func (_c *MetadataProvider_GetAllSegmentMetadata_Call) RunAndReturn(run func(con
 	return _c
 }
 
+// GetAllSkipRanges provides a mock function with given fields: ctx
+func (_m *MetadataProvider) GetAllSkipRanges(ctx context.Context) (*meta.AllSkipRanges, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllSkipRanges")
+	}
+
+	var r0 *meta.AllSkipRanges
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (*meta.AllSkipRanges, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) *meta.AllSkipRanges); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.AllSkipRanges)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MetadataProvider_GetAllSkipRanges_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllSkipRanges'
+type MetadataProvider_GetAllSkipRanges_Call struct {
+	*mock.Call
+}
+
+// GetAllSkipRanges is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MetadataProvider_Expecter) GetAllSkipRanges(ctx interface{}) *MetadataProvider_GetAllSkipRanges_Call {
+	return &MetadataProvider_GetAllSkipRanges_Call{Call: _e.mock.On("GetAllSkipRanges", ctx)}
+}
+
+func (_c *MetadataProvider_GetAllSkipRanges_Call) Run(run func(ctx context.Context)) *MetadataProvider_GetAllSkipRanges_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_GetAllSkipRanges_Call) Return(_a0 *meta.AllSkipRanges, _a1 error) *MetadataProvider_GetAllSkipRanges_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MetadataProvider_GetAllSkipRanges_Call) RunAndReturn(run func(context.Context) (*meta.AllSkipRanges, error)) *MetadataProvider_GetAllSkipRanges_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetConditionWriteResult provides a mock function with given fields: ctx
 func (_m *MetadataProvider) GetConditionWriteResult(ctx context.Context) (bool, error) {
 	ret := _m.Called(ctx)
@@ -2047,6 +2105,53 @@ func (_c *MetadataProvider_StoreSegmentMetadata_Call) Return(_a0 error) *Metadat
 }
 
 func (_c *MetadataProvider_StoreSegmentMetadata_Call) RunAndReturn(run func(context.Context, string, int64, *meta.SegmentMeta) error) *MetadataProvider_StoreSegmentMetadata_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateAllSkipRanges provides a mock function with given fields: ctx, set
+func (_m *MetadataProvider) UpdateAllSkipRanges(ctx context.Context, set *meta.AllSkipRanges) error {
+	ret := _m.Called(ctx, set)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateAllSkipRanges")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *meta.AllSkipRanges) error); ok {
+		r0 = rf(ctx, set)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_UpdateAllSkipRanges_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateAllSkipRanges'
+type MetadataProvider_UpdateAllSkipRanges_Call struct {
+	*mock.Call
+}
+
+// UpdateAllSkipRanges is a helper method to define mock.On call
+//   - ctx context.Context
+//   - set *meta.AllSkipRanges
+func (_e *MetadataProvider_Expecter) UpdateAllSkipRanges(ctx interface{}, set interface{}) *MetadataProvider_UpdateAllSkipRanges_Call {
+	return &MetadataProvider_UpdateAllSkipRanges_Call{Call: _e.mock.On("UpdateAllSkipRanges", ctx, set)}
+}
+
+func (_c *MetadataProvider_UpdateAllSkipRanges_Call) Run(run func(ctx context.Context, set *meta.AllSkipRanges)) *MetadataProvider_UpdateAllSkipRanges_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*meta.AllSkipRanges))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_UpdateAllSkipRanges_Call) Return(_a0 error) *MetadataProvider_UpdateAllSkipRanges_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_UpdateAllSkipRanges_Call) RunAndReturn(run func(context.Context, *meta.AllSkipRanges) error) *MetadataProvider_UpdateAllSkipRanges_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -74,7 +74,8 @@ func surveyBody(stopReason string, statuses ...string) string {
 		blocks = append(blocks, fmt.Sprintf(
 			`{"block":%d,"offset":%d,"bytes":100,"first_entry_id":%d,"last_entry_id":%d,`+
 				`"records_ok":6,"last_good_entry_id":%d,"status":%q,"detail":%q}`,
-			i, i*100, i*10, i*10+9, lastGood, status, detail))
+			i, i*100, i*10, i*10+9, lastGood, status, detail,
+		))
 	}
 	stoppedEarly := stopReason != "end_of_segment"
 	return fmt.Sprintf(`{"node_id":"n","source":"local_staged","survey":{"blocks":[%s],`+
@@ -232,7 +233,8 @@ func blocksBody(stopReason string, stopOffset int64, blocks ...[4]int64) string 
 		parts = append(parts, fmt.Sprintf(
 			`{"block":%d,"offset":%d,"bytes":100,"first_entry_id":%d,"last_entry_id":%d,`+
 				`"records_ok":0,"last_good_entry_id":%d,"status":%q,"detail":%q}`,
-			i, i*100, blk[0], blk[1], blk[2], status, detail))
+			i, i*100, blk[0], blk[1], blk[2], status, detail,
+		))
 	}
 	return fmt.Sprintf(`{"node_id":"n","source":"local_staged","survey":{"blocks":[%s],`+
 		`"sealed":true,"total_blocks_known":%d,"lac":19,"stopped_early":%t,"stop_reason":%q,"stop_offset":%d}}`,
@@ -325,7 +327,8 @@ func blocksBodyFull(sealed bool, lac int64, indexUsable bool, stopReason string,
 		parts = append(parts, fmt.Sprintf(
 			`{"block":%d,"offset":%d,"bytes":100,"first_entry_id":%d,"last_entry_id":%d,`+
 				`"records_ok":0,"last_good_entry_id":%d,"status":%q,"detail":%q}`,
-			i, i*100, blk[0], blk[1], blk[2], status, detail))
+			i, i*100, blk[0], blk[1], blk[2], status, detail,
+		))
 	}
 	return fmt.Sprintf(`{"node_id":"n","source":"local_staged","survey":{"blocks":[%s],`+
 		`"sealed":%t,"total_blocks_known":%d,"index_usable":%t,"lac":%d,`+

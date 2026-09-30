@@ -566,6 +566,88 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 	return nil
 }
 
+// MaxSkipRangeReasonBytes and MaxAllSkipRangesBytes bound the one record that holds every
+// log's skip ranges. The bound is on the encoded size rather than on a count because
+// reason is free text, so a count limit gets the arithmetic wrong. The ceiling is a third
+// of etcd's default 1.5MB request limit, which also keeps the one thing a single record
+// leaks -- an entry a deleted log left behind -- bounded rather than unbounded.
+const (
+	MaxSkipRangeReasonBytes = 256
+	MaxAllSkipRangesBytes   = 512 * 1024
+)
+
+func (e *metadataProviderEtcd) GetAllSkipRanges(ctx context.Context) (*AllSkipRanges, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetAllSkipRanges")
+	defer sp.End()
+	startTime := time.Now()
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	resp, err := e.client.Get(ctx1, e.keyBuilder.AllSkipRangesKey())
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		return nil, werr.ErrMetadataRead.WithCauseErr(err)
+	}
+	set := &AllSkipRanges{Metadata: &proto.AllSkipRanges{}}
+	if len(resp.Kvs) > 0 {
+		set.Revision = resp.Kvs[0].ModRevision
+		if err = pb.Unmarshal(resp.Kvs[0].Value, set.Metadata); err != nil {
+			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", "error").Inc()
+			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			return nil, werr.ErrMetadataDecode.WithCauseErr(err)
+		}
+	}
+	// Revision stays 0 when the record does not exist, which is exactly what the write path
+	// compares against: etcd reads a missing key's ModRevision as 0 too.
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return set, nil
+}
+
+func (e *metadataProviderEtcd) UpdateAllSkipRanges(ctx context.Context, set *AllSkipRanges) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateAllSkipRanges")
+	defer sp.End()
+	startTime := time.Now()
+	key := e.keyBuilder.AllSkipRangesKey()
+
+	value, err := pb.Marshal(set.Metadata)
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Inc()
+		return werr.ErrMetadataEncode.WithCauseErr(err)
+	}
+	if len(value) > MaxAllSkipRangesBytes {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Inc()
+		return werr.ErrMetadataEncode.WithCauseErrMsg(fmt.Sprintf(
+			"skip ranges would be %d bytes, over the %d-byte limit for one record; remove ranges that no longer apply",
+			len(value), MaxAllSkipRangesBytes,
+		))
+	}
+
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	// One compare covers both cases: etcd reads a missing key's ModRevision as 0, which is
+	// the revision a read of an absent record reports, so a record someone else created in
+	// between fails this the same way a record someone else edited does. Without it a second
+	// writer would drop every range the first one added.
+	txnResp, err := e.client.Txn(ctx1).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", set.Revision)).
+		Then(clientv3.OpPut(key, string(value))).Commit()
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+	if !txnResp.Succeeded {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		return werr.ErrMetadataRevisionInvalid.WithCauseErrMsg("skip ranges changed since they were read")
+	}
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_all_skip_ranges", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return nil
+}
+
 func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*LogMeta, map[int64]*SegmentMeta, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "OpenLog")
 	defer sp.End()
@@ -733,14 +815,16 @@ func extractLogNameWithKeyBuilder(keyBuilder *KeyBuilder, key string) (string, e
 	logsPrefix := keyBuilder.LogsPrefix() + "/"
 	if !strings.HasPrefix(key, logsPrefix) {
 		return "", werr.ErrMetadataDecode.WithCauseErrMsg(
-			fmt.Sprintf("extract logName failed, invalid path format: %s", key))
+			fmt.Sprintf("extract logName failed, invalid path format: %s", key),
+		)
 	}
 
 	remaining := strings.TrimPrefix(key, logsPrefix)
 	parts := strings.SplitN(remaining, "/", 2)
 	if len(parts) == 0 || parts[0] == "" {
 		return "", werr.ErrMetadataDecode.WithCauseErrMsg(
-			fmt.Sprintf("extract logName failed, invalid path format: %s", key))
+			fmt.Sprintf("extract logName failed, invalid path format: %s", key),
+		)
 	}
 	return parts[0], nil
 }
@@ -904,11 +988,13 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 			logger.Ctx(ctx).Warn("reject segment store: parent log no longer exists",
 				zap.String("logName", logName), zap.Int64("segmentId", segmentMeta.Metadata.GetSegNo()))
 			return werr.ErrMetadataKeyNotExists.WithCauseErrMsg(
-				fmt.Sprintf("parent log no longer exists for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()))
+				fmt.Sprintf("parent log no longer exists for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()),
+			)
 		}
 		logger.Ctx(ctx).Warn("segment metadata already exists", zap.String("logName", logName), zap.Int64("segmentId", segmentMeta.Metadata.GetSegNo()))
 		return werr.ErrMetadataSegmentAlreadyExists.WithCauseErrMsg(
-			fmt.Sprintf("segment metadata already exists for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()))
+			fmt.Sprintf("segment metadata already exists for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()),
+		)
 	}
 	// update revision
 	segmentMeta.Revision = txnResp.Header.Revision
@@ -957,7 +1043,8 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("segment metadata revision is invalid or outdated", zap.String("logName", logName), zap.Int64("segmentId", segmentMeta.Metadata.GetSegNo()))
 		return werr.ErrMetadataRevisionInvalid.WithCauseErrMsg(
-			fmt.Sprintf("segment metadata revision is invalid or outdated for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()))
+			fmt.Sprintf("segment metadata revision is invalid or outdated for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()),
+		)
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_segment_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -989,7 +1076,8 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(
-			fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId))
+			fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId),
+		)
 	}
 	revision := getResp.Kvs[0].ModRevision
 	segmentMetadata := &proto.SegmentMetadata{}
@@ -1105,7 +1193,8 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "delete_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("segment not found for deletion", zap.String("logName", logName), zap.Int64("segmentId", segmentId))
 		return werr.ErrSegmentNotFound.WithCauseErrMsg(
-			fmt.Sprintf("segment not found for logName:%s segmentId:%d", logName, segmentId))
+			fmt.Sprintf("segment not found for logName:%s segmentId:%d", logName, segmentId),
+		)
 	}
 
 	logger.Ctx(ctx).Info("Deleted segment metadata",
@@ -1160,7 +1249,8 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "store_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("quorum info already exists", zap.Int64("quorumId", info.Id))
 		return werr.ErrMetadataUpdateQuorum.WithCauseErrMsg(
-			fmt.Sprintf("quorum info already exists for id:%d", info.Id))
+			fmt.Sprintf("quorum info already exists for id:%d", info.Id),
+		)
 	}
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "store_quorum_info", "success").Inc()

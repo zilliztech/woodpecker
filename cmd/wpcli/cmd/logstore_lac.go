@@ -99,7 +99,8 @@ func runSegmentLAC(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder
 	quorum := segMeta.GetQuorum()
 	if quorum == nil {
 		return wperrors.NewTargetNotFoundError(fmt.Sprintf(
-			"segment %d of log %s carries no quorum", segmentID, logName))
+			"segment %d of log %s carries no quorum", segmentID, logName,
+		))
 	}
 
 	positions := collectQuorumPositions(ac, members, quorum, logMeta.LogId, segmentID)
@@ -127,7 +128,8 @@ func runSegmentLAC(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder
 	if !ok {
 		unresolved = wperrors.NewNetworkError(fmt.Sprintf(
 			"only %d of %d quorum nodes answered, below aq=%d: no position can be called confirmed",
-			answered, len(positions), quorum.Aq))
+			answered, len(positions), quorum.Aq,
+		))
 	}
 
 	w := cmd.OutOrStdout()

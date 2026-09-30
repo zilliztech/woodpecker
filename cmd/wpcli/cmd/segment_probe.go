@@ -137,7 +137,8 @@ func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 	quorum := segMeta.GetQuorum()
 	if quorum == nil {
 		return wperrors.NewTargetNotFoundError(fmt.Sprintf(
-			"segment %d of log %s carries no quorum", segmentID, logName))
+			"segment %d of log %s carries no quorum", segmentID, logName,
+		))
 	}
 
 	results := probeEachNode(ac, members, quorum, logMeta.LogId, segmentID, fromEntry, maxEntries)
@@ -340,11 +341,13 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 	if exp.truncated {
 		findings = append(findings, fmt.Sprintf(
 			"Segment %d is truncated: its data is being, or has been, reclaimed on purpose. A replica holding nothing here is expected.",
-			segMeta.GetSegNo()))
+			segMeta.GetSegNo(),
+		))
 	}
 	if len(answered) == 0 {
 		findings = append(findings, fmt.Sprintf(
-			"No replica answered (%s), so nothing can be said about this segment.", strings.Join(silent, ", ")))
+			"No replica answered (%s), so nothing can be said about this segment.", strings.Join(silent, ", "),
+		))
 		return findings, judged, wperrors.NewNetworkError("no replica answered the probe")
 	}
 	if len(silent) > 0 {
@@ -352,12 +355,14 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		// can still be served by one that did not answer here.
 		findings = append(findings, fmt.Sprintf(
 			"%d of %d replicas did not answer (%s). Nothing below is a statement about the whole quorum.",
-			len(silent), len(results), strings.Join(silent, ", ")))
+			len(silent), len(results), strings.Join(silent, ", "),
+		))
 	}
 	if shared == len(answered) && len(answered) > 1 {
 		findings = append(findings, fmt.Sprintf(
 			"All %d replicas that answered served this from object storage — one shared copy answering %d times, not %d independent confirmations.",
-			len(answered), len(answered), len(answered)))
+			len(answered), len(answered), len(answered),
+		))
 	}
 
 	switch {
@@ -367,9 +372,11 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		stuck := firstUnreadable(failing)
 		findings = append(findings, fmt.Sprintf(
 			"No replica can serve entry %d: %s. A reader at that position waits forever.",
-			stuck, describeStops(failing)))
+			stuck, describeStops(failing),
+		))
 		return findings, judged, wperrors.NewRedFindingError(fmt.Sprintf(
-			"entry %d cannot be served by any replica", stuck))
+			"entry %d cannot be served by any replica", stuck,
+		))
 	case len(failing) > 0:
 		names := make([]string, 0, len(failing))
 		for _, r := range failing {
@@ -377,7 +384,8 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		}
 		findings = append(findings, fmt.Sprintf(
 			"%d of %d replicas that answered cannot serve the segment: %s. Failover covers for them, so reads still work and nothing else reports this.",
-			len(failing), len(answered), strings.Join(names, ", ")))
+			len(failing), len(answered), strings.Join(names, ", "),
+		))
 		return findings, judged, nil
 	}
 
@@ -404,17 +412,21 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		}
 		findings = append(findings, fmt.Sprintf(
 			"Every replica served up to entry %d, where this probe's window ended.%s Raise --max-entries or move --from-entry to look further.",
-			answered[0].LastEntry, ends))
+			answered[0].LastEntry, ends,
+		))
 	case samePosition && sameOutcome && answered[0].Outcome == probeOutcomeEntryNotFound:
 		findings = append(findings, fmt.Sprintf(
 			"Every replica that answered stops after entry %d because the data ends there — entry %d has not been written yet.",
-			answered[0].LastEntry, answered[0].LastEntry+1))
+			answered[0].LastEntry, answered[0].LastEntry+1,
+		))
 	case samePosition && sameOutcome && answered[0].Outcome == probeOutcomeEndOfFile:
 		findings = append(findings, fmt.Sprintf(
-			"Every replica that answered reads to entry %d and the segment ends there.", answered[0].LastEntry))
+			"Every replica that answered reads to entry %d and the segment ends there.", answered[0].LastEntry,
+		))
 	case samePosition && sameOutcome:
 		findings = append(findings, fmt.Sprintf(
-			"Every replica that answered stopped at entry %d (%s).", answered[0].LastEntry, answered[0].Outcome))
+			"Every replica that answered stopped at entry %d (%s).", answered[0].LastEntry, answered[0].Outcome,
+		))
 	case samePosition:
 		reasons := make([]string, 0, len(answered))
 		for _, r := range answered {
@@ -422,7 +434,8 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		}
 		findings = append(findings, fmt.Sprintf(
 			"Every replica that answered holds the same data, up to entry %d, but gave different reasons for stopping: %s.",
-			answered[0].LastEntry, strings.Join(reasons, ", ")))
+			answered[0].LastEntry, strings.Join(reasons, ", "),
+		))
 	default:
 		behind := make([]string, 0, len(answered))
 		furthest := furthestServed(answered)
@@ -433,7 +446,8 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		}
 		findings = append(findings, fmt.Sprintf(
 			"Replicas hold different amounts, the furthest reaching entry %d: %s. No read failed and the segment is still being written, so this is a replica that is behind, not a damaged one.",
-			furthest, strings.Join(behind, ", ")))
+			furthest, strings.Join(behind, ", "),
+		))
 	}
 	return findings, judged, nil
 }
