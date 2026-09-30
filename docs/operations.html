@@ -541,20 +541,21 @@ so <code>marking list</code> prints the prefix it scanned for you to check again
 </div>
 
 <div class="gap">
-<strong>Gap:</strong> there is still no way to list logs, or to read a reader&rsquo;s recorded position, and no
-command corrects a metadata record beyond <code>marking confirm</code>.
+<strong>Gap:</strong> there is still no way to list logs, and no command corrects a metadata record beyond
+<code>marking confirm</code>.
 </div>
 
-<h3>Readers <span class="lvl none">none</span></h3>
+<h3>Readers <span class="lvl">partial</span></h3>
+
+<p><code>wp log readers</code> lists a log&rsquo;s readers with the position each opened at, the position each last
+read, and how long ago it reported. It reads metadata only, so it answers while a node is unreachable.
+<code>wp logstore lac</code> gives the tail those positions are measured against.</p>
 
 <div class="gap">
-<strong>Gap:</strong> there is no command to see which readers are attached to a log or where each has reached. The
-information exists — readers publish their position into metadata under a lease — but nothing surfaces it.
-<p style="margin-top:0.6rem">Half of the comparison now does exist: <code>wp logstore lac</code> gives the tail a
-reader would be measured against. Until the reader side is surfaced too, a reader that has stopped and one that has
-caught up still cannot be told apart.</p>
-<p style="margin-top:0.6rem">When that arrives, one constraint comes with it: reader positions are republished
-every 30 seconds, so any comparison sampling faster than that sees every reader frozen and calls them all stuck.</p>
+<strong>Gap:</strong> the reader side is per log &mdash; you have to name the log, and nothing lists which logs have
+readers at all, so a reader stuck on a log nobody is watching is still found by looking for it.
+<p style="margin-top:0.6rem">One constraint comes with the positions: they are republished every 30 seconds, so
+any comparison sampling faster than that sees every reader frozen and calls them all stuck.</p>
 </div>
 
 <h3>Client-side writers and readers <span class="lvl">partial</span></h3>
@@ -597,6 +598,7 @@ server-side, and those do appear.
 <tr><td>Local disk filling up</td><td>Works end to end</td></tr>
 <tr><td>Writes are not progressing</td><td>Works &mdash; three commands between them; the client&rsquo;s own submit queue is not published</td></tr>
 <tr><td>A reader is not progressing</td><td>Yes &mdash; the reader&rsquo;s position, the confirmed tail, and whether the data at that position is readable at all</td></tr>
+<tr><td>Checking a whole log</td><td>Yes &mdash; one sweep reconciles every segment&rsquo;s metadata against what the replicas hold</td></tr>
 <tr><td>Correcting metadata</td><td>Not yet &mdash; beyond <code>marking confirm</code></td></tr>
 </tbody>
 </table>
@@ -732,6 +734,50 @@ write the nodes holding the pending appends are the ones with live processors, s
 processors have all been evicted cannot be fenced through this path at all.
 </div>
 
+<h3>Checking a whole log</h3>
+
+<p>Every command below starts from a segment id, which assumes you already suspect one. One sweep asks the
+question the other way round &mdash; does this log read through from end to end, and does what is on disk match
+what the metadata says:</p>
+
+<div class="code-block"><pre>wp log scan &lt;logName&gt; [--mode quick|raw] [--from-segment N] [--to-segment N] \
+    --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>One line per segment, then the findings. A clean log is a short report.</p>
+
+<div class="code-block"><pre>SEGMENT  STATE      META LAST  REACHES  REPLICAS  VERDICT  DETAIL
+0        Completed  19         0-19     2/2       ok
+1        Completed  19         0-9      2/2       short    missing 10-19
+3        Active     -1 (open)  0-7      2/2       open</pre></div>
+
+<p>The two modes cost three orders of magnitude apart because they answer different questions:</p>
+
+<table>
+<tr><th>Mode</th><th>Reads</th><th>Answers</th></tr>
+<tr><td><code>quick</code> (default)</td><td>the index and footer only &mdash; one trailer read per sealed segment,
+a few kilobytes whatever the segment weighs</td><td>Does the <strong>structure</strong> add up?</td></tr>
+<tr><td><code>raw</code></td><td>the normal path, codec and checksums</td><td>How far does a <strong>reader</strong>
+actually get?</td></tr>
+</table>
+
+<p>That is what makes sweeping a whole log affordable: a 256MB segment costs a quick scan the same as an empty one.
+An active segment has no index, so quick mode walks the chain for each block&rsquo;s header, but not its body.</p>
+
+<p><code>REACHES</code> is the union across replicas, because a read needs one replica that holds the entry rather
+than a quorum. A replica short of that union is a replica that needs resyncing, not a loss, and is reported as such
+rather than as a fault. Entry ids restart at 0 in every segment, so a segment&rsquo;s expected range is
+<code>[0, lastEntryId]</code> and nothing is derived from its neighbours; an Active segment&rsquo;s
+<code>-1</code> is open, never a mismatch.</p>
+
+<p>Above the segment rows come the log-level findings: a gap in the segment ids, split by what to do about it
+&mdash; a node still holds the data (data nobody owns, which no reader reaches and no reclaim removes), no node
+holds it (the record is gone rather than the data), or no node could be asked &mdash; more than one Active
+segment, and an Active segment that is not the newest. Gaps below the truncation point are expected and stay
+silent.</p>
+
+<p>A scan narrows to a segment; it does not explain one. It stops where a read stops and names
+<code>wp segment inspect</code> for the question of whether the damage ends there.</p>
+
 <h3>A reader is not progressing</h3>
 
 <p>Two positions answer this, and both are readable. Where each reader has read to comes from metadata alone,
@@ -808,8 +854,9 @@ position: replicas flush on their own timers, so the same block number covers di
 nodes, and a shorter replica returns nothing for a later page.</p>
 
 <p>Read them in that order. <code>lac</code> and <code>log readers</code> are cheap and answer most stalls;
-<code>probe</code> costs a bounded read per replica; <code>inspect</code> reads every byte of the blocks it walks
-and is worth reaching for once probe has shown there is something to explain.</p>
+<code>log scan --mode quick</code> is cheap too and is the one to reach for when no particular segment is suspected
+yet; <code>probe</code> costs a bounded read per replica; <code>inspect</code> reads every byte of the blocks it
+walks and is worth reaching for once probe has shown there is something to explain.</p>
 
 <div class="gap">
 <strong>Gap:</strong> the reader still cannot be told to skip what it cannot read. A checksum failure reaches the
