@@ -50,6 +50,12 @@ type MetadataProvider interface {
 	GetLogMeta(ctx context.Context, logName string) (*LogMeta, error)
 	// UpdateLogMeta updates the metadata for a specific log.
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error
+	// GetAllSkipRanges returns every log's operator-declared skip ranges, with the
+	// revision they were read at. A record that does not exist yet reads as empty
+	// rather than as an error: most clusters never have one.
+	GetAllSkipRanges(ctx context.Context) (*AllSkipRanges, error)
+	// UpdateAllSkipRanges writes them back, failing when the record moved since the read.
+	UpdateAllSkipRanges(ctx context.Context, set *AllSkipRanges) error
 	// ClearMeta removes all content metadata for this instance (logs, segments, quorums,
 	// node registrations, reader sessions, cleanup and compacted-mark records) and re-seeds
 	// the instance-level keys. clearLogIdGen decides whether the log id counter restarts;
@@ -179,6 +185,22 @@ type ReaderTempInfoSession interface {
 type LogMeta struct {
 	Metadata *proto.LogMeta
 	Revision int64
+}
+
+// AllSkipRanges is a wrapper of proto.AllSkipRanges with the revision it was read at,
+// so a writer can refuse to overwrite a record that moved under it.
+type AllSkipRanges struct {
+	Metadata *proto.AllSkipRanges
+	Revision int64
+}
+
+// For returns one log's ranges, or nil when it has none. Safe on a nil receiver, so the
+// caller never has to check whether any skip range exists at all.
+func (a *AllSkipRanges) For(logID int64) *proto.LogSkipRanges {
+	if a == nil {
+		return nil
+	}
+	return a.Metadata.GetByLogId()[logID]
 }
 
 // SegmentMeta is a wrapper of proto.SegmentMetadata with revision.

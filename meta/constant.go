@@ -88,6 +88,13 @@ func (b *KeyBuilder) SegmentCleanupStatusPrefix() string {
 	return fmt.Sprintf("%s/cleaning", b.prefix)
 }
 
+// AllSkipRangesKey returns the key holding every log's operator-declared skip ranges.
+// One record for the whole metadata root: a reader must not have to guess which key to
+// read, and skip ranges are an incident artefact, so the record stays small.
+func (b *KeyBuilder) AllSkipRangesKey() string {
+	return fmt.Sprintf("%s/skipranges", b.prefix)
+}
+
 // ConditionWriteKey returns the key for conditional write configuration.
 func (b *KeyBuilder) ConditionWriteKey() string {
 	return fmt.Sprintf("%s/conditionwrite", b.prefix)
