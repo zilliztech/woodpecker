@@ -109,6 +109,25 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
   the point is kept by truncation, so its absence is a loss), and the Active segments, reported
   without failing on them because a roll with queued appends legitimately leaves two Active.
 
+### Declaring data unreadable
+- `wp log skip-range list [<logName>]` — the declared skip ranges, with each one's age and reason.
+  With no log name it lists every log, including ranges whose log no longer exists: log ids are
+  never reused, so such a range can never apply again, but it stays until it is removed.
+- `wp log skip-range add <logName> <segmentId> --from-entry N --to-entry M --reason "..." [-y] [--force]`
+  — declare an entry range unreadable so readers move past it. **This gives up data.** It asks the
+  quorum first and refuses, naming the replica, if any replica can still read part of the range —
+  a read is served by any one replica, so such a range is not lost. A replica that could not be
+  asked is reported rather than counted as agreement. `--force` overrides the refusal; without
+  `-y` nothing is written.
+- `wp log skip-range remove <logName> <segmentId> --from-entry N --to-entry M` — withdraw a range,
+  so readers try those entries again. Withdrawing part of a range splits it, so the boundaries do
+  not have to match the original declaration. It restores nothing, and a reader that already moved
+  past the range does not come back for it.
+
+All three read and write one record for the whole metadata root, under
+`<meta-prefix>/skipranges`, indexed by log id and then segment id. A write refuses if the record
+moved since it was read, so two operators cannot drop each other's ranges.
+
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
 - `wp segment inspect <logName> <segmentId>` — walk the blocks on every replica: which entries are damaged where, whether the damage is bounded, and what a skip would cost
