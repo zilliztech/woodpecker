@@ -274,6 +274,10 @@ func putSegmentRanges(set *proto.AllSkipRanges, logID, segmentID int64, ranges [
 		}
 		return
 	}
+	// Reading a nil map is legal and reading through a nil message is what the generated getters
+	// are for, so everything else in this file chains them freely. Writing is the exception: an
+	// assignment into a nil map panics, so each level is created before the next line touches it.
+	// The direct field accesses below are safe only because of that order.
 	if set.ByLogId == nil {
 		set.ByLogId = map[int64]*proto.LogSkipRanges{}
 	}
