@@ -78,7 +78,7 @@ func newSegment(t *testing.T, blocks, entriesPerBlock int, sealed bool) *segment
 
 func (b *segmentBuilder) survey(fromBlock, maxBlocks int64) SegmentSurvey {
 	data := b.buf.Bytes()
-	return InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), fromBlock, maxBlocks)
+	return InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), fromBlock, maxBlocks, SurveyVerify)
 }
 
 // corruptAt flips a byte, which is what a damaged block looks like from here.
@@ -573,7 +573,7 @@ func TestInspectBlocks_ZeroBlockSealedSegment(t *testing.T) {
 	b.seal() // no blocks between the header and the footer
 
 	data := b.buf.Bytes()
-	got := InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), 0, 100)
+	got := InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), 0, 100, SurveyVerify)
 
 	require.True(t, got.Sealed, "the footer decoded, so the segment is sealed")
 	require.Empty(t, got.Blocks)
@@ -591,7 +591,7 @@ func TestInspectBlocks_ActiveTailBetweenTheTwoWrites(t *testing.T) {
 	b.truncateTo(int(b.indexes[2].StartOffset) + RecordHeaderSize + BlockHeaderRecordSize)
 
 	data := b.buf.Bytes()
-	got := InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), 0, 100)
+	got := InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), 0, 100, SurveyVerify)
 
 	require.Len(t, got.Blocks, 3, "the partial block is still worth reporting")
 	require.Equal(t, BlockOK, got.Blocks[1].Status)
@@ -627,4 +627,95 @@ func TestInspectBlocks_FromBlockIsAPositionOnBothPaths(t *testing.T) {
 	require.Len(t, fromChain.Blocks, 3)
 	require.Equal(t, fromChain.Blocks[0].FirstEntryID, fromIndex.Blocks[0].FirstEntryID,
 		"--from-block 2 must mean the same block on both paths")
+}
+
+// TestInspectBlocks_CoverageModeReadsNoBodies is what makes a whole-log sweep affordable. A sealed
+// segment's index already carries every block's entry range, so the coverage can be had without
+// reading a single byte of block data — and the report says the blocks were not verified rather
+// than calling them ok.
+func TestInspectBlocks_CoverageModeReadsNoBodies(t *testing.T) {
+	b := newSegment(t, 4, 5, true)
+	data := b.buf.Bytes()
+	counted := &countingReaderAt{inner: bytes.NewReader(data)}
+
+	got := InspectBlocks(context.Background(), counted, int64(len(data)), 0, 100, SurveyCoverage)
+
+	require.Len(t, got.Blocks, 4)
+	for i, block := range got.Blocks {
+		require.Equal(t, BlockNotVerified, block.Status, "block %d", i)
+		require.Equal(t, int64(i*5), block.FirstEntryID)
+		require.Equal(t, int64(i*5+4), block.LastEntryID)
+	}
+	require.True(t, got.Sealed)
+	// The bound that matters is not a fraction of the file but the trailer itself: a sealed
+	// segment's coverage is the footer plus the index records, whatever the blocks hold. Anything
+	// more means a block was touched.
+	trailer := int64(RecordHeaderSize+GetFooterRecordSize(FormatVersion)) +
+		4*int64(RecordHeaderSize+IndexRecordSize)
+	require.LessOrEqual(t, counted.bytes, trailer,
+		"coverage read %d bytes; the footer and index are %d — the rest can only be block data",
+		counted.bytes, trailer)
+}
+
+// TestInspectBlocks_CoverageModeOnAnActiveSegment covers the segment with no footer: the block
+// headers still carry the entry ranges, and each one says how far to skip to reach the next, so the
+// coverage costs a header per block and no data.
+func TestInspectBlocks_CoverageModeOnAnActiveSegment(t *testing.T) {
+	b := newSegment(t, 3, 4, false)
+	data := b.buf.Bytes()
+	counted := &countingReaderAt{inner: bytes.NewReader(data)}
+
+	got := InspectBlocks(context.Background(), counted, int64(len(data)), 0, 100, SurveyCoverage)
+
+	require.Len(t, got.Blocks, 3)
+	require.Equal(t, int64(0), got.Blocks[0].FirstEntryID)
+	require.Equal(t, int64(11), got.Blocks[2].LastEntryID)
+	for i, block := range got.Blocks {
+		require.Equal(t, BlockNotVerified, block.Status,
+			"block %d: nothing was checked, so it must not come back ok", i)
+	}
+	require.False(t, got.Sealed)
+	require.Less(t, counted.bytes, int64(len(data)),
+		"the bodies are skipped over, not read")
+}
+
+// TestInspectBlocks_CoverageModeStillReportsAMissingHeader keeps coverage honest: it does not verify
+// data, but a header it cannot read is still a header it cannot read.
+func TestInspectBlocks_CoverageModeStillReportsAMissingHeader(t *testing.T) {
+	b := newSegment(t, 4, 4, false)
+	b.corruptAt(int(b.indexes[2].StartOffset) + 2)
+	data := b.buf.Bytes()
+
+	got := InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), 0, 100, SurveyCoverage)
+
+	require.Len(t, got.Blocks, 2, "the chain cannot be followed past a header it cannot read")
+	require.True(t, got.StoppedEarly)
+	require.Equal(t, SurveyStopChainBroken, got.StopReason)
+}
+
+// TestInspectBlocks_VerifyModeIsUnchanged pins that the mode is additive: the verifying walk still
+// checks bodies and still reports a damaged one.
+func TestInspectBlocks_VerifyModeIsUnchanged(t *testing.T) {
+	b := newSegment(t, 3, 4, true)
+	b.corruptAt(int(b.indexes[1].StartOffset) + RecordHeaderSize + BlockHeaderRecordSize + 1)
+	data := b.buf.Bytes()
+
+	got := InspectBlocks(context.Background(), bytes.NewReader(data), int64(len(data)), 0, 100, SurveyVerify)
+
+	require.Equal(t, BlockOK, got.Blocks[0].Status)
+	require.Equal(t, BlockChecksumFailed, got.Blocks[1].Status)
+	require.Equal(t, BlockOK, got.Blocks[2].Status)
+}
+
+// countingReaderAt records how much was actually read, which is how a promise of "no data reads"
+// gets tested rather than asserted.
+type countingReaderAt struct {
+	inner *bytes.Reader
+	bytes int64
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.inner.ReadAt(p, off)
+	c.bytes += int64(n)
+	return n, err
 }
