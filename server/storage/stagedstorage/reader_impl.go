@@ -983,7 +983,29 @@ func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) err
 	return nil
 }
 
+// readDataBlocksUnsafe reads data blocks from startBlockOffset, returning
+// entries up to the reader's LAC. The caller knows of no finalized footer: -1.
 func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*proto.BatchReadResult, error) {
+	return r.readDataBlocksWithFinalizedFooterLACUnsafe(ctx, opt, startBlockID, startBlockOffset, -1)
+}
+
+// readDataBlocksWithFinalizedFooterLACUnsafe reads data blocks from
+// startBlockOffset, returning entries up to the LAC in effect for each block,
+// which is the highest of:
+//
+//   - the reader's in-memory LAC (r.lastAddConfirmed), re-read before every
+//     block. The writer syncs it asynchronously, so it lags. It bounds what is
+//     safe to read, not where the segment ends.
+//   - the LAC of the footer installed in the reader (r.footer), if any.
+//   - finalizedFooterLAC: the LAC in the footer the segment was finalized
+//     with, read from disk by the caller and not installed, or -1 when there
+//     is none. A footer is written once, when the segment is finalized, and
+//     never changes, so every entry up to its LAC is in the file.
+//
+// finalizedFooterLAC is only ever that footer's LAC. It is not the reader's
+// LAC, and passing the in-memory LAC would change nothing: it is read before
+// every block anyway.
+func (r *StagedFileReaderAdv) readDataBlocksWithFinalizedFooterLACUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64, finalizedFooterLAC int64) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readDataBlocks")
 	defer sp.End()
 	startTime := time.Now()
@@ -1025,6 +1047,9 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 		currentLAC = r.lastAddConfirmed.Load() // Obtain the lac before each block starts reading, more aggressive realtime read
 		if r.footer != nil && r.footer.LAC > currentLAC {
 			currentLAC = r.footer.LAC
+		}
+		if finalizedFooterLAC > currentLAC {
+			currentLAC = finalizedFooterLAC // the segment's final boundary, read from the footer on disk
 		}
 		currentBlockID := i
 
@@ -1191,8 +1216,28 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			if !r.isIncompleteFile.Load() || r.footer != nil {
 				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 			}
-			if r.isFooterExistsUnsafe(ctx) {
-				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			// A footer on disk means the segment was finalized, possibly after this
+			// reader last learned its LAC (a read that carries the consumer's resume
+			// state does not probe for the footer first). The scan above then stopped
+			// at the stale in-memory LAC. The footer's LAC is the final boundary:
+			// end-of-file is only true past it, and ending below it would make the
+			// consumer skip the entries up to it (#405). Scan once more with the
+			// footer's LAC in effect.
+			if footer := r.readFooterFromDiskUnsafe(ctx); footer != nil {
+				if opt.StartEntryID > footer.LAC {
+					return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+				}
+				if finalizedFooterLAC < footer.LAC { // this scan did not have the footer's LAC yet
+					logger.Ctx(ctx).Info("segment finalized beyond the reader's LAC; scanning again up to the footer's LAC",
+						zap.String("filePath", r.filePath),
+						zap.Int64("startEntryId", opt.StartEntryID),
+						zap.Int64("readerLAC", currentLAC),
+						zap.Int64("footerLAC", footer.LAC))
+					return r.readDataBlocksWithFinalizedFooterLACUnsafe(ctx, opt, startBlockID, startBlockOffset, footer.LAC)
+				}
+				// Already scanned with the footer's LAC and still nothing: not
+				// end-of-file below it; let the caller retry or ask another replica.
+				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("entries below the footer's LAC not readable here now, retry later or try to read from other nodes")
 			}
 		}
 		// return entryNotFound to let read caller retry later
@@ -1235,7 +1280,16 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 }
 
 // isFooterExistsUnsafe determines whether a valid footer record exists in the local file
+// isFooterExistsUnsafe reports whether a valid footer is on disk.
 func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
+	return r.readFooterFromDiskUnsafe(ctx) != nil
+}
+
+// readFooterFromDiskUnsafe reads and parses the footer at the end of the local
+// file, or returns nil when there is none (yet). It does not install it in the
+// reader: callers holding only the read lock use it to learn the segment's
+// final boundary.
+func (r *StagedFileReaderAdv) readFooterFromDiskUnsafe(ctx context.Context) *codec.FooterRecord {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "isFooterExists")
 	defer sp.End()
 
@@ -1243,7 +1297,7 @@ func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
 		// Defensive guard: only meaningful for a local file. A compacted (minio-backed)
 		// reader never reaches here in normal operation (isCompacted short-circuits in
 		// readDataBlocksUnsafe before this is called).
-		return false
+		return nil
 	}
 
 	// update size
@@ -1252,7 +1306,7 @@ func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
 		logger.Ctx(ctx).Warn("failed to stat file",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
-		return false
+		return nil
 	}
 	currentSize := stat.Size()
 
@@ -1263,7 +1317,7 @@ func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
 		logger.Ctx(ctx).Debug("file too small for footer, no footer exists yet",
 			zap.String("filePath", r.filePath),
 			zap.Int64("fileSize", currentSize))
-		return false
+		return nil
 	}
 
 	// Try to read and parse footer from the end of the file using compatibility parsing
@@ -1273,20 +1327,19 @@ func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
 		logger.Ctx(ctx).Debug("failed to read footer data, no footer exists yet",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
-		return false
+		return nil
 	}
 
 	// Try to parse footer with compatibility parsing
-	_, err = codec.ParseFooterFromBytes(footerData)
+	footer, err := codec.ParseFooterFromBytes(footerData)
 	if err != nil {
 		logger.Ctx(ctx).Debug("failed to parse footer record, no footer exists yet",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
-		return false
+		return nil
 	}
 
-	// footer exists
-	return true
+	return footer
 }
 
 func (r *StagedFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, blockHeaderRecord *codec.BlockHeaderRecord, currentBlockID int64, dataRecordsBuffer []byte) error {
