@@ -596,7 +596,7 @@ server-side, and those do appear.
 <tr><td>Reclaiming an orphaned instance</td><td>Works end to end</td></tr>
 <tr><td>Local disk filling up</td><td>Works end to end</td></tr>
 <tr><td>Writes are not progressing</td><td>Works &mdash; three commands between them; the client&rsquo;s own submit queue is not published</td></tr>
-<tr><td>A reader is not progressing</td><td>Yes &mdash; the reader&rsquo;s position and the tail to measure it against are both readable</td></tr>
+<tr><td>A reader is not progressing</td><td>Yes &mdash; the reader&rsquo;s position, the confirmed tail, and whether the data at that position is readable at all</td></tr>
 <tr><td>Correcting metadata</td><td>Not yet &mdash; beyond <code>marking confirm</code></td></tr>
 </tbody>
 </table>
@@ -759,12 +759,68 @@ inside a read looks like.</td></tr>
 node fail a question that pure metadata already answers. Sample no faster than 30 seconds &mdash; positions are
 republished on that cadence, and a tighter interval shows every reader frozen and calls them all stuck.</p>
 
+<p>Those two say where a reader is and where the confirmed tail is. When a reader is stuck between them, the
+next question is whether the data at that position can be read at all &mdash; and on which replicas:</p>
+
+<div class="code-block"><pre>wp segment probe &lt;logName&gt; &lt;segmentId&gt; [--from-entry N] [--max-entries N] \
+    --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>Each replica attempts a bounded read of its own copy and reports what it holds and how far it got. Three
+readings mean different things, and the command states which one it found rather than leaving it to be derived:</p>
+
+<table>
+<tr><th>Reading</th><th>What it means</th></tr>
+<tr><td>every replica stops at the same entry, no error</td><td>The data ends there. Nothing is wrong; the reader
+is waiting for something not yet written.</td></tr>
+<tr><td>one replica stops earlier, with an error</td><td>That replica is damaged and failover is covering for it.
+Nothing else reports this &mdash; reads keep working.</td></tr>
+<tr><td>every replica fails at the same entry</td><td>The entry cannot be read anywhere. This is the case a reader
+waits on forever.</td></tr>
+</table>
+
+<p>Probe stops where a read would, at the first block it cannot serve. That leaves the question a recovery turns
+on &mdash; is one block damaged, or is everything after it gone? &mdash; so the survey goes past that point:</p>
+
+<div class="code-block"><pre>wp segment inspect &lt;logName&gt; &lt;segmentId&gt; [--from-block N] [--max-blocks N] \
+    --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>It walks each replica&rsquo;s blocks and keeps going after one fails, which is what separates it from every read
+path. The findings under the table are the part to act on: which entries are damaged on which replica, whether
+another replica still holds them, whether every replica actually looked, and <strong>where readable data
+resumes</strong> &mdash; that last one is what decides whether a recovery gives up four entries or the rest of the
+segment.</p>
+
+<table>
+<tr><th>Column</th><th>What it means</th></tr>
+<tr><td><code>READABLE</code></td><td><code>all</code> or <code>none</code>. A backend drops a block that fails its
+integrity check whole, so nothing in a failed block is readable.</td></tr>
+<tr><td><code>RECOVERABLE</code></td><td>The prefix of a failed block whose own records still verify. No reader
+serves it; it is what a repair could salvage.</td></tr>
+<tr><td><code>STATUS</code></td><td><code>checksum_failed</code>, <code>header_missing</code>,
+<code>data_unreadable</code>, or <code>data_incomplete</code> &mdash; the last being an unsealed tail whose data has
+not been written yet, which is not damage.</td></tr>
+</table>
+
+<p>Both commands are bounded by the node whatever you ask, because a full survey reads every byte of the segment on
+every replica. When the report says the bound rather than the segment ended the walk, raise
+<code>--max-blocks</code> or move <code>--from-block</code>. Note that <code>--from-block</code> is a per-replica
+position: replicas flush on their own timers, so the same block number covers different entries on different
+nodes, and a shorter replica returns nothing for a later page.</p>
+
+<p>Read them in that order. <code>lac</code> and <code>log readers</code> are cheap and answer most stalls;
+<code>probe</code> costs a bounded read per replica; <code>inspect</code> reads every byte of the blocks it walks
+and is worth reaching for once probe has shown there is something to explain.</p>
+
 <div class="gap">
-<strong>Gap:</strong> corruption still hides here. A checksum failure is reported as &ldquo;data has not arrived
-yet&rdquo;, which the reader retries indefinitely, so a genuine fault is indistinguishable from an idle log. The
-reader stops reporting while it is blocked, so <code>stale report</code> does catch it &mdash; but it does not say
-why, and the server-side WARN logged at the point of the checksum failure remains the only signal that names the
-cause.
+<strong>Gap:</strong> the reader still cannot be told to skip what it cannot read. A checksum failure reaches the
+reader as &ldquo;data has not arrived yet&rdquo; and is retried indefinitely, so these commands name the fault but
+nothing yet acts on it: there is no notion of a skip range in the repository, and getting a reader past a damaged
+block needs one.
+<p style="margin-top:0.6rem">Two blind spots remain in the survey itself. An active segment whose block
+<em>header</em> is lost is a dead end for both the reader and the walk &mdash; nothing says where the next block
+begins, so the report says where it stopped rather than claiming the rest is damaged. And a compacted segment&rsquo;s
+blocks are objects every replica shares, so per-replica surveying does not apply; whether that single copy is
+damaged is not answered here.</p>
 </div>
 
 <h3>Correcting metadata</h3>
