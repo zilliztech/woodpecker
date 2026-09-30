@@ -43,6 +43,8 @@ jobs:
           | `/rerun-e2e-service` | E2E Service |
           | `/rerun-component-test` | Component Integration Test |
           | `/rerun-chaos` | Chaos Test |
+          | `/rerun-service-stability-process` | Service Stability (Process) |
+          | `/rerun-service-stability-docker` | Service Stability (Docker) |
           | `/rerun-operator` | Operator Test |
           | `/rerun-upgrade-local` | Upgrade Compat Local |
           | `/rerun-upgrade-objectstorage` | Upgrade Compat Object Storage |

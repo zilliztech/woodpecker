@@ -121,9 +121,9 @@ fmt-check: ## Check code formatting (CI)
 	@echo "All files formatted correctly."
 
 .PHONY: unit-test
-unit-test: ## Run unit tests only (excludes integration/benchmark/stability/docker)
+unit-test: ## Run unit tests only (excludes integration/benchmark/stability/docker/k8s)
 	go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
-		$$(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker)')
+		$$(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker|tests/k8s)')
 
 .PHONY: integration-test
 integration-test: ## Run all integration tests (requires etcd + MinIO)
@@ -150,10 +150,24 @@ integration-test-e2e-service: ## Run e2e tests with service storage + failover
 		-run "^TestStagedStorageService" \
 		./tests/integration/...
 
+.PHONY: integration-test-service-stability-process
+integration-test-service-stability-process: ## Service stability, process tier (requires etcd + MinIO; latency budgets, so no -race)
+	go test -cover -timeout=30m -v \
+		-run "^TestServiceStabilityProcess" \
+		./tests/integration/...
+
+.PHONY: integration-test-service-stability-docker
+integration-test-service-stability-docker: ## Service stability, Docker tier (builds the image and starts a 4-node compose cluster)
+	./tests/docker/stability/run_service_stability.sh
+
+.PHONY: integration-test-service-stability-k8s
+integration-test-service-stability-k8s: ## Service stability, K8s tier (minikube + operator + Chaos Mesh; nightly)
+	./tests/k8s/stability/run_service_stability.sh
+
 .PHONY: integration-test-components
 integration-test-components: ## Run component integration tests (non-e2e)
 	go test -race -cover -failfast -timeout=20m -v \
-		-skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService)" \
+		-skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestServiceStability)" \
 		./tests/integration/...
 
 clean: ## Clean built binaries

@@ -1,0 +1,103 @@
+name: Service Stability (Docker)
+
+# Service stability suite, Docker tier: the process tier's cases against real
+# woodpecker containers, faulted with docker kill / stop / pause.
+
+on:
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "deployments/**"
+      - "build/**"
+      - "tests/docker/**"
+      - "tests/utils/stability/**"
+      - ".github/workflows/integration-test-service-stability-docker.yaml"
+  workflow_call:
+
+concurrency:
+  group: integration-test-service-stability-docker-${{ github.event_name == 'workflow_call' && 'nightly-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  Service-Stability-Docker:
+    name: Service Stability (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Build Docker image
+        run: ./build/build_image.sh ubuntu22.04 amd64 -t woodpecker:latest
+
+      - name: Start cluster
+        run: |
+          cd tests/docker/stability
+          SCRIPT_DIR="$(pwd)"
+          source ../common.sh
+          OVERRIDE_FILE="$SCRIPT_DIR/docker-compose.stability.yaml"
+          PROJECT_NAME="woodpecker-stability"
+          CONTAINERS="etcd minio woodpecker-node1 woodpecker-node2 woodpecker-node3 woodpecker-node4"
+          compose_cmd up -d
+          echo "Waiting for containers..."
+          wait_for_containers
+          echo "Waiting for gossip convergence..."
+          sleep 15
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Run service stability tests (Docker tier)
+        # No -race: these tests assert latency budgets.
+        run: |
+          cd tests/docker/stability
+          set +e
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output.json \
+            -- -timeout 30m -count=1 -run "^TestServiceStabilityDocker" ./...
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output.json
+          exit $exit_code
+
+      - name: Collect container logs on failure
+        if: failure()
+        run: |
+          mkdir -p tests/docker/stability/logs
+          for container in etcd minio woodpecker-node1 woodpecker-node2 woodpecker-node3 woodpecker-node4; do
+            docker logs "$container" > "tests/docker/stability/logs/${container}.log" 2>&1 || true
+          done
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-stability-docker-logs
+          path: |
+            tests/docker/stability/test-output.json
+            tests/docker/stability/logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Stop cluster
+        if: always()
+        run: |
+          cd tests/docker/stability
+          DEPLOYMENTS_DIR="$(cd ../../.. && pwd)/deployments"
+          docker compose -f "$DEPLOYMENTS_DIR/docker-compose.yaml" \
+            -f docker-compose.stability.yaml \
+            -p woodpecker-stability down -v 2>/dev/null || true
