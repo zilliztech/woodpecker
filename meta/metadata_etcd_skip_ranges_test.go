@@ -90,6 +90,22 @@ func testSkipRangesRoundTripsByLogAndSegment(t *testing.T) {
 	require.NotZero(t, back.Revision)
 }
 
+// testSkipRangesUndecodableRecordIsAnError covers a record that cannot be parsed. Reading it as
+// empty would be worse than failing: every reader would quietly stop skipping, and the operator
+// who declared the ranges would see readers hang again with nothing saying why.
+func testSkipRangesUndecodableRecordIsAnError(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+
+	_, err := etcdProvider.client.Put(ctx, etcdProvider.keyBuilder.AllSkipRangesKey(), "not a proto")
+	require.NoError(t, err)
+
+	_, err = provider.GetAllSkipRanges(ctx)
+	require.Error(t, err, "a record that cannot be parsed is not a record with nothing in it")
+}
+
 // testSkipRangesStaleWriteIsRefused is what keeps two operators from losing each
 // other's work: the record is one key for the whole root, so a blind write would drop
 // every range someone else added since the read.

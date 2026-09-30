@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	pb "google.golang.org/protobuf/proto"
@@ -812,4 +814,89 @@ func TestSkipRangeWrite_StaleRecordIsRefused(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, 4, wperrors.ExitCodeFor(err))
 	require.Contains(t, err.Error(), "re-run")
+}
+
+// TestSkipRangeCommands_RejectInvocationsThatCannotMeanAnything covers the argument and flag
+// validation, which every one of these commands does before it touches etcd. A CLI that accepts a
+// nonsensical invocation and then guesses is worse than one that refuses: `--to-entry` below
+// `--from-entry` is not a range, a declaration with no reason leaves no account of why data was
+// given up, and a log name together with `--log-id` names two different logs.
+func TestSkipRangeCommands_RejectInvocationsThatCannotMeanAnything(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  func() *cobra.Command
+		args []string
+		want string
+	}{
+		{
+			name: "add: to below from",
+			cmd:  newLogSkipRangeAddCommand,
+			args: []string{"mylog", "3", "--from-entry", "20", "--to-entry", "10", "--reason", "x"},
+			want: "is not a range",
+		},
+		{
+			name: "add: negative from",
+			cmd:  newLogSkipRangeAddCommand,
+			args: []string{"mylog", "3", "--from-entry", "-5", "--to-entry", "10", "--reason", "x"},
+			want: "is not a range",
+		},
+		{
+			name: "add: no reason",
+			cmd:  newLogSkipRangeAddCommand,
+			args: []string{"mylog", "3", "--from-entry", "10", "--to-entry", "19"},
+			want: "--reason is required",
+		},
+		{
+			name: "add: segment id is not a number",
+			cmd:  newLogSkipRangeAddCommand,
+			args: []string{"mylog", "three", "--from-entry", "10", "--to-entry", "19", "--reason", "x"},
+			want: "is not a number",
+		},
+		{
+			name: "remove: a name and a log id name two different logs",
+			cmd:  newLogSkipRangeRemoveCommand,
+			args: []string{"mylog", "3", "--log-id", "7", "--from-entry", "10", "--to-entry", "19"},
+			want: "give either",
+		},
+		{
+			name: "remove: a name with no segment id",
+			cmd:  newLogSkipRangeRemoveCommand,
+			args: []string{"mylog", "--from-entry", "10", "--to-entry", "19"},
+			want: "give either",
+		},
+		{
+			name: "remove: to below from",
+			cmd:  newLogSkipRangeRemoveCommand,
+			args: []string{"mylog", "3", "--from-entry", "20", "--to-entry", "10"},
+			want: "is not a range",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := tc.cmd()
+			cmd.SetArgs(tc.args)
+			cmd.SetOut(new(bytes.Buffer))
+			cmd.SetErr(new(bytes.Buffer))
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+
+			err := cmd.Execute()
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+			require.Equal(t, 2, wperrors.ExitCodeFor(err), "a bad invocation is a usage error")
+		})
+	}
+}
+
+// TestJoinReasons covers the merge of two accounts of one incident. The dedupe branch is here
+// because it once made a test pass for the wrong reason: twelve declarations that reused one reason
+// string exercised this early return rather than the growth the test was written for.
+func TestJoinReasons(t *testing.T) {
+	require.Equal(t, "same", joinReasons("same", "same"), "one incident described twice is one reason")
+	require.Equal(t, "held", joinReasons("held", ""), "nothing to add")
+	require.Equal(t, "added", joinReasons("", "added"), "nothing held yet")
+	require.Equal(t, "first; second", joinReasons("first", "second"), "both accounts are kept")
+
+	long := joinReasons(strings.Repeat("a", 200), strings.Repeat("b", 200))
+	require.LessOrEqual(t, len(long), meta.MaxSkipRangeReasonBytes,
+		"joining must not carry the record past the field's budget")
 }
