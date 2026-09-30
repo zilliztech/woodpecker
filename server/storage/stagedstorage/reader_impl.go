@@ -983,14 +983,29 @@ func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) err
 	return nil
 }
 
+// readDataBlocksUnsafe reads data blocks from startBlockOffset, returning
+// entries up to the reader's LAC. The caller knows of no finalized footer: -1.
 func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*proto.BatchReadResult, error) {
-	return r.readDataBlocksBoundedUnsafe(ctx, opt, startBlockID, startBlockOffset, -1)
+	return r.readDataBlocksWithFinalizedFooterLACUnsafe(ctx, opt, startBlockID, startBlockOffset, -1)
 }
 
-// readDataBlocksBoundedUnsafe reads data blocks from startBlockOffset, returning
-// entries up to the reader's LAC. lacFloor, when not -1, is a boundary known to
-// be final (the footer's LAC read from disk) and raises the LAC to at least it.
-func (r *StagedFileReaderAdv) readDataBlocksBoundedUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64, lacFloor int64) (*proto.BatchReadResult, error) {
+// readDataBlocksWithFinalizedFooterLACUnsafe reads data blocks from
+// startBlockOffset, returning entries up to the LAC in effect for each block,
+// which is the highest of:
+//
+//   - the reader's in-memory LAC (r.lastAddConfirmed), re-read before every
+//     block. The writer syncs it asynchronously, so it lags. It bounds what is
+//     safe to read, not where the segment ends.
+//   - the LAC of the footer installed in the reader (r.footer), if any.
+//   - finalizedFooterLAC: the LAC in the footer the segment was finalized
+//     with, read from disk by the caller and not installed, or -1 when there
+//     is none. A footer is written once, when the segment is finalized, and
+//     never changes, so every entry up to its LAC is in the file.
+//
+// finalizedFooterLAC is only ever that footer's LAC. It is not the reader's
+// LAC, and passing the in-memory LAC would change nothing: it is read before
+// every block anyway.
+func (r *StagedFileReaderAdv) readDataBlocksWithFinalizedFooterLACUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64, finalizedFooterLAC int64) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readDataBlocks")
 	defer sp.End()
 	startTime := time.Now()
@@ -1033,8 +1048,8 @@ func (r *StagedFileReaderAdv) readDataBlocksBoundedUnsafe(ctx context.Context, o
 		if r.footer != nil && r.footer.LAC > currentLAC {
 			currentLAC = r.footer.LAC
 		}
-		if lacFloor > currentLAC {
-			currentLAC = lacFloor
+		if finalizedFooterLAC > currentLAC {
+			currentLAC = finalizedFooterLAC // the segment's final boundary, read from the footer on disk
 		}
 		currentBlockID := i
 
@@ -1201,23 +1216,27 @@ func (r *StagedFileReaderAdv) readDataBlocksBoundedUnsafe(ctx context.Context, o
 			if !r.isIncompleteFile.Load() || r.footer != nil {
 				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 			}
-			// The segment was finalized after this reader last learned its LAC, which
-			// only bounds what is safe to read and lags the writer. The footer holds
-			// the final boundary, and end-of-file is only true past it: entries up to
-			// it are in the file, and ending here would make the consumer skip them
-			// (#405). Scan again bounded by the footer's LAC.
+			// A footer on disk means the segment was finalized, possibly after this
+			// reader last learned its LAC (a read that carries the consumer's resume
+			// state does not probe for the footer first). The scan above then stopped
+			// at the stale in-memory LAC. The footer's LAC is the final boundary:
+			// end-of-file is only true past it, and ending below it would make the
+			// consumer skip the entries up to it (#405). Scan once more with the
+			// footer's LAC in effect.
 			if footer := r.readFooterFromDiskUnsafe(ctx); footer != nil {
 				if opt.StartEntryID > footer.LAC {
 					return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 				}
-				if lacFloor < footer.LAC {
+				if finalizedFooterLAC < footer.LAC { // this scan did not have the footer's LAC yet
 					logger.Ctx(ctx).Info("segment finalized beyond the reader's LAC; scanning again up to the footer's LAC",
 						zap.String("filePath", r.filePath),
 						zap.Int64("startEntryId", opt.StartEntryID),
 						zap.Int64("readerLAC", currentLAC),
 						zap.Int64("footerLAC", footer.LAC))
-					return r.readDataBlocksBoundedUnsafe(ctx, opt, startBlockID, startBlockOffset, footer.LAC)
+					return r.readDataBlocksWithFinalizedFooterLACUnsafe(ctx, opt, startBlockID, startBlockOffset, footer.LAC)
 				}
+				// Already scanned with the footer's LAC and still nothing: not
+				// end-of-file below it; let the caller retry or ask another replica.
 				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("entries below the footer's LAC not readable here now, retry later or try to read from other nodes")
 			}
 		}
