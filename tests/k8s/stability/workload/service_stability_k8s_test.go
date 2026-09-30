@@ -159,8 +159,8 @@ func TestServiceStabilityK8s_KillQuorumPod_NeverReturns(t *testing.T) {
 }
 
 // A quorum pod's server dies without a gossip leave and the pod is recreated
-// under the same name with a new IP, the case memberlist refuses to readmit
-// until the old entry is reaped (#395). The runner reports how long that took.
+// under the same name with a new IP (#395). The runner fails the case if the
+// peers take longer than READMIT_BUDGET to list it alive at its new address.
 func TestServiceStabilityK8s_KillQuorumPod_Rescheduled(t *testing.T) {
 	env := startK8sEnv(t, harness.DefaultLogs, false)
 	env.fault(env.BusiestQuorumAddr())
