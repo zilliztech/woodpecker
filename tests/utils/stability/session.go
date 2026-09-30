@@ -51,6 +51,15 @@ const VanishDetection = 2 * time.Second
 // default), and the next replica is asked after that.
 const VanishReadDetection = 3 * time.Second
 
+// SilentReplicaCompletion is what completing a segment costs when one of its
+// replicas' addresses has stopped answering. When the old segment's queue is
+// empty at a roll, the roll fences and completes it before the new segment is
+// created, and new appends wait for that. Fence and complete each wait for
+// every replica, so each waits out the dial timeout on the silent one
+// (woodpecker.client.grpc.dialTimeout, 1s by default): 2s in all, before a few
+// milliseconds of RPCs (#399, #403).
+const SilentReplicaCompletion = 2 * time.Second
+
 // SessionConfig says what workload a Session runs.
 type SessionConfig struct {
 	Logs     int           // logs, each with a writer and a tail reader; DefaultLogs if 0

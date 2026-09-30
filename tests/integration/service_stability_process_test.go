@@ -162,6 +162,10 @@ func TestServiceStabilityProcess_RestartQuorumPod(t *testing.T) {
 // already completed ("appendOp not found in queue").
 func TestServiceStabilityProcess_RestartQuorumPod_SlowRefusal(t *testing.T) {
 	env := startProcessEnv(t, stability.DefaultLogs, false)
+	// The late refusals mean the failure is seen after the refusal window, when
+	// the address has gone silent: a roll then waits out the dial timeout on it
+	// for fence and complete.
+	env.ExtraStall = stability.SilentReplicaCompletion
 	plan := utils.RollingRestartPlan()
 	plan.RefuseLatency = 200 * time.Millisecond
 	env.cluster.PodRestart(t, env.busiestQuorumNode(), plan)
@@ -183,6 +187,7 @@ func TestServiceStabilityProcess_KillQuorumPod(t *testing.T) {
 // against the healthy replicas' acks.
 func TestServiceStabilityProcess_KillQuorumPod_SlowRefusal(t *testing.T) {
 	env := startProcessEnv(t, stability.DefaultLogs, false)
+	env.ExtraStall = stability.SilentReplicaCompletion // see RestartQuorumPod_SlowRefusal
 	plan := utils.RollingRestartPlan()
 	plan.Kill = true
 	plan.RefuseLatency = 200 * time.Millisecond
