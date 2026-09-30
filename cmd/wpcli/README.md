@@ -81,6 +81,14 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
 ### Log metadata
 - `wp log readers <logName>` — where each of a log's readers has read to (etcd only, no node contact)
 
+### Log end to end
+- `wp log scan <logName> [--mode quick|raw] [--from-segment N] [--to-segment N]` — sweep every
+  segment of a log and reconcile what metadata claims against what the replicas hold. `quick`
+  (default) reads structure only — one trailer read per sealed segment — and answers "does the
+  shape add up". `raw` reads through the normal path with codec and CRC and answers "how far does
+  a reader actually get". Reports one line per segment plus the log-level findings: gaps in the
+  segment ids, more than one Active segment, and a segment no replica can read to the end of.
+
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
 - `wp segment inspect <logName> <segmentId>` — walk the blocks on every replica: which entries are damaged where, whether the damage is bounded, and what a skip would cost

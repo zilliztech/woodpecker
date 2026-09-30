@@ -24,6 +24,7 @@ func newLogCommand() *cobra.Command {
 		Short: "Inspect a log through its metadata (not log levels — see 'wp logging')",
 	}
 	cmd.AddCommand(newLogReadersCommand())
+	cmd.AddCommand(newLogScanCommand())
 	return cmd
 }
 
