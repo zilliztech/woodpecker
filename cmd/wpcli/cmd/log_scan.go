@@ -216,6 +216,14 @@ func readSegmentMetas(ctx context.Context, cli *clientv3.Client, kb *meta.KeyBui
 
 // scanSegmentNodes asks each of the segment's replicas what it holds. Quick mode asks for coverage,
 // which reads no entry data; raw mode asks for the verifying walk.
+// scanMaxBlocks is what a sweep asks each node to survey. Left unset, a verifying survey takes the
+// node's own default of 64 blocks -- half of a default-sized segment, which holds about 128 --
+// and stops with `bound`, making the coverage a lower bound rather than an answer. This is the
+// node's ceiling, above the 1000 blocks a segment's rolling policy allows, so one request covers a
+// whole segment. A segment that somehow exceeds it still comes back `bound`, which the
+// reconciliation reads as "not known" rather than as missing data.
+const scanMaxBlocks = 4096
+
 func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentMeta, logID int64, mode string) []scanNode {
 	quorum := sm.meta.GetQuorum()
 	if quorum == nil || len(quorum.Nodes) == 0 {
@@ -232,7 +240,8 @@ func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentM
 		}
 		node.label = member.ID
 
-		path := fmt.Sprintf("/admin/logstore/segment/inspect?log_id=%d&segment_id=%d", logID, sm.id)
+		path := fmt.Sprintf("/admin/logstore/segment/inspect?log_id=%d&segment_id=%d&max_blocks=%d",
+			logID, sm.id, scanMaxBlocks)
 		if mode == scanModeQuick {
 			path += "&verify=false"
 		}

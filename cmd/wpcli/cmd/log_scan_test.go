@@ -28,16 +28,39 @@ func seg(id int64, state proto.SegmentState, metaLast int64, nodes ...scanNode) 
 	return scanSegment{id: id, state: state, metaLast: metaLast, nodes: nodes}
 }
 
+// replica answered with a survey that reached the end of the segment, so its coverage is a claim
+// about what it holds.
 func replica(label string, from, to int64) scanNode {
-	n := scanNode{label: label, answered: true}
+	n := scanNode{label: label, answered: true, stopped: surveyStopEnd}
 	if to >= from {
 		n.coverage = n.coverage.add(entryRange{from, to})
 	}
 	return n
 }
 
+// boundedReplica answered, but the node stopped the survey at its own block bound, so the coverage
+// is a lower bound and says nothing about the entries past it.
+func boundedReplica(label string, from, to int64) scanNode {
+	n := replica(label, from, to)
+	n.stopped = surveyStopBound
+	return n
+}
+
+// noLocalDataReplica answered that it holds no local copy at all -- the shape a compacted segment
+// takes once the replicas have reclaimed their staged data.
+func noLocalDataReplica(label string) scanNode {
+	return scanNode{label: label, answered: true, stopped: surveyStopNoBlocks}
+}
+
 func silentReplica(label, why string) scanNode {
 	return scanNode{label: label, state: why}
+}
+
+// reconcileWholeLog reconciles a fixture that lists every segment the log still has, so the oldest
+// listed segment is the truncation point and no id is expected to be missing. Tests about the id
+// sequence pass their own truncation point instead.
+func reconcileWholeLog(segments []scanSegment) ([]scanRow, []string, error) {
+	return reconcileScan(segments, segments[0].id, 0)
 }
 
 // TestReconcileScan_CleanLogSaysSoBriefly covers the common case. A sound log should not produce a
@@ -48,7 +71,7 @@ func TestReconcileScan_CleanLogSaysSoBriefly(t *testing.T) {
 		seg(1, proto.SegmentState_Active, -1, replica("node-1", 0, 37), replica("node-2", 0, 37)),
 	}
 
-	rows, findings, err := reconcileScan(segments, -1, 0)
+	rows, findings, err := reconcileWholeLog(segments)
 
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
@@ -65,7 +88,7 @@ func TestReconcileScan_DataShortOfMetadata(t *testing.T) {
 		seg(3, proto.SegmentState_Completed, 99, replica("node-1", 0, 87), replica("node-2", 0, 87)),
 	}
 
-	rows, findings, err := reconcileScan(segments, -1, 0)
+	rows, findings, err := reconcileWholeLog(segments)
 
 	require.Error(t, err, "data that does not reach what metadata promises is a finding")
 	require.Equal(t, scanVerdictShort, rows[0].verdict)
@@ -83,7 +106,7 @@ func TestReconcileScan_OneReplicaShortIsNotTheSegmentShort(t *testing.T) {
 		seg(3, proto.SegmentState_Completed, 99, replica("node-1", 0, 99), replica("node-2", 0, 87)),
 	}
 
-	rows, findings, err := reconcileScan(segments, -1, 0)
+	rows, findings, err := reconcileWholeLog(segments)
 
 	require.NoError(t, err, "some replica holds all of it, so a reader is served")
 	require.Equal(t, scanVerdictOK, rows[0].verdict)
@@ -94,50 +117,255 @@ func TestReconcileScan_OneReplicaShortIsNotTheSegmentShort(t *testing.T) {
 // TestReconcileScan_HoleInsideASegment covers coverage that starts at 0 and reaches the end with a
 // gap in between, which a per-segment last entry alone would never reveal.
 func TestReconcileScan_HoleInsideASegment(t *testing.T) {
-	node := scanNode{label: "node-1", answered: true}
+	node := scanNode{label: "node-1", answered: true, stopped: surveyStopEnd}
 	node.coverage = node.coverage.add(entryRange{0, 40}).add(entryRange{60, 99})
 	segments := []scanSegment{seg(3, proto.SegmentState_Completed, 99, node)}
 
-	_, findings, err := reconcileScan(segments, -1, 0)
+	_, findings, err := reconcileWholeLog(segments)
 
 	require.Error(t, err)
 	require.Contains(t, joinFindings(findings), "41-59")
 }
 
-// TestReconcileScan_MissingSegmentIdsBelowTruncationAreExpected keeps ordinary retention from
-// reading as data loss, while a hole above the truncation point still does not.
-func TestReconcileScan_MissingSegmentIdsBelowTruncationAreExpected(t *testing.T) {
-	segments := []scanSegment{
-		seg(5, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
-		seg(7, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
-	}
-
-	t.Run("truncated through 6", func(t *testing.T) {
+// TestReconcileScan_TruncationPointSegmentIsKeptNotReclaimed pins where retention stops excusing an
+// absent id. Truncation deliberately keeps the segment AT the truncation point -- it is where
+// readers resume, and `log_handle.go` skips it when marking segments Truncated -- so only ids
+// strictly below it are expected to be gone. Excusing the truncation segment itself would hide the
+// loss of the one record readers need.
+func TestReconcileScan_TruncationPointSegmentIsKeptNotReclaimed(t *testing.T) {
+	t.Run("ids below the truncation point are expected to be gone", func(t *testing.T) {
+		segments := []scanSegment{
+			seg(6, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+			seg(7, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+		}
 		_, findings, err := reconcileScan(segments, 6, 0)
-		require.NoError(t, err, "segments at or below the truncation point are expected to be gone")
-		require.NotRegexp(t, `(?i)unexpectedly missing`, joinFindings(findings))
+		require.NoError(t, err, "0-5 are below the truncation point and are not looked for")
+		require.NotRegexp(t, `(?i)missing from metadata`, joinFindings(findings))
 	})
 
-	t.Run("truncated through 4", func(t *testing.T) {
-		_, findings, err := reconcileScan(segments, 4, 0)
+	t.Run("the segment at the truncation point is not excused", func(t *testing.T) {
+		segments := []scanSegment{
+			seg(7, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+			seg(8, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+		}
+		_, findings, err := reconcileScan(segments, 6, 0)
+		require.Error(t, err, "segment 6 is kept by truncation, so its record being gone is a loss")
+		require.Contains(t, joinFindings(findings), "segment id 6")
+	})
+
+	t.Run("a hole above the truncation point is reported", func(t *testing.T) {
+		segments := []scanSegment{
+			seg(6, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+			seg(8, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+		}
+		_, findings, err := reconcileScan(segments, 6, 0)
 		require.Error(t, err)
-		require.Contains(t, joinFindings(findings), "6")
-		require.Regexp(t, `(?i)missing`, joinFindings(findings))
+		require.Contains(t, joinFindings(findings), "segment id 7")
 	})
 }
 
-// TestReconcileScan_StatesThatCannotBeRight covers metadata that contradicts itself: two segments
-// being written at once, and an open segment that is not the newest.
-func TestReconcileScan_StatesThatCannotBeRight(t *testing.T) {
+// TestReconcileScan_GapBeforeTheFirstListedSegmentIsFound covers the ids between the truncation
+// point and the oldest segment metadata still lists. Walking only between listed segments never
+// looks there, so the whole low end of a log could be gone and the scan would report nothing --
+// and it is exactly the end a reader resumes from.
+func TestReconcileScan_GapBeforeTheFirstListedSegmentIsFound(t *testing.T) {
+	t.Run("several ids missing at the low end", func(t *testing.T) {
+		segments := []scanSegment{
+			seg(9, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+			seg(10, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+		}
+		_, findings, err := reconcileScan(segments, 5, 0)
+		require.Error(t, err)
+		for _, id := range []string{"5", "6", "7", "8"} {
+			require.Contains(t, joinFindings(findings), "segment id "+id)
+		}
+	})
+
+	t.Run("one surviving segment still gets its predecessors checked", func(t *testing.T) {
+		segments := []scanSegment{seg(20, proto.SegmentState_Completed, 9, replica("node-1", 0, 9))}
+		_, findings, err := reconcileScan(segments, 18, 0)
+		require.Error(t, err, "a single listed segment is not a reason to stop looking")
+		require.Contains(t, joinFindings(findings), "segment id 18")
+		require.Contains(t, joinFindings(findings), "segment id 19")
+	})
+
+	t.Run("--from-segment moves the start, it does not disable the check", func(t *testing.T) {
+		segments := []scanSegment{seg(20, proto.SegmentState_Completed, 9, replica("node-1", 0, 9))}
+		_, findings, err := reconcileScan(segments, 5, 18)
+		require.Error(t, err)
+		require.Contains(t, joinFindings(findings), "segment id 18")
+		require.NotContains(t, joinFindings(findings), "segment id 17",
+			"ids the caller excluded are not reported")
+	})
+}
+
+// TestReconcileScan_ManyMissingIdsAreNamedWithoutFanningOutPerId covers the cost of the id walk now
+// that it starts at the truncation point. The quorum to ask lives in the record that is gone, so
+// asking whether a node still holds each id is a fan-out per id; a log that lost a long run would
+// turn one scan into thousands of requests. Every id still has to be named, or the operator cannot
+// see the extent of the loss.
+func TestReconcileScan_ManyMissingIdsAreNamedWithoutFanningOutPerId(t *testing.T) {
+	segments := []scanSegment{
+		seg(0, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+		seg(40, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+	}
+	asked := 0
+	probe := func(int64) ([]string, bool) {
+		asked++
+		return nil, true
+	}
+
+	_, findings, err := reconcileScanWithGaps(segments, 0, 0, probe)
+
+	require.Error(t, err)
+	require.LessOrEqual(t, asked, gapProbeBudget,
+		"one scan must not fan out once per missing id")
+	joined := joinFindings(findings)
+	for _, id := range []string{"1", "20", "39"} {
+		require.Contains(t, joined, id, "every lost id has to be visible, budget or not")
+	}
+}
+
+// TestReconcileScan_MultipleActiveIsReportedButNotRed covers the roll window. `log_handle.go`
+// documents that a roll finding a non-empty append queue leaves the previous segment Active until
+// its fence/complete RPCs finish while the new one takes writes, so two Active segments is a state
+// a healthy log passes through. One observation cannot tell that from a segment left behind, so the
+// scan reports what it saw and does not fail on it.
+func TestReconcileScan_MultipleActiveIsReportedButNotRed(t *testing.T) {
 	segments := []scanSegment{
 		seg(0, proto.SegmentState_Active, -1, replica("node-1", 0, 5)),
 		seg(1, proto.SegmentState_Active, -1, replica("node-1", 0, 5)),
 	}
 
-	_, findings, err := reconcileScan(segments, -1, 0)
+	_, findings, err := reconcileWholeLog(segments)
+
+	require.NoError(t, err, "a log rolling a segment with queued appends is healthy")
+	joined := joinFindings(findings)
+	require.Contains(t, joined, "0")
+	require.Contains(t, joined, "1")
+	require.Regexp(t, `(?i)roll`, joined, "the report has to say why this may be transient")
+}
+
+// TestReconcileScan_ActiveBehindTheNewestIsAlsoTheRollWindow covers the same premise one branch
+// over: the previous segment can still be Active after the new one has already completed, so
+// "Active but not the newest" is no more provable than two Active segments.
+func TestReconcileScan_ActiveBehindTheNewestIsAlsoTheRollWindow(t *testing.T) {
+	segments := []scanSegment{
+		seg(0, proto.SegmentState_Active, -1, replica("node-1", 0, 5)),
+		seg(1, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+	}
+
+	_, findings, err := reconcileWholeLog(segments)
+
+	require.NoError(t, err, "the same roll window leaves the older segment Active")
+	joined := joinFindings(findings)
+	require.Contains(t, joined, "Segment 0 is Active",
+		"not failing on it is not the same as not reporting it")
+	require.Contains(t, joined, "1 is newer")
+	require.Regexp(t, `(?i)roll`, joined)
+}
+
+// TestReconcileScan_CompactedSegmentIsNotShort covers the steady state of every old segment in
+// service mode. Compaction moves a segment to one shared object-storage copy and the replicas
+// reclaim their staged data, so each one answers that it holds no local blocks. Measuring that
+// emptiness against what metadata claims turns every compacted segment into a total loss -- the
+// scan would report a healthy log as red on its oldest data.
+func TestReconcileScan_CompactedSegmentIsNotShort(t *testing.T) {
+	segments := []scanSegment{
+		seg(3, proto.SegmentState_Sealed, 99,
+			noLocalDataReplica("node-1"), noLocalDataReplica("node-2")),
+	}
+
+	rows, findings, err := reconcileWholeLog(segments)
+
+	require.NoError(t, err, "a compacted segment is served from object storage, not from a replica")
+	require.NotEqual(t, scanVerdictShort, rows[0].verdict)
+	require.NotContains(t, joinFindings(findings), "no replica has")
+	require.Regexp(t, `(?i)object storage`, rows[0].Detail+joinFindings(findings),
+		"the row has to say where the data actually lives, since the scan did not verify it")
+}
+
+// TestReconcileScan_CompactedSegmentWithOneLocalCopyLeftIsStillNotJudgedLocally covers the window
+// during reclamation: one replica still has its staged copy and the others have dropped theirs. The
+// authority is the object-storage copy either way, so neither the emptiness nor a short local copy
+// is a verdict on the segment, and a replica that reclaimed correctly must not read as "behind".
+func TestReconcileScan_CompactedSegmentWithOneLocalCopyLeftIsStillNotJudgedLocally(t *testing.T) {
+	segments := []scanSegment{
+		seg(3, proto.SegmentState_Sealed, 99,
+			replica("node-1", 0, 40), noLocalDataReplica("node-2")),
+	}
+
+	_, findings, err := reconcileWholeLog(segments)
+
+	require.NoError(t, err)
+	require.NotRegexp(t, `(?i)need resyncing`, joinFindings(findings),
+		"a replica that reclaimed a compacted segment is not behind")
+}
+
+// TestReconcileScan_TruncatedSegmentIsNotShort covers the other state where an empty replica is
+// expected: the data is being deleted on purpose. Between the state change and the reclaim finishing
+// a node answers with no blocks, which is retention working, not loss.
+func TestReconcileScan_TruncatedSegmentIsNotShort(t *testing.T) {
+	// The replica surveyed to the end of what it still has, so its coverage is a complete claim:
+	// without the state being read, 41-99 would be reported as data no replica holds.
+	segments := []scanSegment{
+		seg(2, proto.SegmentState_Truncated, 99, replica("node-1", 0, 40)),
+		seg(3, proto.SegmentState_Completed, 9, replica("node-1", 0, 9)),
+	}
+
+	rows, findings, err := reconcileScan(segments, 4, 0)
+
+	require.NoError(t, err, "a Truncated segment is being reclaimed, not lost")
+	require.NotEqual(t, scanVerdictShort, rows[0].verdict)
+	require.NotContains(t, joinFindings(findings), "no replica has")
+}
+
+// TestReconcileScan_BoundedSurveyIsNotAShortSegment covers the premise behind every `short` verdict:
+// that the replica reported all of its coverage. A node bounds the survey at its own block limit, so
+// a segment larger than that bound comes back with a prefix and nothing about the rest. Reading that
+// prefix as the whole answer reports intact data as missing.
+func TestReconcileScan_BoundedSurveyIsNotAShortSegment(t *testing.T) {
+	segments := []scanSegment{
+		seg(3, proto.SegmentState_Completed, 199,
+			boundedReplica("node-1", 0, 99), boundedReplica("node-2", 0, 99)),
+	}
+
+	rows, findings, err := reconcileWholeLog(segments)
+
+	require.NoError(t, err, "nothing was learned about 100-199, which is not a claim that it is gone")
+	require.Equal(t, scanVerdictUnknown, rows[0].verdict)
+	require.NotContains(t, joinFindings(findings), "no replica has")
+	require.Regexp(t, `(?i)bound`, joinFindings(findings), "the report has to say why it stopped")
+}
+
+// TestReconcileScan_OneCompleteSurveyIsEnoughToCallItShort is the other side of the bound: a read
+// needs one replica that has the entry, so one replica whose survey reached the end of the segment
+// is enough to settle what the quorum holds.
+func TestReconcileScan_OneCompleteSurveyIsEnoughToCallItShort(t *testing.T) {
+	segments := []scanSegment{
+		seg(3, proto.SegmentState_Completed, 199,
+			boundedReplica("node-1", 0, 99), replica("node-2", 0, 149)),
+	}
+
+	rows, findings, err := reconcileWholeLog(segments)
 
 	require.Error(t, err)
-	require.Regexp(t, `(?i)more than one .*active|two .*active`, joinFindings(findings))
+	require.Equal(t, scanVerdictShort, rows[0].verdict)
+	require.Contains(t, joinFindings(findings), "150-199")
+}
+
+// TestReconcileScan_OpenSegmentGapNamesTheRange covers the one finding an operator cannot act on
+// without the numbers. An open segment whose coverage has a hole in the middle has to say where.
+func TestReconcileScan_OpenSegmentGapNamesTheRange(t *testing.T) {
+	node := scanNode{label: "node-1", answered: true, stopped: surveyStopEnd}
+	node.coverage = node.coverage.add(entryRange{0, 5}).add(entryRange{9, 12})
+	segments := []scanSegment{seg(4, proto.SegmentState_Active, -1, node)}
+
+	_, findings, err := reconcileWholeLog(segments)
+
+	require.Error(t, err)
+	require.Contains(t, joinFindings(findings), "6-8",
+		"a gap the operator is told about but not located is not actionable")
 }
 
 // TestReconcileScan_NoReplicaAnsweredClaimsNothing keeps an unreachable quorum from reading as an
@@ -148,7 +376,7 @@ func TestReconcileScan_NoReplicaAnsweredClaimsNothing(t *testing.T) {
 			silentReplica("node-1", "unreachable"), silentReplica("node-2", "unreachable")),
 	}
 
-	rows, findings, err := reconcileScan(segments, -1, 0)
+	rows, findings, err := reconcileWholeLog(segments)
 
 	require.NoError(t, err, "nothing was learned, which is not a finding about the data")
 	require.Equal(t, scanVerdictUnknown, rows[0].verdict)
@@ -309,6 +537,28 @@ func TestLogScan_RawModeAsksForVerification(t *testing.T) {
 	require.NotEmpty(t, *queries)
 	for _, q := range *queries {
 		require.NotContains(t, q, "verify=false")
+	}
+}
+
+// TestLogScan_SurveysAWholeSegmentNotTheNodeDefault covers the bound a sweep would otherwise
+// inherit. A verifying survey defaults to 64 blocks on the node, and a default-sized segment holds
+// about 128, so a scan that does not ask would judge every full segment on half of it.
+func TestLogScan_SurveysAWholeSegmentNotTheNodeDefault(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	scanTestGlobals(t)
+
+	ac, members, queries := scanFixture(t, cli, kb, []scanFixtureSegment{
+		{id: 0, state: proto.SegmentState_Completed, metaLast: 9, perReplica: [][][3]int64{{{0, 9, 1}}}},
+	}, 2)
+	cmd, _, _ := markingTestCmd()
+
+	require.NoError(t, runLogScan(cmd, cli, kb, ac, members, "mylog", scanModeRaw, 0, -1))
+
+	require.NotEmpty(t, *queries)
+	for _, q := range *queries {
+		require.Contains(t, q, fmt.Sprintf("max_blocks=%d", scanMaxBlocks),
+			"a sweep has to ask for the whole segment, or a big segment reads as short")
 	}
 }
 

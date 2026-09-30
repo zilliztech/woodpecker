@@ -86,8 +86,17 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
   segment of a log and reconcile what metadata claims against what the replicas hold. `quick`
   (default) reads structure only — one trailer read per sealed segment — and answers "does the
   shape add up". `raw` reads through the normal path with codec and CRC and answers "how far does
-  a reader actually get". Reports one line per segment plus the log-level findings: gaps in the
-  segment ids, more than one Active segment, and a segment no replica can read to the end of.
+  a reader actually get". Reports one line per segment plus the log-level findings.
+
+  Per-segment verdicts: `ok`, `short` (no replica has some of what metadata claims), `open` (still
+  being written), `compacted` (served from one shared object-storage copy, which this sweep does
+  not read), `reclaimed` (retention is deleting it), `unknown` (no replica answered, or every
+  replica's survey stopped before the end of the segment, so nothing was learned). Only `short` and
+  a hole inside an open segment are failures — a sweep that learned nothing does not claim loss.
+
+  Log-level findings: ids missing from metadata at or above the truncation point (the segment *at*
+  the point is kept by truncation, so its absence is a loss), and the Active segments, reported
+  without failing on them because a roll with queued appends legitimately leaves two Active.
 
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
