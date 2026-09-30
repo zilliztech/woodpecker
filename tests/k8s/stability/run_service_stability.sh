@@ -44,6 +44,10 @@
 #   WP_STABILITY_LATENCY   "report" (default here) reports the stall budget
 #                          instead of failing on it; "enforce" fails on it.
 #                          Completeness and order are always enforced.
+#   READMIT_BUDGET         seconds KillQuorumPod_Rescheduled allows from the
+#                          server's death until every peer lists it alive at
+#                          its new address (default 25; the runner's measure
+#                          includes kubectl polling). Exceeding it fails the case.
 #   KEEP=1                 keep the minikube cluster afterwards
 
 set -euo pipefail
@@ -70,6 +74,7 @@ WORKLOAD_BIN_IN_POD=/root/service_stability.test
 STATE_DIR=/tmp/wp-stability
 ARTIFACTS="$SCRIPT_DIR/artifacts"
 LATENCY_MODE="${WP_STABILITY_LATENCY:-report}"
+READMIT_BUDGET="${READMIT_BUDGET:-25}"
 ALL_CASES="Baseline RestartIdlePod RestartQuorumPod KillQuorumPod KillQuorumPod_NeverReturns KillQuorumPod_Rescheduled VanishQuorumPod VanishReadPod_SeparateReader RollingRestartAllPods"
 CASES="${CASES:-$ALL_CASES}"
 SERVER_SELECTOR="app.kubernetes.io/instance=${CR_NAME},app.kubernetes.io/component=server"
@@ -286,7 +291,7 @@ run_case() {  # $1 = case name
   pod=""; [ -n "$target" ] && pod=$(pod_of "$target")
   log "CASE $c: fault target '${pod:-none}'"
 
-  local lift_after=""
+  local lift_after="" readmit_failed=""
   case "$c" in
     Baseline) sleep 10 ;;
     RestartIdlePod|RestartQuorumPod)
@@ -309,16 +314,20 @@ run_case() {  # $1 = case name
       # the kubelet's SIGTERM waits behind the stop and its SIGKILL follows,
       # and the StatefulSet recreates the pod under the same name with a new
       # IP. Peers see a node that died without leaving come back at another
-      # address, which memberlist refuses until the old entry is reaped (#395).
-      local old_ip new_ip t0
+      # address; they have to take it back there within READMIT_BUDGET (#395).
+      local old_ip new_ip t0 took
       old_ip=$(kubectl get pod "$pod" -o jsonpath='{.status.podIP}')
       kubectl exec "$pod" -- pkill -STOP -x woodpecker || { abort_case "$c" "$wl" "SIGSTOP of $pod"; return 1; }
       t0=$SECONDS
       kubectl delete pod "$pod" --grace-period=0 --force --wait=false || { abort_case "$c" "$wl" "force delete of $pod"; return 1; }
       wait_pods_ready; wait_converged
+      took=$((SECONDS - t0))
       new_ip=$(kubectl get pod "$pod" -o jsonpath='{.status.podIP}')
-      log "CASE $c: $pod $old_ip -> $new_ip, readmitted by every peer $((SECONDS - t0))s after it died"
-      echo "readmitted_after_seconds=$((SECONDS - t0)) old_ip=$old_ip new_ip=$new_ip" >"$out/readmission.txt" ;;
+      log "CASE $c: $pod $old_ip -> $new_ip, readmitted by every peer ${took}s after it died (budget ${READMIT_BUDGET}s)"
+      echo "readmitted_after_seconds=$took budget_seconds=$READMIT_BUDGET old_ip=$old_ip new_ip=$new_ip" >"$out/readmission.txt"
+      if [ "$took" -gt "$READMIT_BUDGET" ]; then
+        readmit_failed="readmitted after ${took}s, over the ${READMIT_BUDGET}s budget"
+      fi ;;
     VanishQuorumPod|VanishReadPod_SeparateReader) partition_pod "$pod" ;;
     RollingRestartAllPods)
       for i in $(seq $((REPLICAS-1)) -1 0); do
@@ -340,7 +349,10 @@ run_case() {  # $1 = case name
   fi
 
   grep -E '^\s+\[.*\] submitted=|^\s+\[.*\] read=|append stalled|tail read lagged|report only|--- (PASS|FAIL)' "$out/workload.log" || true
-  case "$c" in KillQuorumPod*) collect_artifacts "$c" "$pod" ;; esac  # the killed server's last log, as evidence
+  # The killed server's last log, as evidence. A rescheduled pod is a new pod:
+  # it has no previous container to take a log from.
+  case "$c" in KillQuorumPod|KillQuorumPod_NeverReturns) collect_artifacts "$c" "$pod" ;; esac
+  if [ -n "$readmit_failed" ]; then collect_artifacts "$c"; warn "CASE $c FAILED: $readmit_failed"; return 1; fi
   if [ $rc -ne 0 ]; then collect_artifacts "$c" "$pod"; warn "CASE $c FAILED"; return 1; fi
   log "CASE $c PASSED"
 }

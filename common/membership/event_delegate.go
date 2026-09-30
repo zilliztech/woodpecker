@@ -27,6 +27,9 @@ type EventDelegate struct {
 	discovery *ServiceDiscovery
 	role      NodeRole
 	addrPort  string // only used for logging
+	// onLeave, if set, is told of every node that leaves or is declared dead,
+	// before discovery forgets it.
+	onLeave func(name string)
 }
 
 func NewEventDelegate(discovery *ServiceDiscovery, role NodeRole, addrPort string) *EventDelegate {
@@ -56,6 +59,9 @@ func (e *EventDelegate) NotifyJoin(node *memberlist.Node) {
 
 // NotifyLeave node leaves
 func (e *EventDelegate) NotifyLeave(node *memberlist.Node) {
+	if e.onLeave != nil {
+		e.onLeave(node.Name)
+	}
 	// When metadata is available, use guarded removal to prevent stale leave events
 	// from removing a node that has already rejoined with a new incarnation.
 	if len(node.Meta) > 0 {

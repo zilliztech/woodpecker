@@ -138,6 +138,17 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	mlConfig.GossipInterval = 200 * time.Millisecond // gossip interval time
 	mlConfig.GossipNodes = 3                         // number of randomly selected chat nodes for one gossip round
 
+	// A server that dies without leaving and comes back at another address is
+	// readmitted as soon as its old entry is declared dead (#395), and that
+	// entry is declared dead within suspicionMaxTimeoutMult suspicion timeouts
+	// even when no other peer confirms the suspicion.
+	mlConfig.DeadNodeReclaimTime = deadNodeReclaimTime
+	mlConfig.SuspicionMaxTimeoutMult = suspicionMaxTimeoutMult
+	var list *ml.Memberlist
+	readmit := newReadmitter(func(addrs []string) (int, error) { return list.Join(addrs) })
+	mlConfig.Conflict = readmit
+	eventDel.onLeave = readmit.nodeLeft
+
 	list, err := ml.Create(mlConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create memberlist: %w", err)
