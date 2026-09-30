@@ -56,7 +56,8 @@ func newConfigDiffCommand() *cobra.Command {
 			}
 			if len(unreachable) == len(targets) {
 				return wperrors.NewNetworkError(
-					fmt.Sprintf("no node answered: all %d unreachable", len(targets)))
+					fmt.Sprintf("no node answered: all %d unreachable", len(targets)),
+				)
 			}
 			defer warnIfPartial(cmd.ErrOrStderr(), len(unreachable), len(targets))
 
@@ -67,7 +68,8 @@ func newConfigDiffCommand() *cobra.Command {
 				refID = reference
 				if unreachable[refID] {
 					return wperrors.NewNetworkError(
-						fmt.Sprintf("reference node %s is unreachable", refID))
+						fmt.Sprintf("reference node %s is unreachable", refID),
+					)
 				}
 			} else {
 				for _, t := range targets {

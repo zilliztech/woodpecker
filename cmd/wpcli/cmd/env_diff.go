@@ -30,7 +30,8 @@ func newEnvDiffCommand() *cobra.Command {
 			}
 			if len(unreachable) == len(r.Members.Members) {
 				return wperrors.NewNetworkError(
-					fmt.Sprintf("no node answered: all %d unreachable", len(r.Members.Members)))
+					fmt.Sprintf("no node answered: all %d unreachable", len(r.Members.Members)),
+				)
 			}
 			defer warnIfPartial(cmd.ErrOrStderr(), len(unreachable), len(r.Members.Members))
 			w := cmd.OutOrStdout()

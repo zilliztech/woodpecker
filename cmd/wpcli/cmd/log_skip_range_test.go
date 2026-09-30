@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -357,6 +358,100 @@ func TestSkipRangeList_NamesItsSourceAndListsOrphans(t *testing.T) {
 	require.Contains(t, s, "99", "a range whose log no longer exists is still listed")
 	require.Contains(t, s, "0-5")
 	require.Contains(t, s, "gone log")
+}
+
+// TestSkipRangeList_NothingDeclaredSaysSo covers what an operator sees most of the time. An empty
+// table would read as a command that failed to find the record rather than a record with nothing
+// in it.
+func TestSkipRangeList_NothingDeclaredSaysSo(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runSkipRangeList(cmd, cli, kb, ""))
+
+	require.Contains(t, out.String(), "None declared")
+	require.Contains(t, out.String(), kb.AllSkipRangesKey(), "the source is named even when it is empty")
+}
+
+// TestSkipRangeList_OneLogFiltersTheRest covers naming a log: an operator looking at one incident
+// should not have to read every other log's ranges, and a mistyped name has to be distinguishable
+// from a log with no ranges.
+func TestSkipRangeList_OneLogFiltersTheRest(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{{{0, 29, 0}}, {{0, 29, 0}}})
+	cmd, _, _ := markingTestCmd()
+	require.NoError(t, runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "mine", confirmed: true,
+	}))
+	// Another log's range, written straight into the record.
+	rec, err := readSkipRanges(context.Background(), cli, kb)
+	require.NoError(t, err)
+	putSegmentRanges(rec.set, 42, 0, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 3, Reason: "someone else"}})
+	require.NoError(t, writeSkipRanges(context.Background(), cli, kb, rec))
+
+	named, out, _ := markingTestCmd()
+	require.NoError(t, runSkipRangeList(named, cli, kb, "mylog"))
+	require.Contains(t, out.String(), "mine")
+	require.NotContains(t, out.String(), "someone else", "another log's ranges are not this log's problem")
+
+	missing, _, _ := markingTestCmd()
+	err = runSkipRangeList(missing, cli, kb, "nosuchlog")
+	require.Error(t, err)
+	require.Equal(t, 3, wperrors.ExitCodeFor(err), "a mistyped log name is target-not-found, not an empty list")
+}
+
+// TestSkipRangeAdd_JoinedReasonsStayWithinTheBudget is the bound that keeps repeated edits from
+// growing the record without limit: every overlapping declaration joins its reason onto the one
+// already there.
+func TestSkipRangeAdd_JoinedReasonsStayWithinTheBudget(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	ac, members := skipFixture(t, cli, kb, 3, [][][3]int64{{{0, 99, 0}}, {{0, 99, 0}}})
+	cmd, _, _ := markingTestCmd()
+	// Distinct reasons each time: identical ones are deduplicated on the way in, so reusing one
+	// string would exercise that instead of the growth this is about.
+	for i := 0; i < 12; i++ {
+		require.NoError(t, runSkipRangeAdd(cmd, cli, kb, ac, members, skipRangeAddRequest{
+			logName: "mylog", segmentID: 3, from: int64(i), to: int64(i + 40),
+			reason: fmt.Sprintf("pass %d %s", i, strings.Repeat("x", 60)), confirmed: true,
+		}))
+	}
+
+	got := declaredRanges(t, cli, kb, 7, 3)
+	require.Len(t, got, 1)
+	require.Contains(t, got[0].Reason, "pass 0", "the first account is still there")
+	require.LessOrEqual(t, len(got[0].Reason), meta.MaxSkipRangeReasonBytes,
+		"twelve overlapping declarations must not grow the reason past its budget")
+}
+
+// TestSkipRangeWrite_OversizedRecordIsRefused covers the size bound on the command's own write
+// path, which carries its own copy of the check: a bound enforced in only one of the two places
+// drifts the first time one of them changes.
+func TestSkipRangeWrite_OversizedRecordIsRefused(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	rec, err := readSkipRanges(context.Background(), cli, kb)
+	require.NoError(t, err)
+	huge := strings.Repeat("x", meta.MaxSkipRangeReasonBytes)
+	for logID := int64(0); logID < 4000; logID++ {
+		putSegmentRanges(rec.set, logID, 0, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 9, Reason: huge}})
+	}
+
+	err = writeSkipRanges(context.Background(), cli, kb, rec)
+
+	require.Error(t, err)
+	require.Equal(t, 4, wperrors.ExitCodeFor(err))
+	require.Contains(t, err.Error(), "over the")
+	require.Contains(t, err.Error(), "remove ranges that no longer apply", "the refusal says what to do")
 }
 
 // TestSkipRangeList_JSONIsThePayloadAlone covers the machine-readable path: a caller pipes it.

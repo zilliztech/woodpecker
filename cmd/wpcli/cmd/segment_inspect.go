@@ -120,7 +120,8 @@ func runSegmentInspect(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 	quorum := segMeta.GetQuorum()
 	if quorum == nil {
 		return wperrors.NewTargetNotFoundError(fmt.Sprintf(
-			"segment %d of log %s carries no quorum", segmentID, logName))
+			"segment %d of log %s carries no quorum", segmentID, logName,
+		))
 	}
 
 	results := inspectEachNode(ac, members, quorum, logMeta.LogId, segmentID, fromBlock, maxBlocks)
@@ -430,13 +431,15 @@ func readInspectFindings(results []inspectNode, fromBlock int64) ([]string, erro
 	}
 	if len(views) == 0 {
 		findings = append(findings, fmt.Sprintf(
-			"No replica answered (%s), so nothing can be said about this segment's blocks.", strings.Join(silent, ", ")))
+			"No replica answered (%s), so nothing can be said about this segment's blocks.", strings.Join(silent, ", "),
+		))
 		return findings, wperrors.NewNetworkError("no replica answered")
 	}
 	if len(silent) > 0 {
 		findings = append(findings, fmt.Sprintf(
 			"%d of %d replicas did not answer (%s). Nothing below is a statement about the whole quorum.",
-			len(silent), len(results), strings.Join(silent, ", ")))
+			len(silent), len(results), strings.Join(silent, ", "),
+		))
 	}
 
 	// Why a replica saw less than the others, which is the difference between "it is not there" and
@@ -450,14 +453,17 @@ func readInspectFindings(results []inspectNode, fromBlock int64) ([]string, erro
 			}
 			findings = append(findings, fmt.Sprintf(
 				"%s could not walk past offset %d: no block header could be read there, and %s. Entries beyond %s have not been looked at on that replica.",
-				inspectLabel(view.node), view.node.StopOffset, why, examinedHorizon(view)))
+				inspectLabel(view.node), view.node.StopOffset, why, examinedHorizon(view),
+			))
 		case surveyStopBound:
 			findings = append(findings, fmt.Sprintf(
 				"%s stopped at the block limit, not at the end of the segment — raise --max-blocks or move --from-block to look further.",
-				inspectLabel(view.node)))
+				inspectLabel(view.node),
+			))
 		case surveyStopNoBlocks:
 			findings = append(findings, fmt.Sprintf(
-				"%s holds no local blocks to walk (source %s).", inspectLabel(view.node), view.node.Source))
+				"%s holds no local blocks to walk (source %s).", inspectLabel(view.node), view.node.Source,
+			))
 		}
 	}
 
@@ -476,7 +482,8 @@ func readInspectFindings(results []inspectNode, fromBlock int64) ([]string, erro
 		if len(view.absent) > 0 {
 			findings = append(findings, fmt.Sprintf(
 				"%s does not hold entries %s at all, though its own footer says the quorum confirmed them — that replica needs resyncing.",
-				inspectLabel(view.node), view.absent))
+				inspectLabel(view.node), view.absent,
+			))
 		}
 	}
 
@@ -491,7 +498,8 @@ func readInspectFindings(results []inspectNode, fromBlock int64) ([]string, erro
 	if len(atRisk) > 0 {
 		findings = append(findings, fmt.Sprintf(
 			"%s — those entries are readable on another replica, so the data exists and failover is already serving it.",
-			strings.Join(atRisk, "; ")))
+			strings.Join(atRisk, "; "),
+		))
 	}
 
 	// Entries that every replica looked at and none can read. Only what all of them examined counts:
@@ -500,14 +508,16 @@ func readInspectFindings(results []inspectNode, fromBlock int64) ([]string, erro
 	if len(silent) > 0 && len(lost) > 0 {
 		findings = append(findings, fmt.Sprintf(
 			"Entries %s could not be read on any replica that answered, but %d did not answer and may still hold them.",
-			lost, len(silent)))
+			lost, len(silent),
+		))
 		return findings, nil
 	}
 	if len(lost) == 0 {
 		if unexamined := examinedByAny.subtract(examinedByAll); len(unexamined) > 0 {
 			findings = append(findings, fmt.Sprintf(
 				"Entries %s were looked at by some replicas and not others, so nothing about them holds for the whole quorum.",
-				unexamined))
+				unexamined,
+			))
 		}
 		if len(findings) == 0 {
 			findings = append(findings, "Every block every replica walked verified.")
@@ -516,16 +526,19 @@ func readInspectFindings(results []inspectNode, fromBlock int64) ([]string, erro
 	}
 
 	findings = append(findings, fmt.Sprintf(
-		"No replica can read entries %s, and every replica looked. Only skipping them gets a reader past.", lost))
+		"No replica can read entries %s, and every replica looked. Only skipping them gets a reader past.", lost,
+	))
 	if salvage := recoverableSomewhere.intersect(lost); len(salvage) > 0 {
 		findings = append(findings, fmt.Sprintf(
 			"Of those, entries %s are still intact at record level on some replica — no reader serves them, because a block that fails its checksum is dropped whole, but a repair could recover them.",
-			salvage))
+			salvage,
+		))
 	}
 	if resume, ok := resumeAfter(readableSomewhere, lost); ok {
 		findings = append(findings, fmt.Sprintf(
 			"Readable data resumes at entry %d, so the damage is bounded — %s is what a skip would have to cover.",
-			resume, lost))
+			resume, lost,
+		))
 	} else {
 		findings = append(findings, "No replica reads anything after those entries, so the damage is not known to end within the blocks surveyed.")
 	}

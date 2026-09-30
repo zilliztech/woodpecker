@@ -115,12 +115,14 @@ func runFenceQuorum(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilde
 	quorum := segMeta.GetQuorum()
 	if quorum == nil {
 		return wperrors.NewTargetNotFoundError(fmt.Sprintf(
-			"segment %d of log %s carries no quorum", req.segmentID, req.logName))
+			"segment %d of log %s carries no quorum", req.segmentID, req.logName,
+		))
 	}
 	if quorum.Wq <= 0 || quorum.Aq <= 0 || quorum.Aq > quorum.Wq {
 		return wperrors.NewStateConflictError(fmt.Sprintf(
 			"segment %d of log %s records wq=%d aq=%d: how many nodes must be fenced cannot be derived from it",
-			req.segmentID, req.logName, quorum.Wq, quorum.Aq))
+			req.segmentID, req.logName, quorum.Wq, quorum.Aq,
+		))
 	}
 	required := int(quorum.Wq - quorum.Aq + 1)
 
@@ -151,7 +153,8 @@ func runFenceQuorum(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilde
 		return wperrors.NewUsageError(fmt.Sprintf(
 			"%d node(s) named, but %d of %d are required to interrupt writes; "+
 				"to fence a single node deliberately, use 'wp logstore fence <node>'",
-			len(targets), required, quorum.Wq))
+			len(targets), required, quorum.Wq,
+		))
 	}
 
 	if !req.confirmed {
@@ -174,7 +177,8 @@ func runFenceQuorum(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilde
 	if fenced < required {
 		shortfall = wperrors.NewStateConflictError(fmt.Sprintf(
 			"fenced %d of the %d nodes required to interrupt writes: the writer can still reach aq=%d",
-			fenced, required, quorum.Aq))
+			fenced, required, quorum.Aq,
+		))
 	}
 
 	if renderedOutput() {
@@ -232,7 +236,8 @@ func resolveFenceTargets(quorum *proto.QuorumInfo, members *client.Memberlist, n
 		}
 		if matched == "" {
 			return nil, wperrors.NewUsageError(fmt.Sprintf(
-				"%s is not a member of this segment's quorum (%s)", name, strings.Join(quorum.Nodes, ", ")))
+				"%s is not a member of this segment's quorum (%s)", name, strings.Join(quorum.Nodes, ", "),
+			))
 		}
 		targets = append(targets, matched)
 	}

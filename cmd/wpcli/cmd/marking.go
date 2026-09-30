@@ -428,7 +428,8 @@ func runMarkingConfirm(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 	if status.State != proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL && !force {
 		return wperrors.NewStateConflictError(fmt.Sprintf(
 			"record %d/%d is %s, not PENDING_MANUAL — it is managed automatically; use --force to confirm anyway",
-			logID, segID, status.State.String()))
+			logID, segID, status.State.String(),
+		))
 	}
 
 	// Confirm by transitioning to a durable terminal state, NOT by physical delete: the segment
@@ -452,7 +453,8 @@ func runMarkingConfirm(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 	if !ok {
 		return wperrors.NewStateConflictError(fmt.Sprintf(
 			"marking record %d/%d changed or was reaped concurrently; re-run `wp marking list` and retry if it still shows",
-			logID, segID))
+			logID, segID,
+		))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "confirmed: marking record log %d segment %d set to OPERATOR_CONFIRMED (was %s); it will be reaped when the segment is truncated\n",
 		logID, segID, prevState.String())

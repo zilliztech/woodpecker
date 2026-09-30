@@ -9,7 +9,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/zilliztech/woodpecker/common/etcd"
-
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -45,6 +44,27 @@ func testSkipRangesAbsentRecordReadsAsEmpty(t *testing.T) {
 	require.Empty(t, set.Metadata.GetByLogId())
 	require.Zero(t, set.Revision, "an absent record has no revision, which is what the write path guards on")
 	require.Nil(t, set.For(7), "a log with no ranges answers nil, not an empty map")
+}
+
+// testSkipRangesAccessorIsNilSafeAtEveryLevel pins what the accessor may be called on. Three
+// things can be nil -- the wrapper, the message inside it, and the map inside that -- and the
+// reader calls this on a record most clusters never have, so it has to answer nil rather than
+// panic at each of them.
+func testSkipRangesAccessorIsNilSafeAtEveryLevel(t *testing.T) {
+	var nilWrapper *AllSkipRanges
+	require.Nil(t, nilWrapper.For(7), "a nil wrapper")
+
+	require.Nil(t, (&AllSkipRanges{}).For(7), "a nil proto message inside the wrapper")
+
+	require.Nil(t, (&AllSkipRanges{Metadata: &proto.AllSkipRanges{}}).For(7), "a nil map inside the message")
+
+	// And a log the record does not mention, which is the common case.
+	held := &AllSkipRanges{Metadata: rangesFor(7, 3, 10, 19)}
+	require.Nil(t, held.For(8))
+	require.NotNil(t, held.For(7))
+	require.Nil(t, held.For(7).GetBySegmentId()[4], "a segment the log does not mention")
+	require.Empty(t, held.For(8).GetBySegmentId()[3].GetRanges(),
+		"the whole chain answers empty rather than panicking")
 }
 
 // testSkipRangesRoundTripsByLogAndSegment is the lookup the reader depends on: two map

@@ -90,6 +90,7 @@ func TestAll(t *testing.T) {
 	t.Run("test legacy metadata prefix fallback", testLegacyMetadataPrefixFallback)
 	t.Run("test independent metadata prefix per provider", testIndependentMetadataPrefixPerProvider)
 	t.Run("test skip ranges: an absent record reads as empty", testSkipRangesAbsentRecordReadsAsEmpty)
+	t.Run("test skip ranges: the accessor is nil-safe at every level", testSkipRangesAccessorIsNilSafeAtEveryLevel)
 	t.Run("test skip ranges: round trips by log and segment", testSkipRangesRoundTripsByLogAndSegment)
 	t.Run("test skip ranges: a stale write is refused", testSkipRangesStaleWriteIsRefused)
 	t.Run("test skip ranges: a first write refuses if someone else created it", testSkipRangesFirstWriteRefusesIfSomeoneElseCreatedIt)

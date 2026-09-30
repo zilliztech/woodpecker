@@ -550,13 +550,12 @@ func skipRangeReadability(ac *client.Client, members *client.Memberlist, quorum 
 	return out, unasked
 }
 
+// rangesString renders a non-empty list; both callers check for empty first and say so in their
+// own words, which read better than a shared placeholder.
 func rangesString(ranges []*proto.SkipRange) string {
 	parts := make([]string, 0, len(ranges))
 	for _, r := range ranges {
 		parts = append(parts, fmt.Sprintf("%d-%d", r.FromEntryId, r.ToEntryId))
-	}
-	if len(parts) == 0 {
-		return "nothing"
 	}
 	return strings.Join(parts, ", ")
 }
