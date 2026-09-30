@@ -25,6 +25,7 @@ func newSegmentCommand() *cobra.Command {
 		Short: "Inspect one segment across its quorum",
 	}
 	cmd.AddCommand(newSegmentProbeCommand())
+	cmd.AddCommand(newSegmentInspectCommand())
 	return cmd
 }
 

@@ -14,6 +14,7 @@ Woodpecker exposes an HTTP admin server on each node (default port `9091`, confi
 | GET | `/admin/log-health` | Health | Node-wide per-log read/write health (optionally filtered by bucket/rootPath) |
 | GET | `/admin/instance/data` | Data | Instances holding node-local data (optionally filtered by bucket/rootPath) |
 | GET | `/admin/logstore/segment/probe` | Data | Bounded read attempt on one segment: how far this node can read it |
+| GET | `/admin/logstore/segment/inspect` | Data | Block-by-block survey of one segment on this node, continuing past a bad block |
 | POST | `/admin/node/decommission` | Lifecycle | Start graceful node decommission |
 | GET | `/admin/node/decommission/progress` | Lifecycle | Decommission progress and safe-to-terminate check |
 | GET | `/debug/pprof/` | Debug | Pprof index page (enabled by default, disable via `PPROF_ENABLE=false`) |
@@ -289,6 +290,92 @@ ambiguity instead of picking — a 404 whose message says what it could not reso
 
 This endpoint answers only for the node that serves it, like every other one here. `wp segment
 probe` assembles the quorum's view.
+
+---
+
+## Segment Block Survey
+
+```
+GET /admin/logstore/segment/inspect?log_id=7&segment_id=3
+GET /admin/logstore/segment/inspect?log_id=7&segment_id=3&from_block=10&max_blocks=8
+```
+
+Walks this node's copy of a segment block by block and reports what it found at each one — block
+number, offset, size, the entries it holds, and whether it verified:
+
+```json
+{
+  "node_id": "10.0.1.7:18080",
+  "local": { "data_log": true, "data_log_bytes": 4194304, "compacted_mark": false, "delete_marked": false },
+  "source": "local_staged",
+  "survey": {
+    "blocks": [
+      {"block": 0, "offset": 25, "bytes": 2048, "first_entry_id": 0, "last_entry_id": 9, "status": "ok"},
+      {"block": 1, "offset": 2110, "bytes": 2048, "first_entry_id": 10, "last_entry_id": 19,
+       "records_ok": 6, "last_good_entry_id": 15,
+       "status": "checksum_failed",
+       "detail": "block CRC mismatch: expected 1a2b3c4d, got 5e6f7a8b; record_checksum_failed at record offset 384 (record checksum mismatch)"},
+      {"block": 2, "offset": 4195, "bytes": 2048, "first_entry_id": 20, "last_entry_id": 29, "status": "ok"}
+    ],
+    "sealed": true, "total_blocks_known": 3, "lac": 29,
+    "stopped_early": false, "stop_reason": "end_of_segment"
+  }
+}
+```
+
+**It does not stop at the first failure**, which is what separates it from every read path: a reader
+stops there and returns what it already had (`stagedstorage/reader_impl.go:1081-1096`), so nothing
+else can say whether one block is damaged or everything after it is — the difference between
+skipping a few entries and skipping the rest of the segment.
+
+**How far it can continue depends on what locates the next block.** A sealed segment carries index
+records giving every block's offset independently, so no single damaged block hides the rest. An
+active segment has only the chain: block N+1 begins where block N's header says it ends. A damaged
+body is stepped over there too, but a header that cannot be read ends the walk, reported as
+`stop_reason: chain_broken` — the blocks beyond it have not been looked at, which is not the same as
+their being damaged.
+
+**A damaged block is still walked record by record.** A block's checksum covers all of it, so one
+flipped byte condemns the whole block — but every record inside carries its own checksum, so the
+damage can be placed at a record. `records_ok` and `last_good_entry_id` say how far into the block
+the records still verify.
+
+That is a statement about what could be **recovered**, not about what can be **read**. Every backend
+drops a block whose integrity check fails without returning the records that passed
+(`stagedstorage/reader_impl.go:1090`, `disk:705`, `objectstorage:763`), so a skip range still has to
+cover the whole block's entries. What the record walk adds is that a repair could salvage the
+prefix, which `wp segment inspect` reports on its own line rather than folding into what a reader
+can serve.
+
+There is no "undecodable" status: `DecodeRecordList` answers corruption by stopping and returning
+the records it already has, never by erroring, so a damaged block header presents as no block header
+record being found at that offset.
+
+A segment finalized with no entries is complete, not broken: `Finalize` writes the header and the
+footer with nothing between, and it is reported as sealed with no blocks. On a segment nobody has
+finalized, a block whose header is written and whose data is not — the writer puts them out in two
+separate writes — is reported as `data_incomplete` rather than as damage: those entries have not been
+written yet.
+
+`max_blocks` is bounded by the node whatever the caller asks — a full survey reads every byte of the
+segment — and the read carries the request's context. A node with no local `data.log` answers
+`no_local_blocks` without opening anything: a compacted segment's blocks are objects every replica
+shares, so surveying that per replica would be one copy answered repeatedly.
+
+This endpoint answers only for the node that serves it. `wp segment inspect` assembles the quorum's
+view and states the readings no single replica can: entries damaged here but readable there, entries
+no replica can read, and where readable data resumes.
+
+`lac` is the entry the quorum confirmed, from the replica's own footer, and a finalized replica may
+intentionally hold less than that (`stagedstorage/writer_impl.go:1173`). So a sealed replica that
+walked to the end and stops short of its own `lac` is missing entries that are known to exist, which
+is a different answer from not having looked.
+
+It compares replicas **by entry, never by block number**. Each node flushes on its own timer and
+size (`writer_impl.go:475`, `:509`), so the same entries land in different blocks on different
+nodes and a block number means nothing across them. It also distinguishes what a replica could not
+read from what it never looked at: a replica that stopped early has said nothing about the entries
+beyond its horizon, and its silence is not evidence that they are lost.
 
 ---
 

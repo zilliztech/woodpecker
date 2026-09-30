@@ -56,6 +56,7 @@ const (
 	AdminLogstoreFencePath    = "/admin/logstore/fence"
 	AdminLogstoreCompactPath  = "/admin/logstore/compact"
 	AdminLogstoreProbePath    = "/admin/logstore/segment/probe"
+	AdminLogstoreInspectPath  = "/admin/logstore/segment/inspect"
 )
 
 // AdminLogDeletePath marks a single log deleted: POST {bucketName, rootPath, logId}.

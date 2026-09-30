@@ -263,6 +263,13 @@ func main() {
 					FromEntry: fromEntry, MaxEntries: maxEntries,
 				})
 			},
+			InspectSegment: func(ctx context.Context, bucketName, rootPath string, logID, segmentID, fromBlock, maxBlocks int64) (any, error) {
+				return srv.InspectSegment(ctx, server.SegmentInspectRequest{
+					Bucket: bucketName, RootPath: rootPath,
+					LogID: logID, SegmentID: segmentID,
+					FromBlock: fromBlock, MaxBlocks: maxBlocks,
+				})
+			},
 		},
 		Ops: commonhttp.OpsCallbacks{
 			List: func(params map[string]string) any {
