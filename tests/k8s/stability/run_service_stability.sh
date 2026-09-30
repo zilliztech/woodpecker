@@ -22,6 +22,7 @@
 #   RestartIdlePod, RestartQuorumPod   kubectl delete pod (graceful)
 #   KillQuorumPod                      SIGKILL the server process; the container restarts in place
 #   KillQuorumPod_NeverReturns         SIGKILL, then Chaos Mesh PodChaos pod-failure, lifted after the workload ends
+#   KillQuorumPod_Rescheduled          SIGSTOP, then force delete: dies without a leave, comes back with a new IP (#395)
 #   VanishQuorumPod, VanishReadPod_*   Chaos Mesh NetworkChaos partition for 10s
 #   RollingRestartAllPods              graceful delete of every pod, highest ordinal first
 #
@@ -69,7 +70,7 @@ WORKLOAD_BIN_IN_POD=/root/service_stability.test
 STATE_DIR=/tmp/wp-stability
 ARTIFACTS="$SCRIPT_DIR/artifacts"
 LATENCY_MODE="${WP_STABILITY_LATENCY:-report}"
-ALL_CASES="Baseline RestartIdlePod RestartQuorumPod KillQuorumPod KillQuorumPod_NeverReturns VanishQuorumPod VanishReadPod_SeparateReader RollingRestartAllPods"
+ALL_CASES="Baseline RestartIdlePod RestartQuorumPod KillQuorumPod KillQuorumPod_NeverReturns KillQuorumPod_Rescheduled VanishQuorumPod VanishReadPod_SeparateReader RollingRestartAllPods"
 CASES="${CASES:-$ALL_CASES}"
 SERVER_SELECTOR="app.kubernetes.io/instance=${CR_NAME},app.kubernetes.io/component=server"
 
@@ -303,6 +304,21 @@ run_case() {  # $1 = case name
   duration: 10m"
       sleep 10
       lift_after=podchaos ;;  # stays down until the workload has finished
+    KillQuorumPod_Rescheduled)
+      # The server is frozen so it cannot leave, then the pod is force-deleted:
+      # the kubelet's SIGTERM waits behind the stop and its SIGKILL follows,
+      # and the StatefulSet recreates the pod under the same name with a new
+      # IP. Peers see a node that died without leaving come back at another
+      # address, which memberlist refuses until the old entry is reaped (#395).
+      local old_ip new_ip t0
+      old_ip=$(kubectl get pod "$pod" -o jsonpath='{.status.podIP}')
+      kubectl exec "$pod" -- pkill -STOP -x woodpecker || { abort_case "$c" "$wl" "SIGSTOP of $pod"; return 1; }
+      t0=$SECONDS
+      kubectl delete pod "$pod" --grace-period=0 --force --wait=false || { abort_case "$c" "$wl" "force delete of $pod"; return 1; }
+      wait_pods_ready; wait_converged
+      new_ip=$(kubectl get pod "$pod" -o jsonpath='{.status.podIP}')
+      log "CASE $c: $pod $old_ip -> $new_ip, readmitted by every peer $((SECONDS - t0))s after it died"
+      echo "readmitted_after_seconds=$((SECONDS - t0)) old_ip=$old_ip new_ip=$new_ip" >"$out/readmission.txt" ;;
     VanishQuorumPod|VanishReadPod_SeparateReader) partition_pod "$pod" ;;
     RollingRestartAllPods)
       for i in $(seq $((REPLICAS-1)) -1 0); do

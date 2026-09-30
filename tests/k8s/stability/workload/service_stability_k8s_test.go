@@ -158,6 +158,15 @@ func TestServiceStabilityK8s_KillQuorumPod_NeverReturns(t *testing.T) {
 	env.finish()
 }
 
+// A quorum pod's server dies without a gossip leave and the pod is recreated
+// under the same name with a new IP, the case memberlist refuses to readmit
+// until the old entry is reaped (#395). The runner reports how long that took.
+func TestServiceStabilityK8s_KillQuorumPod_Rescheduled(t *testing.T) {
+	env := startK8sEnv(t, harness.DefaultLogs, false)
+	env.fault(env.BusiestQuorumAddr())
+	env.finish()
+}
+
 // A quorum pod is partitioned from everything (Chaos Mesh NetworkChaos): its
 // connections go silent instead of resetting.
 func TestServiceStabilityK8s_VanishQuorumPod(t *testing.T) {

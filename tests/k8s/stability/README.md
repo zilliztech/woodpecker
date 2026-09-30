@@ -18,6 +18,7 @@ A deleted pod keeps its DNS name and gets a new IP, as in production. A killed o
 | `RestartQuorumPod` | `kubectl delete pod` (graceful) of the busiest quorum pod |
 | `KillQuorumPod` | SIGKILL of the server process (`pkill -KILL -x woodpecker`); the container restarts in place |
 | `KillQuorumPod_NeverReturns` | SIGKILL, then PodChaos `pod-failure`, lifted only after the workload has finished |
+| `KillQuorumPod_Rescheduled` | SIGSTOP the server, then force delete the pod. It dies without a leave and comes back with a new IP. The time until every peer readmits it is written to `artifacts/KillQuorumPod_Rescheduled/readmission.txt` (#395). |
 | `VanishQuorumPod` | NetworkChaos `partition` (both directions, every pod) for 10s |
 | `VanishReadPod_SeparateReader` | the same on the pod the tail readers use, readers in their own client |
 | `RollingRestartAllPods` | graceful delete of every pod, highest ordinal first, waiting for Ready and gossip |
