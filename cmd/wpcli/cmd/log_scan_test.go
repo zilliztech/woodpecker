@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	pb "google.golang.org/protobuf/proto"
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/client"
+	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -441,4 +444,165 @@ func TestLogScan_GapWithNoDataAnywhereSaysSo(t *testing.T) {
 	require.Contains(t, s, "no node holds data for it")
 	require.NotContains(t, s, "data with no metadata record",
 		"nothing holds it, so there is no orphan data to clean up")
+}
+
+// TestLogScanNodes_ReportsWhyAReplicaDidNotAnswer covers the four ways a replica fails to answer.
+// They are not interchangeable: a node missing from the memberlist is a metadata problem, one that
+// refuses the connection is down, one answering non-200 is up but cannot serve the segment, and one
+// answering nonsense is a version mismatch. A scan that folded them into "unreachable" would send
+// an operator after the wrong thing, and none of them may be counted as coverage.
+func TestLogScanNodes_ReportsWhyAReplicaDidNotAnswer(t *testing.T) {
+	scanTestGlobals(t)
+
+	serve := func(h http.HandlerFunc) (*httptest.Server, client.Member, string) {
+		srv := httptest.NewServer(h)
+		t.Cleanup(srv.Close)
+		addr := srv.Listener.Addr().String()
+		return srv, client.Member{
+			ID: "node-" + extractPort(t, srv.URL), ServiceAddr: addr,
+			Tags: map[string]string{"admin_port": extractPort(t, srv.URL)},
+		}, addr
+	}
+
+	_, refusing, refusingAddr := serve(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	_, garbling, garblingAddr := serve(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`this is not json`))
+	})
+	// A node that is in the memberlist but whose server is gone: the connection is refused.
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadAddr := dead.Listener.Addr().String()
+	deadPort := extractPort(t, dead.URL)
+	dead.Close()
+	down := client.Member{ID: "node-down", ServiceAddr: deadAddr, Tags: map[string]string{"admin_port": deadPort}}
+
+	const strangerAddr = "127.0.0.1:19999"
+	members := &client.Memberlist{Members: []client.Member{refusing, garbling, down}}
+	sm := segmentMeta{id: 4, meta: &proto.SegmentMetadata{
+		SegNo: 4, State: proto.SegmentState_Completed, LastEntryId: 9,
+		Quorum: &proto.QuorumInfo{
+			Id: 1, Es: 4, Wq: 4, Aq: 3,
+			Nodes: []string{strangerAddr, refusingAddr, garblingAddr, deadAddr},
+		},
+	}}
+	ac := client.New("http://127.0.0.1:1", client.ClientOpts{Timeout: 2 * time.Second})
+
+	nodes := scanSegmentNodes(ac, members, sm, 7, scanModeQuick)
+
+	require.Len(t, nodes, 4, "a replica that could not be asked still belongs in the count")
+	byLabel := map[string]scanNode{}
+	for _, n := range nodes {
+		require.False(t, n.answered, "%s answered nothing usable", n.label)
+		require.Empty(t, n.coverage, "%s must contribute no coverage", n.label)
+		byLabel[n.label] = n
+	}
+	require.Equal(t, posUnknownNode, byLabel[strangerAddr].state,
+		"a quorum member absent from the memberlist is labelled by address, since it has no ID")
+	require.Equal(t, probeStateCannotAnswer, byLabel[refusing.ID].state)
+	require.Equal(t, posBadResponse, byLabel[garbling.ID].state)
+	require.Equal(t, posUnreachable, byLabel[down.ID].state)
+
+	// What an operator reads: the row says nothing is known, and names each reason.
+	row, findings, problem := reconcileSegment(scanSegment{
+		id: 4, state: proto.SegmentState_Completed, metaLast: 9, nodes: nodes,
+	})
+	require.Equal(t, "0/4", row.Replicas)
+	require.Equal(t, "-", row.Reaches, "no replica answered, so no range may be claimed")
+	require.False(t, problem, "nothing is known about the segment, which is not the same as it being short")
+	require.Len(t, findings, 1)
+	for _, want := range []string{posUnknownNode, probeStateCannotAnswer, posBadResponse, posUnreachable} {
+		require.Contains(t, findings[0], want)
+	}
+}
+
+// TestLogScan_JSONCarriesRowsAndFindings covers the machine-readable path. Stdout has to be the
+// payload alone: a caller pipes it, and a preamble printed for a human would break that.
+func TestLogScan_JSONCarriesRowsAndFindings(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	old := Globals
+	t.Cleanup(func() { Globals = old })
+	Globals = GlobalFlags{Timeout: 2 * time.Second, Output: "json"}
+
+	ac, members, _ := scanFixture(t, cli, kb, []scanFixtureSegment{
+		{id: 0, state: proto.SegmentState_Completed, metaLast: 19, perReplica: [][][3]int64{{{0, 9, 1}}}},
+	}, 2)
+	cmd, out, _ := markingTestCmd()
+
+	err := runLogScan(cmd, cli, kb, ac, members, "mylog", scanModeQuick, 0, -1)
+
+	require.Error(t, err, "a short segment is a finding, and the exit code has to agree with the payload")
+	var payload struct {
+		LogName  string `json:"log_name"`
+		LogID    int64  `json:"log_id"`
+		Mode     string `json:"mode"`
+		Segments []struct {
+			SegmentID int64  `json:"segment_id"`
+			Verdict   string `json:"verdict"`
+			Reaches   string `json:"reaches"`
+			Detail    string `json:"detail"`
+		} `json:"segments"`
+		Findings []string `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &payload),
+		"stdout has to be the payload alone, or a caller cannot pipe it anywhere")
+	require.Equal(t, "mylog", payload.LogName)
+	require.Equal(t, int64(7), payload.LogID)
+	require.Equal(t, scanModeQuick, payload.Mode, "a report has to say which question it answered")
+	require.Len(t, payload.Segments, 1)
+	require.Equal(t, scanVerdictShort, payload.Segments[0].Verdict)
+	require.Equal(t, "0-9", payload.Segments[0].Reaches)
+	require.Equal(t, "missing 10-19", payload.Segments[0].Detail)
+	require.NotEmpty(t, payload.Findings)
+}
+
+// TestLogScan_OpenSegmentIsNotRenderedAsEntryMinusOne covers the open segment's row: metadata
+// records no last entry while it is being written, and printing a bare -1 in a column of entry ids
+// reads as an entry id.
+func TestLogScan_OpenSegmentIsNotRenderedAsEntryMinusOne(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	scanTestGlobals(t)
+
+	ac, members, _ := scanFixture(t, cli, kb, []scanFixtureSegment{
+		{id: 0, state: proto.SegmentState_Active, metaLast: -1, perReplica: [][][3]int64{{{0, 7, 1}}}},
+	}, 2)
+	cmd, out, _ := markingTestCmd()
+
+	require.NoError(t, runLogScan(cmd, cli, kb, ac, members, "mylog", scanModeQuick, 0, -1))
+
+	s := out.String()
+	require.Contains(t, s, scanVerdictOpen, "an open segment is not short, whatever it reaches")
+
+	var cells []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "0 ") {
+			cells = regexp.MustCompile(`\s{2,}`).Split(strings.TrimSpace(line), -1)
+			break
+		}
+	}
+	require.NotEmpty(t, cells, "the segment's row must be printed")
+	require.Equal(t, "-1 (open)", cells[2],
+		"a bare -1 in a column of entry ids reads as an entry id")
+}
+
+// TestLogScan_UnknownLogIsTargetNotFound covers the mistyped log name, which is the first thing a
+// caller does wrong. It has to be distinguishable from a log that exists and is broken.
+func TestLogScan_UnknownLogIsTargetNotFound(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	scanTestGlobals(t)
+
+	ac, members, _ := scanFixture(t, cli, kb, []scanFixtureSegment{
+		{id: 0, state: proto.SegmentState_Completed, metaLast: 9, perReplica: [][][3]int64{{{0, 9, 1}}}},
+	}, 2)
+	cmd, _, _ := markingTestCmd()
+
+	err := runLogScan(cmd, cli, kb, ac, members, "nosuchlog", scanModeQuick, 0, -1)
+
+	require.Error(t, err)
+	require.Equal(t, 3, wperrors.ExitCodeFor(err))
+	require.Contains(t, err.Error(), "nosuchlog")
 }
