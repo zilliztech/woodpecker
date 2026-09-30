@@ -298,6 +298,7 @@ probe` assembles the quorum's view.
 ```
 GET /admin/logstore/segment/inspect?log_id=7&segment_id=3
 GET /admin/logstore/segment/inspect?log_id=7&segment_id=3&from_block=10&max_blocks=8
+GET /admin/logstore/segment/inspect?log_id=7&segment_id=3&verify=false
 ```
 
 Walks this node's copy of a segment block by block and reports what it found at each one — block
@@ -357,8 +358,19 @@ finalized, a block whose header is written and whose data is not — the writer 
 separate writes — is reported as `data_incomplete` rather than as damage: those entries have not been
 written yet.
 
+`verify=false` asks what the segment claims to hold instead of reading it. A sealed segment's index
+already carries every block's offset, size and entry range, so the answer comes from one trailer read
+— a few kilobytes whatever the segment's size — and each block is reported `not_verified` with no
+byte of its body read. An active segment has no index, so the walk still follows the chain and reads
+each block's header, but not its body. This is what makes a whole-log sweep affordable: `wp log scan
+--mode quick` reads structure across every segment at trailer cost, and `--mode raw` leaves it
+default so codec and CRC decide. The default is `verify=true`; any other value than a boolean is a
+400, so a typo reads as a request error rather than silently skipping verification.
+
 `max_blocks` is bounded by the node whatever the caller asks — a full survey reads every byte of the
-segment — and the read carries the request's context. A node with no local `data.log` answers
+segment — and the read carries the request's context. Its default is 64 blocks when verifying and
+4096 when not, since a pass that reads no block body no longer costs what the segment weighs; the
+ceiling a caller can ask for is 4096 either way. A node with no local `data.log` answers
 `no_local_blocks` without opening anything: a compacted segment's blocks are objects every replica
 shares, so surveying that per replica would be one copy answered repeatedly.
 

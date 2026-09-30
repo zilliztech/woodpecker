@@ -140,9 +140,49 @@ func TestInspectSegment_ShutdownIsNotASurvey(t *testing.T) {
 
 // TestInspectBound keeps a survey within bounds the node sets, whatever was asked for.
 func TestInspectBound(t *testing.T) {
-	require.Equal(t, InspectMaxBlocksDefault, inspectBound(0))
-	require.Equal(t, InspectMaxBlocksDefault, inspectBound(-1))
-	require.Equal(t, int64(8), inspectBound(8))
-	require.Equal(t, InspectMaxBlocksLimit, inspectBound(1_000_000),
+	require.Equal(t, InspectMaxBlocksDefault, inspectBound(0, false))
+	require.Equal(t, InspectMaxBlocksDefault, inspectBound(-1, false))
+	require.Equal(t, int64(8), inspectBound(8, false))
+	require.Equal(t, InspectMaxBlocksLimit, inspectBound(1_000_000, false),
 		"a caller cannot ask a node to read a segment whole")
+}
+
+// TestInspectSegment_CoverageOnlyReadsNoBlockData is the promise a whole-log sweep rests on: asking
+// for coverage costs the trailer, not the segment. The zero value verifies, because that is what
+// asking a node to inspect a segment means; coverage is the explicit opt-in.
+func TestInspectSegment_CoverageOnlyReadsNoBlockData(t *testing.T) {
+	store := inspectTestStore(t)
+	writeSegmentFile(t, store.localSegmentDir(testBucketName, testRootPath, testLogId, 29), 4)
+
+	verified, err := store.InspectSegment(context.Background(), SegmentInspectRequest{
+		Bucket: testBucketName, RootPath: testRootPath, LogID: testLogId, SegmentID: 29,
+	})
+	require.NoError(t, err)
+	require.Equal(t, codec.BlockOK, verified.Survey.Blocks[0].Status,
+		"the zero value verifies")
+
+	coverage, err := store.InspectSegment(context.Background(), SegmentInspectRequest{
+		Bucket: testBucketName, RootPath: testRootPath, LogID: testLogId, SegmentID: 29,
+		CoverageOnly: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, coverage.Survey.Blocks, 4, "coverage still reports every block")
+	for i, block := range coverage.Survey.Blocks {
+		require.Equal(t, codec.BlockNotVerified, block.Status,
+			"block %d: nothing was checked, so it must not come back ok", i)
+		require.Equal(t, verified.Survey.Blocks[i].FirstEntryID, block.FirstEntryID,
+			"block %d: the entry range is the same either way", i)
+		require.Equal(t, verified.Survey.Blocks[i].LastEntryID, block.LastEntryID)
+	}
+}
+
+// TestInspectBoundDependsOnTheMode keeps the two costs apart: a coverage pass reads a header per
+// block and no data, so its default covers a whole segment; verifying reads every byte it walks.
+func TestInspectBoundDependsOnTheMode(t *testing.T) {
+	require.Equal(t, InspectMaxBlocksDefault, inspectBound(0, false))
+	require.Equal(t, CoverageMaxBlocksDefault, inspectBound(0, true))
+	require.Greater(t, CoverageMaxBlocksDefault, InspectMaxBlocksDefault,
+		"coverage is cheap enough to default to a whole segment")
+	require.Equal(t, InspectMaxBlocksLimit, inspectBound(1_000_000, true),
+		"the hard ceiling holds in both modes")
 }
