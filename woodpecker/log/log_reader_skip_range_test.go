@@ -153,11 +153,11 @@ func TestReaderOpensWithNoRangesHeld(t *testing.T) {
 	require.EqualValues(t, 10, reader.pendingReadEntryId)
 }
 
-// TestReaderOpeningPositionCountsAsReported covers the first stall. The trigger is a position that
-// has not moved since the last report, so the position at open has to be recorded as reported --
-// otherwise the first tick compares against a zero value, sees a change, and a reader stuck from
-// the moment it opened waits an extra interval.
-func TestReaderOpeningPositionCountsAsReported(t *testing.T) {
+// TestReaderOpeningPositionIsTheFirstBaseline covers the first stall. The trigger compares the
+// current position against where the reader was on the previous tick, so the opening position has
+// to be that baseline -- otherwise the first tick compares against a zero value, sees a change, and
+// a reader stuck from the moment it opened waits an extra interval.
+func TestReaderOpeningPositionIsTheFirstBaseline(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 	logHandle := &testLogHandleMock{}
@@ -171,8 +171,7 @@ func TestReaderOpeningPositionCountsAsReported(t *testing.T) {
 	require.NoError(t, err)
 	reader := r.(*logBatchReaderImpl)
 
-	require.EqualValues(t, 6, reader.reportedSegmentId)
-	require.EqualValues(t, 42, reader.reportedEntryId)
+	require.Equal(t, LogMessageId{SegmentId: 6, EntryId: 42}, reader.positionAtLastReport)
 }
 
 // TestReaderAsksOnlyWhileItIsNotMovingOn covers the trigger, which is where the cost of this whole
@@ -195,19 +194,19 @@ func TestReaderAsksOnlyWhileItIsNotMovingOn(t *testing.T) {
 	ctx := context.Background()
 
 	// Advancing: nothing is asked, whatever the record holds.
-	reader.refreshSkipRangesIfStuck(ctx, 3, 11)
+	reader.refreshSkipRangesIfStuck(ctx, LogMessageId{SegmentId: 3, EntryId: 11})
 	require.Zero(t, logHandle.skipRangeReads.Load(), "a reader that moved on has no reason to ask")
 	require.Nil(t, reader.skips)
 
 	// Same position as the last report: asked once, and now holds the ranges.
-	reader.refreshSkipRangesIfStuck(ctx, 3, 11)
+	reader.refreshSkipRangesIfStuck(ctx, LogMessageId{SegmentId: 3, EntryId: 11})
 	require.EqualValues(t, 1, logHandle.skipRangeReads.Load())
 	require.NotNil(t, reader.skips)
 
 	// Moving again stops it asking, and the next tick at the new position asks once more.
-	reader.refreshSkipRangesIfStuck(ctx, 3, 30)
+	reader.refreshSkipRangesIfStuck(ctx, LogMessageId{SegmentId: 3, EntryId: 30})
 	require.EqualValues(t, 1, logHandle.skipRangeReads.Load())
-	reader.refreshSkipRangesIfStuck(ctx, 3, 30)
+	reader.refreshSkipRangesIfStuck(ctx, LogMessageId{SegmentId: 3, EntryId: 30})
 	require.EqualValues(t, 2, logHandle.skipRangeReads.Load())
 }
 
