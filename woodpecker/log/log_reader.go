@@ -241,8 +241,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// the position is unchanged - but at its own interval, not once per poll.
 		now := time.Now().UnixMilli()
 		if segId > l.pendingReadSegmentId || l.lastReported+UpdateReaderInfoIntervalMs < now {
-			l.refreshSkipRangesIfStuck(ctx, segId, entryId)
-			l.lastReported = now
+			l.onReportTick(ctx, now, segId, entryId)
 			// update reader info with the session this reader owns
 			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.readerTempSession, segId, entryId)
 			if updateReaderErr != nil {
@@ -332,16 +331,21 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 	}
 }
 
-// refreshSkipRangesIfStuck re-reads what this reader should pass over, but only when the position
-// has not moved since the last report. That condition is the whole cost discipline: ErrEntryNotFound
-// is the steady state of a reader tailing an idle log, so asking on every one of them would put a
-// metadata read on every poll of every healthy reader. It is also what keeps a range declared over
+// onReportTick is the periodic point at which this reader notes where it is. It is the only place
+// the three lastReported* fields are maintained, so there is nothing for the caller to keep in step
+// with -- and the position it publishes afterwards is the same local value, rather than a field
+// this has just written, so reordering the two cannot make the report lag a tick behind.
+//
+// Before moving the baseline it answers the one question the skip ranges are consulted on: has this
+// reader moved since the last tick. That condition is the whole cost discipline. ErrEntryNotFound is
+// the steady state of a reader tailing an idle log, so asking on every one of them would re-read
+// the record on every poll of every healthy reader. It is also what keeps a range declared over
 // data that is in fact readable from costing anything, since a reader that never asks cannot jump.
-func (l *logBatchReaderImpl) refreshSkipRangesIfStuck(ctx context.Context, segmentId, entryId int64) {
+func (l *logBatchReaderImpl) onReportTick(ctx context.Context, now, segmentId, entryId int64) {
 	if segmentId == l.lastReportedSegmentId && entryId == l.lastReportedEntryId {
 		l.skips = l.logHandle.GetSkipRanges(ctx)
 	}
-	l.lastReportedSegmentId, l.lastReportedEntryId = segmentId, entryId
+	l.lastReported, l.lastReportedSegmentId, l.lastReportedEntryId = now, segmentId, entryId
 }
 
 // skipPast moves the read position past a declared range covering the current position, and

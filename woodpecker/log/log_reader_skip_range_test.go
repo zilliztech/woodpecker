@@ -3,6 +3,7 @@ package log
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -195,20 +196,27 @@ func TestReaderAsksOnlyWhileItIsNotMovingOn(t *testing.T) {
 	ctx := context.Background()
 
 	// Advancing: nothing is asked, whatever the record holds.
-	reader.refreshSkipRangesIfStuck(ctx, 3, 11)
+	reader.onReportTick(ctx, time.Now().UnixMilli(), 3, 11)
 	require.Zero(t, logHandle.skipRangeReads.Load(), "a reader that moved on has no reason to ask")
 	require.Nil(t, reader.skips)
 
 	// Same position as the last report: asked once, and now holds the ranges.
-	reader.refreshSkipRangesIfStuck(ctx, 3, 11)
+	reader.onReportTick(ctx, time.Now().UnixMilli(), 3, 11)
 	require.EqualValues(t, 1, logHandle.skipRangeReads.Load())
 	require.NotNil(t, reader.skips)
 
 	// Moving again stops it asking, and the next tick at the new position asks once more.
-	reader.refreshSkipRangesIfStuck(ctx, 3, 30)
+	reader.onReportTick(ctx, time.Now().UnixMilli(), 3, 30)
 	require.EqualValues(t, 1, logHandle.skipRangeReads.Load())
-	reader.refreshSkipRangesIfStuck(ctx, 3, 30)
+	reader.onReportTick(ctx, time.Now().UnixMilli(), 3, 30)
 	require.EqualValues(t, 2, logHandle.skipRangeReads.Load())
+
+	// The tick also carries the timestamp the next tick is scheduled against, so it is the one
+	// place the whole lastReported set is maintained and nothing at the call site has to agree.
+	reader.onReportTick(ctx, 1234, 3, 31)
+	require.EqualValues(t, 1234, reader.lastReported)
+	require.EqualValues(t, 3, reader.lastReportedSegmentId)
+	require.EqualValues(t, 31, reader.lastReportedEntryId)
 }
 
 // TestGetSkipRanges_HostOverrideWinsAndCostsNoRead covers the hook an embedding application binds.
