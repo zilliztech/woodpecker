@@ -1495,3 +1495,31 @@ woodpecker:
 		assert.NoError(t, cfg.Validate())
 	})
 }
+
+// TestSkipRangeRefreshInterval covers the one knob the skip-range mechanism exposes. Its default
+// matters because it is what an operator waits through twice: once before a declared range takes
+// effect, and once more before a withdrawn one stops being acted on.
+func TestSkipRangeRefreshInterval(t *testing.T) {
+	cfg, err := NewConfiguration()
+	require.NoError(t, err)
+
+	require.Equal(t, 10*time.Second, cfg.Woodpecker.Client.GetSkipRangeRefreshInterval(),
+		"the shipped configuration has to agree with the documented default")
+
+	var unset ClientConfig
+	require.Equal(t, DefaultSkipRangeRefreshInterval, unset.GetSkipRangeRefreshInterval(),
+		"a configuration built in code without it stays usable")
+
+	configured := ClientConfig{SkipRangeRefreshInterval: DurationSeconds{NewDuration(30*time.Second, time.Second)}}
+	require.Equal(t, 30*time.Second, configured.GetSkipRangeRefreshInterval())
+}
+
+// TestSkipRangeRefreshIntervalRejectsNegative keeps a value that cannot mean anything from being
+// accepted and then silently treated as the default.
+func TestSkipRangeRefreshIntervalRejectsNegative(t *testing.T) {
+	cfg, err := NewConfiguration()
+	require.NoError(t, err)
+	cfg.Woodpecker.Client.SkipRangeRefreshInterval = DurationSeconds{NewDuration(-time.Second, time.Second)}
+
+	require.Error(t, cfg.Validate())
+}

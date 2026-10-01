@@ -133,9 +133,16 @@ moved since it was read, so two operators cannot drop each other's ranges.
 
 A reader consults that record **only while it is making no progress** — a position unchanged since
 its last report — and then moves past a range covering its position, logging a warning and counting
-it. A reader that is advancing never reads the record at all, so a range declared over data that is
-in fact readable costs nothing: nothing acts on it unless a reader is genuinely stuck there. An
-embedding application can supply the ranges itself instead, through a runtime hook that nothing
+it. A reader that is advancing never consults it at all, so a range declared over data that is in
+fact readable costs nothing: nothing acts on it unless a reader is genuinely stuck there.
+
+**The read path never waits for the record.** A reader is answered from what the client already
+holds, and an elapsed refresh interval only starts a re-read behind it, one at a time however many
+readers ask. So `woodpecker.client.skipRangeRefreshInterval` (default 10s) trades staleness against
+etcd traffic and nothing else: it bounds how long a reader keeps acting on a withdrawn range, and
+shortening it never makes a read slower.
+
+An embedding application can supply the ranges itself instead, through a runtime hook that nothing
 binds by default; when it does, `wp log skip-range list` is not the source a reader is using, which
 is why the listing names the source it read.
 

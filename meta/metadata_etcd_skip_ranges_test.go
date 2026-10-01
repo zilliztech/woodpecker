@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -125,7 +126,7 @@ func testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd(t *testing.T) {
 	// etcd holds nothing; the stale entry holds a range. They disagree on purpose.
 	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
 		set:    &AllSkipRanges{Metadata: rangesFor(7, 3, 10, 19)},
-		readAt: time.Now().Add(-2 * SkipRangeCacheTTL),
+		readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
 	})
 
 	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7),
@@ -134,6 +135,29 @@ func testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd(t *testing.T) {
 	// And the refresh it started does land, so the staleness is bounded rather than permanent.
 	require.Eventually(t, func() bool { return provider.GetAllSkipRangesCached(ctx).For(7) == nil },
 		2*time.Second, 20*time.Millisecond, "the background refresh replaces what was held")
+}
+
+// testSkipRangesRefreshIntervalComesFromTheConfiguration covers the wiring between the knob and the
+// provider. How long a reader keeps acting on a withdrawn range is a property of the deployment, so
+// a provider that quietly used its own number would make the configuration a decoration -- and
+// nothing a reader does would reveal it, because every other test ages the entry past both values.
+func testSkipRangesRefreshIntervalComesFromTheConfiguration(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	cfg := testMetaCfg(t)
+	cfg.Woodpecker.Client.SkipRangeRefreshInterval = config.DurationSeconds{
+		Duration: config.NewDuration(45*time.Second, time.Second),
+	}
+	provider := NewMetadataProvider(context.Background(), etcdCli, cfg)
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+
+	require.Equal(t, 45*time.Second, etcdProvider.skipRangeRefreshInterval)
+
+	// And an unset value takes the default rather than zero, which would refresh on every poll.
+	defaulted := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t)).(*metadataProviderEtcd)
+	require.Equal(t, config.DefaultSkipRangeRefreshInterval, defaulted.skipRangeRefreshInterval)
 }
 
 // testSkipRangesRefreshIsSingleFlighted covers what makes "answer from the cache" cheap. Every
@@ -203,7 +227,7 @@ func testSkipRangesCachedReadSurvivesAnUnreadableRecord(t *testing.T) {
 	held := etcdProvider.skipRangeCache.Load()
 	require.NotNil(t, held)
 	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
-		set: held.set, readAt: time.Now().Add(-2 * SkipRangeCacheTTL),
+		set: held.set, readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
 	})
 
 	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7),

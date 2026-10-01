@@ -115,6 +115,10 @@ type metadataProviderEtcd struct {
 	// be many readers per log. skipRangeRefreshing holds one refresh at a time.
 	skipRangeCache      atomic.Pointer[cachedSkipRanges]
 	skipRangeRefreshing atomic.Bool
+	// skipRangeRefreshInterval is how stale the held record may be before a request starts a
+	// refresh behind the caller. From the client configuration, since how long a reader keeps
+	// acting on a withdrawn range is a property of the deployment, not of this package.
+	skipRangeRefreshInterval time.Duration
 
 	// instanceMu serializes the two operations that write instance-level keys
 	// shared by every log: CreateLog, which allocates from the log id
@@ -155,7 +159,9 @@ func NewMetadataProvider(ctx context.Context, client *clientv3.Client, cfg *conf
 		logNs:            metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		configuredPrefix: configuredPrefix,
 		effectivePrefix:  effectivePrefix,
-		keyBuilder:       NewKeyBuilder(effectivePrefix),
+
+		skipRangeRefreshInterval: cfg.Woodpecker.Client.GetSkipRangeRefreshInterval(),
+		keyBuilder:               NewKeyBuilder(effectivePrefix),
 		// logWriterLocks is a sync.Map, no initialization needed
 	}
 }
@@ -611,12 +617,6 @@ func (e *metadataProviderEtcd) GetAllSkipRanges(ctx context.Context) (*AllSkipRa
 	return set, nil
 }
 
-// SkipRangeCacheTTL bounds how stale a reader's view of the skip ranges may be. It is short
-// because the record only changes when an operator acts on an incident and is then waiting to see
-// the reader move; it is not zero because a reader consults it while stuck, which can be every
-// poll.
-const SkipRangeCacheTTL = 5 * time.Second
-
 type cachedSkipRanges struct {
 	set    *AllSkipRanges
 	readAt time.Time
@@ -633,7 +633,7 @@ type cachedSkipRanges struct {
 // the time an operator spends establishing that the data is gone.
 func (e *metadataProviderEtcd) GetAllSkipRangesCached(ctx context.Context) *AllSkipRanges {
 	held := e.skipRangeCache.Load()
-	if held == nil || time.Since(held.readAt) >= SkipRangeCacheTTL {
+	if held == nil || time.Since(held.readAt) >= e.skipRangeRefreshInterval {
 		_ = e.refreshSkipRangesInBackground(ctx)
 	}
 	if held != nil {
