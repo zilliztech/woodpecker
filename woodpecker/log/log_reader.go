@@ -87,22 +87,24 @@ type logBatchReaderImpl struct {
 	batch                *proto.BatchReadResult
 	next                 int
 	lastRead             int64
-	// positionAtLastReport is where this reader was on the previous report tick, which is what the
-	// current position is compared against to tell whether it has moved at all. Making no progress
-	// is the only state in which the skip ranges are consulted: ErrEntryNotFound is also the steady
-	// state of a reader tailing an idle log, so asking on every one of those would re-read the
-	// record on every poll.
-	positionAtLastReport readPosition
-	// skips is what this reader has been told to pass over, held across reads. Looking it up costs
-	// one map lookup, so it is checked on every segment resolved; re-reading it costs a metadata
-	// read, so that happens only while stuck.
-	skips config.LogSkipRanges
 	// lastReported is when the read position was last written to metadata. It is
 	// tracked separately from lastRead because lastRead only advances when an
 	// entry is actually returned: an idle reader parked on an active segment
 	// never advances it, so gating the periodic report on lastRead would re-write
 	// an unchanged position on every poll.
 	lastReported int64
+	// lastReportedSegmentId/lastReportedEntryId are where this reader was at the moment lastReported
+	// records, so the three read as one set: when it last reported, and where it was. The current
+	// position is compared against them to tell whether it has moved at all, which is the only
+	// state in which the skip ranges are consulted: ErrEntryNotFound is also the steady state of a
+	// reader tailing an idle log, so asking on every one of those would re-read the record on every
+	// poll.
+	lastReportedSegmentId int64
+	lastReportedEntryId   int64
+	// skips is what this reader has been told to pass over, held across reads. Looking it up costs
+	// one map lookup, so it is checked on every segment resolved; re-reading it costs a metadata
+	// read, so that happens only while stuck.
+	skips config.LogSkipRanges
 }
 
 // publishReadFrontierMetric records where this reader has got to. Observability
@@ -151,7 +153,8 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		lastReported:         now,
 		// The opening position is the first thing to compare against, so a reader that has not
 		// moved by the first tick is recognised then rather than one tick later.
-		positionAtLastReport: readPosition{segmentID: from.SegmentId, entryID: from.EntryId},
+		lastReportedSegmentId: from.SegmentId,
+		lastReportedEntryId:   from.EntryId,
 		// skips is deliberately empty here. A reader that is making progress never asks for the
 		// ranges and so can never jump one, which means a range declared over data that is in fact
 		// readable costs nothing -- and that property only holds if the ranges enter the reader
@@ -238,7 +241,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// the position is unchanged - but at its own interval, not once per poll.
 		now := time.Now().UnixMilli()
 		if segId > l.pendingReadSegmentId || l.lastReported+UpdateReaderInfoIntervalMs < now {
-			l.refreshSkipRangesIfStuck(ctx, readPosition{segmentID: segId, entryID: entryId})
+			l.refreshSkipRangesIfStuck(ctx, segId, entryId)
 			l.lastReported = now
 			// update reader info with the session this reader owns
 			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.readerTempSession, segId, entryId)
@@ -334,23 +337,11 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 // is the steady state of a reader tailing an idle log, so asking on every one of them would put a
 // metadata read on every poll of every healthy reader. It is also what keeps a range declared over
 // data that is in fact readable from costing anything, since a reader that never asks cannot jump.
-// readPosition is a (segment, entry) pair compared for equality to tell whether a reader has moved.
-//
-// Deliberately its own type rather than LogMessageId. That one belongs to the public API, so it is
-// the likelier of the two to grow a field, and this comparison depends on the field set being
-// exactly a position: an extra field would make two equal positions compare unequal, the stall
-// would never be recognised, and the only symptom would be that declared skip ranges stopped taking
-// effect -- with nothing to connect that to a struct having gained a member.
-type readPosition struct {
-	segmentID int64
-	entryID   int64
-}
-
-func (l *logBatchReaderImpl) refreshSkipRangesIfStuck(ctx context.Context, at readPosition) {
-	if at == l.positionAtLastReport {
+func (l *logBatchReaderImpl) refreshSkipRangesIfStuck(ctx context.Context, segmentId, entryId int64) {
+	if segmentId == l.lastReportedSegmentId && entryId == l.lastReportedEntryId {
 		l.skips = l.logHandle.GetSkipRanges(ctx)
 	}
-	l.positionAtLastReport = at
+	l.lastReportedSegmentId, l.lastReportedEntryId = segmentId, entryId
 }
 
 // skipPast moves the read position past a declared range covering the current position, and
