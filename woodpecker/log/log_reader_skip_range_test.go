@@ -171,7 +171,7 @@ func TestReaderOpeningPositionIsTheFirstBaseline(t *testing.T) {
 	require.NoError(t, err)
 	reader := r.(*logBatchReaderImpl)
 
-	require.Equal(t, LogMessageId{SegmentId: 6, EntryId: 42}, reader.positionAtLastReport)
+	require.Equal(t, readPosition{segmentID: 6, entryID: 42}, reader.positionAtLastReport)
 }
 
 // TestReaderAsksOnlyWhileItIsNotMovingOn covers the trigger, which is where the cost of this whole
@@ -194,19 +194,19 @@ func TestReaderAsksOnlyWhileItIsNotMovingOn(t *testing.T) {
 	ctx := context.Background()
 
 	// Advancing: nothing is asked, whatever the record holds.
-	reader.refreshSkipRangesIfStuck(ctx, LogMessageId{SegmentId: 3, EntryId: 11})
+	reader.refreshSkipRangesIfStuck(ctx, readPosition{segmentID: 3, entryID: 11})
 	require.Zero(t, logHandle.skipRangeReads.Load(), "a reader that moved on has no reason to ask")
 	require.Nil(t, reader.skips)
 
 	// Same position as the last report: asked once, and now holds the ranges.
-	reader.refreshSkipRangesIfStuck(ctx, LogMessageId{SegmentId: 3, EntryId: 11})
+	reader.refreshSkipRangesIfStuck(ctx, readPosition{segmentID: 3, entryID: 11})
 	require.EqualValues(t, 1, logHandle.skipRangeReads.Load())
 	require.NotNil(t, reader.skips)
 
 	// Moving again stops it asking, and the next tick at the new position asks once more.
-	reader.refreshSkipRangesIfStuck(ctx, LogMessageId{SegmentId: 3, EntryId: 30})
+	reader.refreshSkipRangesIfStuck(ctx, readPosition{segmentID: 3, entryID: 30})
 	require.EqualValues(t, 1, logHandle.skipRangeReads.Load())
-	reader.refreshSkipRangesIfStuck(ctx, LogMessageId{SegmentId: 3, EntryId: 30})
+	reader.refreshSkipRangesIfStuck(ctx, readPosition{segmentID: 3, entryID: 30})
 	require.EqualValues(t, 2, logHandle.skipRangeReads.Load())
 }
 
