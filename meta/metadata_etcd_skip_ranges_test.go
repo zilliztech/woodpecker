@@ -4,10 +4,12 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -104,6 +106,135 @@ func testSkipRangesUndecodableRecordIsAnError(t *testing.T) {
 
 	_, err = provider.GetAllSkipRanges(ctx)
 	require.Error(t, err, "a record that cannot be parsed is not a record with nothing in it")
+}
+
+// testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd is the property the read path depends on.
+// The state that makes a reader ask -- a position that has not moved since its last report -- is
+// also what a reader that has simply caught up with the tail of its log looks like, so this runs
+// for every parked reader. Reading inline put an etcd round trip inside ReadNext and showed up as a
+// second of tail-read lag in the stability suite.
+//
+// Asserted by what comes back rather than by how long it took: a stale entry that disagrees with
+// etcd is answered from the entry, which an implementation that read inline could not do. A timing
+// assertion would pass against an inline read whenever etcd happened to be quick.
+func testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+
+	// etcd holds nothing; the stale entry holds a range. They disagree on purpose.
+	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
+		set:    &AllSkipRanges{Metadata: rangesFor(7, 3, 10, 19)},
+		readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
+	})
+
+	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7),
+		"the caller is answered from the cache, so it cannot have waited for etcd")
+
+	// And the refresh it started does land, so the staleness is bounded rather than permanent.
+	require.Eventually(t, func() bool { return provider.GetAllSkipRangesCached(ctx).For(7) == nil },
+		2*time.Second, 20*time.Millisecond, "the background refresh replaces what was held")
+}
+
+// testSkipRangesRefreshIntervalComesFromTheConfiguration covers the wiring between the knob and the
+// provider. How long a reader keeps acting on a withdrawn range is a property of the deployment, so
+// a provider that quietly used its own number would make the configuration a decoration -- and
+// nothing a reader does would reveal it, because every other test ages the entry past both values.
+func testSkipRangesRefreshIntervalComesFromTheConfiguration(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	cfg := testMetaCfg(t)
+	cfg.Woodpecker.Client.SkipRangeRefreshInterval = config.DurationSeconds{
+		Duration: config.NewDuration(45*time.Second, time.Second),
+	}
+	provider := NewMetadataProvider(context.Background(), etcdCli, cfg)
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+
+	require.Equal(t, 45*time.Second, etcdProvider.skipRangeRefreshInterval)
+
+	// And an unset value takes the default rather than zero, which would refresh on every poll.
+	defaulted := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t)).(*metadataProviderEtcd)
+	require.Equal(t, config.DefaultSkipRangeRefreshInterval, defaulted.skipRangeRefreshInterval)
+}
+
+// testSkipRangesRefreshIsSingleFlighted covers what makes "answer from the cache" cheap. Every
+// parked reader asks on its own report tick, so a burst of them all seeing the same stale entry
+// would each pay for a read of the same record if nothing held them to one.
+func testSkipRangesRefreshIsSingleFlighted(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+
+	// Stand in for a refresh already running, deterministically.
+	require.True(t, etcdProvider.skipRangeRefreshing.CompareAndSwap(false, true))
+	require.False(t, etcdProvider.refreshSkipRangesInBackground(ctx),
+		"a second asker joins the refresh in flight rather than starting another")
+
+	etcdProvider.skipRangeRefreshing.Store(false)
+	require.True(t, etcdProvider.refreshSkipRangesInBackground(ctx),
+		"and once it is done the next asker does start one")
+}
+
+// testSkipRangesCachedReadHoldsForItsWindow covers the window. A reader consults this while it is
+// making no progress, which can be every report tick and for many readers per log, so the answer is
+// shared for a few seconds rather than re-read each time.
+func testSkipRangesCachedReadHoldsForItsWindow(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+
+	// Prime the cache and let the first refresh land.
+	provider.GetAllSkipRangesCached(ctx)
+	require.Eventually(t, func() bool {
+		return provider.GetAllSkipRangesCached(ctx) != nil
+	}, 2*time.Second, 20*time.Millisecond)
+
+	// Write a range straight through the uncached path, so only the cache can hide it.
+	write, err := provider.GetAllSkipRanges(ctx)
+	require.NoError(t, err)
+	write.Metadata = rangesFor(7, 3, 10, 19)
+	require.NoError(t, provider.UpdateAllSkipRanges(ctx, write))
+
+	require.Nil(t, provider.GetAllSkipRangesCached(ctx).For(7),
+		"within the window the reader keeps the answer it already had")
+	uncached, err := provider.GetAllSkipRanges(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, uncached.For(7), "and the uncached read sees it, so the write really did land")
+}
+
+// testSkipRangesCachedReadSurvivesAnUnreadableRecord covers what a reader does when the record
+// cannot be read: it keeps behaving as it did. Answering "no ranges" on a failed read would make a
+// reader that had been skipping stop, over a record most clusters never have.
+func testSkipRangesCachedReadSurvivesAnUnreadableRecord(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+	etcdProvider, ok := provider.(*metadataProviderEtcd)
+	require.True(t, ok)
+
+	write, err := provider.GetAllSkipRanges(ctx)
+	require.NoError(t, err)
+	write.Metadata = rangesFor(7, 3, 10, 19)
+	require.NoError(t, provider.UpdateAllSkipRanges(ctx, write))
+	require.Eventually(t, func() bool { return provider.GetAllSkipRangesCached(ctx).For(7) != nil },
+		2*time.Second, 20*time.Millisecond, "the background refresh picks the range up")
+
+	// Make the record unparseable and age the entry, so the next refresh fails.
+	_, err = etcdProvider.client.Put(ctx, etcdProvider.keyBuilder.AllSkipRangesKey(), "not a proto")
+	require.NoError(t, err)
+	held := etcdProvider.skipRangeCache.Load()
+	require.NotNil(t, held)
+	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
+		set: held.set, readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
+	})
+
+	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7),
+		"a refresh that fails leaves the reader with what it had")
+	time.Sleep(200 * time.Millisecond) // let the failing refresh finish
+	require.NotNil(t, provider.GetAllSkipRangesCached(ctx).For(7),
+		"and it stays that way rather than being cleared")
 }
 
 // testSkipRangesStaleWriteIsRefused is what keeps two operators from losing each

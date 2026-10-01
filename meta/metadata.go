@@ -56,6 +56,10 @@ type MetadataProvider interface {
 	GetAllSkipRanges(ctx context.Context) (*AllSkipRanges, error)
 	// UpdateAllSkipRanges writes them back, failing when the record moved since the read.
 	UpdateAllSkipRanges(ctx context.Context, set *AllSkipRanges) error
+	// GetAllSkipRangesCached is GetAllSkipRanges with a short-lived cache, for the read path.
+	// A reader consults it only while it is making no progress, so the window only has to be
+	// short enough that an operator's declaration takes effect while they are still watching.
+	GetAllSkipRangesCached(ctx context.Context) *AllSkipRanges
 	// ClearMeta removes all content metadata for this instance (logs, segments, quorums,
 	// node registrations, reader sessions, cleanup and compacted-mark records) and re-seeds
 	// the instance-level keys. clearLogIdGen decides whether the log id counter restarts;
@@ -109,7 +113,11 @@ type MetadataProvider interface {
 	// UpdateReaderTempInfo updates the recent read position of the reader owning
 	// the given session. A retired session is rejected: only a live reader may
 	// write (and, after a lease loss, recreate) its own temp info.
-	UpdateReaderTempInfo(ctx context.Context, session ReaderTempInfoSession, recentReadSegmentId int64, recentReadEntryId int64) error
+	// UpdateReaderTempInfo publishes where a reader has read to. reportedAtMs is the caller's own
+	// clock reading for this report rather than one taken here, so a test can assert the exact
+	// value that lands in the record, and so the reader's view of when it last reported is the
+	// same number the record carries.
+	UpdateReaderTempInfo(ctx context.Context, session ReaderTempInfoSession, reportedAtMs int64, recentReadSegmentId int64, recentReadEntryId int64) error
 	// DeleteReaderTempInfo retires the session and deletes the temporary
 	// information for its reader. It is idempotent.
 	DeleteReaderTempInfo(ctx context.Context, session ReaderTempInfoSession) error

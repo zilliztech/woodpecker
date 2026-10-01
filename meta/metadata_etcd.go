@@ -110,6 +110,16 @@ func (sl *SessionLock) GetSession() *concurrency.Session {
 //
 // The two locks that remain each carry their reason at the field.
 type metadataProviderEtcd struct {
+	// skipRangeCache keeps the read path off etcd entirely: the reader asks on every report tick
+	// while its position is not moving, which a parked tail reader also looks like, and there may
+	// be many readers per log. skipRangeRefreshing holds one refresh at a time.
+	skipRangeCache      atomic.Pointer[cachedSkipRanges]
+	skipRangeRefreshing atomic.Bool
+	// skipRangeRefreshInterval is how stale the held record may be before a request starts a
+	// refresh behind the caller. From the client configuration, since how long a reader keeps
+	// acting on a withdrawn range is a property of the deployment, not of this package.
+	skipRangeRefreshInterval time.Duration
+
 	// instanceMu serializes the two operations that write instance-level keys
 	// shared by every log: CreateLog, which allocates from the log id
 	// generator, and ClearMeta, which wipes and re-seeds it. Both are rare and
@@ -149,7 +159,9 @@ func NewMetadataProvider(ctx context.Context, client *clientv3.Client, cfg *conf
 		logNs:            metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		configuredPrefix: configuredPrefix,
 		effectivePrefix:  effectivePrefix,
-		keyBuilder:       NewKeyBuilder(effectivePrefix),
+
+		skipRangeRefreshInterval: cfg.Woodpecker.Client.GetSkipRangeRefreshInterval(),
+		keyBuilder:               NewKeyBuilder(effectivePrefix),
 		// logWriterLocks is a sync.Map, no initialization needed
 	}
 }
@@ -603,6 +615,60 @@ func (e *metadataProviderEtcd) GetAllSkipRanges(ctx context.Context) (*AllSkipRa
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return set, nil
+}
+
+type cachedSkipRanges struct {
+	set    *AllSkipRanges
+	readAt time.Time
+}
+
+// GetAllSkipRangesCached answers from the cache and never waits for etcd. A stale entry starts a
+// refresh in the background and the caller gets what was already held.
+//
+// It must not block, because the caller is the read path and the state that makes it ask -- a
+// position that has not moved -- is indistinguishable from a reader that has simply caught up with
+// the tail of its log. Reading inline put an etcd round trip inside ReadNext for every parked tail
+// reader, which showed up as a second of tail-read lag in the stability suite. The cost of not
+// waiting is that a declaration takes effect one tick later than it could, which is nothing next to
+// the time an operator spends establishing that the data is gone.
+func (e *metadataProviderEtcd) GetAllSkipRangesCached(ctx context.Context) *AllSkipRanges {
+	held := e.skipRangeCache.Load()
+	if held == nil || time.Since(held.readAt) >= e.skipRangeRefreshInterval {
+		_ = e.refreshSkipRangesInBackground(ctx)
+	}
+	if held != nil {
+		return held.set
+	}
+	// Nothing read yet. A record most clusters never have reads as empty rather than as unknown:
+	// the alternative is a reader that behaves differently on its first poll than on its second.
+	return &AllSkipRanges{Metadata: &proto.AllSkipRanges{}}
+}
+
+// refreshSkipRangesInBackground re-reads the record without the caller waiting, and reports whether
+// it started one. At most one runs at a time however many readers ask: a burst of parked readers all
+// seeing the same stale entry would otherwise each pay for a read of the same record.
+func (e *metadataProviderEtcd) refreshSkipRangesInBackground(ctx context.Context) bool {
+	if !e.skipRangeRefreshing.CompareAndSwap(false, true) {
+		return false
+	}
+	// The caller's context belongs to one read and is cancelled when that read returns, so it
+	// cannot carry a refresh that outlives it.
+	go func() {
+		defer e.skipRangeRefreshing.Store(false)
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.requestTimeout)
+		defer cancel()
+		set, err := e.GetAllSkipRanges(readCtx)
+		if err != nil {
+			// Keep whatever is held: a reader that cannot reach etcd should go on behaving as it
+			// did, rather than start or stop skipping because of a failed read.
+			logger.Ctx(readCtx).Warn("refresh skip ranges failed; keeping the previous view", zap.Error(err))
+			return
+		}
+		// The whole value is replaced rather than mutated: one provider hands the same record to
+		// every reader of every log, and nothing may write through it.
+		e.skipRangeCache.Store(&cachedSkipRanges{set: set, readAt: time.Now()})
+	}()
+	return true
 }
 
 func (e *metadataProviderEtcd) UpdateAllSkipRanges(ctx context.Context, set *AllSkipRanges) error {
@@ -1574,7 +1640,7 @@ func (e *metadataProviderEtcd) GetAllReaderTempInfoForLog(ctx context.Context, l
 
 // UpdateReaderTempInfo updates the recent read position of the reader owning
 // the given session.
-func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, session ReaderTempInfoSession, recentReadSegmentId int64, recentReadEntryId int64) error {
+func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, session ReaderTempInfoSession, reportedAtMs int64, recentReadSegmentId int64, recentReadEntryId int64) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateReaderTempInfo")
 	defer sp.End()
 	startTime := time.Now()
@@ -1615,7 +1681,7 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, session
 		OpenEntryId:         entry.openEntryId,
 		RecentReadSegmentId: recentReadSegmentId,
 		RecentReadEntryId:   recentReadEntryId,
-		RecentReadTimestamp: uint64(time.Now().UnixMilli()),
+		RecentReadTimestamp: uint64(reportedAtMs),
 	}
 	bytes, err := pb.Marshal(readerInfo)
 	if err != nil {

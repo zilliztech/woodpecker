@@ -131,7 +131,7 @@ func testUpdateReaderTempInfoSelfHealsAfterLeaseLoss(t *testing.T) {
 	require.Equal(t, 0, len(gone.Kvs), "key should vanish with the revoked lease")
 
 	// The reader is still open; its next progress update must self-heal.
-	err = env.provider.UpdateReaderTempInfo(context.Background(), env.session, 7, 77)
+	err = env.provider.UpdateReaderTempInfo(context.Background(), env.session, time.Now().UnixMilli(), 7, 77)
 	require.NoError(t, err, "update must recreate reader temp info lost with its lease")
 
 	info, err := env.provider.GetReaderTempInfo(context.Background(), env.logId, env.readerName)
@@ -159,7 +159,7 @@ func testUpdateAfterDeleteDoesNotResurrectReaderTempInfo(t *testing.T) {
 
 	require.NoError(t, env.provider.DeleteReaderTempInfo(context.Background(), env.session))
 
-	err := env.provider.UpdateReaderTempInfo(context.Background(), env.session, 5, 50)
+	err := env.provider.UpdateReaderTempInfo(context.Background(), env.session, time.Now().UnixMilli(), 5, 50)
 	require.Error(t, err, "update after close must not recreate the temp info")
 	assert.Contains(t, err.Error(), "reader temp info not found")
 
@@ -178,7 +178,7 @@ func testUpdatePutFailureDoesNotRevokeReaderTempInfoLease(t *testing.T) {
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := env.provider.UpdateReaderTempInfo(cancelledCtx, env.session, 5, 50)
+	err := env.provider.UpdateReaderTempInfo(cancelledCtx, env.session, time.Now().UnixMilli(), 5, 50)
 	require.Error(t, err, "update with a dead caller context must fail")
 
 	resp, err := env.etcdCli.Get(context.Background(), env.readerKey)
@@ -190,7 +190,7 @@ func testUpdatePutFailureDoesNotRevokeReaderTempInfoLease(t *testing.T) {
 	assert.Greater(t, ttlResp.TTL, int64(0), "the healthy lease must not be revoked")
 
 	// The reader keeps working once the caller context is healthy again.
-	require.NoError(t, env.provider.UpdateReaderTempInfo(context.Background(), env.session, 6, 60))
+	require.NoError(t, env.provider.UpdateReaderTempInfo(context.Background(), env.session, time.Now().UnixMilli(), 6, 60))
 }
 
 // A reader owns its session for its whole life, including across the provider's
@@ -203,7 +203,7 @@ func testReaderSessionSurvivesProviderClose(t *testing.T) {
 	require.NoError(t, env.provider.Close())
 	assert.True(t, env.session.IsActive(), "the provider does not own the session it handed out")
 
-	require.NoError(t, env.provider.UpdateReaderTempInfo(context.Background(), env.session, 6, 66),
+	require.NoError(t, env.provider.UpdateReaderTempInfo(context.Background(), env.session, time.Now().UnixMilli(), 6, 66),
 		"a reader that is still open can still report its position")
 
 	// The reader retiring itself is what removes the key.
@@ -253,12 +253,12 @@ func testReaderTempInfoRejectsForeignSession(t *testing.T) {
 	env := setupReaderSessionTest(t, "reader_session_foreign_test_"+time.Now().Format("20060102150405"), "foreign-reader", 6, 60)
 	defer env.provider.Close()
 
-	err := env.provider.UpdateReaderTempInfo(context.Background(), nil, 7, 70)
+	err := env.provider.UpdateReaderTempInfo(context.Background(), nil, time.Now().UnixMilli(), 7, 70)
 	require.Error(t, err, "update with a nil session must be refused")
 	err = env.provider.DeleteReaderTempInfo(context.Background(), nil)
 	require.Error(t, err, "delete with a nil session must be refused")
 
-	err = env.provider.UpdateReaderTempInfo(context.Background(), foreignReaderTempInfoSession{logId: env.logId, readerName: env.readerName}, 7, 70)
+	err = env.provider.UpdateReaderTempInfo(context.Background(), foreignReaderTempInfoSession{logId: env.logId, readerName: env.readerName}, time.Now().UnixMilli(), 7, 70)
 	require.Error(t, err, "update with a foreign session type must be refused")
 
 	// The real reader is untouched by any of it

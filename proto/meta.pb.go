@@ -662,7 +662,17 @@ type ReaderTempInfo struct {
 	OpenEntryId         int64                  `protobuf:"varint,5,opt,name=open_entry_id,json=openEntryId,proto3" json:"open_entry_id,omitempty"`
 	RecentReadSegmentId int64                  `protobuf:"varint,6,opt,name=recent_read_segment_id,json=recentReadSegmentId,proto3" json:"recent_read_segment_id,omitempty"`
 	RecentReadEntryId   int64                  `protobuf:"varint,7,opt,name=recent_read_entry_id,json=recentReadEntryId,proto3" json:"recent_read_entry_id,omitempty"`
-	RecentReadTimestamp uint64                 `protobuf:"fixed64,8,opt,name=recent_read_timestamp,json=recentReadTimestamp,proto3" json:"recent_read_timestamp,omitempty"`
+	// When the reader last published this record, which is every report interval while it is
+	// running -- so it is the time of its most recent read *attempt*, not of the last entry it
+	// delivered. The name is kept as it is because the field is already in use; read it as
+	// recent_read_attempt_timestamp.
+	//
+	// A reader waiting on an entry it cannot read keeps publishing, so this advancing means the
+	// reader is alive, not that it is making progress. What it is for is the opposite: the absence
+	// of movement here is what `wp log readers` reports as a stale report, meaning the reader has
+	// stopped running rather than stopped progressing. Whether it is progressing is answered by
+	// comparing recent_read_segment_id/entry_id against the tail, not by this.
+	RecentReadTimestamp uint64 `protobuf:"fixed64,8,opt,name=recent_read_timestamp,json=recentReadTimestamp,proto3" json:"recent_read_timestamp,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }

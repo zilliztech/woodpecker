@@ -92,6 +92,16 @@ message ReaderTempInfo{
   int64 open_entry_id = 5;
   int64 recent_read_segment_id = 6;
   int64 recent_read_entry_id = 7;
+  // When the reader last published this record, which is every report interval while it is
+  // running -- so it is the time of its most recent read *attempt*, not of the last entry it
+  // delivered. The name is kept as it is because the field is already in use; read it as
+  // recent_read_attempt_timestamp.
+  //
+  // A reader waiting on an entry it cannot read keeps publishing, so this advancing means the
+  // reader is alive, not that it is making progress. What it is for is the opposite: the absence
+  // of movement here is what `wp log readers` reports as a stale report, meaning the reader has
+  // stopped running rather than stopped progressing. Whether it is progressing is answered by
+  // comparing recent_read_segment_id/entry_id against the tail, not by this.
   fixed64 recent_read_timestamp = 8;
 }
 

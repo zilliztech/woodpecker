@@ -100,6 +100,35 @@ type ClientConfig struct {
 	// are under logstore.grpc: each process reads its own section.
 	GRPC        GRPCClientConfig  `yaml:"grpc"`
 	SegmentRead SegmentReadConfig `yaml:"segmentRead"`
+	// SkipRanges lets an embedding application supply the entry ranges readers should pass over,
+	// instead of woodpecker reading them from its own metadata. Nothing binds it by default, so a
+	// nil result means "no opinion here" and the client reads the record itself.
+	//
+	// Deliberately not a YAML field: a range set in a file would be invisible to `wp log
+	// skip-range list`, which reads the record, so the listing would lie by omission.
+	SkipRanges Dynamic[map[int64]LogSkipRanges] `yaml:"-"`
+	// SkipRangeRefreshInterval is how often a client re-reads that record. It bounds how long a
+	// reader keeps acting on a withdrawn range, and how long it waits before acting on a new one.
+	//
+	// The read never waits for it: a reader is always answered from what the client already holds,
+	// and an elapsed interval only starts a refresh behind the caller. So this trades staleness
+	// against etcd traffic and nothing else -- shortening it does not make a read slower, and
+	// lengthening it does not make one faster. Zero leaves it at the default, 10s.
+	SkipRangeRefreshInterval DurationSeconds `yaml:"skipRangeRefreshInterval"`
+}
+
+// DefaultSkipRangeRefreshInterval is used when skipRangeRefreshInterval is unset. Ten seconds is
+// chosen for the operator, not the reader: it is short enough that someone who has just declared a
+// range sees readers move while they are still watching, and the cost of it being short is one
+// shared etcd read per interval per client, whatever the number of readers.
+const DefaultSkipRangeRefreshInterval = 10 * time.Second
+
+// GetSkipRangeRefreshInterval returns the configured interval, or the default when unset.
+func (c *ClientConfig) GetSkipRangeRefreshInterval() time.Duration {
+	if d := c.SkipRangeRefreshInterval.Duration.Duration(); d > 0 {
+		return d
+	}
+	return DefaultSkipRangeRefreshInterval
 }
 
 type AuditorConfig struct {
@@ -145,6 +174,17 @@ type CustomPlacement struct {
 	Az            string `yaml:"az"`
 	ResourceGroup string `yaml:"resourceGroup"`
 }
+
+// SkipSpan is an inclusive range of entry ids a reader should pass over. Entry ids restart at 0
+// in every segment, so a span means nothing without the segment it belongs to.
+type SkipSpan struct {
+	FromEntryID int64
+	ToEntryID   int64
+}
+
+// LogSkipRanges is one log's spans indexed by segment id, so a reader that has just resolved a
+// segment answers "is any of this skipped" with one lookup.
+type LogSkipRanges map[int64][]SkipSpan
 
 // QuorumSelectStrategy stores the quorum selection strategy configuration.
 type QuorumSelectStrategy struct {
@@ -774,6 +814,10 @@ func (c *Configuration) validateClientConfig() error {
 	}
 	if client.Quorum.SelectNodesTimeout.Duration.Duration() < 0 {
 		return fmt.Errorf("quorum select nodes timeout cannot be negative, got %v", client.Quorum.SelectNodesTimeout.Duration.Duration())
+	}
+
+	if client.SkipRangeRefreshInterval.Duration.Duration() < 0 {
+		return fmt.Errorf("skip range refresh interval cannot be negative, got %v", client.SkipRangeRefreshInterval.Duration.Duration())
 	}
 
 	// Zero leaves a read bound at its default, so a configuration built in code

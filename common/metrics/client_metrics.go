@@ -193,6 +193,16 @@ var (
 		Help:      "Total times a reader skipped forward over a cleaned(GC'd) segment range",
 	}, []string{"log_ns", "log_id"})
 
+	// Read-position moves over a range an operator declared unreadable. Unlike the GC skip above
+	// this is not an expected outcome of retention: entries in the range are given up on, so it is
+	// counted where an alert can see it.
+	WpLogReaderSkipRangeSkipsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "reader_skip_range_skips_total",
+		Help:      "Total times a reader moved past an operator-declared skip range",
+	}, []string{"log_ns", "log_id"})
+
 	// LogWriter metrics
 	WpLogWriterBytesWritten = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
@@ -358,6 +368,7 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpLogReaderOperationLatency)
 		registerer.MustRegister(WpLogReaderTempInfoErrorsTotal)
 		registerer.MustRegister(WpLogReaderGCSkipsTotal)
+		registerer.MustRegister(WpLogReaderSkipRangeSkipsTotal)
 		// LogWriter metrics
 		registerer.MustRegister(WpLogWriterBytesWritten)
 		registerer.MustRegister(WpLogWriterOperationLatency)
