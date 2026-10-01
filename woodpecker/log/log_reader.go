@@ -243,7 +243,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		if segId > l.pendingReadSegmentId || l.lastReported+UpdateReaderInfoIntervalMs < now {
 			l.onReportTick(ctx, now, segId, entryId)
 			// update reader info with the session this reader owns
-			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.readerTempSession, segId, entryId)
+			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.readerTempSession, l.lastReported, l.lastReportedSegmentId, l.lastReportedEntryId)
 			if updateReaderErr != nil {
 				metrics.WpLogReaderTempInfoErrorsTotal.WithLabelValues(l.logNs, l.logIdStr, "update").Inc()
 				logger.Ctx(ctx).Warn("update reader info failed", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("nextReadSegmentId", segId), zap.Error(updateReaderErr))

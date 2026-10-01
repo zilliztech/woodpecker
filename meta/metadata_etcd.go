@@ -1640,7 +1640,7 @@ func (e *metadataProviderEtcd) GetAllReaderTempInfoForLog(ctx context.Context, l
 
 // UpdateReaderTempInfo updates the recent read position of the reader owning
 // the given session.
-func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, session ReaderTempInfoSession, recentReadSegmentId int64, recentReadEntryId int64) error {
+func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, session ReaderTempInfoSession, reportedAtMs int64, recentReadSegmentId int64, recentReadEntryId int64) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateReaderTempInfo")
 	defer sp.End()
 	startTime := time.Now()
@@ -1681,7 +1681,7 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, session
 		OpenEntryId:         entry.openEntryId,
 		RecentReadSegmentId: recentReadSegmentId,
 		RecentReadEntryId:   recentReadEntryId,
-		RecentReadTimestamp: uint64(time.Now().UnixMilli()),
+		RecentReadTimestamp: uint64(reportedAtMs),
 	}
 	bytes, err := pb.Marshal(readerInfo)
 	if err != nil {
