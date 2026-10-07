@@ -976,7 +976,8 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum, nil)
+			segmentMeta.Metadata.Quorum, nil,
+		)
 		ops = append(ops, op)
 		testQueue.PushBack(op)
 	}
@@ -1059,7 +1060,8 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum, nil)
+			segmentMeta.Metadata.Quorum, nil,
+		)
 		ops = append(ops, op)
 		testQueue.PushBack(op)
 	}
@@ -1152,7 +1154,8 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum, nil)
+			segmentMeta.Metadata.Quorum, nil,
+		)
 		ops[i] = op
 		testQueue.PushBack(op)
 	}
@@ -1257,7 +1260,8 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum, nil)
+			segmentMeta.Metadata.Quorum, nil,
+		)
 		testQueue.PushBack(op)
 	}
 
@@ -1413,7 +1417,8 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum, nil)
+			segmentMeta.Metadata.Quorum, nil,
+		)
 		testQueue.PushBack(op)
 	}
 
@@ -1522,7 +1527,8 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum, nil)
+			segmentMeta.Metadata.Quorum, nil,
+		)
 		testQueue.PushBack(op)
 	}
 
@@ -1631,7 +1637,8 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			segmentMeta.Metadata.Quorum, nil)
+			segmentMeta.Metadata.Quorum, nil,
+		)
 		attempt := 1
 		if i == 1 {
 			attempt = 2 // This will be >= MaxRetries (2), so it will be removed
@@ -3098,7 +3105,8 @@ func TestSegmentHandle_HandleAppendRequestFailure_RetrySubmitFailed(t *testing.T
 
 	testQueue := list.New()
 	segmentHandle := NewSegmentHandleWithAppendOpsQueueWithWritable(
-		context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue, true)
+		context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue, true,
+	)
 	segImpl := segmentHandle.(*segmentHandleImpl)
 
 	// Start the executor
@@ -3132,7 +3140,8 @@ func TestSegmentHandle_HandleAppendRequestFailure_RetrySubmitFailed(t *testing.T
 		"a-bucket", "files", 1, 1, 0,
 		[]byte("test_data"), callback,
 		mockClientPool, segmentHandle,
-		segmentMeta.Metadata.Quorum, nil)
+		segmentMeta.Metadata.Quorum, nil,
+	)
 	retryableOp.channelAttempts[0] = 0 // first attempt, retryable
 	testQueue.PushBack(retryableOp)
 
@@ -6621,7 +6630,8 @@ func TestHandleAppendRequestFailure_OpAlreadyRemovedFromQueue(t *testing.T) {
 
 	testQueue := list.New()
 	sh := NewSegmentHandleWithAppendOpsQueueWithWritable(
-		context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue, true)
+		context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue, true,
+	)
 	impl := sh.(*segmentHandleImpl)
 
 	// Simulate: an AppendOp for entryId=0 was added and already completed by 2 nodes
@@ -6871,7 +6881,8 @@ func TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas(t *testing.T
 				}
 				if r.footer != notFinalized && r.footer != lac {
 					return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-						fmt.Sprintf("footer already finalized at %d, refusing %d", r.footer, lac))
+						fmt.Sprintf("footer already finalized at %d, refusing %d", r.footer, lac),
+					)
 				}
 				r.footer = lac
 				return r.tail, nil

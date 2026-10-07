@@ -157,7 +157,7 @@ func TestOpenLogUnsafe_Success(t *testing.T) {
 		return &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"localhost:8888"}}, nil
 	}
 
-	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, handle)
 }
@@ -189,7 +189,7 @@ func TestOpenLogUnsafe_SeedsTruncationFrontier(t *testing.T) {
 	}
 	mockMeta.EXPECT().OpenLog(mock.Anything, "test-log").Return(logMeta, map[int64]*meta.SegmentMeta{}, nil).Once()
 
-	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, nil, nil)
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, handle)
 	t.Cleanup(func() {
@@ -214,7 +214,7 @@ func TestOpenLogUnsafe_Error(t *testing.T) {
 		return nil, nil
 	}
 
-	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, handle)
 	assert.Equal(t, openErr, err)

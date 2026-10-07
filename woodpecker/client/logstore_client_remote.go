@@ -407,7 +407,8 @@ func (l *logStoreClientRemote) MarkLogDeleted(ctx context.Context, bucketName st
 	// switching backends on a WAL that is not actually empty.
 	if sync && !resp.GetSyncApplied() {
 		return false, werr.ErrUnsupportedVersionError.WithCauseErrMsg(
-			"logstore node did not confirm synchronous delete support; upgrade the node")
+			"logstore node did not confirm synchronous delete support; upgrade the node",
+		)
 	}
 	return resp.GetLocalDataFound(), nil
 }

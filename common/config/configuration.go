@@ -100,14 +100,7 @@ type ClientConfig struct {
 	// are under logstore.grpc: each process reads its own section.
 	GRPC        GRPCClientConfig  `yaml:"grpc"`
 	SegmentRead SegmentReadConfig `yaml:"segmentRead"`
-	// SkipRanges lets an embedding application supply the entry ranges readers should pass over,
-	// instead of woodpecker reading them from its own metadata. Nothing binds it by default, so a
-	// nil result means "no opinion here" and the client reads the record itself.
-	//
-	// Deliberately not a YAML field: a range set in a file would be invisible to `wp log
-	// skip-range list`, which reads the record, so the listing would lie by omission.
-	SkipRanges Dynamic[map[int64]LogSkipRanges] `yaml:"-"`
-	// SkipRangeRefreshInterval is how often a client re-reads that record. It bounds how long a
+	// SkipRangeRefreshInterval is how often a client re-reads the operator-declared skip ranges. It bounds how long a
 	// reader keeps acting on a withdrawn range, and how long it waits before acting on a new one.
 	//
 	// The read never waits for it: a reader is always answered from what the client already holds,
@@ -174,17 +167,6 @@ type CustomPlacement struct {
 	Az            string `yaml:"az"`
 	ResourceGroup string `yaml:"resourceGroup"`
 }
-
-// SkipSpan is an inclusive range of entry ids a reader should pass over. Entry ids restart at 0
-// in every segment, so a span means nothing without the segment it belongs to.
-type SkipSpan struct {
-	FromEntryID int64
-	ToEntryID   int64
-}
-
-// LogSkipRanges is one log's spans indexed by segment id, so a reader that has just resolved a
-// segment answers "is any of this skipped" with one lookup.
-type LogSkipRanges map[int64][]SkipSpan
 
 // QuorumSelectStrategy stores the quorum selection strategy configuration.
 type QuorumSelectStrategy struct {

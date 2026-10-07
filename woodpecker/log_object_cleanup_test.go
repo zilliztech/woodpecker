@@ -118,7 +118,8 @@ func walkReturning(storage *mocks_objectstorage.ObjectStorage, keys ...string) {
 // look like woodpecker's own are reported, never removed.
 func TestDeleteLogObjectsDeletesOnlyMatchingKeys(t *testing.T) {
 	storage := mocks_objectstorage.NewObjectStorage(t)
-	walkReturning(storage,
+	walkReturning(
+		storage,
 		"root/7/0/0.blk",
 		"root/7/0/footer.blk",
 		"root/7/1/write.lock",

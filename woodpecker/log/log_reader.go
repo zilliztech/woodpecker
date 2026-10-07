@@ -104,7 +104,7 @@ type logBatchReaderImpl struct {
 	// skips is what this reader has been told to pass over, held across reads. Looking it up costs
 	// one map lookup, so it is checked on every segment resolved; re-reading it costs a metadata
 	// read, so that happens only while stuck.
-	skips config.LogSkipRanges
+	skips LogSkipRanges
 }
 
 // publishReadFrontierMetric records where this reader has got to. Observability

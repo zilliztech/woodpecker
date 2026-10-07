@@ -87,6 +87,9 @@ type woodpeckerClient struct {
 	// managed cli
 	managedCli bool
 	etcdCli    *clientv3.Client
+	// skipRanges, when an application supplied one, replaces woodpecker's own record as the source
+	// of what this client's readers pass over.
+	skipRanges log.SkipRangeSource
 
 	// quorum discovery implementation
 	quorumDiscovery quorum.QuorumDiscovery
@@ -126,7 +129,17 @@ func reportClientPlacement(ctx context.Context) {
 		zap.String("az", topology.GetCurrentAvailabilityZone()))
 }
 
-func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clientv3.Client, managed bool) (Client, error) {
+// ClientOption replaces one of a client's collaborators at construction.
+type ClientOption func(*woodpeckerClient)
+
+// WithSkipRangeSource makes every log this client opens take its readers' skip ranges from src
+// instead of from woodpecker's own record. For an application that manages those ranges itself:
+// with one bound, the client never reads the record at all.
+func WithSkipRangeSource(src log.SkipRangeSource) ClientOption {
+	return func(c *woodpeckerClient) { c.skipRanges = src }
+}
+
+func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clientv3.Client, managed bool, opts ...ClientOption) (Client, error) {
 	// Re-validate the object-storage section at the consumption point (the config may have
 	// been mutated after load); the client builds object-storage keys and RPC rootPath values
 	// from it verbatim. Scoped to the minio section so hand-rolled partial configs still work.
@@ -151,6 +164,9 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 		clientPool: clientPool,
 		managedCli: managed,
 		etcdCli:    etcdClient,
+	}
+	for _, opt := range opts {
+		opt(c)
 	}
 	c.closeState.Store(false)
 
@@ -266,12 +282,12 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	objStorageClient := c.getOrCreateObjectStorageClient(ctx)
-	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes, objStorageClient)
+	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes, objStorageClient, c.skipRanges)
 }
 
 func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string, clientPool client.LogStoreClientPool,
 	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
-	objectStorageClient storageclient.ObjectStorage,
+	objectStorageClient storageclient.ObjectStorage, skipRanges log.SkipRangeSource,
 ) (log.LogHandle, error) {
 	// Open log and retrieve metadata with detailed comments
 	logMeta, segmentsMeta, err := metadata.OpenLog(ctx, logName)
@@ -284,7 +300,8 @@ func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName 
 	if logMeta.Metadata.GetTruncatedSegmentId() >= 0 {
 		metrics.SetTruncationFrontier(logNs, logIdStr, logMeta.Metadata.GetTruncatedSegmentId(), logMeta.Metadata.GetTruncatedEntryId())
 	}
-	newLogHandle := log.NewLogHandle(logName, logID, segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc, objectStorageClient)
+	newLogHandle := log.NewLogHandle(logName, logID, segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc,
+		objectStorageClient, log.WithSkipRangeSource(skipRanges))
 	metrics.WpLogNameIdMapping.WithLabelValues(logNs, logName).Set(float64(logID))
 	return newLogHandle, nil
 }

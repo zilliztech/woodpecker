@@ -5,9 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -16,7 +19,7 @@ import (
 // by hand, may arrive unsorted or overlapping -- and a reader that answered wrongly for such a
 // record would skip the wrong entries rather than merely take an extra hop.
 func TestSkipSpanFor_ScansWhateverOrderTheRangesCameIn(t *testing.T) {
-	ranges := config.LogSkipRanges{3: []config.SkipSpan{
+	ranges := LogSkipRanges{3: []SkipSpan{
 		{FromEntryID: 40, ToEntryID: 49},
 		{FromEntryID: 10, ToEntryID: 19},
 		{FromEntryID: 15, ToEntryID: 25}, // overlaps the one before it
@@ -59,7 +62,7 @@ func TestSkipRangesOf_ConvertsTheRecordAndNothingElse(t *testing.T) {
 		4: {},
 	}})
 	require.Len(t, held, 2)
-	require.Equal(t, []config.SkipSpan{{FromEntryID: 10, ToEntryID: 19}}, held[3])
+	require.Equal(t, []SkipSpan{{FromEntryID: 10, ToEntryID: 19}}, held[3])
 	require.Empty(t, held[4], "a segment listed with no ranges declares nothing")
 }
 
@@ -87,7 +90,7 @@ func TestReaderSkipsPastADeclaredRange(t *testing.T) {
 	reader.batch = &proto.BatchReadResult{
 		LastReadState: &proto.LastReadState{SegmentId: 3, LastBlockId: 7, BlockOffset: 4096},
 	}
-	reader.skips = config.LogSkipRanges{3: []config.SkipSpan{{FromEntryID: 10, ToEntryID: 19}}}
+	reader.skips = LogSkipRanges{3: []SkipSpan{{FromEntryID: 10, ToEntryID: 19}}}
 
 	moved := reader.skipPast(context.Background(), 3, 10)
 
@@ -116,7 +119,7 @@ func TestReaderDoesNotSkipWhatIsNotDeclared(t *testing.T) {
 	reader := r.(*logBatchReaderImpl)
 	held := &proto.BatchReadResult{LastReadState: &proto.LastReadState{SegmentId: 3, LastBlockId: 1}}
 	reader.batch = held
-	reader.skips = config.LogSkipRanges{3: []config.SkipSpan{{FromEntryID: 10, ToEntryID: 19}}}
+	reader.skips = LogSkipRanges{3: []SkipSpan{{FromEntryID: 10, ToEntryID: 19}}}
 
 	require.False(t, reader.skipPast(context.Background(), 3, 5), "5 is below the range")
 	require.False(t, reader.skipPast(context.Background(), 3, 20), "20 is above it")
@@ -138,7 +141,7 @@ func TestReaderOpensWithNoRangesHeld(t *testing.T) {
 	logHandle.Test(t)
 	logHandle.On("GetName").Return("quiet-log").Maybe()
 	logHandle.On("GetId").Return(int64(90)).Maybe()
-	logHandle.skipRanges = config.LogSkipRanges{3: []config.SkipSpan{{FromEntryID: 0, ToEntryID: 99}}}
+	logHandle.skipRanges = LogSkipRanges{3: []SkipSpan{{FromEntryID: 0, ToEntryID: 99}}}
 
 	r, err := NewLogBatchReader(context.Background(), logHandle, nil,
 		&LogMessageId{SegmentId: 3, EntryId: 10}, "quiet-reader",
@@ -186,7 +189,7 @@ func TestReaderAsksOnlyWhileItIsNotMovingOn(t *testing.T) {
 	logHandle.Test(t)
 	logHandle.On("GetName").Return("trigger-log").Maybe()
 	logHandle.On("GetId").Return(int64(92)).Maybe()
-	logHandle.skipRanges = config.LogSkipRanges{3: []config.SkipSpan{{FromEntryID: 10, ToEntryID: 19}}}
+	logHandle.skipRanges = LogSkipRanges{3: []SkipSpan{{FromEntryID: 10, ToEntryID: 19}}}
 
 	r, err := NewLogBatchReader(context.Background(), logHandle, nil,
 		&LogMessageId{SegmentId: 3, EntryId: 10}, "trigger-reader",
@@ -222,20 +225,101 @@ func TestReaderAsksOnlyWhileItIsNotMovingOn(t *testing.T) {
 // TestGetSkipRanges_HostOverrideWinsAndCostsNoRead covers the hook an embedding application binds.
 // When it has an opinion the client must not read its own record at all -- otherwise a host that
 // manages these itself would still pay for, and be affected by, a record it does not use.
+// fixedSkipRanges is a host-supplied source: whatever it was built with, for every log it names.
+type fixedSkipRanges map[int64]LogSkipRanges
+
+func (f fixedSkipRanges) For(_ context.Context, logID int64) LogSkipRanges { return f[logID] }
+
 func TestGetSkipRanges_HostOverrideWinsAndCostsNoRead(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	cfg.Woodpecker.Client.SkipRanges.WithSource(func() (map[int64]config.LogSkipRanges, bool) {
-		return map[int64]config.LogSkipRanges{
-			7: {3: []config.SkipSpan{{FromEntryID: 1, ToEntryID: 2}}},
-		}, true
-	})
-
-	// A provider that fails the test if it is consulted.
-	handle := &logHandleImpl{Name: "override-log", Id: 7, cfg: cfg, Metadata: nil}
+	// A source of its own, and a nil metadata provider: if the handle consulted the record instead,
+	// the default source would be reached and this would answer nothing.
+	handle := &logHandleImpl{
+		Name: "override-log", Id: 7, cfg: cfg, Metadata: nil,
+		skipRanges: fixedSkipRanges{7: {3: []SkipSpan{{FromEntryID: 1, ToEntryID: 2}}}},
+	}
 
 	got := handle.GetSkipRanges(context.Background())
 
-	require.Equal(t, config.LogSkipRanges{3: []config.SkipSpan{{FromEntryID: 1, ToEntryID: 2}}}, got)
+	require.Equal(t, LogSkipRanges{3: []SkipSpan{{FromEntryID: 1, ToEntryID: 2}}}, got)
 	require.Nil(t, handle.GetSkipRanges(context.Background())[4], "a segment the host did not name")
+}
+
+// TestLogHandleDefaultsToTheRecord covers the default path: a handle built without an option reads
+// woodpecker's own record, so nothing has to be wired for the feature to work.
+func TestLogHandleDefaultsToTheRecord(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockMeta.EXPECT().GetAllSkipRangesCached(mock.Anything).Return(&meta.AllSkipRanges{
+		Metadata: &proto.AllSkipRanges{ByLogId: map[int64]*proto.LogSkipRanges{
+			7: {BySegmentId: map[int64]*proto.SegmentSkipRanges{
+				3: {Ranges: []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19}}},
+			}},
+		}},
+	}).Maybe()
+
+	handle := &logHandleImpl{Name: "l", Id: 7, cfg: cfg, Metadata: mockMeta}
+	handle.skipRanges = metadataSkipRanges{provider: mockMeta}
+
+	require.Equal(t, LogSkipRanges{3: []SkipSpan{{FromEntryID: 10, ToEntryID: 19}}},
+		handle.GetSkipRanges(context.Background()))
+}
+
+// TestWithSkipRangeSourceIgnoresNil keeps the client's option harmless when no application supplied
+// one: openLogUnsafe passes whatever the client holds, which is usually nothing.
+func TestWithSkipRangeSourceIgnoresNil(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	l := &logHandleImpl{Id: 7, skipRanges: metadataSkipRanges{provider: mockMeta}}
+
+	WithSkipRangeSource(nil)(l)
+
+	require.Equal(t, metadataSkipRanges{provider: mockMeta}, l.skipRanges,
+		"a nil option must not replace the default with something that panics on use")
+}
+
+// TestNewLogHandleWiresTheSkipRangeSource covers the construction path, which the tests that build a
+// logHandleImpl by hand all bypass. Two things are only decided here: that a handle built with no
+// option reads woodpecker's record, and that one built with an option reads that instead and never
+// touches the record.
+func TestNewLogHandleWiresTheSkipRangeSource(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	segments := map[int64]*meta.SegmentMeta{}
+
+	t.Run("no option: the record", func(t *testing.T) {
+		mockMeta := mocks_meta.NewMetadataProvider(t)
+		mockMeta.EXPECT().GetAllSkipRangesCached(mock.Anything).Return(&meta.AllSkipRanges{
+			Metadata: &proto.AllSkipRanges{ByLogId: map[int64]*proto.LogSkipRanges{
+				4: {BySegmentId: map[int64]*proto.SegmentSkipRanges{
+					1: {Ranges: []*proto.SkipRange{{FromEntryId: 5, ToEntryId: 6}}},
+				}},
+			}},
+		}).Once()
+
+		h := NewLogHandle("wired-log", 4, segments, mockMeta, nil, cfg, nil, nil)
+		t.Cleanup(func() { _ = h.Close(context.Background()) })
+
+		require.Equal(t, LogSkipRanges{1: []SkipSpan{{FromEntryID: 5, ToEntryID: 6}}},
+			h.GetSkipRanges(context.Background()))
+	})
+
+	t.Run("with an option: that source, and the record is never read", func(t *testing.T) {
+		// No EXPECT for GetAllSkipRangesCached: the mock fails the test if it is called.
+		mockMeta := mocks_meta.NewMetadataProvider(t)
+
+		h := NewLogHandle("wired-log", 4, segments, mockMeta, nil, cfg, nil, nil,
+			WithSkipRangeSource(fixedSkipRanges{4: {1: []SkipSpan{{FromEntryID: 9, ToEntryID: 9}}}}))
+		t.Cleanup(func() { _ = h.Close(context.Background()) })
+
+		require.Equal(t, LogSkipRanges{1: []SkipSpan{{FromEntryID: 9, ToEntryID: 9}}},
+			h.GetSkipRanges(context.Background()))
+	})
+}
+
+// TestMetadataSkipRangesWithoutAProviderAnswersNothing covers the guard that keeps a source built
+// without its provider from panicking on use rather than reporting no ranges.
+func TestMetadataSkipRangesWithoutAProviderAnswersNothing(t *testing.T) {
+	require.Nil(t, metadataSkipRanges{}.For(context.Background(), 7))
 }

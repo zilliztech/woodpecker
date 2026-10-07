@@ -142,9 +142,10 @@ readers ask. So `woodpecker.client.skipRangeRefreshInterval` (default 10s) trade
 etcd traffic and nothing else: it bounds how long a reader keeps acting on a withdrawn range, and
 shortening it never makes a read slower.
 
-An embedding application can supply the ranges itself instead, through a runtime hook that nothing
-binds by default; when it does, `wp log skip-range list` is not the source a reader is using, which
-is why the listing names the source it read.
+An embedding application can supply the ranges itself instead, by passing its own source to
+`woodpecker.NewClient`; nothing supplies one by default. When one is supplied the client never reads
+this record at all, so `wp log skip-range list` is not the source those readers are using — which is
+why the listing names the source it read.
 
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for

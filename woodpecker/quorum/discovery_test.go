@@ -250,7 +250,8 @@ func TestQuorumDiscovery_StrategyTypeMapping(t *testing.T) {
 					{Endpoint: "node-1:8080"},
 					{Endpoint: "node-2:8080"},
 					{Endpoint: "node-3:8080"},
-				}, nil)
+				}, nil,
+			)
 
 			discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
 			assert.NoError(t, err)
@@ -404,7 +405,8 @@ func TestQuorumDiscovery_FillRemainingNodes_FirstPoolFails_TriesNext(t *testing.
 
 	// Region B: fails completely — returns error
 	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		[]*proto.NodeMeta{}, errors.New("region-b unavailable")).Once()
+		[]*proto.NodeMeta{}, errors.New("region-b unavailable"),
+	).Once()
 
 	// Region C: returns 1 node OK
 	mockClientC.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
@@ -521,7 +523,8 @@ func TestQuorumDiscovery_CrossRegion_FillDeduplicatesNodes(t *testing.T) {
 				{Endpoint: "nodeA1:8080"}, // duplicate — should be skipped
 				{Endpoint: "nodeA2:8080"}, // new
 			}, nil
-		}).Maybe()
+		},
+	).Maybe()
 
 	// Region B: first round fails, fill round returns a unique node
 	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{}, errors.New("region down")).Once()
@@ -648,7 +651,8 @@ func TestQuorumDiscovery_SeedRotation_SkipsDeadSeed(t *testing.T) {
 
 	// Dead seed always fails
 	mockDeadClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		[]*proto.NodeMeta{}, errors.New("connection refused")).Maybe()
+		[]*proto.NodeMeta{}, errors.New("connection refused"),
+	).Maybe()
 
 	// Healthy seed always succeeds
 	mockHealthyClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
@@ -699,11 +703,14 @@ func TestQuorumDiscovery_SeedRotation_AllSeedsDead(t *testing.T) {
 
 	// All seeds fail
 	mockClient1.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		[]*proto.NodeMeta{}, errors.New("dead1 refused")).Maybe()
+		[]*proto.NodeMeta{}, errors.New("dead1 refused"),
+	).Maybe()
 	mockClient2.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		[]*proto.NodeMeta{}, errors.New("dead2 refused")).Maybe()
+		[]*proto.NodeMeta{}, errors.New("dead2 refused"),
+	).Maybe()
 	mockClient3.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
-		[]*proto.NodeMeta{}, errors.New("dead3 refused")).Maybe()
+		[]*proto.NodeMeta{}, errors.New("dead3 refused"),
+	).Maybe()
 
 	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
 	assert.NoError(t, err)

@@ -352,7 +352,9 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	// Embed mode reads locally; no direct read from object storage needed
-	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes, nil)
+	// Embed mode has no client option to carry one, so the skip ranges come from woodpecker's own
+	// record.
+	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes, nil, nil)
 }
 
 func (c *woodpeckerEmbedClient) SelectQuorumNodes(ctx context.Context) (*proto.QuorumInfo, error) {

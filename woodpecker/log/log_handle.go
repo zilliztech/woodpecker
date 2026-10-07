@@ -59,7 +59,7 @@ type LogHandle interface {
 	GetTruncatedRecordId(ctx context.Context) (*LogMessageId, error)
 	// GetSkipRanges returns the entry ranges an operator has declared unreadable for this log,
 	// indexed by segment id. Nil when there are none, which is the normal case.
-	GetSkipRanges(ctx context.Context) config.LogSkipRanges
+	GetSkipRanges(ctx context.Context) LogSkipRanges
 	// CheckAndSetSegmentTruncatedIfNeed checks if the segment needs to be truncated and sets the truncated flag accordingly.
 	CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) error
 	// GetNextSegmentId returns the next new segment ID for the log.
@@ -103,6 +103,10 @@ type logHandleImpl struct {
 	WritableSegmentId int64
 	Metadata          meta.MetadataProvider
 	ClientPool        client.LogStoreClientPool
+	// skipRanges answers what this log's readers should pass over. Injected rather than read from
+	// the configuration: the ranges are an operational record, not a setting, and only readers use
+	// them.
+	skipRanges SkipRangeSource
 
 	// rolling policy
 	// atomic so the auditor can read it without the log handle's lock; see
@@ -125,9 +129,23 @@ type logHandleImpl struct {
 	objectStorageClient storageclient.ObjectStorage
 }
 
+// LogHandleOption replaces one of a log handle's collaborators at construction. Options are applied
+// before the handle is returned, so nothing observes it changing.
+type LogHandleOption func(*logHandleImpl)
+
+// WithSkipRangeSource makes this log's readers take their skip ranges from src instead of from
+// woodpecker's own record.
+func WithSkipRangeSource(src SkipRangeSource) LogHandleOption {
+	return func(l *logHandleImpl) {
+		if src != nil {
+			l.skipRanges = src
+		}
+	}
+}
+
 func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta, meta meta.MetadataProvider, clientPool client.LogStoreClientPool,
 	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
-	objectStorageClient storageclient.ObjectStorage,
+	objectStorageClient storageclient.ObjectStorage, opts ...LogHandleOption,
 ) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds()
@@ -157,6 +175,11 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 		cleanupDone:         make(chan struct{}),
 		selectQuorumFunc:    selectQuorumFunc,
 		objectStorageClient: objectStorageClient,
+		// Woodpecker's own record unless an embedding application supplied its own below.
+		skipRanges: metadataSkipRanges{provider: meta},
+	}
+	for _, opt := range opts {
+		opt(l)
 	}
 	l.LastSegmentId.Store(lastSegmentNo)
 	seedSegmentFrontierMetrics(logNs, logIdStr, segments)
@@ -1191,47 +1214,10 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 	}, nil
 }
 
-// GetSkipRanges returns what this log's readers should pass over. An embedding application that
-// supplies its own takes precedence -- that is the whole point of the hook -- and otherwise they
-// come from woodpecker's own record, read through a short-lived cache.
-//
-// A nil result is the normal case and costs the caller one map lookup, so a reader can consult this
-// on every segment it resolves without thinking about it.
-func (l *logHandleImpl) GetSkipRanges(ctx context.Context) config.LogSkipRanges {
-	if byLog := l.cfg.Woodpecker.Client.SkipRanges.Get(); byLog != nil {
-		return byLog[l.Id]
-	}
-	return skipRangesOf(l.Metadata.GetAllSkipRangesCached(ctx).For(l.Id))
-}
-
-// skipRangesOf converts the stored record into the shape both sources share, so the reader has one
-// thing to consult whichever supplied it.
-func skipRangesOf(held *proto.LogSkipRanges) config.LogSkipRanges {
-	bySegment := held.GetBySegmentId()
-	if len(bySegment) == 0 {
-		return nil
-	}
-	out := make(config.LogSkipRanges, len(bySegment))
-	for segmentID, ranges := range bySegment {
-		spans := make([]config.SkipSpan, 0, len(ranges.GetRanges()))
-		for _, r := range ranges.GetRanges() {
-			spans = append(spans, config.SkipSpan{FromEntryID: r.GetFromEntryId(), ToEntryID: r.GetToEntryId()})
-		}
-		out[segmentID] = spans
-	}
-	return out
-}
-
-// skipSpanFor returns the span covering an entry, if any. Ranges within a segment are kept sorted
-// and coalesced by the write path, but correctness does not rest on that: scanning a handful
-// answers the same however they are ordered, and an overlap only costs a second hop.
-func skipSpanFor(ranges config.LogSkipRanges, segmentID, entryID int64) (config.SkipSpan, bool) {
-	for _, span := range ranges[segmentID] {
-		if entryID >= span.FromEntryID && entryID <= span.ToEntryID {
-			return span, true
-		}
-	}
-	return config.SkipSpan{}, false
+// GetSkipRanges returns the entry ranges an operator has declared unreadable for this log. A nil
+// result is the normal case and costs one map lookup, so a reader can consult it freely.
+func (l *logHandleImpl) GetSkipRanges(ctx context.Context) LogSkipRanges {
+	return l.skipRanges.For(ctx, l.Id)
 }
 
 // completeAllSegmentHandlesUnsafe completes all segment handles. Must be called with lock held.
