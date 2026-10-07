@@ -41,6 +41,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/skiprange"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -622,7 +623,7 @@ type cachedSkipRanges struct {
 	readAt time.Time
 }
 
-// GetAllSkipRangesCached answers from the cache and never waits for etcd. A stale entry starts a
+// getAllSkipRangesCached answers from the cache and never waits for etcd. A stale entry starts a
 // refresh in the background and the caller gets what was already held.
 //
 // It must not block, because the caller is the read path and the state that makes it ask -- a
@@ -631,7 +632,36 @@ type cachedSkipRanges struct {
 // reader, which showed up as a second of tail-read lag in the stability suite. The cost of not
 // waiting is that a declaration takes effect one tick later than it could, which is nothing next to
 // the time an operator spends establishing that the data is gone.
-func (e *metadataProviderEtcd) GetAllSkipRangesCached(ctx context.Context) *AllSkipRanges {
+// SkipRangeSource hands out this provider's view of the declared skip ranges, so a reader depends on
+// the interface rather than on the metadata provider or on the record's shape.
+func (e *metadataProviderEtcd) SkipRangeSource() skiprange.Source {
+	return etcdSkipRanges{provider: e}
+}
+
+// etcdSkipRanges converts the stored record into the shape a reader consults. The conversion belongs
+// here rather than in the reader: the proto is this layer's business.
+type etcdSkipRanges struct {
+	provider *metadataProviderEtcd
+}
+
+func (s etcdSkipRanges) For(ctx context.Context, logID int64) skiprange.BySegment {
+	held := s.provider.getAllSkipRangesCached(ctx).For(logID)
+	bySegment := held.GetBySegmentId()
+	if len(bySegment) == 0 {
+		return nil
+	}
+	out := make(skiprange.BySegment, len(bySegment))
+	for segmentID, ranges := range bySegment {
+		spans := make([]skiprange.Span, 0, len(ranges.GetRanges()))
+		for _, r := range ranges.GetRanges() {
+			spans = append(spans, skiprange.Span{FromEntryID: r.GetFromEntryId(), ToEntryID: r.GetToEntryId()})
+		}
+		out[segmentID] = spans
+	}
+	return out
+}
+
+func (e *metadataProviderEtcd) getAllSkipRangesCached(ctx context.Context) *AllSkipRanges {
 	held := e.skipRangeCache.Load()
 	if held == nil || time.Since(held.readAt) >= e.skipRangeRefreshInterval {
 		_ = e.refreshSkipRangesInBackground(ctx)

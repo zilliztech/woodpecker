@@ -27,6 +27,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/skiprange"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
@@ -104,7 +105,7 @@ type logBatchReaderImpl struct {
 	// skips is what this reader has been told to pass over, held across reads. Looking it up costs
 	// one map lookup, so it is checked on every segment resolved; re-reading it costs a metadata
 	// read, so that happens only while stuck.
-	skips LogSkipRanges
+	skips skiprange.BySegment
 }
 
 // publishReadFrontierMetric records where this reader has got to. Observability
@@ -351,7 +352,7 @@ func (l *logBatchReaderImpl) onReportTick(ctx context.Context, now, segmentId, e
 // skipPast moves the read position past a declared range covering the current position, and
 // reports whether it moved. Giving up entries is never silent: the range is logged and counted.
 func (l *logBatchReaderImpl) skipPast(ctx context.Context, segmentId, entryId int64) bool {
-	span, found := skipSpanFor(l.skips, segmentId, entryId)
+	span, found := skiprange.SpanFor(l.skips, segmentId, entryId)
 	if !found {
 		return false
 	}

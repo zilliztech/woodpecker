@@ -20,6 +20,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/zilliztech/woodpecker/common/skiprange"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -56,10 +57,10 @@ type MetadataProvider interface {
 	GetAllSkipRanges(ctx context.Context) (*AllSkipRanges, error)
 	// UpdateAllSkipRanges writes them back, failing when the record moved since the read.
 	UpdateAllSkipRanges(ctx context.Context, set *AllSkipRanges) error
-	// GetAllSkipRangesCached is GetAllSkipRanges with a short-lived cache, for the read path.
-	// A reader consults it only while it is making no progress, so the window only has to be
-	// short enough that an operator's declaration takes effect while they are still watching.
-	GetAllSkipRangesCached(ctx context.Context) *AllSkipRanges
+	// SkipRangeSource hands out this provider's view of the declared skip ranges. A reader takes the
+	// interface rather than the provider, so what it depends on is "something that answers which
+	// entries to pass over" and not this package.
+	SkipRangeSource() skiprange.Source
 	// ClearMeta removes all content metadata for this instance (logs, segments, quorums,
 	// node registrations, reader sessions, cleanup and compacted-mark records) and re-seeds
 	// the instance-level keys. clearLogIdGen decides whether the log id counter restarts;

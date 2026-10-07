@@ -41,6 +41,7 @@ import (
 
 func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProvider) {
 	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockMeta.EXPECT().SkipRangeSource().Return(nil).Maybe()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -88,7 +89,11 @@ func TestNewLogHandle_SeedsSegmentFrontierMetrics(t *testing.T) {
 		4: {Metadata: &proto.SegmentMetadata{SegNo: 4, State: proto.SegmentState_Active, LastEntryId: 4}},
 	}
 
-	logHandle := NewLogHandle("frontier-seed-log", logID, segments, mocks_meta.NewMetadataProvider(t), nil, cfg, nil, nil).(*logHandleImpl)
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockMeta.EXPECT().SkipRangeSource().Return(nil).Maybe()
+	// NewLogHandle asks the provider for a skip-range source when no option supplies one.
+	mockMeta.EXPECT().SkipRangeSource().Return(nil).Maybe()
+	logHandle := NewLogHandle("frontier-seed-log", logID, segments, mockMeta, nil, cfg, nil, nil).(*logHandleImpl)
 	t.Cleanup(func() {
 		logHandle.stopBackgroundCleanup()
 		logHandle.cancel()
@@ -1078,6 +1083,7 @@ func TestLogHandle_BackgroundCleanup_DataRaceProtection(t *testing.T) {
 // createMockLogHandleWithConfig creates a mock log handle with specific storage and fence policy configuration
 func createMockLogHandleWithConfig(t *testing.T, storageType string, conditionWrite string) (*logHandleImpl, *mocks_meta.MetadataProvider) {
 	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockMeta.EXPECT().SkipRangeSource().Return(nil).Maybe()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -2092,6 +2098,7 @@ func TestLogHandle_BackgroundCleanupLoop_StopsOnCleanupDone(t *testing.T) {
 func TestLogHandle_BackgroundCleanupLoop_StopsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockMeta.EXPECT().SkipRangeSource().Return(nil).Maybe()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -2211,6 +2218,7 @@ func TestLogHandle_GetNextSegmentId_Error(t *testing.T) {
 
 func TestLogHandle_CreateNewSegmentMeta_QuorumError(t *testing.T) {
 	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockMeta.EXPECT().SkipRangeSource().Return(nil).Maybe()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -2239,6 +2247,7 @@ func TestLogHandle_CreateNewSegmentMeta_QuorumError(t *testing.T) {
 // from a non-empty segments map, covering the loop that finds the max SegNo.
 func TestNewLogHandle_WithExistingSegments(t *testing.T) {
 	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockMeta.EXPECT().SkipRangeSource().Return(nil).Maybe()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{

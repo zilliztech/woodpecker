@@ -29,6 +29,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/skiprange"
 	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -89,7 +90,7 @@ type woodpeckerClient struct {
 	etcdCli    *clientv3.Client
 	// skipRanges, when an application supplied one, replaces woodpecker's own record as the source
 	// of what this client's readers pass over.
-	skipRanges log.SkipRangeSource
+	skipRanges skiprange.Source
 
 	// quorum discovery implementation
 	quorumDiscovery quorum.QuorumDiscovery
@@ -135,7 +136,7 @@ type ClientOption func(*woodpeckerClient)
 // WithSkipRangeSource makes every log this client opens take its readers' skip ranges from src
 // instead of from woodpecker's own record. For an application that manages those ranges itself:
 // with one bound, the client never reads the record at all.
-func WithSkipRangeSource(src log.SkipRangeSource) ClientOption {
+func WithSkipRangeSource(src skiprange.Source) ClientOption {
 	return func(c *woodpeckerClient) { c.skipRanges = src }
 }
 
@@ -287,7 +288,7 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 
 func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string, clientPool client.LogStoreClientPool,
 	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
-	objectStorageClient storageclient.ObjectStorage, skipRanges log.SkipRangeSource,
+	objectStorageClient storageclient.ObjectStorage, skipRanges skiprange.Source,
 ) (log.LogHandle, error) {
 	// Open log and retrieve metadata with detailed comments
 	logMeta, segmentsMeta, err := metadata.OpenLog(ctx, logName)
