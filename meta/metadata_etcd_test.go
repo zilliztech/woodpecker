@@ -95,7 +95,7 @@ func TestAll(t *testing.T) {
 	t.Run("test skip ranges: an undecodable record is an error", testSkipRangesUndecodableRecordIsAnError)
 	t.Run("test skip ranges: a cached read answers from the cache, not from etcd", testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd)
 	t.Run("test skip ranges: the refresh interval comes from the configuration", testSkipRangesRefreshIntervalComesFromTheConfiguration)
-	t.Run("test skip ranges: the source converts the record", testSkipRangeSourceConvertsTheRecord)
+	t.Run("test skip ranges: one log's ranges come back keyed by segment", testGetLogSkipRangesReturnsOneLogsRanges)
 	t.Run("test skip ranges: the refresh is single-flighted", testSkipRangesRefreshIsSingleFlighted)
 	t.Run("test skip ranges: a cached read holds for its window", testSkipRangesCachedReadHoldsForItsWindow)
 	t.Run("test skip ranges: a cached read survives an unreadable record", testSkipRangesCachedReadSurvivesAnUnreadableRecord)

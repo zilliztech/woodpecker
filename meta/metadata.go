@@ -19,8 +19,8 @@ package meta
 import (
 	"context"
 	"io"
+	"unicode/utf8"
 
-	"github.com/zilliztech/woodpecker/common/skiprange"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -51,16 +51,20 @@ type MetadataProvider interface {
 	GetLogMeta(ctx context.Context, logName string) (*LogMeta, error)
 	// UpdateLogMeta updates the metadata for a specific log.
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error
-	// GetAllSkipRanges returns every log's operator-declared skip ranges, with the
-	// revision they were read at. A record that does not exist yet reads as empty
-	// rather than as an error: most clusters never have one.
+	// GetAllSkipRanges reads the record holding every log's declared skip ranges, with the revision
+	// it was read at. An absent record reads as an empty one rather than as an error: most clusters
+	// never have one, and a read that failed for the normal case is how a real signal gets ignored.
 	GetAllSkipRanges(ctx context.Context) (*AllSkipRanges, error)
-	// UpdateAllSkipRanges writes them back, failing when the record moved since the read.
-	UpdateAllSkipRanges(ctx context.Context, set *AllSkipRanges) error
-	// SkipRangeSource hands out this provider's view of the declared skip ranges. A reader takes the
-	// interface rather than the provider, so what it depends on is "something that answers which
-	// entries to pass over" and not this package.
-	SkipRangeSource() skiprange.Source
+	// UpdateAllSkipRanges stores the record, refusing it if it moved since it was read. One key holds
+	// every log's ranges, so a blind write would drop whatever another operator added in between.
+	UpdateAllSkipRanges(ctx context.Context, ranges *AllSkipRanges) error
+	// RemoveAllSkipRanges drops the record under the same revision compare, for when the last range
+	// has been lifted and the cluster should look like one that never declared any.
+	RemoveAllSkipRanges(ctx context.Context, ranges *AllSkipRanges) error
+	// GetLogSkipRanges returns one log's ranges from the copy this provider holds, without waiting on
+	// etcd. A stalled reader consults it on every report tick, so it must cost nothing; the copy is
+	// refreshed in the background once it is older than woodpecker.client.skipRangeRefreshInterval.
+	GetLogSkipRanges(ctx context.Context, logID int64) *proto.LogSkipRanges
 	// ClearMeta removes all content metadata for this instance (logs, segments, quorums,
 	// node registrations, reader sessions, cleanup and compacted-mark records) and re-seeds
 	// the instance-level keys. clearLogIdGen decides whether the log id counter restarts;
@@ -210,6 +214,45 @@ func (a *AllSkipRanges) For(logID int64) *proto.LogSkipRanges {
 		return nil
 	}
 	return a.Metadata.GetByLogId()[logID]
+}
+
+// MaxSkipRangeReasonBytes and MaxAllSkipRangesBytes bound the one record that holds every log's skip
+// ranges. The bound is on the encoded size rather than on a count of ranges because reason is free
+// text, so a count gets the arithmetic wrong. The ceiling is a third of etcd's default 1.5MB request
+// limit, which also keeps the one thing a single record leaks -- an entry a deleted log left behind
+// -- bounded rather than unbounded.
+const (
+	MaxSkipRangeReasonBytes = 256
+	MaxAllSkipRangesBytes   = 512 * 1024
+)
+
+// SkipRangeCovering returns the range covering an entry, or nil when the entry is readable. Entry ids
+// restart at 0 in every segment, so a range means nothing without the segment it belongs to.
+//
+// The ranges within a segment are kept sorted and non-overlapping by whatever writes the record, but
+// this does not rely on that: scanning a handful answers the same however they are ordered. A record
+// written by an older tool, or edited by hand, must not make a reader pass over the wrong entries.
+func SkipRangeCovering(ranges *proto.LogSkipRanges, segmentID, entryID int64) *proto.SkipRange {
+	for _, r := range ranges.GetBySegmentId()[segmentID].GetRanges() {
+		if entryID >= r.GetFromEntryId() && entryID <= r.GetToEntryId() {
+			return r
+		}
+	}
+	return nil
+}
+
+// TruncateSkipRangeReason keeps a reason within the field's budget without cutting a character in
+// half. protobuf refuses to marshal a string field that is not valid UTF-8, so a cut by byte count
+// through a multi-byte character fails the write after an operator has already confirmed it.
+func TruncateSkipRangeReason(s string) string {
+	if len(s) <= MaxSkipRangeReasonBytes {
+		return s
+	}
+	cut := s[:MaxSkipRangeReasonBytes]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }
 
 // SegmentMeta is a wrapper of proto.SegmentMetadata with revision.

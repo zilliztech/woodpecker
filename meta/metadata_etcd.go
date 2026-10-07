@@ -41,7 +41,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	"github.com/zilliztech/woodpecker/common/skiprange"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -579,52 +578,143 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 	return nil
 }
 
-// MaxSkipRangeReasonBytes and MaxAllSkipRangesBytes bound the one record that holds every
-// log's skip ranges. The bound is on the encoded size rather than on a count because
-// reason is free text, so a count limit gets the arithmetic wrong. The ceiling is a third
-// of etcd's default 1.5MB request limit, which also keeps the one thing a single record
-// leaks -- an entry a deleted log left behind -- bounded rather than unbounded.
-const (
-	MaxSkipRangeReasonBytes = 256
-	MaxAllSkipRangesBytes   = 512 * 1024
-)
-
+// GetAllSkipRanges reads the record holding every log's declared skip ranges, with the revision it
+// was read at. An absent record reads as an empty one: most clusters never have one, and a read that
+// reported a failure for the normal case is how a real signal gets ignored.
 func (e *metadataProviderEtcd) GetAllSkipRanges(ctx context.Context) (*AllSkipRanges, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetAllSkipRanges")
 	defer sp.End()
 	startTime := time.Now()
 
+	ranges, err := e.readAllSkipRanges(ctx)
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", status).Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", status).
+		Observe(float64(time.Since(startTime).Milliseconds()))
+	return ranges, err
+}
+
+func (e *metadataProviderEtcd) readAllSkipRanges(ctx context.Context) (*AllSkipRanges, error) {
 	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
-	resp, err := e.client.Get(ctx1, e.keyBuilder.AllSkipRangesKey())
+	return ReadSkipRangeRecord(ctx1, e.client, e.keyBuilder)
+}
+
+// ReadSkipRangeRecord reads the one record holding every log's declared skip ranges straight from
+// etcd, without the provider's tracing or metrics and without touching the cache. It is the plain
+// primitive the provider methods build on, and what tests use to see the record exactly as etcd
+// holds it.
+func ReadSkipRangeRecord(ctx context.Context, client *clientv3.Client, kb *KeyBuilder) (*AllSkipRanges, error) {
+	resp, err := client.Get(ctx, kb.AllSkipRangesKey())
 	if err != nil {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, werr.ErrMetadataRead.WithCauseErr(err)
 	}
-	set := &AllSkipRanges{Metadata: &proto.AllSkipRanges{}}
-	if len(resp.Kvs) > 0 {
-		set.Revision = resp.Kvs[0].ModRevision
-		if err = pb.Unmarshal(resp.Kvs[0].Value, set.Metadata); err != nil {
-			metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", "error").Inc()
-			metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-			return nil, werr.ErrMetadataDecode.WithCauseErr(err)
-		}
+	ranges := &AllSkipRanges{Metadata: &proto.AllSkipRanges{}}
+	if len(resp.Kvs) == 0 {
+		// Revision stays 0, which is exactly what a write compares against: etcd reads a missing
+		// key's ModRevision as 0 too.
+		return ranges, nil
 	}
-	// Revision stays 0 when the record does not exist, which is exactly what the write path
-	// compares against: etcd reads a missing key's ModRevision as 0 too.
-	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "get_all_skip_ranges", "success").Inc()
-	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "get_all_skip_ranges", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return set, nil
+	ranges.Revision = resp.Kvs[0].ModRevision
+	if err = pb.Unmarshal(resp.Kvs[0].Value, ranges.Metadata); err != nil {
+		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
+	}
+	return ranges, nil
+}
+
+// UpdateAllSkipRanges stores the record, refusing it if it moved since it was read.
+func (e *metadataProviderEtcd) UpdateAllSkipRanges(ctx context.Context, ranges *AllSkipRanges) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateAllSkipRanges")
+	defer sp.End()
+	startTime := time.Now()
+
+	err := e.putAllSkipRanges(ctx, ranges)
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", status).Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_all_skip_ranges", status).
+		Observe(float64(time.Since(startTime).Milliseconds()))
+	return err
+}
+
+func (e *metadataProviderEtcd) putAllSkipRanges(ctx context.Context, ranges *AllSkipRanges) error {
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	return WriteSkipRangeRecord(ctx1, e.client, e.keyBuilder, ranges)
+}
+
+// WriteSkipRangeRecord stores the record under a compare-and-swap on the revision it was read at,
+// without the provider's tracing or metrics. It is the plain primitive the provider methods build on,
+// and what tests use to write a record straight past the cache.
+func WriteSkipRangeRecord(ctx context.Context, client *clientv3.Client, kb *KeyBuilder, ranges *AllSkipRanges) error {
+	value, err := pb.Marshal(ranges.Metadata)
+	if err != nil {
+		return werr.ErrMetadataEncode.WithCauseErr(err)
+	}
+	if len(value) > MaxAllSkipRangesBytes {
+		return werr.ErrMetadataEncode.WithCauseErrMsg(fmt.Sprintf(
+			"skip ranges would be %d bytes, over the %d-byte limit for one record; remove ranges that no longer apply",
+			len(value), MaxAllSkipRangesBytes,
+		))
+	}
+	return commitSkipRangesTx(ctx, client, kb, clientv3.OpPut(kb.AllSkipRangesKey(), string(value)), ranges.Revision)
+}
+
+// RemoveAllSkipRanges drops the record under the same revision compare, for when the last range has
+// been lifted and the cluster should look like one that never declared any.
+func (e *metadataProviderEtcd) RemoveAllSkipRanges(ctx context.Context, ranges *AllSkipRanges) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "RemoveAllSkipRanges")
+	defer sp.End()
+	startTime := time.Now()
+
+	err := e.commitSkipRanges(ctx, clientv3.OpDelete(e.keyBuilder.AllSkipRangesKey()), ranges.Revision)
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "remove_all_skip_ranges", status).Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "remove_all_skip_ranges", status).
+		Observe(float64(time.Since(startTime).Milliseconds()))
+	return err
+}
+
+func (e *metadataProviderEtcd) commitSkipRanges(ctx context.Context, op clientv3.Op, revision int64) error {
+	ctx1, cancel := e.getContextWithTimeout(ctx)
+	defer cancel()
+	return commitSkipRangesTx(ctx1, e.client, e.keyBuilder, op, revision)
+}
+
+// commitSkipRangesTx applies op only while the record still stands at the revision it was read at.
+// One key holds every log's ranges, so a blind write would drop whatever another operator added in
+// between. The one compare covers a create too: etcd reads a missing key's ModRevision as 0, which is
+// the revision a read of an absent record reports, so a record someone else created in between fails
+// this the same way an edited one does.
+func commitSkipRangesTx(ctx context.Context, client *clientv3.Client, kb *KeyBuilder, op clientv3.Op, revision int64) error {
+	key := kb.AllSkipRangesKey()
+	txn, err := client.Txn(ctx).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", revision)).
+		Then(op).Commit()
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+	if !txn.Succeeded {
+		return werr.ErrMetadataRevisionInvalid.WithCauseErrMsg("skip ranges changed since they were read")
+	}
+	return nil
 }
 
 type cachedSkipRanges struct {
-	set    *AllSkipRanges
+	ranges *AllSkipRanges
 	readAt time.Time
 }
 
-// getAllSkipRangesCached answers from the cache and never waits for etcd. A stale entry starts a
-// refresh in the background and the caller gets what was already held.
+// GetLogSkipRanges answers from the copy this provider holds and never waits for etcd. A stale copy
+// starts a refresh in the background and the caller gets what was already held.
 //
 // It must not block, because the caller is the read path and the state that makes it ask -- a
 // position that has not moved -- is indistinguishable from a reader that has simply caught up with
@@ -632,62 +722,32 @@ type cachedSkipRanges struct {
 // reader, which showed up as a second of tail-read lag in the stability suite. The cost of not
 // waiting is that a declaration takes effect one tick later than it could, which is nothing next to
 // the time an operator spends establishing that the data is gone.
-// SkipRangeSource hands out this provider's view of the declared skip ranges, so a reader depends on
-// the interface rather than on the metadata provider or on the record's shape.
-func (e *metadataProviderEtcd) SkipRangeSource() skiprange.Source {
-	return etcdSkipRanges{provider: e}
-}
-
-// etcdSkipRanges converts the stored record into the shape a reader consults. The conversion belongs
-// here rather than in the reader: the proto is this layer's business.
-type etcdSkipRanges struct {
-	provider *metadataProviderEtcd
-}
-
-func (s etcdSkipRanges) For(ctx context.Context, logID int64) skiprange.BySegment {
-	held := s.provider.getAllSkipRangesCached(ctx).For(logID)
-	bySegment := held.GetBySegmentId()
-	if len(bySegment) == 0 {
-		return nil
-	}
-	out := make(skiprange.BySegment, len(bySegment))
-	for segmentID, ranges := range bySegment {
-		spans := make([]skiprange.Span, 0, len(ranges.GetRanges()))
-		for _, r := range ranges.GetRanges() {
-			spans = append(spans, skiprange.Span{FromEntryID: r.GetFromEntryId(), ToEntryID: r.GetToEntryId()})
-		}
-		out[segmentID] = spans
-	}
-	return out
-}
-
-func (e *metadataProviderEtcd) getAllSkipRangesCached(ctx context.Context) *AllSkipRanges {
+func (e *metadataProviderEtcd) GetLogSkipRanges(ctx context.Context, logID int64) *proto.LogSkipRanges {
 	held := e.skipRangeCache.Load()
 	if held == nil || time.Since(held.readAt) >= e.skipRangeRefreshInterval {
-		_ = e.refreshSkipRangesInBackground(ctx)
+		e.refreshSkipRangesInBackground(ctx)
 	}
-	if held != nil {
-		return held.set
+	if held == nil {
+		// Nothing read yet. A record most clusters never have reads as absent rather than as unknown:
+		// the alternative is a reader that behaves differently on its first poll than on its second.
+		return nil
 	}
-	// Nothing read yet. A record most clusters never have reads as empty rather than as unknown:
-	// the alternative is a reader that behaves differently on its first poll than on its second.
-	return &AllSkipRanges{Metadata: &proto.AllSkipRanges{}}
+	return held.ranges.For(logID)
 }
 
 // refreshSkipRangesInBackground re-reads the record without the caller waiting, and reports whether
 // it started one. At most one runs at a time however many readers ask: a burst of parked readers all
-// seeing the same stale entry would otherwise each pay for a read of the same record.
+// seeing the same stale copy would otherwise each pay for a read of the same record.
 func (e *metadataProviderEtcd) refreshSkipRangesInBackground(ctx context.Context) bool {
 	if !e.skipRangeRefreshing.CompareAndSwap(false, true) {
 		return false
 	}
 	// The caller's context belongs to one read and is cancelled when that read returns, so it
-	// cannot carry a refresh that outlives it.
+	// cannot carry a refresh that outlives it. The provider's own timeout still applies.
 	go func() {
 		defer e.skipRangeRefreshing.Store(false)
-		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.requestTimeout)
-		defer cancel()
-		set, err := e.GetAllSkipRanges(readCtx)
+		readCtx := context.WithoutCancel(ctx)
+		ranges, err := e.GetAllSkipRanges(readCtx)
 		if err != nil {
 			// Keep whatever is held: a reader that cannot reach etcd should go on behaving as it
 			// did, rather than start or stop skipping because of a failed read.
@@ -696,52 +756,9 @@ func (e *metadataProviderEtcd) refreshSkipRangesInBackground(ctx context.Context
 		}
 		// The whole value is replaced rather than mutated: one provider hands the same record to
 		// every reader of every log, and nothing may write through it.
-		e.skipRangeCache.Store(&cachedSkipRanges{set: set, readAt: time.Now()})
+		e.skipRangeCache.Store(&cachedSkipRanges{ranges: ranges, readAt: time.Now()})
 	}()
 	return true
-}
-
-func (e *metadataProviderEtcd) UpdateAllSkipRanges(ctx context.Context, set *AllSkipRanges) error {
-	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateAllSkipRanges")
-	defer sp.End()
-	startTime := time.Now()
-	key := e.keyBuilder.AllSkipRangesKey()
-
-	value, err := pb.Marshal(set.Metadata)
-	if err != nil {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Inc()
-		return werr.ErrMetadataEncode.WithCauseErr(err)
-	}
-	if len(value) > MaxAllSkipRangesBytes {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Inc()
-		return werr.ErrMetadataEncode.WithCauseErrMsg(fmt.Sprintf(
-			"skip ranges would be %d bytes, over the %d-byte limit for one record; remove ranges that no longer apply",
-			len(value), MaxAllSkipRangesBytes,
-		))
-	}
-
-	ctx1, cancel := e.getContextWithTimeout(ctx)
-	defer cancel()
-	// One compare covers both cases: etcd reads a missing key's ModRevision as 0, which is
-	// the revision a read of an absent record reports, so a record someone else created in
-	// between fails this the same way a record someone else edited does. Without it a second
-	// writer would drop every range the first one added.
-	txnResp, err := e.client.Txn(ctx1).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", set.Revision)).
-		Then(clientv3.OpPut(key, string(value))).Commit()
-	if err != nil {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrMetadataWrite.WithCauseErr(err)
-	}
-	if !txnResp.Succeeded {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_all_skip_ranges", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrMetadataRevisionInvalid.WithCauseErrMsg("skip ranges changed since they were read")
-	}
-	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.logNs, "update_all_skip_ranges", "success").Inc()
-	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.logNs, "update_all_skip_ranges", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return nil
 }
 
 func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*LogMeta, map[int64]*SegmentMeta, error) {

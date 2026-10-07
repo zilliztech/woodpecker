@@ -31,7 +31,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
-	"github.com/zilliztech/woodpecker/common/skiprange"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
@@ -60,7 +59,7 @@ type LogHandle interface {
 	GetTruncatedRecordId(ctx context.Context) (*LogMessageId, error)
 	// GetSkipRanges returns the entry ranges an operator has declared unreadable for this log,
 	// indexed by segment id. Nil when there are none, which is the normal case.
-	GetSkipRanges(ctx context.Context) skiprange.BySegment
+	GetSkipRanges(ctx context.Context) *proto.LogSkipRanges
 	// CheckAndSetSegmentTruncatedIfNeed checks if the segment needs to be truncated and sets the truncated flag accordingly.
 	CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) error
 	// GetNextSegmentId returns the next new segment ID for the log.
@@ -104,10 +103,6 @@ type logHandleImpl struct {
 	WritableSegmentId int64
 	Metadata          meta.MetadataProvider
 	ClientPool        client.LogStoreClientPool
-	// skipRanges answers what this log's readers should pass over. Injected rather than read from
-	// the configuration: the ranges are an operational record, not a setting, and only readers use
-	// them.
-	skipRanges skiprange.Source
 
 	// rolling policy
 	// atomic so the auditor can read it without the log handle's lock; see
@@ -130,19 +125,9 @@ type logHandleImpl struct {
 	objectStorageClient storageclient.ObjectStorage
 }
 
-// LogHandleOption replaces one of a log handle's collaborators at construction. Options are applied
-// before the handle is returned, so nothing observes it changing.
-type LogHandleOption func(*logHandleImpl)
-
-// WithSkipRangeSource makes this log's readers take their skip ranges from src instead of from
-// woodpecker's own record.
-func WithSkipRangeSource(src skiprange.Source) LogHandleOption {
-	return func(l *logHandleImpl) { l.skipRanges = src }
-}
-
 func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta, meta meta.MetadataProvider, clientPool client.LogStoreClientPool,
 	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
-	objectStorageClient storageclient.ObjectStorage, opts ...LogHandleOption,
+	objectStorageClient storageclient.ObjectStorage,
 ) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds()
@@ -172,14 +157,6 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 		cleanupDone:         make(chan struct{}),
 		selectQuorumFunc:    selectQuorumFunc,
 		objectStorageClient: objectStorageClient,
-	}
-	for _, opt := range opts {
-		opt(l)
-	}
-	if l.skipRanges == nil {
-		// Woodpecker's own record, asked for only when no application supplied a source: one that
-		// manages these itself should not have a metadata-backed source built for it at all.
-		l.skipRanges = meta.SkipRangeSource()
 	}
 	l.LastSegmentId.Store(lastSegmentNo)
 	seedSegmentFrontierMetrics(logNs, logIdStr, segments)
@@ -1216,14 +1193,8 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 
 // GetSkipRanges returns the entry ranges an operator has declared unreadable for this log. A nil
 // result is the normal case and costs one map lookup, so a reader can consult it freely.
-func (l *logHandleImpl) GetSkipRanges(ctx context.Context) skiprange.BySegment {
-	if l.skipRanges == nil {
-		// No source at all reads as nothing declared. A nil interface would panic here instead, and
-		// this runs on the read path: a reader that cannot be told what to skip must keep reading,
-		// not die.
-		return nil
-	}
-	return l.skipRanges.For(ctx, l.Id)
+func (l *logHandleImpl) GetSkipRanges(ctx context.Context) *proto.LogSkipRanges {
+	return l.Metadata.GetLogSkipRanges(ctx, l.Id)
 }
 
 // completeAllSegmentHandlesUnsafe completes all segment handles. Must be called with lock held.

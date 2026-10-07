@@ -7,15 +7,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	pb "google.golang.org/protobuf/proto"
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/client"
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -177,57 +177,59 @@ does not come back for it.`,
 	return cmd
 }
 
-// skipRangeRecord is the stored record plus the revision it was read at, so a write can refuse
-// to overwrite one that moved.
-type skipRangeRecord struct {
-	set      *proto.AllSkipRanges
-	revision int64
+// skipRangeMeta wraps the resolved etcd connection in the metadata provider every reader uses, so the
+// record's key, its compare-and-swap and its size bound have one implementation rather than this
+// command's copy of them. It also hands the provider the same decision a reader makes -- which
+// metadata prefix this cluster is actually on -- because a declaration written under any other prefix
+// is one no reader will ever see.
+//
+// Nothing else in `wp` goes through the provider: the plain "get a key and unmarshal it" reads carry
+// no invariant worth sharing, and this is not the command that changes them.
+func skipRangeMeta(ctx context.Context, cli *clientv3.Client, kb *meta.KeyBuilder) meta.MetadataProvider {
+	cfg := &config.Configuration{}
+	cfg.Woodpecker.Meta.Prefix = kb.Prefix()
+	return meta.NewMetadataProvider(ctx, cli, cfg)
 }
 
-// readSkipRanges reads the one record holding every log's ranges. An absent record is an empty
-// one: most clusters never have any, and reporting that as an error would bury the real signal.
-func readSkipRanges(ctx context.Context, cli *clientv3.Client, kb *meta.KeyBuilder) (*skipRangeRecord, error) {
-	resp, err := cli.Get(ctx, kb.AllSkipRangesKey())
+// readSkipRanges, writeSkipRanges and removeSkipRanges translate the provider's errors into the ones
+// a `wp` caller needs an exit code from. That translation is all they do: `meta` has no business
+// knowing about exit codes, and this command has none reimplementing the record.
+func readSkipRanges(ctx context.Context, provider meta.MetadataProvider, kb *meta.KeyBuilder) (*meta.AllSkipRanges, error) {
+	rec, err := provider.GetAllSkipRanges(ctx)
 	if err != nil {
-		return nil, wperrors.NewNetworkError(fmt.Sprintf("etcd get %s: %v", kb.AllSkipRangesKey(), err))
-	}
-	rec := &skipRangeRecord{set: &proto.AllSkipRanges{}}
-	if len(resp.Kvs) == 0 {
-		return rec, nil
-	}
-	rec.revision = resp.Kvs[0].ModRevision
-	if err := pb.Unmarshal(resp.Kvs[0].Value, rec.set); err != nil {
-		return nil, wperrors.NewStateConflictError(fmt.Sprintf("skip range record is not decodable: %v", err))
+		if werr.ErrMetadataDecode.Is(err) {
+			return nil, wperrors.NewStateConflictError(fmt.Sprintf("skip range record is not decodable: %v", err))
+		}
+		return nil, wperrors.NewNetworkError(fmt.Sprintf("read %s: %v", kb.AllSkipRangesKey(), err))
 	}
 	return rec, nil
 }
 
-// writeSkipRanges stores the record, refusing if it moved since it was read. One key holds every
-// log's ranges, so a blind write would drop whatever another operator added in between.
-func writeSkipRanges(ctx context.Context, cli *clientv3.Client, kb *meta.KeyBuilder, rec *skipRangeRecord) error {
-	value, err := pb.Marshal(rec.set)
-	if err != nil {
-		return wperrors.NewStateConflictError(fmt.Sprintf("encode skip ranges: %v", err))
-	}
-	if len(value) > meta.MaxAllSkipRangesBytes {
-		return wperrors.NewStateConflictError(fmt.Sprintf(
-			"skip ranges would be %d bytes, over the %d-byte limit for one record; remove ranges that no longer apply",
-			len(value), meta.MaxAllSkipRangesBytes,
-		))
-	}
-	key := kb.AllSkipRangesKey()
-	txn, err := cli.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", rec.revision)).
-		Then(clientv3.OpPut(key, string(value))).Commit()
-	if err != nil {
-		return wperrors.NewNetworkError(fmt.Sprintf("etcd put %s: %v", key, err))
-	}
-	if !txn.Succeeded {
+func writeSkipRanges(ctx context.Context, provider meta.MetadataProvider, kb *meta.KeyBuilder, rec *meta.AllSkipRanges) error {
+	return translateSkipRangeWrite(provider.UpdateAllSkipRanges(ctx, rec), kb)
+}
+
+// removeSkipRanges drops the record rather than storing an empty one, so a cluster whose last
+// declaration has been withdrawn looks like one that never had any.
+func removeSkipRanges(ctx context.Context, provider meta.MetadataProvider, kb *meta.KeyBuilder, rec *meta.AllSkipRanges) error {
+	return translateSkipRangeWrite(provider.RemoveAllSkipRanges(ctx, rec), kb)
+}
+
+func translateSkipRangeWrite(err error, kb *meta.KeyBuilder) error {
+	switch {
+	case err == nil:
+		return nil
+	case werr.ErrMetadataRevisionInvalid.Is(err):
 		return wperrors.NewStateConflictError(
 			"the skip range record changed while this command was running; re-run it",
 		)
+	case werr.ErrMetadataEncode.Is(err):
+		// Over the size limit, or unencodable: either way the operator has something to remove, and
+		// the message from meta already names the sizes.
+		return wperrors.NewStateConflictError(err.Error())
+	default:
+		return wperrors.NewNetworkError(fmt.Sprintf("write %s: %v", kb.AllSkipRangesKey(), err))
 	}
-	return nil
 }
 
 // segmentRangesOf returns the ranges declared for one segment, and whether the record holds any.
@@ -264,20 +266,6 @@ func normaliseRanges(ranges []*proto.SkipRange) []*proto.SkipRange {
 
 // joinReasons keeps both accounts within the field's budget, so repeated edits cannot grow the
 // record without bound.
-// truncateReason keeps a reason within the field's budget without cutting a character in half.
-// protobuf refuses to marshal a string field that is not valid UTF-8, so a byte-count cut through a
-// multi-byte character would fail the write after the operator had already confirmed it.
-func truncateReason(s string) string {
-	if len(s) <= meta.MaxSkipRangeReasonBytes {
-		return s
-	}
-	cut := s[:meta.MaxSkipRangeReasonBytes]
-	for len(cut) > 0 && !utf8.ValidString(cut) {
-		cut = cut[:len(cut)-1]
-	}
-	return cut
-}
-
 func joinReasons(a, b string) string {
 	if a == b || b == "" {
 		return a
@@ -285,7 +273,7 @@ func joinReasons(a, b string) string {
 	if a == "" {
 		return b
 	}
-	return truncateReason(a + "; " + b)
+	return meta.TruncateSkipRangeReason(a + "; " + b)
 }
 
 func putSegmentRanges(set *proto.AllSkipRanges, logID, segmentID int64, ranges []*proto.SkipRange) {
@@ -318,7 +306,7 @@ func runSkipRangeList(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuil
 	ctx, cancel := metaCtx()
 	defer cancel()
 
-	rec, err := readSkipRanges(ctx, cli, kb)
+	rec, err := readSkipRanges(ctx, skipRangeMeta(ctx, cli, kb), kb)
 	if err != nil {
 		return err
 	}
@@ -344,7 +332,7 @@ func runSkipRangeList(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuil
 		Reason    string `json:"reason"`
 	}
 	rows := make([]row, 0)
-	for logID, byLog := range rec.set.GetByLogId() {
+	for logID, byLog := range rec.Metadata.GetByLogId() {
 		if wanted >= 0 && logID != wanted {
 			continue
 		}
@@ -482,11 +470,12 @@ func runSkipRangeAdd(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 	metaWriteCtx, cancelWrite := metaCtx()
 	defer cancelWrite()
 
-	rec, err := readSkipRanges(metaWriteCtx, cli, kb)
+	provider := skipRangeMeta(metaWriteCtx, cli, kb)
+	rec, err := readSkipRanges(metaWriteCtx, provider, kb)
 	if err != nil {
 		return err
 	}
-	existing := segmentRangesOf(rec.set, logMeta.LogId, req.segmentID)
+	existing := segmentRangesOf(rec.Metadata, logMeta.LogId, req.segmentID)
 
 	// What is newly given up, computed before the merge: normalising rewrites the stored ranges in
 	// place, so a preview taken afterwards would measure the new range against itself and report
@@ -499,7 +488,7 @@ func runSkipRangeAdd(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 
 	proposed := normaliseRanges(append(append([]*proto.SkipRange(nil), existing...), &proto.SkipRange{
 		FromEntryId: req.from, ToEntryId: req.to,
-		CreationTimestamp: uint64(time.Now().Unix()), Reason: truncateReason(req.reason),
+		CreationTimestamp: uint64(time.Now().Unix()), Reason: meta.TruncateSkipRangeReason(req.reason),
 	}))
 
 	fmt.Fprintf(errOut, "Declaring log %s (id %d) segment %d entries %s unreadable.\n",
@@ -513,8 +502,8 @@ func runSkipRangeAdd(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 		return wperrors.NewUserAbortError()
 	}
 
-	putSegmentRanges(rec.set, logMeta.LogId, req.segmentID, proposed)
-	if err := writeSkipRanges(metaWriteCtx, cli, kb, rec); err != nil {
+	putSegmentRanges(rec.Metadata, logMeta.LogId, req.segmentID, proposed)
+	if err := writeSkipRanges(metaWriteCtx, provider, kb, rec); err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Declared: log %d segment %d now skips %s\n",
@@ -541,11 +530,12 @@ func runSkipRangeRemove(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBu
 		}
 		logID = logMeta.LogId
 	}
-	rec, err := readSkipRanges(ctx, cli, kb)
+	provider := skipRangeMeta(ctx, cli, kb)
+	rec, err := readSkipRanges(ctx, provider, kb)
 	if err != nil {
 		return err
 	}
-	existing := segmentRangesOf(rec.set, logID, segmentID)
+	existing := segmentRangesOf(rec.Metadata, logID, segmentID)
 	if len(existing) == 0 {
 		return wperrors.NewTargetNotFoundError(fmt.Sprintf(
 			"log %d segment %d has no declared skip range", logID, segmentID,
@@ -573,9 +563,19 @@ func runSkipRangeRemove(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBu
 		))
 	}
 
-	putSegmentRanges(rec.set, logID, segmentID, normaliseRanges(kept))
-	if err := writeSkipRanges(ctx, cli, kb, rec); err != nil {
-		return err
+	putSegmentRanges(rec.Metadata, logID, segmentID, normaliseRanges(kept))
+	var writeErr error
+	if len(rec.Metadata.GetByLogId()) == 0 {
+		// Dropping the last declared range drops the record rather than storing an empty one, so a
+		// cluster whose declarations have all been withdrawn looks like one that never had any. The
+		// write and the delete are alternatives, not a sequence: writing first would move the record's
+		// revision and the delete's compare-and-swap would refuse on the revision it was read at.
+		writeErr = removeSkipRanges(ctx, provider, kb, rec)
+	} else {
+		writeErr = writeSkipRanges(ctx, provider, kb, rec)
+	}
+	if writeErr != nil {
+		return writeErr
 	}
 	w := cmd.OutOrStdout()
 	if len(kept) == 0 {

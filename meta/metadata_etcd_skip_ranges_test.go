@@ -11,7 +11,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
-	"github.com/zilliztech/woodpecker/common/skiprange"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -49,7 +48,8 @@ func rangesFor(logID, segID int64, from, to int64) *proto.AllSkipRanges {
 func testSkipRangesAbsentRecordReadsAsEmpty(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 
-	set, err := provider.GetAllSkipRanges(context.Background())
+	e := etcdProviderOf(t, provider)
+	set, err := ReadSkipRangeRecord(context.Background(), e.client, e.keyBuilder)
 
 	require.NoError(t, err)
 	require.NotNil(t, set)
@@ -85,12 +85,12 @@ func testSkipRangesRoundTripsByLogAndSegment(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 	ctx := context.Background()
 
-	read, err := provider.GetAllSkipRanges(ctx)
+	read, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
 	read.Metadata = rangesFor(7, 3, 10, 19)
-	require.NoError(t, provider.UpdateAllSkipRanges(ctx, read))
+	require.NoError(t, WriteSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder, read))
 
-	back, err := provider.GetAllSkipRanges(ctx)
+	back, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
 	seg := back.For(7).GetBySegmentId()[3]
 	require.NotNil(t, seg)
@@ -113,7 +113,7 @@ func testSkipRangesUndecodableRecordIsAnError(t *testing.T) {
 	_, err := etcdProvider.client.Put(ctx, etcdProvider.keyBuilder.AllSkipRangesKey(), "not a proto")
 	require.NoError(t, err)
 
-	_, err = provider.GetAllSkipRanges(ctx)
+	_, err = ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.Error(t, err, "a record that cannot be parsed is not a record with nothing in it")
 }
 
@@ -133,15 +133,15 @@ func testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd(t *testing.T) {
 
 	// etcd holds nothing; the stale entry holds a range. They disagree on purpose.
 	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
-		set:    &AllSkipRanges{Metadata: rangesFor(7, 3, 10, 19)},
+		ranges: &AllSkipRanges{Metadata: rangesFor(7, 3, 10, 19)},
 		readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
 	})
 
-	require.NotNil(t, etcdProviderOf(t, provider).getAllSkipRangesCached(ctx).For(7),
+	require.NotNil(t, etcdProviderOf(t, provider).GetLogSkipRanges(ctx, 7),
 		"the caller is answered from the cache, so it cannot have waited for etcd")
 
 	// And the refresh it started does land, so the staleness is bounded rather than permanent.
-	require.Eventually(t, func() bool { return etcdProviderOf(t, provider).getAllSkipRangesCached(ctx).For(7) == nil },
+	require.Eventually(t, func() bool { return etcdProviderOf(t, provider).GetLogSkipRanges(ctx, 7) == nil },
 		2*time.Second, 20*time.Millisecond, "the background refresh replaces what was held")
 }
 
@@ -167,17 +167,18 @@ func testSkipRangesRefreshIntervalComesFromTheConfiguration(t *testing.T) {
 	require.Equal(t, config.DefaultSkipRangeRefreshInterval, defaulted.skipRangeRefreshInterval)
 }
 
-// testSkipRangeSourceConvertsTheRecord covers the boundary between the stored record and the shape a
-// reader consults. The conversion lives on this side because the proto is this layer's business, and
-// it has to answer nil at every level: the record is absent on almost every cluster.
-func testSkipRangeSourceConvertsTheRecord(t *testing.T) {
+// testGetLogSkipRangesReturnsOneLogsRanges covers the boundary between the stored record and the
+// shape a reader consults: one log's ranges come back keyed by segment, and nil means nothing
+// declared for that log. It also pins the nil answers at every level, because the record is absent
+// on almost every cluster.
+func testGetLogSkipRangesReturnsOneLogsRanges(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 	ctx := context.Background()
-	src := provider.SkipRangeSource()
+	e := etcdProviderOf(t, provider)
 
-	require.Nil(t, src.For(ctx, 7), "no record at all")
+	require.Nil(t, e.GetLogSkipRanges(ctx, 7), "no record at all")
 
-	write, err := provider.GetAllSkipRanges(ctx)
+	write, err := ReadSkipRangeRecord(ctx, e.client, e.keyBuilder)
 	require.NoError(t, err)
 	write.Metadata = &proto.AllSkipRanges{ByLogId: map[int64]*proto.LogSkipRanges{
 		7: {BySegmentId: map[int64]*proto.SegmentSkipRanges{
@@ -185,23 +186,23 @@ func testSkipRangeSourceConvertsTheRecord(t *testing.T) {
 			4: {},
 		}},
 	}}
-	require.NoError(t, provider.UpdateAllSkipRanges(ctx, write))
+	require.NoError(t, WriteSkipRangeRecord(ctx, e.client, e.keyBuilder, write))
 
 	// The first call above primed the cache with the pre-write record, and the window is longer
 	// than this test should wait, so age the entry rather than sleeping out the interval.
-	etcdProvider := etcdProviderOf(t, provider)
-	if held := etcdProvider.skipRangeCache.Load(); held != nil {
-		etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
-			set: held.set, readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
+	if held := e.skipRangeCache.Load(); held != nil {
+		e.skipRangeCache.Store(&cachedSkipRanges{
+			ranges: held.ranges, readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
 		})
 	}
-	require.Eventually(t, func() bool { return src.For(ctx, 7) != nil },
+	require.Eventually(t, func() bool { return e.GetLogSkipRanges(ctx, 7) != nil },
 		2*time.Second, 20*time.Millisecond, "the background refresh picks the record up")
 
-	held := src.For(ctx, 7)
-	require.Equal(t, []skiprange.Span{{FromEntryID: 10, ToEntryID: 19}}, held[3])
-	require.Empty(t, held[4], "a segment listed with no ranges declares nothing")
-	require.Nil(t, src.For(ctx, 8), "a log the record does not mention")
+	held := e.GetLogSkipRanges(ctx, 7)
+	require.Equal(t, []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19, Reason: "bad disk"}},
+		held.GetBySegmentId()[3].GetRanges())
+	require.Empty(t, held.GetBySegmentId()[4].GetRanges(), "a segment listed with no ranges declares nothing")
+	require.Nil(t, e.GetLogSkipRanges(ctx, 8), "a log the record does not mention")
 }
 
 // testSkipRangesRefreshIsSingleFlighted covers what makes "answer from the cache" cheap. Every
@@ -229,21 +230,23 @@ func testSkipRangesCachedReadHoldsForItsWindow(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 	ctx := context.Background()
 
+	etcdProvider := etcdProviderOf(t, provider)
+
 	// Prime the cache and let the first refresh land.
-	etcdProviderOf(t, provider).getAllSkipRangesCached(ctx)
+	etcdProvider.GetLogSkipRanges(ctx, 7)
 	require.Eventually(t, func() bool {
-		return etcdProviderOf(t, provider).getAllSkipRangesCached(ctx) != nil
+		return etcdProvider.skipRangeCache.Load() != nil
 	}, 2*time.Second, 20*time.Millisecond)
 
 	// Write a range straight through the uncached path, so only the cache can hide it.
-	write, err := provider.GetAllSkipRanges(ctx)
+	write, err := ReadSkipRangeRecord(ctx, etcdProvider.client, etcdProvider.keyBuilder)
 	require.NoError(t, err)
 	write.Metadata = rangesFor(7, 3, 10, 19)
-	require.NoError(t, provider.UpdateAllSkipRanges(ctx, write))
+	require.NoError(t, WriteSkipRangeRecord(ctx, etcdProvider.client, etcdProvider.keyBuilder, write))
 
-	require.Nil(t, etcdProviderOf(t, provider).getAllSkipRangesCached(ctx).For(7),
+	require.Nil(t, etcdProvider.GetLogSkipRanges(ctx, 7),
 		"within the window the reader keeps the answer it already had")
-	uncached, err := provider.GetAllSkipRanges(ctx)
+	uncached, err := ReadSkipRangeRecord(ctx, etcdProvider.client, etcdProvider.keyBuilder)
 	require.NoError(t, err)
 	require.NotNil(t, uncached.For(7), "and the uncached read sees it, so the write really did land")
 }
@@ -256,11 +259,11 @@ func testSkipRangesCachedReadSurvivesAnUnreadableRecord(t *testing.T) {
 	ctx := context.Background()
 	etcdProvider := etcdProviderOf(t, provider)
 
-	write, err := provider.GetAllSkipRanges(ctx)
+	write, err := ReadSkipRangeRecord(ctx, etcdProvider.client, etcdProvider.keyBuilder)
 	require.NoError(t, err)
 	write.Metadata = rangesFor(7, 3, 10, 19)
-	require.NoError(t, provider.UpdateAllSkipRanges(ctx, write))
-	require.Eventually(t, func() bool { return etcdProviderOf(t, provider).getAllSkipRangesCached(ctx).For(7) != nil },
+	require.NoError(t, WriteSkipRangeRecord(ctx, etcdProvider.client, etcdProvider.keyBuilder, write))
+	require.Eventually(t, func() bool { return etcdProvider.GetLogSkipRanges(ctx, 7) != nil },
 		2*time.Second, 20*time.Millisecond, "the background refresh picks the range up")
 
 	// Make the record unparseable and age the entry, so the next refresh fails.
@@ -269,13 +272,13 @@ func testSkipRangesCachedReadSurvivesAnUnreadableRecord(t *testing.T) {
 	held := etcdProvider.skipRangeCache.Load()
 	require.NotNil(t, held)
 	etcdProvider.skipRangeCache.Store(&cachedSkipRanges{
-		set: held.set, readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
+		ranges: held.ranges, readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
 	})
 
-	require.NotNil(t, etcdProviderOf(t, provider).getAllSkipRangesCached(ctx).For(7),
+	require.NotNil(t, etcdProvider.GetLogSkipRanges(ctx, 7),
 		"a refresh that fails leaves the reader with what it had")
 	time.Sleep(200 * time.Millisecond) // let the failing refresh finish
-	require.NotNil(t, etcdProviderOf(t, provider).getAllSkipRangesCached(ctx).For(7),
+	require.NotNil(t, etcdProvider.GetLogSkipRanges(ctx, 7),
 		"and it stays that way rather than being cleared")
 }
 
@@ -286,24 +289,24 @@ func testSkipRangesStaleWriteIsRefused(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 	ctx := context.Background()
 
-	first, err := provider.GetAllSkipRanges(ctx)
+	first, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
-	stale, err := provider.GetAllSkipRanges(ctx)
+	stale, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
 
 	first.Metadata = rangesFor(7, 3, 10, 19)
-	require.NoError(t, provider.UpdateAllSkipRanges(ctx, first))
+	require.NoError(t, WriteSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder, first))
 
 	stale.Metadata = rangesFor(8, 1, 0, 5)
-	require.Error(t, provider.UpdateAllSkipRanges(ctx, stale), "the record moved since it was read")
+	require.Error(t, WriteSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder, stale), "the record moved since it was read")
 
 	// Re-reading and writing again succeeds, and keeps what the first writer added.
-	fresh, err := provider.GetAllSkipRanges(ctx)
+	fresh, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
 	fresh.Metadata.ByLogId[8] = rangesFor(8, 1, 0, 5).ByLogId[8]
-	require.NoError(t, provider.UpdateAllSkipRanges(ctx, fresh))
+	require.NoError(t, WriteSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder, fresh))
 
-	back, err := provider.GetAllSkipRanges(ctx)
+	back, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
 	require.NotNil(t, back.For(7), "the first writer's ranges survived")
 	require.NotNil(t, back.For(8))
@@ -316,18 +319,18 @@ func testSkipRangesFirstWriteRefusesIfSomeoneElseCreatedIt(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 	ctx := context.Background()
 
-	a, err := provider.GetAllSkipRanges(ctx)
+	a, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
-	b, err := provider.GetAllSkipRanges(ctx)
+	b, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
 	require.Zero(t, a.Revision)
 	require.Zero(t, b.Revision)
 
 	a.Metadata = rangesFor(7, 3, 10, 19)
-	require.NoError(t, provider.UpdateAllSkipRanges(ctx, a))
+	require.NoError(t, WriteSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder, a))
 
 	b.Metadata = rangesFor(8, 1, 0, 5)
-	require.Error(t, provider.UpdateAllSkipRanges(ctx, b),
+	require.Error(t, WriteSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder, b),
 		"the record exists now, so this write is no longer a creation")
 }
 
@@ -338,7 +341,7 @@ func testSkipRangesOversizedRecordIsRefused(t *testing.T) {
 	provider := setupSkipRangeTest(t)
 	ctx := context.Background()
 
-	set, err := provider.GetAllSkipRanges(ctx)
+	set, err := ReadSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder)
 	require.NoError(t, err)
 	set.Metadata = &proto.AllSkipRanges{ByLogId: map[int64]*proto.LogSkipRanges{}}
 	huge := strings.Repeat("x", MaxSkipRangeReasonBytes)
@@ -350,7 +353,7 @@ func testSkipRangesOversizedRecordIsRefused(t *testing.T) {
 		}
 	}
 
-	err = provider.UpdateAllSkipRanges(ctx, set)
+	err = WriteSkipRangeRecord(ctx, etcdProviderOf(t, provider).client, etcdProviderOf(t, provider).keyBuilder, set)
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "over the")

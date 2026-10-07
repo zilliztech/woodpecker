@@ -621,7 +621,6 @@ func TestDetectAndStoreConditionWriteCapability_EnableModeUnexpectedEtcdErrorInR
 func newTestEmbedClient(t *testing.T) (*woodpeckerEmbedClient, *mocks_meta.MetadataProvider, *mocks_logstore_client.LogStoreClientPool) {
 	mockMeta := mocks_meta.NewMetadataProvider(t)
 	// Opening a log asks the provider for a skip-range source; embed mode never supplies one.
-	mockMeta.EXPECT().SkipRangeSource().Return(nil).Maybe()
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
