@@ -159,7 +159,7 @@ func TestOpenLogUnsafe_Success(t *testing.T) {
 	}
 
 	// The handle asks the provider for a skip-range source unless one was passed in.
-	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil, nil)
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, handle)
 }
@@ -192,7 +192,7 @@ func TestOpenLogUnsafe_SeedsTruncationFrontier(t *testing.T) {
 	mockMeta.EXPECT().OpenLog(mock.Anything, "test-log").Return(logMeta, map[int64]*meta.SegmentMeta{}, nil).Once()
 
 	// The handle asks the provider for a skip-range source unless one was passed in.
-	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, nil, nil, nil)
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, handle)
 	t.Cleanup(func() {
@@ -218,7 +218,7 @@ func TestOpenLogUnsafe_Error(t *testing.T) {
 	}
 
 	// The handle asks the provider for a skip-range source unless one was passed in.
-	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil, nil)
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
 	assert.Error(t, err)
 	assert.Nil(t, handle)
 	assert.Equal(t, openErr, err)
