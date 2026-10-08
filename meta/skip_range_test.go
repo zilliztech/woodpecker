@@ -17,7 +17,9 @@
 package meta
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -73,4 +75,35 @@ func TestAllSkipRangesFor(t *testing.T) {
 	}}}
 	require.NotNil(t, held.For(7))
 	require.Nil(t, held.For(8), "another log")
+}
+
+// TestTruncateSkipRangeReason pins the UTF-8-safe cut: protobuf refuses to marshal a string that is
+// not valid UTF-8, so a byte-count cut through a multi-byte rune fails the write after an operator
+// has already confirmed it. Short reasons pass through, over-budget ones are cut, and a cut that
+// lands mid-rune backs off to the last whole rune.
+func TestTruncateSkipRangeReason(t *testing.T) {
+	// Under budget: unchanged.
+	require.Equal(t, "short", TruncateSkipRangeReason("short"))
+
+	// Exactly at the budget: unchanged.
+	exact := string(make([]byte, MaxSkipRangeReasonBytes))
+	require.Len(t, exact, MaxSkipRangeReasonBytes)
+	require.Equal(t, exact, TruncateSkipRangeReason(exact))
+
+	// Over budget by ASCII: cut to the budget, still valid UTF-8.
+	longASCII := string(make([]byte, MaxSkipRangeReasonBytes+20))
+	got := TruncateSkipRangeReason(longASCII)
+	require.Len(t, got, MaxSkipRangeReasonBytes)
+
+	// Over budget with a multi-byte rune straddling the cut: back off to a whole-rune boundary.
+	// '中' is 3 bytes; fill so the byte budget ends one byte into a rune, so a naive cut would split it.
+	prefix := make([]byte, MaxSkipRangeReasonBytes-2)
+	for i := range prefix {
+		prefix[i] = 'x'
+	}
+	over := string(prefix) + "中文"
+	got = TruncateSkipRangeReason(over)
+	require.LessOrEqual(t, len(got), MaxSkipRangeReasonBytes)
+	require.True(t, utf8.ValidString(got), "the cut must not split a rune")
+	require.True(t, strings.HasPrefix(got, string(prefix)), "the whole prefix before the cut is kept")
 }

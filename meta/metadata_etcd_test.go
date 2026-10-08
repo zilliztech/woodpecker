@@ -102,6 +102,8 @@ func TestAll(t *testing.T) {
 	t.Run("test skip ranges: a stale write is refused", testSkipRangesStaleWriteIsRefused)
 	t.Run("test skip ranges: a first write refuses if someone else created it", testSkipRangesFirstWriteRefusesIfSomeoneElseCreatedIt)
 	t.Run("test skip ranges: an oversized record is refused", testSkipRangesOversizedRecordIsRefused)
+	t.Run("test skip ranges: remove drops the record", testSkipRangesRemoveDropsTheRecord)
+	t.Run("test skip ranges: a stale remove is refused", testSkipRangesRemoveStaleIsRefused)
 	t.Run("test create log and open", testCreateLogAndOpen)
 	t.Run("test check exists", testCheckExists)
 	t.Run("test store quorum info", testStoreQuorumInfo)

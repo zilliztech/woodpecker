@@ -335,6 +335,56 @@ func testSkipRangesFirstWriteRefusesIfSomeoneElseCreatedIt(t *testing.T) {
 		"the record exists now, so this write is no longer a creation")
 }
 
+// testSkipRangesRemoveDropsTheRecord covers the delete path, which is its own transaction shape:
+// the compare-and-swap on revision must hold for an OpDelete exactly as it does for an OpPut, and a
+// successful delete leaves the cluster looking like one that never declared anything.
+func testSkipRangesRemoveDropsTheRecord(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+	e := etcdProviderOf(t, provider)
+
+	rec, err := ReadSkipRangeRecord(ctx, e.client, e.keyBuilder)
+	require.NoError(t, err)
+	rec.Metadata = rangesFor(7, 3, 10, 19)
+	require.NoError(t, WriteSkipRangeRecord(ctx, e.client, e.keyBuilder, rec))
+
+	// A remove compares against the revision the record was read at, so read the record back after
+	// the write to carry the revision that write produced.
+	current, err := ReadSkipRangeRecord(ctx, e.client, e.keyBuilder)
+	require.NoError(t, err)
+
+	// RemoveAllSkipRanges goes through the provider, so it carries the same revision compare.
+	require.NoError(t, provider.RemoveAllSkipRanges(ctx, current))
+
+	back, err := ReadSkipRangeRecord(ctx, e.client, e.keyBuilder)
+	require.NoError(t, err)
+	require.Empty(t, back.Metadata.GetByLogId(), "the record is gone, not left empty")
+	require.Zero(t, back.Revision, "an absent record reads as revision zero again")
+}
+
+// testSkipRangesRemoveStaleIsRefused covers the same compare-and-swap on the delete side: dropping
+// the record after it moved must refuse, so two operators cannot delete one another's declaration.
+func testSkipRangesRemoveStaleIsRefused(t *testing.T) {
+	provider := setupSkipRangeTest(t)
+	ctx := context.Background()
+	e := etcdProviderOf(t, provider)
+
+	first, err := ReadSkipRangeRecord(ctx, e.client, e.keyBuilder)
+	require.NoError(t, err)
+	stale, err := ReadSkipRangeRecord(ctx, e.client, e.keyBuilder)
+	require.NoError(t, err)
+
+	first.Metadata = rangesFor(7, 3, 10, 19)
+	require.NoError(t, WriteSkipRangeRecord(ctx, e.client, e.keyBuilder, first))
+
+	// The record moved since `stale` was read, so a remove at `stale`'s revision must refuse.
+	require.Error(t, provider.RemoveAllSkipRanges(ctx, stale))
+
+	back, err := ReadSkipRangeRecord(ctx, e.client, e.keyBuilder)
+	require.NoError(t, err)
+	require.NotNil(t, back.For(7), "the concurrent declaration survived the refused delete")
+}
+
 // testSkipRangesOversizedRecordIsRefused bounds the one record. reason is free text, so
 // a count limit would not hold; the refusal names the size so an operator knows what to
 // remove rather than guessing.
