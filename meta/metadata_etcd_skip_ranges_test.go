@@ -26,7 +26,7 @@ func setupSkipRangeTest(t *testing.T) MetadataProvider {
 }
 
 // etcdProviderOf reaches the concrete provider for the few assertions that are about its internals
-// -- the cache behind the skip-range source, which the interface deliberately does not expose.
+// -- the skip-range cache, which the interface deliberately does not expose.
 func etcdProviderOf(t *testing.T, p MetadataProvider) *metadataProviderEtcd {
 	t.Helper()
 	e, ok := p.(*metadataProviderEtcd)
@@ -146,9 +146,10 @@ func testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd(t *testing.T) {
 }
 
 // testSkipRangesRefreshIntervalComesFromTheConfiguration covers the wiring between the knob and the
-// provider. How long a reader keeps acting on a withdrawn range is a property of the deployment, so
-// a provider that quietly used its own number would make the configuration a decoration -- and
-// nothing a reader does would reveal it, because every other test ages the entry past both values.
+// provider. How often the record is re-read once a reader starts asking is a property of the
+// deployment, so a provider that quietly used its own number would make the configuration a
+// decoration -- and nothing a reader does would reveal it, because every other test ages the entry
+// past both values.
 func testSkipRangesRefreshIntervalComesFromTheConfiguration(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
 	require.NoError(t, err)

@@ -68,7 +68,8 @@ woodpecker:
     # How often a client re-reads the operator-declared skip ranges (wp log skip-range).
     # A reader is always answered from what the client already holds; an elapsed interval only
     # starts a refresh behind it, so this trades staleness against etcd traffic and never makes a
-    # read slower. It bounds how long a reader keeps acting on a withdrawn range. Default 10.
+    # read slower. It bounds how often refreshes happen once a stalled reader starts asking, not the
+    # absolute age of the cached copy. Default 10.
     skipRangeRefreshInterval: 10
     # Advanced Quorum Configuration for Service storage backend mode
     # This configuration supports complex node selection strategies and buffer pools

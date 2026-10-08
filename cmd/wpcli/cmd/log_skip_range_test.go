@@ -649,9 +649,8 @@ func TestSkipRangeRemove_NonOverlappingWithdrawalIsNotFound(t *testing.T) {
 }
 
 // TestSkipRangeList_NamesItsSourceAndListsOrphans covers two things a listing has to say. The
-// source matters because a host application can supply ranges of its own at runtime and those
-// never reach this record. The orphan matters because a deleted log's ranges stay behind, and
-// listing is how an operator finds them.
+// source matters because a caller has to know which record was read. The orphan matters because a
+// deleted log's ranges stay behind, and listing is how an operator finds them.
 func TestSkipRangeList_NamesItsSourceAndListsOrphans(t *testing.T) {
 	cli := startTestEtcd(t)
 	kb := meta.NewKeyBuilder("wptest")

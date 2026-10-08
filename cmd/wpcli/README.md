@@ -153,11 +153,6 @@ read slower. How soon a *newly* declared range takes effect is set by the reader
 instead: the ranges are asked for only while the reader is stalled, and a cold cache answers empty
 on that ask and only starts the refresh, so a lone reader sees a new range on its following tick.
 
-An embedding application can supply the ranges itself instead, by passing its own source to
-`woodpecker.NewClient`; nothing supplies one by default. When one is supplied the client never reads
-this record at all, so `wp log skip-range list` is not the source those readers are using — which is
-why the listing names the source it read.
-
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
 - `wp segment inspect <logName> <segmentId>` — walk the blocks on every replica: which entries are damaged where, whether the damage is bounded, and what a skip would cost

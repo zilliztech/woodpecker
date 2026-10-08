@@ -116,8 +116,9 @@ type metadataProviderEtcd struct {
 	skipRangeCache      atomic.Pointer[cachedSkipRanges]
 	skipRangeRefreshing atomic.Bool
 	// skipRangeRefreshInterval is how stale the held record may be before a request starts a
-	// refresh behind the caller. From the client configuration, since how long a reader keeps
-	// acting on a withdrawn range is a property of the deployment, not of this package.
+	// refresh behind the caller. It bounds how often refreshes happen once readers start asking,
+	// not the absolute age of the held copy. From the client configuration, since how often a
+	// reader re-reads the record is a property of the deployment, not of this package.
 	skipRangeRefreshInterval time.Duration
 
 	// instanceMu serializes the two operations that write instance-level keys

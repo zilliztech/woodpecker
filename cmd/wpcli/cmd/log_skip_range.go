@@ -367,8 +367,8 @@ func runSkipRangeList(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuil
 		return output.RenderJSON(w, payload)
 	}
 
-	// Naming the source matters: a host application can supply ranges of its own at runtime,
-	// and those never reach this record, so a caller has to know which one was read.
+	// Naming the source matters: the ranges live in this one record, and a caller has to know
+	// which record was read.
 	fmt.Fprintf(w, "Skip ranges declared in %s\n\n", kb.AllSkipRangesKey())
 	if len(rows) == 0 {
 		fmt.Fprintln(w, "None declared.")

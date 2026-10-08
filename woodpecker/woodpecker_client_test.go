@@ -43,7 +43,7 @@ import (
 // newTestWoodpeckerClient creates a woodpeckerClient with mocks for testing.
 func newTestWoodpeckerClient(t *testing.T) (*woodpeckerClient, *mocks_meta.MetadataProvider, *mocks_logstore_client.LogStoreClientPool, *mocks_quorum.QuorumDiscovery) {
 	mockMeta := mocks_meta.NewMetadataProvider(t)
-	// Opening a log asks the provider for a skip-range source unless the client was given one.
+	// Opening a log asks the provider for the skip ranges.
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockQuorum := mocks_quorum.NewQuorumDiscovery(t)
 	cfg := &config.Configuration{
@@ -158,7 +158,7 @@ func TestOpenLogUnsafe_Success(t *testing.T) {
 		return &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"localhost:8888"}}, nil
 	}
 
-	// The handle asks the provider for a skip-range source unless one was passed in.
+	// The handle asks the provider for the skip ranges.
 	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, handle)
@@ -191,7 +191,7 @@ func TestOpenLogUnsafe_SeedsTruncationFrontier(t *testing.T) {
 	}
 	mockMeta.EXPECT().OpenLog(mock.Anything, "test-log").Return(logMeta, map[int64]*meta.SegmentMeta{}, nil).Once()
 
-	// The handle asks the provider for a skip-range source unless one was passed in.
+	// The handle asks the provider for the skip ranges.
 	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, handle)
@@ -217,7 +217,7 @@ func TestOpenLogUnsafe_Error(t *testing.T) {
 		return nil, nil
 	}
 
-	// The handle asks the provider for a skip-range source unless one was passed in.
+	// The handle asks the provider for the skip ranges.
 	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
 	assert.Error(t, err)
 	assert.Nil(t, handle)

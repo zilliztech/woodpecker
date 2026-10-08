@@ -89,7 +89,7 @@ func TestNewLogHandle_SeedsSegmentFrontierMetrics(t *testing.T) {
 	}
 
 	mockMeta := mocks_meta.NewMetadataProvider(t)
-	// NewLogHandle asks the provider for a skip-range source when no option supplies one.
+	// NewLogHandle asks the provider for the skip ranges.
 	logHandle := NewLogHandle("frontier-seed-log", logID, segments, mockMeta, nil, cfg, nil, nil).(*logHandleImpl)
 	t.Cleanup(func() {
 		logHandle.stopBackgroundCleanup()

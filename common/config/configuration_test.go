@@ -1497,8 +1497,9 @@ woodpecker:
 }
 
 // TestSkipRangeRefreshInterval covers the one knob the skip-range mechanism exposes. Its default
-// matters because it is what an operator waits through twice: once before a declared range takes
-// effect, and once more before a withdrawn one stops being acted on.
+// matters because it sets how often the record is re-read once a stalled reader starts asking: a
+// newly declared range takes effect on a reader's following report tick, and a withdrawn one stops
+// being acted on once a later stall re-reads the record.
 func TestSkipRangeRefreshInterval(t *testing.T) {
 	cfg, err := NewConfiguration()
 	require.NoError(t, err)
