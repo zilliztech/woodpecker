@@ -349,7 +349,8 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 		s.ClientPool,
 		s,
 		s.quorumInfo,
-		s.nodeScopes)
+		s.nodeScopes,
+	)
 	return pendingAppendOp
 }
 
@@ -1524,7 +1525,8 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 			zap.Int("requiredAckQuorum", ackQuorum))
 		return werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
 			fmt.Sprintf("insufficient finalized complete responses: finalized=%d qualified=%d required=%d lastError=%v",
-				len(finalizedResults), len(qualifiedResults), ackQuorum, lastError))
+				len(finalizedResults), len(qualifiedResults), ackQuorum, lastError),
+		)
 	}
 
 	if len(qualifiedResults) < ackQuorum {
@@ -1770,14 +1772,16 @@ func (s *segmentHandleImpl) resolveFenceLAC(results []int64, writeQuorum, ackQuo
 	// its way through a malformed one.
 	if writeQuorum < ackQuorum || ackQuorum <= 0 {
 		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
-			fmt.Sprintf("inconsistent quorum for fence resolution: writeQuorum %d, ackQuorum %d", writeQuorum, ackQuorum))
+			fmt.Sprintf("inconsistent quorum for fence resolution: writeQuorum %d, ackQuorum %d", writeQuorum, ackQuorum),
+		)
 	}
 
 	missingTolerated := writeQuorum - ackQuorum
 	if len(results) <= missingTolerated {
 		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
 			fmt.Sprintf("insufficient successful fence responses: got %d, need more than %d (writeQuorum %d - ackQuorum %d)",
-				len(results), missingTolerated, writeQuorum, ackQuorum))
+				len(results), missingTolerated, writeQuorum, ackQuorum),
+		)
 	}
 
 	// Sort a copy in ascending order, leaving the caller's slice untouched.

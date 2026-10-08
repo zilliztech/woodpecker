@@ -284,7 +284,8 @@ func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName 
 	if logMeta.Metadata.GetTruncatedSegmentId() >= 0 {
 		metrics.SetTruncationFrontier(logNs, logIdStr, logMeta.Metadata.GetTruncatedSegmentId(), logMeta.Metadata.GetTruncatedEntryId())
 	}
-	newLogHandle := log.NewLogHandle(logName, logID, segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc, objectStorageClient)
+	newLogHandle := log.NewLogHandle(logName, logID, segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc,
+		objectStorageClient)
 	metrics.WpLogNameIdMapping.WithLabelValues(logNs, logName).Set(float64(logID))
 	return newLogHandle, nil
 }

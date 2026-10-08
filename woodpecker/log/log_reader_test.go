@@ -38,6 +38,9 @@ import (
 // testLogHandleMock is an in-package mock for LogHandle to avoid circular imports.
 type testLogHandleMock struct {
 	mock.Mock
+	// skipRanges is what GetSkipRanges answers, and skipRangeReads counts how often it was asked.
+	skipRanges     *proto.LogSkipRanges
+	skipRangeReads atomic.Int32
 }
 
 func (m *testLogHandleMock) GetName() string {
@@ -85,6 +88,15 @@ func (m *testLogHandleMock) GetLastRecordId(ctx context.Context) (*LogMessageId,
 func (m *testLogHandleMock) Truncate(ctx context.Context, recordId *LogMessageId) error {
 	args := m.Called(ctx, recordId)
 	return args.Error(0)
+}
+
+// GetSkipRanges answers from a field rather than through the expectation machinery. Nothing
+// declared is the state every test that does not care about skip ranges is in, and making each of
+// them stub a call they have no opinion about would say nothing. The counter is there because one
+// property is worth asserting directly: a reader making progress must never ask.
+func (m *testLogHandleMock) GetSkipRanges(ctx context.Context) *proto.LogSkipRanges {
+	m.skipRangeReads.Add(1)
+	return m.skipRanges
 }
 
 func (m *testLogHandleMock) GetTruncatedRecordId(ctx context.Context) (*LogMessageId, error) {
@@ -347,7 +359,7 @@ func TestLogReader_ReadNext_FreshBatchRead(t *testing.T) {
 		},
 	}).Maybe()
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, int64(0), int64(0)).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, int64(0), int64(0)).Return(nil).Maybe()
 
 	// ReadBatchAdv returns a batch with one entry
 	mockSegHandle.EXPECT().ReadBatchAdv(mock.Anything, int64(0), int64(DefaultBatchEntriesLimit), mock.Anything).Return(
@@ -407,7 +419,7 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 		},
 	}).Maybe()
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	// First ReadBatchAdv returns EOF
 	mockSegHandle0.EXPECT().ReadBatchAdv(mock.Anything, int64(5), int64(DefaultBatchEntriesLimit), mock.Anything).Return(
 		nil, werr.ErrFileReaderEndOfFile,
@@ -1261,7 +1273,7 @@ func TestLogReader_ReadNext_EntryNotFound_ContextCancelled(t *testing.T) {
 		},
 	}).Maybe()
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// ReadBatchAdv returns ErrEntryNotFound
 	mockSegHandle.EXPECT().ReadBatchAdv(mock.Anything, int64(0), int64(DefaultBatchEntriesLimit), mock.Anything).Return(
@@ -1318,8 +1330,8 @@ func TestLogReader_ReadNext_IdleReaderThrottlesPositionReports(t *testing.T) {
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
 
 	var updates atomic.Int32
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(context.Context, meta.ReaderTempInfoSession, int64, int64) error {
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, meta.ReaderTempInfoSession, int64, int64, int64) error {
 			updates.Add(1)
 			return nil
 		}).Maybe()
@@ -1386,7 +1398,7 @@ func TestLogReader_ReadNext_OtherReadError(t *testing.T) {
 		},
 	}).Maybe()
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
-	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// ReadBatchAdv returns a generic error
 	mockSegHandle.EXPECT().ReadBatchAdv(mock.Anything, int64(0), int64(DefaultBatchEntriesLimit), mock.Anything).Return(

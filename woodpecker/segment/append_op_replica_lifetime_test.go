@@ -309,7 +309,8 @@ func TestAppendOp_receivedAckCallback_CloseFailureDoesNotStopTheAck(t *testing.T
 // below use a distinct logId each so they do not see one another's counts.
 func replicaOutcomeCount(op *AppendOp, status string) float64 {
 	return testutil.ToFloat64(metrics.WpClientReplicaAppendTotal.WithLabelValues(
-		op.logNs, strconv.FormatInt(op.logId, 10), topology.ScopeUnknown, status))
+		op.logNs, strconv.FormatInt(op.logId, 10), topology.ScopeUnknown, status,
+	))
 }
 
 // answeringOp builds an op whose replicas all have an answer waiting, and a

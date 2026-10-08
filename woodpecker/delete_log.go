@@ -224,7 +224,8 @@ func deleteLogUnsafe(
 		// them by. Failing here keeps the log discoverable so a retry can finish the job.
 		if storage == nil {
 			return stats, werr.ErrMetadataWrite.WithCauseErrMsg(
-				"object storage client unavailable; refusing to delete metadata while objects remain")
+				"object storage client unavailable; refusing to delete metadata while objects remain",
+			)
 		}
 		deleted, _, objErr := deleteLogObjects(ctx, storage, cfg, logId)
 		stats.ObjectsDeleted += deleted
@@ -363,18 +364,19 @@ func markLogDeletedOnNode(
 	opts deleteOptions,
 ) (bool, error) {
 	var hadData bool
-	err := retry.Do(ctx, func() error {
-		attemptCtx, cancel := context.WithTimeout(ctx, opts.markAttemptTimeout)
-		defer cancel()
+	err := retry.Do(
+		ctx, func() error {
+			attemptCtx, cancel := context.WithTimeout(ctx, opts.markAttemptTimeout)
+			defer cancel()
 
-		lsClient, getErr := pool.GetLogStoreClient(attemptCtx, node)
-		if getErr != nil {
-			return getErr
-		}
-		var markErr error
-		hadData, markErr = lsClient.MarkLogDeleted(attemptCtx, bucketName, rootPath, logId, sync)
-		return markErr
-	},
+			lsClient, getErr := pool.GetLogStoreClient(attemptCtx, node)
+			if getErr != nil {
+				return getErr
+			}
+			var markErr error
+			hadData, markErr = lsClient.MarkLogDeleted(attemptCtx, bucketName, rootPath, logId, sync)
+			return markErr
+		},
 		retry.Attempts(opts.markAttempts),
 		retry.Sleep(markRetrySleep),
 		retry.MaxSleepTime(markMaxSleep),
@@ -515,7 +517,8 @@ func sweepParkedLogObjects(
 	}
 	if storage == nil {
 		return 0, werr.ErrMetadataWrite.WithCauseErrMsg(
-			"object storage client unavailable; refusing to clear metadata while parked logs may still have objects")
+			"object storage client unavailable; refusing to clear metadata while parked logs may still have objects",
+		)
 	}
 	total := 0
 	for _, logId := range ids {

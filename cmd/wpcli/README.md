@@ -121,15 +121,37 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
   unread range is not an empty one, which is what a bounded survey, a broken chain, a compacted
   segment or an unwritten tail all produce. A segment naming no replica refuses too. `--force`
   carries any of those decisions and says so; without `-y` nothing is written.
-- `wp log skip-range remove <logName> <segmentId> --from-entry N --to-entry M` — withdraw a range,
-  so readers try those entries again. Withdrawing part of a range splits it, so the boundaries do
-  not have to match the original declaration. It restores nothing, and a reader that already moved
-  past the range does not come back for it. Use `--log-id N <segmentId>` instead of the name to
-  withdraw a range whose log has been deleted.
+- `wp log skip-range remove <logName> <segmentId> --from-entry N --to-entry M` — withdraw a
+  declaration once it is no longer needed, typically after the WAL has been truncated or compacted
+  away and the lost entries can never be read again regardless. Withdrawing part of a range splits
+  it, so the boundaries do not have to match the original declaration. It restores nothing, and a
+  reader that already moved past the range does not come back for it. Use `--log-id N <segmentId>`
+  instead of the name to withdraw a range whose log has been deleted.
 
 All three read and write one record for the whole metadata root, under
 `<meta-prefix>/skipranges`, indexed by log id and then segment id. A write refuses if the record
 moved since it was read, so two operators cannot drop each other's ranges.
+
+A skip range is a statement of fact: an operator has established that these entries are
+permanently unreadable (typically a damaged disk), and any reader reaching them must move past
+rather than wait. The declaration is the source of truth; there is no expectation that the data
+becomes readable again, and `remove` exists for the later point in the log's life when the WAL has
+been truncated or compacted away and the record itself is no longer needed — it does not restore
+the entries, and a reader that already moved past them does not come back.
+
+A reader consults that record **only while it is making no progress** — a position unchanged since
+its last report — and then moves past a range covering its position, logging a warning and counting
+it. A reader that is advancing never consults it, which keeps the per-poll cost of the common,
+healthy case at zero.
+
+**The read path never waits for the record.** A reader is answered from what the client already
+holds, and an elapsed refresh interval only starts a re-read behind it, one at a time however many
+readers ask. So `woodpecker.client.skipRangeRefreshInterval` (default 10s) bounds how often the
+record is re-read once a stalled reader starts asking — not the absolute age of the copy: if no
+reader has stalled for a long time the copy is correspondingly old. Shortening it never makes a
+read slower. How soon a *newly* declared range takes effect is set by the reader's report tick
+instead: the ranges are asked for only while the reader is stalled, and a cold cache answers empty
+on that ask and only starts the refresh, so a lone reader sees a new range on its following tick.
 
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for

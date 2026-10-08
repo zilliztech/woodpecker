@@ -436,7 +436,8 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context, pools
 		if selectedNode == "" {
 			return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf(
 				"no unique node available for custom placement rule %d (region: %s, az: %s, rg: %s): all %d candidates already selected by prior rules",
-				i, placement.Region, placement.Az, placement.ResourceGroup, len(regionResult.Nodes)))
+				i, placement.Region, placement.Az, placement.ResourceGroup, len(regionResult.Nodes),
+			))
 		}
 
 		selectedSet[selectedNode] = true

@@ -1092,6 +1092,55 @@ func (_c *MetadataProvider_GetLogMeta_Call) RunAndReturn(run func(context.Contex
 	return _c
 }
 
+// GetLogSkipRanges provides a mock function with given fields: ctx, logID
+func (_m *MetadataProvider) GetLogSkipRanges(ctx context.Context, logID int64) *proto.LogSkipRanges {
+	ret := _m.Called(ctx, logID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetLogSkipRanges")
+	}
+
+	var r0 *proto.LogSkipRanges
+	if rf, ok := ret.Get(0).(func(context.Context, int64) *proto.LogSkipRanges); ok {
+		r0 = rf(ctx, logID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*proto.LogSkipRanges)
+		}
+	}
+
+	return r0
+}
+
+// MetadataProvider_GetLogSkipRanges_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetLogSkipRanges'
+type MetadataProvider_GetLogSkipRanges_Call struct {
+	*mock.Call
+}
+
+// GetLogSkipRanges is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logID int64
+func (_e *MetadataProvider_Expecter) GetLogSkipRanges(ctx interface{}, logID interface{}) *MetadataProvider_GetLogSkipRanges_Call {
+	return &MetadataProvider_GetLogSkipRanges_Call{Call: _e.mock.On("GetLogSkipRanges", ctx, logID)}
+}
+
+func (_c *MetadataProvider_GetLogSkipRanges_Call) Run(run func(ctx context.Context, logID int64)) *MetadataProvider_GetLogSkipRanges_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_GetLogSkipRanges_Call) Return(_a0 *proto.LogSkipRanges) *MetadataProvider_GetLogSkipRanges_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_GetLogSkipRanges_Call) RunAndReturn(run func(context.Context, int64) *proto.LogSkipRanges) *MetadataProvider_GetLogSkipRanges_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetQuorumInfo provides a mock function with given fields: ctx, quorumId
 func (_m *MetadataProvider) GetQuorumInfo(ctx context.Context, quorumId int64) (*proto.QuorumInfo, error) {
 	ret := _m.Called(ctx, quorumId)
@@ -1910,6 +1959,53 @@ func (_c *MetadataProvider_ReleaseLogWriterLock_Call) RunAndReturn(run func(cont
 	return _c
 }
 
+// RemoveAllSkipRanges provides a mock function with given fields: ctx, ranges
+func (_m *MetadataProvider) RemoveAllSkipRanges(ctx context.Context, ranges *meta.AllSkipRanges) error {
+	ret := _m.Called(ctx, ranges)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RemoveAllSkipRanges")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *meta.AllSkipRanges) error); ok {
+		r0 = rf(ctx, ranges)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_RemoveAllSkipRanges_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveAllSkipRanges'
+type MetadataProvider_RemoveAllSkipRanges_Call struct {
+	*mock.Call
+}
+
+// RemoveAllSkipRanges is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ranges *meta.AllSkipRanges
+func (_e *MetadataProvider_Expecter) RemoveAllSkipRanges(ctx interface{}, ranges interface{}) *MetadataProvider_RemoveAllSkipRanges_Call {
+	return &MetadataProvider_RemoveAllSkipRanges_Call{Call: _e.mock.On("RemoveAllSkipRanges", ctx, ranges)}
+}
+
+func (_c *MetadataProvider_RemoveAllSkipRanges_Call) Run(run func(ctx context.Context, ranges *meta.AllSkipRanges)) *MetadataProvider_RemoveAllSkipRanges_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*meta.AllSkipRanges))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_RemoveAllSkipRanges_Call) Return(_a0 error) *MetadataProvider_RemoveAllSkipRanges_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_RemoveAllSkipRanges_Call) RunAndReturn(run func(context.Context, *meta.AllSkipRanges) error) *MetadataProvider_RemoveAllSkipRanges_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // StoreConditionWriteEnabled provides a mock function with given fields: ctx
 func (_m *MetadataProvider) StoreConditionWriteEnabled(ctx context.Context) error {
 	ret := _m.Called(ctx)
@@ -2109,9 +2205,9 @@ func (_c *MetadataProvider_StoreSegmentMetadata_Call) RunAndReturn(run func(cont
 	return _c
 }
 
-// UpdateAllSkipRanges provides a mock function with given fields: ctx, set
-func (_m *MetadataProvider) UpdateAllSkipRanges(ctx context.Context, set *meta.AllSkipRanges) error {
-	ret := _m.Called(ctx, set)
+// UpdateAllSkipRanges provides a mock function with given fields: ctx, ranges
+func (_m *MetadataProvider) UpdateAllSkipRanges(ctx context.Context, ranges *meta.AllSkipRanges) error {
+	ret := _m.Called(ctx, ranges)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateAllSkipRanges")
@@ -2119,7 +2215,7 @@ func (_m *MetadataProvider) UpdateAllSkipRanges(ctx context.Context, set *meta.A
 
 	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context, *meta.AllSkipRanges) error); ok {
-		r0 = rf(ctx, set)
+		r0 = rf(ctx, ranges)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2134,12 +2230,12 @@ type MetadataProvider_UpdateAllSkipRanges_Call struct {
 
 // UpdateAllSkipRanges is a helper method to define mock.On call
 //   - ctx context.Context
-//   - set *meta.AllSkipRanges
-func (_e *MetadataProvider_Expecter) UpdateAllSkipRanges(ctx interface{}, set interface{}) *MetadataProvider_UpdateAllSkipRanges_Call {
-	return &MetadataProvider_UpdateAllSkipRanges_Call{Call: _e.mock.On("UpdateAllSkipRanges", ctx, set)}
+//   - ranges *meta.AllSkipRanges
+func (_e *MetadataProvider_Expecter) UpdateAllSkipRanges(ctx interface{}, ranges interface{}) *MetadataProvider_UpdateAllSkipRanges_Call {
+	return &MetadataProvider_UpdateAllSkipRanges_Call{Call: _e.mock.On("UpdateAllSkipRanges", ctx, ranges)}
 }
 
-func (_c *MetadataProvider_UpdateAllSkipRanges_Call) Run(run func(ctx context.Context, set *meta.AllSkipRanges)) *MetadataProvider_UpdateAllSkipRanges_Call {
+func (_c *MetadataProvider_UpdateAllSkipRanges_Call) Run(run func(ctx context.Context, ranges *meta.AllSkipRanges)) *MetadataProvider_UpdateAllSkipRanges_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(*meta.AllSkipRanges))
 	})
@@ -2204,17 +2300,17 @@ func (_c *MetadataProvider_UpdateLogMeta_Call) RunAndReturn(run func(context.Con
 	return _c
 }
 
-// UpdateReaderTempInfo provides a mock function with given fields: ctx, session, recentReadSegmentId, recentReadEntryId
-func (_m *MetadataProvider) UpdateReaderTempInfo(ctx context.Context, session meta.ReaderTempInfoSession, recentReadSegmentId int64, recentReadEntryId int64) error {
-	ret := _m.Called(ctx, session, recentReadSegmentId, recentReadEntryId)
+// UpdateReaderTempInfo provides a mock function with given fields: ctx, session, reportedAtMs, recentReadSegmentId, recentReadEntryId
+func (_m *MetadataProvider) UpdateReaderTempInfo(ctx context.Context, session meta.ReaderTempInfoSession, reportedAtMs int64, recentReadSegmentId int64, recentReadEntryId int64) error {
+	ret := _m.Called(ctx, session, reportedAtMs, recentReadSegmentId, recentReadEntryId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateReaderTempInfo")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, meta.ReaderTempInfoSession, int64, int64) error); ok {
-		r0 = rf(ctx, session, recentReadSegmentId, recentReadEntryId)
+	if rf, ok := ret.Get(0).(func(context.Context, meta.ReaderTempInfoSession, int64, int64, int64) error); ok {
+		r0 = rf(ctx, session, reportedAtMs, recentReadSegmentId, recentReadEntryId)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2230,15 +2326,16 @@ type MetadataProvider_UpdateReaderTempInfo_Call struct {
 // UpdateReaderTempInfo is a helper method to define mock.On call
 //   - ctx context.Context
 //   - session meta.ReaderTempInfoSession
+//   - reportedAtMs int64
 //   - recentReadSegmentId int64
 //   - recentReadEntryId int64
-func (_e *MetadataProvider_Expecter) UpdateReaderTempInfo(ctx interface{}, session interface{}, recentReadSegmentId interface{}, recentReadEntryId interface{}) *MetadataProvider_UpdateReaderTempInfo_Call {
-	return &MetadataProvider_UpdateReaderTempInfo_Call{Call: _e.mock.On("UpdateReaderTempInfo", ctx, session, recentReadSegmentId, recentReadEntryId)}
+func (_e *MetadataProvider_Expecter) UpdateReaderTempInfo(ctx interface{}, session interface{}, reportedAtMs interface{}, recentReadSegmentId interface{}, recentReadEntryId interface{}) *MetadataProvider_UpdateReaderTempInfo_Call {
+	return &MetadataProvider_UpdateReaderTempInfo_Call{Call: _e.mock.On("UpdateReaderTempInfo", ctx, session, reportedAtMs, recentReadSegmentId, recentReadEntryId)}
 }
 
-func (_c *MetadataProvider_UpdateReaderTempInfo_Call) Run(run func(ctx context.Context, session meta.ReaderTempInfoSession, recentReadSegmentId int64, recentReadEntryId int64)) *MetadataProvider_UpdateReaderTempInfo_Call {
+func (_c *MetadataProvider_UpdateReaderTempInfo_Call) Run(run func(ctx context.Context, session meta.ReaderTempInfoSession, reportedAtMs int64, recentReadSegmentId int64, recentReadEntryId int64)) *MetadataProvider_UpdateReaderTempInfo_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(meta.ReaderTempInfoSession), args[2].(int64), args[3].(int64))
+		run(args[0].(context.Context), args[1].(meta.ReaderTempInfoSession), args[2].(int64), args[3].(int64), args[4].(int64))
 	})
 	return _c
 }
@@ -2248,7 +2345,7 @@ func (_c *MetadataProvider_UpdateReaderTempInfo_Call) Return(_a0 error) *Metadat
 	return _c
 }
 
-func (_c *MetadataProvider_UpdateReaderTempInfo_Call) RunAndReturn(run func(context.Context, meta.ReaderTempInfoSession, int64, int64) error) *MetadataProvider_UpdateReaderTempInfo_Call {
+func (_c *MetadataProvider_UpdateReaderTempInfo_Call) RunAndReturn(run func(context.Context, meta.ReaderTempInfoSession, int64, int64, int64) error) *MetadataProvider_UpdateReaderTempInfo_Call {
 	_c.Call.Return(run)
 	return _c
 }

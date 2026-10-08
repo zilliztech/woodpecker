@@ -121,11 +121,22 @@ func skipTestGlobals(t *testing.T) {
 	Globals = GlobalFlags{Timeout: 2 * time.Second}
 }
 
+// testReadSkipRanges and testWriteSkipRanges route the record through the same metadata provider
+// the command now uses, so the assertions exercise the provider's compare-and-swap and error
+// translation rather than a separate copy of them.
+func testReadSkipRanges(ctx context.Context, cli *clientv3.Client, kb *meta.KeyBuilder) (*meta.AllSkipRanges, error) {
+	return readSkipRanges(ctx, skipRangeMeta(ctx, cli, kb), kb)
+}
+
+func testWriteSkipRanges(ctx context.Context, cli *clientv3.Client, kb *meta.KeyBuilder, rec *meta.AllSkipRanges) error {
+	return writeSkipRanges(ctx, skipRangeMeta(ctx, cli, kb), kb, rec)
+}
+
 func declaredRanges(t *testing.T, cli *clientv3.Client, kb *meta.KeyBuilder, logID, segID int64) []*proto.SkipRange {
 	t.Helper()
-	rec, err := readSkipRanges(context.Background(), cli, kb)
+	rec, err := testReadSkipRanges(context.Background(), cli, kb)
 	require.NoError(t, err)
-	return segmentRangesOf(rec.set, logID, segID)
+	return segmentRangesOf(rec.Metadata, logID, segID)
 }
 
 // TestSkipRangeAdd_RefusesWhenAReplicaCanStillRead is the gate that makes this command safe to
@@ -408,10 +419,10 @@ func TestSkipRangeRemove_ByLogIdReachesADeletedLogsRanges(t *testing.T) {
 	kb := meta.NewKeyBuilder("wptest")
 	skipTestGlobals(t)
 
-	rec, err := readSkipRanges(context.Background(), cli, kb)
+	rec, err := testReadSkipRanges(context.Background(), cli, kb)
 	require.NoError(t, err)
-	putSegmentRanges(rec.set, 99, 1, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 5, Reason: "gone log"}})
-	require.NoError(t, writeSkipRanges(context.Background(), cli, kb, rec))
+	putSegmentRanges(rec.Metadata, 99, 1, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 5, Reason: "gone log"}})
+	require.NoError(t, testWriteSkipRanges(context.Background(), cli, kb, rec))
 	cmd, _, _ := markingTestCmd()
 
 	require.NoError(t, runSkipRangeRemove(cmd, cli, kb, "", 99, 1, 0, 5))
@@ -612,9 +623,9 @@ func TestSkipRangeRemove_WithdrawingEverythingClearsTheSegment(t *testing.T) {
 	require.NoError(t, runSkipRangeRemove(cmd, cli, kb, "mylog", -1, 3, 0, 99))
 
 	require.Empty(t, declaredRanges(t, cli, kb, 7, 3))
-	rec, err := readSkipRanges(context.Background(), cli, kb)
+	rec, err := testReadSkipRanges(context.Background(), cli, kb)
 	require.NoError(t, err)
-	require.Empty(t, rec.set.GetByLogId(), "the log's entry goes too, not just the segment's")
+	require.Empty(t, rec.Metadata.GetByLogId(), "the log's entry goes too, not just the segment's")
 }
 
 // TestSkipRangeRemove_NonOverlappingWithdrawalIsNotFound stops a typo from reporting success
@@ -638,20 +649,19 @@ func TestSkipRangeRemove_NonOverlappingWithdrawalIsNotFound(t *testing.T) {
 }
 
 // TestSkipRangeList_NamesItsSourceAndListsOrphans covers two things a listing has to say. The
-// source matters because a host application can supply ranges of its own at runtime and those
-// never reach this record. The orphan matters because a deleted log's ranges stay behind, and
-// listing is how an operator finds them.
+// source matters because a caller has to know which record was read. The orphan matters because a
+// deleted log's ranges stay behind, and listing is how an operator finds them.
 func TestSkipRangeList_NamesItsSourceAndListsOrphans(t *testing.T) {
 	cli := startTestEtcd(t)
 	kb := meta.NewKeyBuilder("wptest")
 	skipTestGlobals(t)
 
-	rec, err := readSkipRanges(context.Background(), cli, kb)
+	rec, err := testReadSkipRanges(context.Background(), cli, kb)
 	require.NoError(t, err)
-	putSegmentRanges(rec.set, 99, 1, []*proto.SkipRange{{
+	putSegmentRanges(rec.Metadata, 99, 1, []*proto.SkipRange{{
 		FromEntryId: 0, ToEntryId: 5, CreationTimestamp: uint64(time.Now().Unix()), Reason: "gone log",
 	}})
-	require.NoError(t, writeSkipRanges(context.Background(), cli, kb, rec))
+	require.NoError(t, testWriteSkipRanges(context.Background(), cli, kb, rec))
 	cmd, out, _ := markingTestCmd()
 
 	require.NoError(t, runSkipRangeList(cmd, cli, kb, ""))
@@ -661,6 +671,24 @@ func TestSkipRangeList_NamesItsSourceAndListsOrphans(t *testing.T) {
 	require.Contains(t, s, "99", "a range whose log no longer exists is still listed")
 	require.Contains(t, s, "0-5")
 	require.Contains(t, s, "gone log")
+}
+
+// TestSkipRangeRead_UndecodableRecordIsAStateConflict covers the last translation branch. A record
+// that cannot be parsed is not a record with nothing in it, and an operator needs to be told that
+// rather than shown an empty list.
+func TestSkipRangeRead_UndecodableRecordIsAStateConflict(t *testing.T) {
+	cli := startTestEtcd(t)
+	kb := meta.NewKeyBuilder("wptest")
+	skipTestGlobals(t)
+
+	_, err := cli.Put(context.Background(), kb.AllSkipRangesKey(), "not a proto")
+	require.NoError(t, err)
+
+	_, err = testReadSkipRanges(context.Background(), cli, kb)
+
+	require.Error(t, err)
+	require.Equal(t, 4, wperrors.ExitCodeFor(err))
+	require.Contains(t, err.Error(), "not decodable")
 }
 
 // TestSkipRangeList_NothingDeclaredSaysSo covers what an operator sees most of the time. An empty
@@ -692,10 +720,10 @@ func TestSkipRangeList_OneLogFiltersTheRest(t *testing.T) {
 		logName: "mylog", segmentID: 3, from: 10, to: 19, reason: "mine", confirmed: true,
 	}))
 	// Another log's range, written straight into the record.
-	rec, err := readSkipRanges(context.Background(), cli, kb)
+	rec, err := testReadSkipRanges(context.Background(), cli, kb)
 	require.NoError(t, err)
-	putSegmentRanges(rec.set, 42, 0, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 3, Reason: "someone else"}})
-	require.NoError(t, writeSkipRanges(context.Background(), cli, kb, rec))
+	putSegmentRanges(rec.Metadata, 42, 0, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 3, Reason: "someone else"}})
+	require.NoError(t, testWriteSkipRanges(context.Background(), cli, kb, rec))
 
 	named, out, _ := markingTestCmd()
 	require.NoError(t, runSkipRangeList(named, cli, kb, "mylog"))
@@ -734,22 +762,22 @@ func TestSkipRangeAdd_JoinedReasonsStayWithinTheBudget(t *testing.T) {
 		"twelve overlapping declarations must not grow the reason past its budget")
 }
 
-// TestSkipRangeWrite_OversizedRecordIsRefused covers the size bound on the command's own write
-// path, which carries its own copy of the check: a bound enforced in only one of the two places
-// drifts the first time one of them changes.
+// TestSkipRangeWrite_OversizedRecordIsRefused covers the same translation for the size bound: the
+// limit is meta's, and what has to be true here is that an operator sees an exit code and a sentence
+// naming what to remove rather than a bare error.
 func TestSkipRangeWrite_OversizedRecordIsRefused(t *testing.T) {
 	cli := startTestEtcd(t)
 	kb := meta.NewKeyBuilder("wptest")
 	skipTestGlobals(t)
 
-	rec, err := readSkipRanges(context.Background(), cli, kb)
+	rec, err := testReadSkipRanges(context.Background(), cli, kb)
 	require.NoError(t, err)
 	huge := strings.Repeat("x", meta.MaxSkipRangeReasonBytes)
 	for logID := int64(0); logID < 4000; logID++ {
-		putSegmentRanges(rec.set, logID, 0, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 9, Reason: huge}})
+		putSegmentRanges(rec.Metadata, logID, 0, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 9, Reason: huge}})
 	}
 
-	err = writeSkipRanges(context.Background(), cli, kb, rec)
+	err = testWriteSkipRanges(context.Background(), cli, kb, rec)
 
 	require.Error(t, err)
 	require.Equal(t, 4, wperrors.ExitCodeFor(err))
@@ -765,10 +793,10 @@ func TestSkipRangeList_JSONIsThePayloadAlone(t *testing.T) {
 	t.Cleanup(func() { Globals = old })
 	Globals = GlobalFlags{Timeout: 2 * time.Second, Output: "json"}
 
-	rec, err := readSkipRanges(context.Background(), cli, kb)
+	rec, err := testReadSkipRanges(context.Background(), cli, kb)
 	require.NoError(t, err)
-	putSegmentRanges(rec.set, 7, 3, []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19, Reason: "bad disk"}})
-	require.NoError(t, writeSkipRanges(context.Background(), cli, kb, rec))
+	putSegmentRanges(rec.Metadata, 7, 3, []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19, Reason: "bad disk"}})
+	require.NoError(t, testWriteSkipRanges(context.Background(), cli, kb, rec))
 	cmd, out, _ := markingTestCmd()
 
 	require.NoError(t, runSkipRangeList(cmd, cli, kb, ""))
@@ -792,24 +820,26 @@ func TestSkipRangeList_JSONIsThePayloadAlone(t *testing.T) {
 	require.EqualValues(t, 10, payload.Ranges[0].Entries, "an inclusive 10-19 is ten entries")
 }
 
-// TestSkipRangeWrite_StaleRecordIsRefused covers the single-key consequence: two operators
-// editing at once must not drop each other's ranges.
+// TestSkipRangeWrite_StaleRecordIsRefused covers this command's half of the compare-and-swap: that
+// the refusal reaches a caller as a state conflict with an exit code and something to do about it.
+// Whether the compare itself holds is meta's test; what is asserted here is the translation, which
+// is all `wp` adds.
 func TestSkipRangeWrite_StaleRecordIsRefused(t *testing.T) {
 	cli := startTestEtcd(t)
 	kb := meta.NewKeyBuilder("wptest")
 	skipTestGlobals(t)
 	ctx := context.Background()
 
-	first, err := readSkipRanges(ctx, cli, kb)
+	first, err := testReadSkipRanges(ctx, cli, kb)
 	require.NoError(t, err)
-	stale, err := readSkipRanges(ctx, cli, kb)
+	stale, err := testReadSkipRanges(ctx, cli, kb)
 	require.NoError(t, err)
 
-	putSegmentRanges(first.set, 7, 3, []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19}})
-	require.NoError(t, writeSkipRanges(ctx, cli, kb, first))
+	putSegmentRanges(first.Metadata, 7, 3, []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19}})
+	require.NoError(t, testWriteSkipRanges(ctx, cli, kb, first))
 
-	putSegmentRanges(stale.set, 8, 1, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 5}})
-	err = writeSkipRanges(ctx, cli, kb, stale)
+	putSegmentRanges(stale.Metadata, 8, 1, []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 5}})
+	err = testWriteSkipRanges(ctx, cli, kb, stale)
 
 	require.Error(t, err)
 	require.Equal(t, 4, wperrors.ExitCodeFor(err))

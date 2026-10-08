@@ -100,6 +100,36 @@ type ClientConfig struct {
 	// are under logstore.grpc: each process reads its own section.
 	GRPC        GRPCClientConfig  `yaml:"grpc"`
 	SegmentRead SegmentReadConfig `yaml:"segmentRead"`
+	// SkipRangeRefreshInterval is how often a client re-reads the operator-declared skip ranges once
+	// a stalled reader starts asking for them. The refresh is triggered only by such an ask when the
+	// held copy is older than this interval, and that same ask is still answered from the held copy,
+	// so this bounds how often refreshes happen -- not the absolute age of the copy. If no reader has
+	// stalled for a long time the copy is correspondingly old.
+	//
+	// A reader asks for the ranges only while it is stalled and only on its report tick, so how soon
+	// a newly declared range takes effect is set by that tick, not by this interval. A cold cache
+	// answers empty on the first ask and only starts a refresh behind the caller, so a lone reader
+	// sees a new range on its following tick.
+	//
+	// The read never waits for the refresh: a reader is always answered from what the client already
+	// holds. So this trades staleness against etcd traffic and nothing else -- shortening it does not
+	// make a read slower, and lengthening it does not make one faster. Zero leaves it at the default,
+	// 10s.
+	SkipRangeRefreshInterval DurationSeconds `yaml:"skipRangeRefreshInterval"`
+}
+
+// DefaultSkipRangeRefreshInterval is used when skipRangeRefreshInterval is unset. Ten seconds is
+// chosen for the operator, not the reader: it is short enough that someone who has just declared a
+// range sees readers move while they are still watching, and the cost of it being short is one
+// shared etcd read per interval per client, whatever the number of readers.
+const DefaultSkipRangeRefreshInterval = 10 * time.Second
+
+// GetSkipRangeRefreshInterval returns the configured interval, or the default when unset.
+func (c *ClientConfig) GetSkipRangeRefreshInterval() time.Duration {
+	if d := c.SkipRangeRefreshInterval.Duration.Duration(); d > 0 {
+		return d
+	}
+	return DefaultSkipRangeRefreshInterval
 }
 
 type AuditorConfig struct {
@@ -774,6 +804,10 @@ func (c *Configuration) validateClientConfig() error {
 	}
 	if client.Quorum.SelectNodesTimeout.Duration.Duration() < 0 {
 		return fmt.Errorf("quorum select nodes timeout cannot be negative, got %v", client.Quorum.SelectNodesTimeout.Duration.Duration())
+	}
+
+	if client.SkipRangeRefreshInterval.Duration.Duration() < 0 {
+		return fmt.Errorf("skip range refresh interval cannot be negative, got %v", client.SkipRangeRefreshInterval.Duration.Duration())
 	}
 
 	// Zero leaves a read bound at its default, so a configuration built in code

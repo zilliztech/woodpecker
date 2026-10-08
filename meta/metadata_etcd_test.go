@@ -93,9 +93,17 @@ func TestAll(t *testing.T) {
 	t.Run("test skip ranges: the accessor is nil-safe at every level", testSkipRangesAccessorIsNilSafeAtEveryLevel)
 	t.Run("test skip ranges: round trips by log and segment", testSkipRangesRoundTripsByLogAndSegment)
 	t.Run("test skip ranges: an undecodable record is an error", testSkipRangesUndecodableRecordIsAnError)
+	t.Run("test skip ranges: a cached read answers from the cache, not from etcd", testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd)
+	t.Run("test skip ranges: the refresh interval comes from the configuration", testSkipRangesRefreshIntervalComesFromTheConfiguration)
+	t.Run("test skip ranges: one log's ranges come back keyed by segment", testGetLogSkipRangesReturnsOneLogsRanges)
+	t.Run("test skip ranges: the refresh is single-flighted", testSkipRangesRefreshIsSingleFlighted)
+	t.Run("test skip ranges: a cached read holds for its window", testSkipRangesCachedReadHoldsForItsWindow)
+	t.Run("test skip ranges: a cached read survives an unreadable record", testSkipRangesCachedReadSurvivesAnUnreadableRecord)
 	t.Run("test skip ranges: a stale write is refused", testSkipRangesStaleWriteIsRefused)
 	t.Run("test skip ranges: a first write refuses if someone else created it", testSkipRangesFirstWriteRefusesIfSomeoneElseCreatedIt)
 	t.Run("test skip ranges: an oversized record is refused", testSkipRangesOversizedRecordIsRefused)
+	t.Run("test skip ranges: remove drops the record", testSkipRangesRemoveDropsTheRecord)
+	t.Run("test skip ranges: a stale remove is refused", testSkipRangesRemoveStaleIsRefused)
 	t.Run("test create log and open", testCreateLogAndOpen)
 	t.Run("test check exists", testCheckExists)
 	t.Run("test store quorum info", testStoreQuorumInfo)
@@ -989,7 +997,7 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	updatedEntryId := int64(10)
 
 	// Update reader temp info
-	err = provider.UpdateReaderTempInfo(context.Background(), readerSession, updatedSegmentId, updatedEntryId)
+	err = provider.UpdateReaderTempInfo(context.Background(), readerSession, time.Now().UnixMilli(), updatedSegmentId, updatedEntryId)
 	assert.NoError(t, err)
 
 	// Get the updated reader temp info
@@ -1007,7 +1015,7 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	assert.Equal(t, initialEntryId, updatedReader.OpenEntryId)
 
 	// Test updating without a session of this provider
-	err = provider.UpdateReaderTempInfo(context.Background(), nil, 1, 1)
+	err = provider.UpdateReaderTempInfo(context.Background(), nil, time.Now().UnixMilli(), 1, 1)
 	assert.Error(t, err)
 
 	// Verify lease persistence (reader temporary info should still exist with a TTL)
@@ -2175,7 +2183,7 @@ func testCancelledContextEtcdErrors(t *testing.T) {
 	_, _ = provider.GetAllReaderTempInfoForLog(cancelledCtx, 1)
 
 	// UpdateReaderTempInfo / DeleteReaderTempInfo without a session (mutating)
-	err = provider.UpdateReaderTempInfo(cancelledCtx, nil, 0, 0)
+	err = provider.UpdateReaderTempInfo(cancelledCtx, nil, time.Now().UnixMilli(), 0, 0)
 	assert.Error(t, err)
 	err = provider.DeleteReaderTempInfo(cancelledCtx, nil)
 	assert.Error(t, err)
@@ -2273,7 +2281,7 @@ func testCorruptedProtobufData(t *testing.T) {
 
 	// UpdateReaderTempInfo does not read the stored value at all, so corrupted
 	// data cannot break it; without a session of this provider it is refused
-	err = provider.UpdateReaderTempInfo(context.Background(), nil, 0, 0)
+	err = provider.UpdateReaderTempInfo(context.Background(), nil, time.Now().UnixMilli(), 0, 0)
 	assert.Error(t, err)
 
 	// GetSegmentCleanupStatus unmarshal error
@@ -2415,7 +2423,7 @@ func testUpdateReaderTempInfoWithoutSession(t *testing.T) {
 	// Update must refuse to write for a reader this process never opened:
 	// blindly adopting a foreign key would resurrect metadata after close and
 	// pin the cleanup low-watermark forever.
-	err = provider.UpdateReaderTempInfo(context.Background(), foreignReaderTempInfoSession{logId: logMeta.Metadata.LogId, readerName: readerName}, 5, 100)
+	err = provider.UpdateReaderTempInfo(context.Background(), foreignReaderTempInfoSession{logId: logMeta.Metadata.LogId, readerName: readerName}, time.Now().UnixMilli(), 5, 100)
 	assert.Error(t, err)
 
 	// The foreign key is left untouched
