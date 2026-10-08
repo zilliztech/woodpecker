@@ -138,9 +138,12 @@ fact readable costs nothing: nothing acts on it unless a reader is genuinely stu
 
 **The read path never waits for the record.** A reader is answered from what the client already
 holds, and an elapsed refresh interval only starts a re-read behind it, one at a time however many
-readers ask. So `woodpecker.client.skipRangeRefreshInterval` (default 10s) trades staleness against
-etcd traffic and nothing else: it bounds how long a reader keeps acting on a withdrawn range, and
-shortening it never makes a read slower.
+readers ask. So `woodpecker.client.skipRangeRefreshInterval` (default 10s) bounds how stale that
+answer can get, which bounds how long a reader keeps acting on a withdrawn range; shortening it
+never makes a read slower. How soon a *newly* declared range takes effect is set by the reader's
+report tick instead: the ranges are asked for only while the reader is stalled, and a cold cache
+answers empty on that ask and only starts the refresh, so a lone reader sees a new range on its
+following tick.
 
 An embedding application can supply the ranges itself instead, by passing its own source to
 `woodpecker.NewClient`; nothing supplies one by default. When one is supplied the client never reads

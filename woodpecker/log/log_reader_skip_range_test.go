@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
+	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -155,11 +157,14 @@ func TestReaderAsksOnlyWhileItIsNotMovingOn(t *testing.T) {
 	require.EqualValues(t, 1, logHandle.skipRangeReads.Load())
 	require.NotNil(t, reader.skips)
 
-	// Moving again stops it asking, and the next tick at the new position asks once more.
+	// Moving again clears what the stall fetched, so a range held from the stalled position cannot
+	// act at the new one; the next tick at that new position then asks once more.
 	reader.onReportTick(ctx, time.Now().UnixMilli(), 3, 30)
 	require.EqualValues(t, 1, logHandle.skipRangeReads.Load())
+	require.Nil(t, reader.skips, "a moving reader drops the ranges fetched while it was stuck")
 	reader.onReportTick(ctx, time.Now().UnixMilli(), 3, 30)
 	require.EqualValues(t, 2, logHandle.skipRangeReads.Load())
+	require.NotNil(t, reader.skips)
 
 	// The tick also carries the timestamp the next tick is scheduled against, so it is the one
 	// place the whole lastReported set is maintained and nothing at the call site has to agree.
@@ -194,4 +199,65 @@ func TestGetSkipRangesNothingDeclaredReadsAsNothing(t *testing.T) {
 	h := &logHandleImpl{Id: 7, Metadata: mockMeta}
 
 	require.Nil(t, h.GetSkipRanges(context.Background()))
+}
+
+// TestReadNextSkipsPastADeclaredRange drives the skip-range jump through ReadNext itself rather than
+// calling skipPast/onReportTick directly, which is the wiring the unit tests above leave to
+// reasoning: the report tick at the stale position fetches the ranges, skipPast is consulted on the
+// resolved position and moves it, and the next batch read is asked for the entry after the range.
+func TestReadNextSkipsPastADeclaredRange(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	writeMsg := &WriteMessage{Payload: []byte("after the skip")}
+	data, err := MarshalMessage(writeMsg)
+	require.NoError(t, err)
+
+	reader := &logBatchReaderImpl{
+		logName:               "skip-log",
+		logId:                 7,
+		logIdStr:              "7",
+		logHandle:             mockLogHandle,
+		pendingReadSegmentId:  3,
+		pendingReadEntryId:    10,
+		currentSegmentHandle:  mockSegHandle,
+		readerName:            "skip-reader",
+		readerTempSession:     &fakeReaderTempSession{logId: 7, readerName: "skip-reader"},
+		logNs:                 "",
+		lastRead:              time.Now().UnixMilli(),
+		lastReported:          time.Now().UnixMilli() - UpdateReaderInfoIntervalMs - 1000,
+		lastReportedSegmentId: 3,
+		lastReportedEntryId:   10,
+	}
+	// The ranges the stalled tick fetches cover 10-19, so the reader should resume at 20.
+	mockLogHandle.skipRanges = &proto.LogSkipRanges{BySegmentId: map[int64]*proto.SegmentSkipRanges{
+		3: {Ranges: []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19, Reason: "bad disk"}}},
+	}}
+
+	// The current segment handle holds the pending position, so resolution stops there.
+	mockLogHandle.On("GetNextSegmentId", mock.Anything).Return(int64(4), nil)
+	mockSegHandle.EXPECT().GetId(mock.Anything).Return(int64(3)).Maybe()
+	mockSegHandle.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{State: proto.SegmentState_Active, LastEntryId: 100},
+	}).Maybe()
+
+	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
+	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	// The only batch read must be for entry 20: the range moved the position before reading, so the
+	// reader never asks for entry 10.
+	mockSegHandle.EXPECT().ReadBatchAdv(mock.Anything, int64(20), int64(DefaultBatchEntriesLimit), mock.Anything).
+		Return(&proto.BatchReadResult{
+			Entries: []*proto.LogEntry{{SegId: 3, EntryId: 20, Values: data}},
+		}, nil,
+		).Once()
+
+	msg, readErr := reader.ReadNext(context.Background())
+	require.NoError(t, readErr)
+	require.NotNil(t, msg)
+	require.Equal(t, int64(3), msg.Id.SegmentId)
+	require.Equal(t, int64(20), msg.Id.EntryId, "the reader resumed after the range, not at its start")
+	require.Equal(t, writeMsg.Payload, msg.Payload)
 }

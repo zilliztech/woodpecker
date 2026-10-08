@@ -100,13 +100,19 @@ type ClientConfig struct {
 	// are under logstore.grpc: each process reads its own section.
 	GRPC        GRPCClientConfig  `yaml:"grpc"`
 	SegmentRead SegmentReadConfig `yaml:"segmentRead"`
-	// SkipRangeRefreshInterval is how often a client re-reads the operator-declared skip ranges. It bounds how long a
-	// reader keeps acting on a withdrawn range, and how long it waits before acting on a new one.
+	// SkipRangeRefreshInterval is how often a client re-reads the operator-declared skip ranges in
+	// the background. It bounds how stale the copy a reader is answered from can get, which bounds
+	// how long a reader keeps acting on a withdrawn range.
 	//
-	// The read never waits for it: a reader is always answered from what the client already holds,
-	// and an elapsed interval only starts a refresh behind the caller. So this trades staleness
-	// against etcd traffic and nothing else -- shortening it does not make a read slower, and
-	// lengthening it does not make one faster. Zero leaves it at the default, 10s.
+	// A reader asks for the ranges only while it is stalled and only on its report tick, so how soon
+	// a newly declared range takes effect is set by that tick, not by this interval. A cold cache
+	// answers empty on the first ask and only starts a refresh behind the caller, so a lone reader
+	// sees a new range on its following tick.
+	//
+	// The read never waits for the refresh: a reader is always answered from what the client already
+	// holds. So this trades staleness against etcd traffic and nothing else -- shortening it does not
+	// make a read slower, and lengthening it does not make one faster. Zero leaves it at the default,
+	// 10s.
 	SkipRangeRefreshInterval DurationSeconds `yaml:"skipRangeRefreshInterval"`
 }
 

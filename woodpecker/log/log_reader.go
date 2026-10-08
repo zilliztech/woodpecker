@@ -344,6 +344,12 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 func (l *logBatchReaderImpl) onReportTick(ctx context.Context, now, segmentId, entryId int64) {
 	if segmentId == l.lastReportedSegmentId && entryId == l.lastReportedEntryId {
 		l.skips = l.logHandle.GetSkipRanges(ctx)
+	} else {
+		// The position moved, so whatever was fetched while this reader was stuck elsewhere is stale:
+		// it is the whole log's set, and a range for a later segment must not fire here just because
+		// it was in a snapshot taken for an earlier one. Keeping only the stalled fetch means a range
+		// can only ever act on the position that triggered it.
+		l.skips = nil
 	}
 	l.lastReported, l.lastReportedSegmentId, l.lastReportedEntryId = now, segmentId, entryId
 }
@@ -367,7 +373,8 @@ func (l *logBatchReaderImpl) skipPast(ctx context.Context, segmentId, entryId in
 		zap.Int64("segmentId", segmentId),
 		zap.Int64("fromEntryId", skip.GetFromEntryId()),
 		zap.Int64("toEntryId", skip.GetToEntryId()),
-		zap.Int64("resumeEntryId", skip.GetToEntryId()+1))
+		zap.Int64("resumeEntryId", skip.GetToEntryId()+1),
+		zap.String("reason", skip.GetReason()))
 	metrics.WpLogReaderSkipRangeSkipsTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
 	return true
 }

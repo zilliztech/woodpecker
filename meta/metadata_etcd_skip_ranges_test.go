@@ -277,7 +277,8 @@ func testSkipRangesCachedReadSurvivesAnUnreadableRecord(t *testing.T) {
 
 	require.NotNil(t, etcdProvider.GetLogSkipRanges(ctx, 7),
 		"a refresh that fails leaves the reader with what it had")
-	time.Sleep(200 * time.Millisecond) // let the failing refresh finish
+	require.Eventually(t, func() bool { return !etcdProvider.skipRangeRefreshing.Load() },
+		2*time.Second, 20*time.Millisecond, "the failing refresh finishes")
 	require.NotNil(t, etcdProvider.GetLogSkipRanges(ctx, 7),
 		"and it stays that way rather than being cleared")
 }
