@@ -155,11 +155,12 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		// moved by the first tick is recognised then rather than one tick later.
 		lastReportedSegmentId: from.SegmentId,
 		lastReportedEntryId:   from.EntryId,
-		// skips is deliberately empty here. A reader that is making progress never asks for the
-		// ranges and so can never jump one, which means a range declared over data that is in fact
-		// readable costs nothing -- and that property only holds if the ranges enter the reader
-		// through the stall alone. A reader that opens inside a declared range stalls like any
-		// other and moves past it on the next tick.
+		// skips is deliberately empty here. The ranges are a statement of fact an operator
+		// established -- typically that a disk is damaged and the entries are permanently
+		// unreadable -- and the cost of reading them is paid only when the reader actually stalls
+		// on an entry it cannot get past. A reader that is advancing never reads the record. A
+		// reader that opens inside a declared range stalls like any other and moves past it on the
+		// next tick.
 	}
 	// Publish where the reader opens, so one that never delivers a first entry -
 	// waiting out ErrSegmentNotFound, or parked at the tail of an idle log - is
@@ -339,16 +340,14 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 // Before moving the baseline it answers the one question the skip ranges are consulted on: has this
 // reader moved since the last tick. That condition is the whole cost discipline. ErrEntryNotFound is
 // the steady state of a reader tailing an idle log, so asking on every one of them would re-read
-// the record on every poll of every healthy reader. It is also what keeps a range declared over
-// data that is in fact readable from costing anything, since a reader that never asks cannot jump.
+// the record on every poll of every healthy reader.
 func (l *logBatchReaderImpl) onReportTick(ctx context.Context, now, segmentId, entryId int64) {
 	if segmentId == l.lastReportedSegmentId && entryId == l.lastReportedEntryId {
 		l.skips = l.logHandle.GetSkipRanges(ctx)
 	} else {
-		// The position moved, so whatever was fetched while this reader was stuck elsewhere is stale:
-		// it is the whole log's set, and a range for a later segment must not fire here just because
-		// it was in a snapshot taken for an earlier one. Keeping only the stalled fetch means a range
-		// can only ever act on the position that triggered it.
+		// The position moved, so the snapshot fetched for the stall that just ended no longer matches
+		// where the reader is. Drop it: the record is re-read on the next stall, which is also when a
+		// range withdrawn in the meantime stops being applied.
 		l.skips = nil
 	}
 	l.lastReported, l.lastReportedSegmentId, l.lastReportedEntryId = now, segmentId, entryId
@@ -376,13 +375,12 @@ func (l *logBatchReaderImpl) skipPast(ctx context.Context, segmentId, entryId in
 		zap.Int64("resumeEntryId", skip.GetToEntryId()+1),
 		zap.String("reason", skip.GetReason()))
 	metrics.WpLogReaderSkipRangeSkipsTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
-	// The snapshot is single-use: whatever this jump moved past has been given up, but the rest of
-	// the set may cover entries this reader reaches later by simply reading -- and those may be
-	// readable in fact. Dropping it here means a range for another segment (or another range in this
-	// one) only acts after this reader stalls again and re-reads the record on the next tick, which
-	// is the property that keeps a range declared over readable data from costing anything. Without
-	// this, an EOF that crosses into the next segment does not fire the report tick (the pending id
-	// already equals the resolved id), so a stale snapshot would skip that segment's entries.
+	// The snapshot is single-use: the jump above gives up exactly the range covering the stalled
+	// position, and the set is dropped rather than carried to a later position. If the reader
+	// reaches another declared range it stalls there and re-reads the record on the next tick --
+	// which is also how a range withdrawn in the meantime stops being applied. An EOF into the next
+	// segment does not fire the report tick (the pending id already equals the resolved id), so
+	// without dropping the set here it would still be consulted at the new position.
 	l.skips = nil
 	return true
 }
