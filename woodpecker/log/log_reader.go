@@ -355,7 +355,16 @@ func (l *logBatchReaderImpl) onReportTick(ctx context.Context, now, segmentId, e
 
 // skipPast moves the read position past a declared range covering the current position, and
 // reports whether it moved. Giving up entries is never silent: the range is logged and counted.
+//
+// It consults the snapshot only at the position that fetched it (lastReported*): the ranges are a
+// statement about entries this reader is stuck on, so a position reached later by normal reads must
+// not be skipped from a snapshot taken for an earlier stall. This is what keeps a snapshot taken
+// during a stall but never acted on from firing at a later position the reader reached by simply
+// reading.
 func (l *logBatchReaderImpl) skipPast(ctx context.Context, segmentId, entryId int64) bool {
+	if segmentId != l.lastReportedSegmentId || entryId != l.lastReportedEntryId {
+		return false
+	}
 	skip := meta.SkipRangeCovering(l.skips, segmentId, entryId)
 	if skip == nil {
 		return false
@@ -375,12 +384,9 @@ func (l *logBatchReaderImpl) skipPast(ctx context.Context, segmentId, entryId in
 		zap.Int64("resumeEntryId", skip.GetToEntryId()+1),
 		zap.String("reason", skip.GetReason()))
 	metrics.WpLogReaderSkipRangeSkipsTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
-	// The snapshot is single-use: the jump above gives up exactly the range covering the stalled
-	// position, and the set is dropped rather than carried to a later position. If the reader
-	// reaches another declared range it stalls there and re-reads the record on the next tick --
-	// which is also how a range withdrawn in the meantime stops being applied. An EOF into the next
-	// segment does not fire the report tick (the pending id already equals the resolved id), so
-	// without dropping the set here it would still be consulted at the new position.
+	// The position guard above already limits the snapshot to the stall position; drop it so the
+	// next stall re-reads the record rather than consulting a set that has been acted on. This is
+	// how a range withdrawn in the meantime stops being applied.
 	l.skips = nil
 	return true
 }

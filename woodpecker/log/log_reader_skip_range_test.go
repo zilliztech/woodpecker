@@ -298,3 +298,41 @@ func TestSkipPastConsumesTheSnapshot(t *testing.T) {
 	require.False(t, reader.skipPast(context.Background(), 4, 0),
 		"a range reached by simply reading must not be skipped from an earlier stall's snapshot")
 }
+
+// TestSkipPastOnlyActsAtTheStalledPosition closes the window the position guard exists for: a
+// snapshot fetched while the reader was stalled at one position must not skip a range at a later
+// position the reader reaches by normal reads. The two cases below are the same segment (stalled at
+// (3,5), snapshot has 3:[10,19]) and the next segment (snapshot has 4:[0,5]); in neither has the
+// reader stalled at the position the range covers, so skipPast must decline.
+func TestSkipPastOnlyActsAtTheStalledPosition(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	logHandle := &testLogHandleMock{}
+	logHandle.Test(t)
+	logHandle.On("GetName").Return("skip-log").Maybe()
+	logHandle.On("GetId").Return(int64(88)).Maybe()
+
+	r, err := NewLogBatchReader(context.Background(), logHandle, nil,
+		&LogMessageId{SegmentId: 3, EntryId: 5}, "skip-reader",
+		&fakeReaderTempSession{logId: 88, readerName: "skip-reader"}, cfg)
+	require.NoError(t, err)
+	reader := r.(*logBatchReaderImpl)
+	reader.skips = &proto.LogSkipRanges{BySegmentId: map[int64]*proto.SegmentSkipRanges{
+		3: {Ranges: []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19}}},
+		4: {Ranges: []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 5}}},
+	}}
+
+	// lastReported* still point at (3,5): the position that fetched the snapshot. The snapshot does
+	// not cover (3,5), so no jump happened there.
+	require.False(t, reader.skipPast(context.Background(), 3, 5))
+
+	// Same segment: the reader then reads 5..9 normally and resolves (3,10). 10 is in the snapshot,
+	// but it was not the stalled position, so it must not be skipped.
+	require.False(t, reader.skipPast(context.Background(), 3, 10),
+		"a range in the same segment, reached by normal reads, must not fire from an earlier stall")
+
+	// Next segment: the reader reaches EOF in segment 3 and resolves (4,0). 0 is in the snapshot,
+	// but the reader never stalled there, so it must not be skipped.
+	require.False(t, reader.skipPast(context.Background(), 4, 0),
+		"a range in the next segment must not fire from an earlier stall")
+}
