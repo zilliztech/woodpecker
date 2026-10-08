@@ -49,6 +49,8 @@ func TestReaderSkipsPastADeclaredRange(t *testing.T) {
 	require.Nil(t, reader.batch,
 		"the cached block offset is for entry 10, and the reuse test only compares the segment id")
 	require.Zero(t, reader.next)
+	require.Nil(t, reader.skips,
+		"the snapshot is single-use: after the jump it must not act again without a new stall")
 }
 
 // TestReaderDoesNotSkipWhatIsNotDeclared is the other half: the lookup runs on every resolved
@@ -260,4 +262,39 @@ func TestReadNextSkipsPastADeclaredRange(t *testing.T) {
 	require.Equal(t, int64(3), msg.Id.SegmentId)
 	require.Equal(t, int64(20), msg.Id.EntryId, "the reader resumed after the range, not at its start")
 	require.Equal(t, writeMsg.Payload, msg.Payload)
+}
+
+// TestSkipPastConsumesTheSnapshot covers the cross-segment window the report tick does not close:
+// an EOF into the next segment does not fire onReportTick (the pending id already equals the
+// resolved id), so a snapshot fetched for an earlier stall would otherwise skip the next segment's
+// range even though this reader never stalled there. After one jump the snapshot must be gone, so a
+// second range only acts after the reader stalls again and re-reads the record.
+func TestSkipPastConsumesTheSnapshot(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	logHandle := &testLogHandleMock{}
+	logHandle.Test(t)
+	logHandle.On("GetName").Return("skip-log").Maybe()
+	logHandle.On("GetId").Return(int64(88)).Maybe()
+
+	r, err := NewLogBatchReader(context.Background(), logHandle, nil,
+		&LogMessageId{SegmentId: 3, EntryId: 10}, "skip-reader",
+		&fakeReaderTempSession{logId: 88, readerName: "skip-reader"}, cfg)
+	require.NoError(t, err)
+	reader := r.(*logBatchReaderImpl)
+
+	// One snapshot covering a stalled range in seg 3 and a range in seg 4 the reader has not reached.
+	reader.skips = &proto.LogSkipRanges{BySegmentId: map[int64]*proto.SegmentSkipRanges{
+		3: {Ranges: []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19}}},
+		4: {Ranges: []*proto.SkipRange{{FromEntryId: 0, ToEntryId: 99}}},
+	}}
+
+	require.True(t, reader.skipPast(context.Background(), 3, 10), "seg 3 is genuinely stuck")
+	require.EqualValues(t, 20, reader.pendingReadEntryId)
+
+	// The reader then reads seg 3 to EOF and resolves seg 4 entry 0 without a report tick in
+	// between. The consumed snapshot must not fire here: entry 0 is not in a range the reader stalled
+	// on, and the range it did stall on has already been given up.
+	require.False(t, reader.skipPast(context.Background(), 4, 0),
+		"a range reached by simply reading must not be skipped from an earlier stall's snapshot")
 }

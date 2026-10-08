@@ -376,6 +376,14 @@ func (l *logBatchReaderImpl) skipPast(ctx context.Context, segmentId, entryId in
 		zap.Int64("resumeEntryId", skip.GetToEntryId()+1),
 		zap.String("reason", skip.GetReason()))
 	metrics.WpLogReaderSkipRangeSkipsTotal.WithLabelValues(l.logNs, l.logIdStr).Inc()
+	// The snapshot is single-use: whatever this jump moved past has been given up, but the rest of
+	// the set may cover entries this reader reaches later by simply reading -- and those may be
+	// readable in fact. Dropping it here means a range for another segment (or another range in this
+	// one) only acts after this reader stalls again and re-reads the record on the next tick, which
+	// is the property that keeps a range declared over readable data from costing anything. Without
+	// this, an EOF that crosses into the next segment does not fire the report tick (the pending id
+	// already equals the resolved id), so a stale snapshot would skip that segment's entries.
+	l.skips = nil
 	return true
 }
 
