@@ -272,7 +272,6 @@ func TestDataCorruptionService_Active_OneReplicaDamaged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, readonlySeg.Compact(ctx))
 	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
-
 }
 
 // TestDataCorruptionService_Completed_OneReplicaDamaged covers A1: a Completed segment
@@ -339,7 +338,6 @@ func TestDataCorruptionService_Completed_OneReplicaDamaged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, readonlySeg.Compact(ctx))
 	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
-
 }
 
 // TestDataCorruptionService_Completed_AllReplicasDamagedRange covers A3 + skip-range
@@ -556,7 +554,6 @@ func TestDataCorruptionService_Active_AllReplicasTruncated(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, readonlySeg.Compact(ctx))
 	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
-
 }
 
 // TestDataCorruptionService_Active_TwoReplicasTruncated covers B2: two Active replicas
@@ -646,7 +643,6 @@ func TestDataCorruptionService_Active_TwoReplicasTruncated(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, readonlySeg.Compact(ctx))
 	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
-
 }
 
 // TestDataCorruptionService_TruncateReclaimsDamagedSegment covers truncate as the
@@ -723,7 +719,6 @@ func TestDataCorruptionService_TruncateReclaimsDamagedSegment(t *testing.T) {
 	require.NoError(t, readErr)
 	require.Equal(t, next.LogMessageId, msg.Id)
 	require.Equal(t, []byte("after-truncate"), msg.Payload)
-
 }
 
 // TestDataCorruptionService_Completed_TwoReplicasDamaged covers A2a: a Completed segment
@@ -792,5 +787,4 @@ func TestDataCorruptionService_Completed_TwoReplicasDamaged(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, readonlySeg.Compact(ctx))
 	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
-
 }
