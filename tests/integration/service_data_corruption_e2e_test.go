@@ -18,6 +18,7 @@ package integration
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -26,6 +27,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
@@ -54,27 +57,50 @@ func corruptionDataLogPath(cluster *utils.MiniCluster, cfg *config.Configuration
 	return filepath.Join(corruptionSegmentDir(cluster, cfg, nodeIndex, logID, segID), "data.log")
 }
 
+// dataRecordPayloadOffsets scans the data.log records in order and returns the byte offset of each
+// data record's payload. Entry ids are implicit: they start at the header's FirstEntryID and
+// increase by one per data record. These test segments start at zero, so index N is entry N.
+func dataRecordPayloadOffsets(t *testing.T, dataLogPath string) []int64 {
+	t.Helper()
+	data, err := os.ReadFile(dataLogPath)
+	require.NoError(t, err)
+
+	offsets := make([]int64, 0)
+	offset := int64(0)
+	for offset+codec.RecordHeaderSize <= int64(len(data)) {
+		recordType := data[offset+4]
+		payloadLength := int64(binary.LittleEndian.Uint32(data[offset+5 : offset+9]))
+		total := int64(codec.RecordHeaderSize) + payloadLength
+		if offset+total > int64(len(data)) {
+			break
+		}
+		payloadStart := offset + int64(codec.RecordHeaderSize)
+		switch recordType {
+		case codec.HeaderRecordType:
+			require.GreaterOrEqual(t, payloadLength, int64(12), "short header record")
+			require.Zero(t, binary.LittleEndian.Uint64(data[payloadStart+4:payloadStart+12]), "test segments must start at entry zero")
+		case codec.DataRecordType:
+			offsets = append(offsets, payloadStart)
+		}
+		offset += total
+	}
+	require.NotEmpty(t, offsets, "no data records in %s", dataLogPath)
+	return offsets
+}
+
 // corruptDataRecordAtEntry corrupts the payload of the data record holding the given entry id, so
 // the block CRC no longer matches. This models a damaged block while keeping the record structure
 // parseable -- the kind of damage a reader's CRC check and compaction's CRC check catch, rather
 // than a truncation.
 func corruptDataRecordAtEntry(t *testing.T, dataLogPath string, entryID int64) {
 	t.Helper()
-	positions := parseFileRecordPositions(t, dataLogPath)
-	var target *RecordPosition
-	for i := range positions {
-		if positions[i].RecordType == "data" && positions[i].EntryID == entryID {
-			p := positions[i]
-			target = &p
-			break
-		}
-	}
-	require.NotNil(t, target, "entry %d not found in %s", entryID, dataLogPath)
+	offsets := dataRecordPayloadOffsets(t, dataLogPath)
+	require.GreaterOrEqual(t, entryID, int64(0))
+	require.Less(t, entryID, int64(len(offsets)), "entry %d out of range in %s", entryID, dataLogPath)
 
 	data, err := os.ReadFile(dataLogPath)
 	require.NoError(t, err)
-	// The payload follows the fixed record header; flip its first byte to break the block CRC.
-	payloadStart := target.StartPos + codec.RecordHeaderSize
+	payloadStart := offsets[entryID]
 	require.Greater(t, int64(len(data)), payloadStart, "data record too short to corrupt")
 	data[payloadStart] ^= 0xFF
 	require.NoError(t, os.WriteFile(dataLogPath, data, 0o644))
@@ -125,6 +151,23 @@ func quorumNodeIndexes(t *testing.T, cluster *utils.MiniCluster, nodes []string)
 	return compactedCleanupQuorumNodeIndexes(t, cluster, nodes)
 }
 
+// restartCorruptionNode waits for membership convergence before another node is
+// stopped. Restarted nodes use new gossip ports, so rapid restarts against stale
+// membership can otherwise leave each replica in an isolated cluster.
+func restartCorruptionNode(t *testing.T, cluster *utils.MiniCluster, nodeIndex int) {
+	t.Helper()
+	_, err := cluster.RestartNode(t, nodeIndex, cluster.GetSeedList())
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		for _, srv := range cluster.Servers {
+			if srv != nil && srv.GetMemberCount() < cluster.GetActiveNodes() {
+				return false
+			}
+		}
+		return true
+	}, 30*time.Second, 100*time.Millisecond, "restarted nodes must rejoin the cluster")
+}
+
 // declareSkipRange writes the operator-declared skip range for a log/segment through the client's
 // metadata provider, so a stalled reader can move past the damaged range.
 func declareSkipRange(t *testing.T, ctx context.Context, c woodpecker.Client, logID, segID, from, to int64) {
@@ -154,7 +197,7 @@ func readEntry(ctx context.Context, reader log.LogReader) (*log.LogMessage, erro
 	return reader.ReadNext(readCtx)
 }
 
-// TestStagedStorageService_Corruption_Active_OneReplicaDamaged covers B1: an Active segment where
+// TestDataCorruptionService_Active_OneReplicaDamaged covers B1: an Active segment where
 // one replica's local data is truncated before finalize. Restart + fence re-derives the LAC from
 // the two healthy replicas, so no data is lost, no reader stalls, and compaction succeeds.
 func TestDataCorruptionService_Active_OneReplicaDamaged(t *testing.T) {
@@ -165,7 +208,7 @@ func TestDataCorruptionService_Active_OneReplicaDamaged(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := corruptionE2EConfig(t)
 
-	cluster, cfg, gossipSeeds, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
+	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
 	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
@@ -200,11 +243,16 @@ func TestDataCorruptionService_Active_OneReplicaDamaged(t *testing.T) {
 	// Restart the damaged node; recovery truncates it at the bad point.
 	_, err = cluster.LeaveNodeWithIndex(t, target)
 	require.NoError(t, err)
-	_, err = cluster.RestartNode(t, target, gossipSeeds)
-	require.NoError(t, err)
+	restartCorruptionNode(t, cluster, target)
 
 	// Re-open the writer to trigger fenceAllActiveSegments; LAC resolves from the healthy replicas.
-	require.NoError(t, logWriter.Close(ctx))
+	// Take over through a fresh handle before closing the original writer:
+	// a normal close would finalize the segment and bypass recovery fencing.
+	previousWriter := logWriter
+	defer previousWriter.Close(context.Background())
+	logHandle, err = wpClient.OpenLog(ctx, logName)
+	require.NoError(t, err)
+	defer logHandle.Close(context.Background())
 	logWriter, err = logHandle.OpenLogWriter(ctx)
 	require.NoError(t, err)
 	defer logWriter.Close(ctx)
@@ -220,9 +268,14 @@ func TestDataCorruptionService_Active_OneReplicaDamaged(t *testing.T) {
 		require.NoError(t, readErr, "read %d failed (must not stall with two healthy replicas)", i)
 		require.Equal(t, int64(i), msg.Id.EntryId)
 	}
+	readonlySeg, err := logHandle.GetExistsReadonlySegmentHandle(ctx, segID)
+	require.NoError(t, err)
+	require.NoError(t, readonlySeg.Compact(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
+
 }
 
-// TestStagedStorageService_Corruption_Completed_OneReplicaDamaged covers A1: a Completed segment
+// TestDataCorruptionService_Completed_OneReplicaDamaged covers A1: a Completed segment
 // with one damaged replica. The reader fails over to the two healthy replicas and reads every
 // entry; compaction seals on a healthy replica.
 func TestDataCorruptionService_Completed_OneReplicaDamaged(t *testing.T) {
@@ -233,7 +286,7 @@ func TestDataCorruptionService_Completed_OneReplicaDamaged(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := corruptionE2EConfig(t)
 
-	cluster, cfg, gossipSeeds, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
+	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
 	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
@@ -252,15 +305,15 @@ func TestDataCorruptionService_Completed_OneReplicaDamaged(t *testing.T) {
 	require.NoError(t, err)
 
 	segID := writeCorruptionSegment(t, ctx, logWriter, entries)
-	require.NoError(t, logHandle.CompleteAllActiveSegmentIfExists(ctx))
-	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 45*time.Second)
-	require.NoError(t, logWriter.Close(ctx))
-
 	segHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
 	require.NotNil(t, segHandle)
 	quorumInfo, err := segHandle.GetQuorumInfo(ctx)
 	require.NoError(t, err)
 	nodes := quorumNodeIndexes(t, cluster, quorumInfo.Nodes)
+
+	require.NoError(t, logHandle.CompleteAllActiveSegmentIfExists(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 45*time.Second)
+	require.NoError(t, logWriter.Close(ctx))
 
 	// Damage one replica's local data.log.
 	target := nodes[0]
@@ -271,8 +324,7 @@ func TestDataCorruptionService_Completed_OneReplicaDamaged(t *testing.T) {
 	// Restart the damaged node.
 	_, err = cluster.LeaveNodeWithIndex(t, target)
 	require.NoError(t, err)
-	_, err = cluster.RestartNode(t, target, gossipSeeds)
-	require.NoError(t, err)
+	restartCorruptionNode(t, cluster, target)
 
 	// The two healthy replicas still cover the full range: the reader sees every entry.
 	reader, err := logHandle.OpenLogReader(ctx, &log.LogMessageId{SegmentId: segID, EntryId: 0}, "a1-reader")
@@ -283,13 +335,17 @@ func TestDataCorruptionService_Completed_OneReplicaDamaged(t *testing.T) {
 		require.NoError(t, readErr, "read %d failed (must failover to healthy replicas)", i)
 		require.Equal(t, int64(i), msg.Id.EntryId)
 	}
+	readonlySeg, err := logHandle.GetExistsReadonlySegmentHandle(ctx, segID)
+	require.NoError(t, err)
+	require.NoError(t, readonlySeg.Compact(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
+
 }
 
-// TestStagedStorageService_Corruption_Completed_AllReplicasDamagedRange covers A3 + skip-range
+// TestDataCorruptionService_Completed_AllReplicasDamagedRange covers A3 + skip-range
 // recovery: a range of entries is damaged on every replica, so the earliest reader stalls at the
 // first damaged entry. Declaring a skip range over exactly that range lets the reader move past it
-// and continue with the next healthy entries. Truncate is verified to keep the reader parked
-// rather than being the un-stall tool.
+// and continue with the next healthy entries. Compaction cannot seal the damaged segment.
 func TestDataCorruptionService_Completed_AllReplicasDamagedRange(t *testing.T) {
 	const (
 		clusterSize = 3
@@ -300,11 +356,11 @@ func TestDataCorruptionService_Completed_AllReplicasDamagedRange(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := corruptionE2EConfig(t)
 
-	cluster, cfg, gossipSeeds, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
+	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
 	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
 	wpClient := newCorruptionClient(t, ctx, cfg, seeds)
@@ -319,15 +375,15 @@ func TestDataCorruptionService_Completed_AllReplicasDamagedRange(t *testing.T) {
 	require.NoError(t, err)
 
 	segID := writeCorruptionSegment(t, ctx, logWriter, entries)
-	require.NoError(t, logHandle.CompleteAllActiveSegmentIfExists(ctx))
-	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 45*time.Second)
-	require.NoError(t, logWriter.Close(ctx))
-
 	segHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
 	require.NotNil(t, segHandle)
 	quorumInfo, err := segHandle.GetQuorumInfo(ctx)
 	require.NoError(t, err)
 	nodes := quorumNodeIndexes(t, cluster, quorumInfo.Nodes)
+
+	require.NoError(t, logHandle.CompleteAllActiveSegmentIfExists(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 45*time.Second)
+	require.NoError(t, logWriter.Close(ctx))
 
 	// Damage the same entry range on every replica.
 	for _, nodeIndex := range nodes {
@@ -342,9 +398,13 @@ func TestDataCorruptionService_Completed_AllReplicasDamagedRange(t *testing.T) {
 	for _, nodeIndex := range nodes {
 		_, err = cluster.LeaveNodeWithIndex(t, nodeIndex)
 		require.NoError(t, err)
-		_, err = cluster.RestartNode(t, nodeIndex, gossipSeeds)
-		require.NoError(t, err)
+		restartCorruptionNode(t, cluster, nodeIndex)
 	}
+
+	readonlySeg, err := logHandle.GetExistsReadonlySegmentHandle(ctx, segID)
+	require.NoError(t, err)
+	require.Error(t, readonlySeg.Compact(ctx), "all damaged replicas must prevent compaction")
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 5*time.Second)
 
 	reader, err := logHandle.OpenLogReader(ctx, &log.LogMessageId{SegmentId: segID, EntryId: 0}, "a3-reader")
 	require.NoError(t, err)
@@ -362,11 +422,22 @@ func TestDataCorruptionService_Completed_AllReplicasDamagedRange(t *testing.T) {
 	require.Error(t, stallErr, "reader must stall on the damaged entry")
 	require.True(t, isDeadline(stallErr), "stall must be a deadline, got %v", stallErr)
 
-	// Truncate does not un-stall a parked reader; a skip range is the recovery tool.
+	// Keep ReadNext running across two report intervals: the first records the stalled
+	// position, and the second refreshes skip ranges for that unchanged position.
 	declareSkipRange(t, ctx, wpClient, logHandle.GetId(), segID, fromEntry, toEntry)
-
-	// The reader must now move past the damaged range and keep reading the healthy tail.
-	for i := toEntry + 1; i < entries; i++ {
+	skipCtx, cancelSkip := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelSkip()
+	var firstAfter *log.LogMessage
+	var readErr error
+	for skipCtx.Err() == nil {
+		firstAfter, readErr = readEntry(skipCtx, reader)
+		if !isDeadline(readErr) {
+			break
+		}
+	}
+	require.NoError(t, readErr, "reader did not move past the damaged range after skip")
+	require.Equal(t, int64(toEntry+1), firstAfter.Id.EntryId, "first entry after skip must be the one after the range")
+	for i := int64(toEntry + 2); i < entries; i++ {
 		msg, readErr := readEntry(ctx, reader)
 		require.NoError(t, readErr, "read %d after skip failed", i)
 		require.Equal(t, i, msg.Id.EntryId)
@@ -374,7 +445,7 @@ func TestDataCorruptionService_Completed_AllReplicasDamagedRange(t *testing.T) {
 }
 
 func isDeadline(err error) bool {
-	return err != nil && errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded
 }
 
 // truncateDataLogAfterEntry truncates a data.log right after the data record holding the given
@@ -382,18 +453,21 @@ func isDeadline(err error) bool {
 // everything past a point is incomplete, rather than a CRC-damaged block.
 func truncateDataLogAfterEntry(t *testing.T, dataLogPath string, lastGoodEntry int64) {
 	t.Helper()
-	positions := parseFileRecordPositions(t, dataLogPath)
-	var cutoff int64 = -1
-	for i := range positions {
-		if positions[i].RecordType == "data" && positions[i].EntryID == lastGoodEntry {
-			cutoff = positions[i].EndPos
-		}
-	}
-	require.NotEqual(t, int64(-1), cutoff, "entry %d not found in %s", lastGoodEntry, dataLogPath)
+	data, err := os.ReadFile(dataLogPath)
+	require.NoError(t, err)
+	offsets := dataRecordPayloadOffsets(t, dataLogPath)
+	require.Less(t, lastGoodEntry, int64(len(offsets)), "entry %d out of range", lastGoodEntry)
+
+	require.GreaterOrEqual(t, lastGoodEntry, int64(0))
+	// The length lives in the fixed header immediately before this payload.
+	payloadStart := offsets[lastGoodEntry]
+	headerStart := payloadStart - int64(codec.RecordHeaderSize)
+	payloadLength := int64(binary.LittleEndian.Uint32(data[headerStart+5 : headerStart+9]))
+	cutoff := payloadStart + payloadLength
 	require.NoError(t, os.Truncate(dataLogPath, cutoff))
 }
 
-// TestStagedStorageService_Corruption_Active_AllReplicasTruncated covers B3: an Active segment
+// TestDataCorruptionService_Active_AllReplicasTruncated covers B3: an Active segment
 // whose three replicas are all truncated at the same point. Restart + fence re-derives the LAC at
 // the truncation point, so the reader reads only up to that point and then reaches EOF cleanly --
 // no stall, no skip range needed, and compaction seals at the shorter LAC.
@@ -406,7 +480,7 @@ func TestDataCorruptionService_Active_AllReplicasTruncated(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := corruptionE2EConfig(t)
 
-	cluster, cfg, gossipSeeds, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
+	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
 	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
@@ -442,12 +516,17 @@ func TestDataCorruptionService_Active_AllReplicasTruncated(t *testing.T) {
 	for _, nodeIndex := range nodes {
 		_, err = cluster.LeaveNodeWithIndex(t, nodeIndex)
 		require.NoError(t, err)
-		_, err = cluster.RestartNode(t, nodeIndex, gossipSeeds)
-		require.NoError(t, err)
+		restartCorruptionNode(t, cluster, nodeIndex)
 	}
 
 	// Re-open the writer to trigger fenceAllActiveSegments; LAC resolves to lastGood.
-	require.NoError(t, logWriter.Close(ctx))
+	// Take over through a fresh handle before closing the original writer:
+	// a normal close would finalize the segment and bypass recovery fencing.
+	previousWriter := logWriter
+	defer previousWriter.Close(context.Background())
+	logHandle, err = wpClient.OpenLog(ctx, logName)
+	require.NoError(t, err)
+	defer logHandle.Close(context.Background())
 	logWriter, err = logHandle.OpenLogWriter(ctx)
 	require.NoError(t, err)
 	defer logWriter.Close(ctx)
@@ -463,9 +542,24 @@ func TestDataCorruptionService_Active_AllReplicasTruncated(t *testing.T) {
 		require.NoError(t, readErr, "read %d failed", i)
 		require.Equal(t, i, msg.Id.EntryId)
 	}
+	// A following segment proves the reader crosses the shortened segment's EOF
+	// instead of exposing its discarded tail or stalling there.
+	next := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte("after-shortened-segment")})
+	require.NoError(t, next.Err)
+	require.Greater(t, next.LogMessageId.SegmentId, segID)
+	msg, readErr := readEntry(ctx, reader)
+	require.NoError(t, readErr)
+	require.Equal(t, next.LogMessageId, msg.Id)
+	require.Equal(t, []byte("after-shortened-segment"), msg.Payload)
+
+	readonlySeg, err := logHandle.GetExistsReadonlySegmentHandle(ctx, segID)
+	require.NoError(t, err)
+	require.NoError(t, readonlySeg.Compact(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
+
 }
 
-// TestStagedStorageService_Corruption_Active_TwoReplicasTruncated covers B2: two Active replicas
+// TestDataCorruptionService_Active_TwoReplicasTruncated covers B2: two Active replicas
 // truncated at the same point while the third is healthy. Fence re-derives the LAC at the
 // truncation point (the next-smallest reported lastEntryId), so the reader sees only up to that
 // point and then EOF -- no stall, no skip range.
@@ -478,7 +572,7 @@ func TestDataCorruptionService_Active_TwoReplicasTruncated(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := corruptionE2EConfig(t)
 
-	cluster, cfg, gossipSeeds, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
+	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
 	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
@@ -514,11 +608,16 @@ func TestDataCorruptionService_Active_TwoReplicasTruncated(t *testing.T) {
 	for _, nodeIndex := range nodes[:2] {
 		_, err = cluster.LeaveNodeWithIndex(t, nodeIndex)
 		require.NoError(t, err)
-		_, err = cluster.RestartNode(t, nodeIndex, gossipSeeds)
-		require.NoError(t, err)
+		restartCorruptionNode(t, cluster, nodeIndex)
 	}
 
-	require.NoError(t, logWriter.Close(ctx))
+	// Take over through a fresh handle before closing the original writer:
+	// a normal close would finalize the segment and bypass recovery fencing.
+	previousWriter := logWriter
+	defer previousWriter.Close(context.Background())
+	logHandle, err = wpClient.OpenLog(ctx, logName)
+	require.NoError(t, err)
+	defer logHandle.Close(context.Background())
 	logWriter, err = logHandle.OpenLogWriter(ctx)
 	require.NoError(t, err)
 	defer logWriter.Close(ctx)
@@ -533,9 +632,24 @@ func TestDataCorruptionService_Active_TwoReplicasTruncated(t *testing.T) {
 		require.NoError(t, readErr, "read %d failed", i)
 		require.Equal(t, i, msg.Id.EntryId)
 	}
+	// A following segment proves the reader crosses the shortened segment's EOF
+	// instead of exposing its discarded tail or stalling there.
+	next := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte("after-shortened-segment")})
+	require.NoError(t, next.Err)
+	require.Greater(t, next.LogMessageId.SegmentId, segID)
+	msg, readErr := readEntry(ctx, reader)
+	require.NoError(t, readErr)
+	require.Equal(t, next.LogMessageId, msg.Id)
+	require.Equal(t, []byte("after-shortened-segment"), msg.Payload)
+
+	readonlySeg, err := logHandle.GetExistsReadonlySegmentHandle(ctx, segID)
+	require.NoError(t, err)
+	require.NoError(t, readonlySeg.Compact(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
+
 }
 
-// TestStagedStorageService_Corruption_TruncateReclaimsDamagedSegment covers truncate as the
+// TestDataCorruptionService_TruncateReclaimsDamagedSegment covers truncate as the
 // lifecycle exit for a damaged Completed segment: truncating past the damaged range advances the
 // log's truncation point, and the log remains usable afterward.
 func TestDataCorruptionService_TruncateReclaimsDamagedSegment(t *testing.T) {
@@ -546,7 +660,7 @@ func TestDataCorruptionService_TruncateReclaimsDamagedSegment(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := corruptionE2EConfig(t)
 
-	cluster, cfg, gossipSeeds, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
+	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
 	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
@@ -565,15 +679,15 @@ func TestDataCorruptionService_TruncateReclaimsDamagedSegment(t *testing.T) {
 	require.NoError(t, err)
 
 	segID := writeCorruptionSegment(t, ctx, logWriter, entries)
-	require.NoError(t, logHandle.CompleteAllActiveSegmentIfExists(ctx))
-	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 45*time.Second)
-	require.NoError(t, logWriter.Close(ctx))
-
 	segHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
 	require.NotNil(t, segHandle)
 	quorumInfo, err := segHandle.GetQuorumInfo(ctx)
 	require.NoError(t, err)
 	nodes := quorumNodeIndexes(t, cluster, quorumInfo.Nodes)
+
+	require.NoError(t, logHandle.CompleteAllActiveSegmentIfExists(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 45*time.Second)
+	require.NoError(t, logWriter.Close(ctx))
 
 	// Damage all replicas so the segment cannot be read or sealed.
 	for _, nodeIndex := range nodes {
@@ -584,8 +698,7 @@ func TestDataCorruptionService_TruncateReclaimsDamagedSegment(t *testing.T) {
 	for _, nodeIndex := range nodes {
 		_, err = cluster.LeaveNodeWithIndex(t, nodeIndex)
 		require.NoError(t, err)
-		_, err = cluster.RestartNode(t, nodeIndex, gossipSeeds)
-		require.NoError(t, err)
+		restartCorruptionNode(t, cluster, nodeIndex)
 	}
 
 	// Truncate past the damaged range: Completed segments are valid truncate targets.
@@ -596,9 +709,24 @@ func TestDataCorruptionService_TruncateReclaimsDamagedSegment(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, segID, truncated.SegmentId)
 	require.Equal(t, int64(entries-1), truncated.EntryId)
+	// After truncation, new writes and reads must still work in a new segment.
+	logWriter, err = logHandle.OpenLogWriter(ctx)
+	require.NoError(t, err)
+	defer logWriter.Close(ctx)
+	next := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte("after-truncate")})
+	require.NoError(t, next.Err)
+	require.Greater(t, next.LogMessageId.SegmentId, segID)
+	reader, err := logHandle.OpenLogReader(ctx, next.LogMessageId, "truncate-reader")
+	require.NoError(t, err)
+	defer reader.Close(ctx)
+	msg, readErr := readEntry(ctx, reader)
+	require.NoError(t, readErr)
+	require.Equal(t, next.LogMessageId, msg.Id)
+	require.Equal(t, []byte("after-truncate"), msg.Payload)
+
 }
 
-// TestStagedStorageService_Corruption_Completed_TwoReplicasDamaged covers A2a: a Completed segment
+// TestDataCorruptionService_Completed_TwoReplicasDamaged covers A2a: a Completed segment
 // with two damaged replicas and one healthy survivor that still covers the LAC. The quorum read
 // only needs any replica to serve an entry, so a single healthy survivor still delivers every
 // entry; compaction seals on that survivor.
@@ -610,7 +738,7 @@ func TestDataCorruptionService_Completed_TwoReplicasDamaged(t *testing.T) {
 	rootPath := t.TempDir()
 	cfg := corruptionE2EConfig(t)
 
-	cluster, cfg, gossipSeeds, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
+	cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, clusterSize, rootPath, cfg)
 	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
@@ -629,15 +757,15 @@ func TestDataCorruptionService_Completed_TwoReplicasDamaged(t *testing.T) {
 	require.NoError(t, err)
 
 	segID := writeCorruptionSegment(t, ctx, logWriter, entries)
-	require.NoError(t, logHandle.CompleteAllActiveSegmentIfExists(ctx))
-	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 45*time.Second)
-	require.NoError(t, logWriter.Close(ctx))
-
 	segHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
 	require.NotNil(t, segHandle)
 	quorumInfo, err := segHandle.GetQuorumInfo(ctx)
 	require.NoError(t, err)
 	nodes := quorumNodeIndexes(t, cluster, quorumInfo.Nodes)
+
+	require.NoError(t, logHandle.CompleteAllActiveSegmentIfExists(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Completed, 45*time.Second)
+	require.NoError(t, logWriter.Close(ctx))
 
 	// Damage two replicas; the third stays intact and still covers the full LAC.
 	for _, nodeIndex := range nodes[:2] {
@@ -648,8 +776,7 @@ func TestDataCorruptionService_Completed_TwoReplicasDamaged(t *testing.T) {
 	for _, nodeIndex := range nodes[:2] {
 		_, err = cluster.LeaveNodeWithIndex(t, nodeIndex)
 		require.NoError(t, err)
-		_, err = cluster.RestartNode(t, nodeIndex, gossipSeeds)
-		require.NoError(t, err)
+		restartCorruptionNode(t, cluster, nodeIndex)
 	}
 
 	// A single healthy survivor still serves every entry.
@@ -661,4 +788,9 @@ func TestDataCorruptionService_Completed_TwoReplicasDamaged(t *testing.T) {
 		require.NoError(t, readErr, "read %d failed (one healthy survivor must serve it)", i)
 		require.Equal(t, int64(i), msg.Id.EntryId)
 	}
+	readonlySeg, err := logHandle.GetExistsReadonlySegmentHandle(ctx, segID)
+	require.NoError(t, err)
+	require.NoError(t, readonlySeg.Compact(ctx))
+	requireCompactedCleanupSegmentState(t, ctx, logHandle, segID, proto.SegmentState_Sealed, 20*time.Second)
+
 }

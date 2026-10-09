@@ -506,13 +506,12 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 		return "", fmt.Errorf("failed to prepare node: %w", err)
 	}
 
-	// Run server (starts grpc server and log store)
-	go func(srv *server.Server, nodeID int) {
-		if runErr := srv.Run(); runErr != nil {
-			// Use fmt instead of t.Logf to avoid panic if test has already finished
-			fmt.Printf("Node %d server run error: %v\n", nodeID, runErr)
-		}
-	}(nodeServer, nodeIndex)
+	// Run returns after gRPC initialization and log-store startup; serving continues
+	// in background goroutines. Wait here so callers can safely stop the restarted
+	// node immediately without racing gRPC server initialization.
+	if err := nodeServer.Run(); err != nil {
+		return "", fmt.Errorf("failed to run node %d: %w", nodeIndex, err)
+	}
 
 	// Update cluster
 	cluster.Servers[nodeIndex] = nodeServer
