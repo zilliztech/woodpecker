@@ -157,7 +157,7 @@ func readEntry(ctx context.Context, reader log.LogReader) (*log.LogMessage, erro
 // TestStagedStorageService_Corruption_Active_OneReplicaDamaged covers B1: an Active segment where
 // one replica's local data is truncated before finalize. Restart + fence re-derives the LAC from
 // the two healthy replicas, so no data is lost, no reader stalls, and compaction succeeds.
-func TestStagedStorageService_Corruption_Active_OneReplicaDamaged(t *testing.T) {
+func TestDataCorruptionService_Active_OneReplicaDamaged(t *testing.T) {
 	const (
 		clusterSize = 3
 		entries     = 100
@@ -225,7 +225,7 @@ func TestStagedStorageService_Corruption_Active_OneReplicaDamaged(t *testing.T) 
 // TestStagedStorageService_Corruption_Completed_OneReplicaDamaged covers A1: a Completed segment
 // with one damaged replica. The reader fails over to the two healthy replicas and reads every
 // entry; compaction seals on a healthy replica.
-func TestStagedStorageService_Corruption_Completed_OneReplicaDamaged(t *testing.T) {
+func TestDataCorruptionService_Completed_OneReplicaDamaged(t *testing.T) {
 	const (
 		clusterSize = 3
 		entries     = 100
@@ -290,7 +290,7 @@ func TestStagedStorageService_Corruption_Completed_OneReplicaDamaged(t *testing.
 // first damaged entry. Declaring a skip range over exactly that range lets the reader move past it
 // and continue with the next healthy entries. Truncate is verified to keep the reader parked
 // rather than being the un-stall tool.
-func TestStagedStorageService_Corruption_Completed_AllReplicasDamagedRange(t *testing.T) {
+func TestDataCorruptionService_Completed_AllReplicasDamagedRange(t *testing.T) {
 	const (
 		clusterSize = 3
 		entries     = 100
@@ -397,7 +397,7 @@ func truncateDataLogAfterEntry(t *testing.T, dataLogPath string, lastGoodEntry i
 // whose three replicas are all truncated at the same point. Restart + fence re-derives the LAC at
 // the truncation point, so the reader reads only up to that point and then reaches EOF cleanly --
 // no stall, no skip range needed, and compaction seals at the shorter LAC.
-func TestStagedStorageService_Corruption_Active_AllReplicasTruncated(t *testing.T) {
+func TestDataCorruptionService_Active_AllReplicasTruncated(t *testing.T) {
 	const (
 		clusterSize = 3
 		entries     = 100
@@ -469,7 +469,7 @@ func TestStagedStorageService_Corruption_Active_AllReplicasTruncated(t *testing.
 // truncated at the same point while the third is healthy. Fence re-derives the LAC at the
 // truncation point (the next-smallest reported lastEntryId), so the reader sees only up to that
 // point and then EOF -- no stall, no skip range.
-func TestStagedStorageService_Corruption_Active_TwoReplicasTruncated(t *testing.T) {
+func TestDataCorruptionService_Active_TwoReplicasTruncated(t *testing.T) {
 	const (
 		clusterSize = 3
 		entries     = 100
@@ -538,7 +538,7 @@ func TestStagedStorageService_Corruption_Active_TwoReplicasTruncated(t *testing.
 // TestStagedStorageService_Corruption_TruncateReclaimsDamagedSegment covers truncate as the
 // lifecycle exit for a damaged Completed segment: truncating past the damaged range advances the
 // log's truncation point, and the log remains usable afterward.
-func TestStagedStorageService_Corruption_TruncateReclaimsDamagedSegment(t *testing.T) {
+func TestDataCorruptionService_TruncateReclaimsDamagedSegment(t *testing.T) {
 	const (
 		clusterSize = 3
 		entries     = 20
@@ -602,7 +602,7 @@ func TestStagedStorageService_Corruption_TruncateReclaimsDamagedSegment(t *testi
 // with two damaged replicas and one healthy survivor that still covers the LAC. The quorum read
 // only needs any replica to serve an entry, so a single healthy survivor still delivers every
 // entry; compaction seals on that survivor.
-func TestStagedStorageService_Corruption_Completed_TwoReplicasDamaged(t *testing.T) {
+func TestDataCorruptionService_Completed_TwoReplicasDamaged(t *testing.T) {
 	const (
 		clusterSize = 3
 		entries     = 100
