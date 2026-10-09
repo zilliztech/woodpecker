@@ -2307,9 +2307,22 @@ func (w *StagedFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, 
 	var currentBlockLastEntryID int64 = -1
 	var inBlock bool = false
 
+	// Recovery stops at the first damaged or incomplete block and discards what follows. Log each
+	// truncation with the shared context so operators can trace a later reader stall back to the
+	// exact offset and entry where the damage was first seen. The normal scan exits the loop
+	// without hitting any of these paths.
+	recoveryLog := logger.Ctx(ctx).With(
+		zap.String("segmentFilePath", w.segmentFilePath),
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId))
+
 	for offset < len(data) {
 		// Check if we have enough data for a record header
 		if offset+codec.RecordHeaderSize > len(data) {
+			recoveryLog.Warn("segment recovery truncated at an incomplete record header",
+				zap.Int64("offset", int64(offset)),
+				zap.Int64("nextEntryId", currentEntryId),
+				zap.Int64("discardedBytes", int64(len(data)-offset)))
 			break
 		}
 
@@ -2317,6 +2330,11 @@ func (w *StagedFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, 
 		record, err := codec.DecodeRecord(data[offset:])
 		if err != nil {
 			// If we can't decode a record, the file might be truncated
+			recoveryLog.Warn("segment recovery truncated at an undecodable record",
+				zap.Int64("offset", int64(offset)),
+				zap.Int64("nextEntryId", currentEntryId),
+				zap.Int64("discardedBytes", int64(len(data)-offset)),
+				zap.Error(err))
 			break
 		}
 
@@ -2387,6 +2405,10 @@ func (w *StagedFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, 
 
 		default:
 			// Unknown record type, might be corrupted
+			recoveryLog.Warn("segment recovery truncated at an unexpected record type",
+				zap.Int64("offset", int64(offset)),
+				zap.Int64("nextEntryId", currentEntryId),
+				zap.Int64("discardedBytes", int64(len(data)-offset)))
 			goto exitLoop
 		}
 
