@@ -1,7 +1,7 @@
 # wp — Woodpecker Operational CLI
 
 `wp` is the Woodpecker operational CLI for service-mode clusters.
-See [`docs/wpcli-design.md`](../../docs/wpcli-design.md) for the full design.
+See [`docs/wip/wpcli/wpcli-design.md`](../../docs/wip/wpcli/wpcli-design.md) for the full design.
 
 ## Build
 
@@ -11,7 +11,7 @@ See [`docs/wpcli-design.md`](../../docs/wpcli-design.md) for the full design.
 
 ## Quick start
 
-See [`docs/wpcli/quickstart.md`](../../docs/wpcli/quickstart.md) for a 15-minute onboarding guide.
+See [`docs/admin-guides/wpcli/quickstart.md`](../../docs/admin-guides/wpcli/quickstart.md) for a 15-minute onboarding guide.
 
 ## In-pod usage (zero-config)
 
@@ -52,7 +52,7 @@ contexts:
     admin_port: 9091
 ```
 
-See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the full reference.
+See [`docs/admin-guides/wpcli/configuration.md`](../../docs/admin-guides/wpcli/configuration.md) for the full reference.
 
 ## Running outside Kubernetes
 
@@ -226,4 +226,12 @@ on that ask and only starts the refresh, so a lone reader sees a new range on it
 
 ## Incident response cookbook
 
-See [`docs/wpcli/cookbook.md`](../../docs/wpcli/cookbook.md) for 10 common recipes.
+See [`docs/admin-guides/wpcli/cookbook.md`](../../docs/admin-guides/wpcli/cookbook.md) for incident-response recipes.
+
+## Incident workflows
+
+The [website operations guide](../../docs/operations.html) connects node drain, orphan cleanup,
+write progress/quorum fencing, log audits, reader diagnosis, skip-range recovery and retention.
+The [CLI cookbook](../../docs/admin-guides/wpcli/cookbook.md) supplies command sequences and
+verification steps. The [v0.1.46 coverage review](../../docs/admin-guides/wpcli/release-0.1.46.md)
+distinguishes merged capabilities from closed proposals and still-open metadata/timeout work.

@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Operations Guide - Woodpecker</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" href="images/icon.png" type="image/png">
+    <style>
+        :root {
+            --primary-color: #4a6cf7;
+            --secondary-color: #6c757d;
+            --dark-color: #2c3e50;
+            --light-color: #f8f9fa;
+            --border-color: #e1e4e8;
+            --success-color: #28a745;
+            --code-bg: #f6f8fa;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+        }
+        
+        .container {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Navigation */
+        .navbar {
+            background-color: #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .nav-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+        
+        .logo-wrapper {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo {
+            font-weight: 400;
+            font-size: 24px;
+            color: var(--primary-color);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            letter-spacing: -0.02em;
+        }
+        
+        .logo-dot {
+            margin: 0 4px;
+            font-size: 24px;
+            line-height: 1;
+            opacity: 0.7;
+        }
+        
+        .logo-beta {
+            font-size: 14px;
+            opacity: 0.6;
+            font-weight: 400;
+            margin-top: 2px;
+        }
+        
+        .nav-links {
+            display: flex;
+            list-style: none;
+        }
+        
+        .nav-links li {
+            margin-left: 30px;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--dark-color);
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: var(--primary-color);
+        }
+        
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, rgba(74, 108, 247, 0.9) 0%, rgba(106, 17, 203, 0.9) 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            height: 420px;
+            width: 100%;
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            width: 1080px;
+            height: 418px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .hero-text {
+            width: 400px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 20px 0;
+        }
+        
+        .hero h1 {
+            font-weight: 400;
+            font-size: 48px;
+            margin-bottom: 16px;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+        
+        .hero p {
+            font-size: 20px;
+            margin-bottom: 24px;
+            opacity: 0.9;
+            line-height: 1.4;
+            max-width: 440px;
+        }
+        
+        /* Content Sections */
+        .section {
+            padding: 60px 0;
+        }
+        
+        .section:nth-child(even) {
+            background-color: var(--light-color);
+        }
+        
+        .section-title {
+            margin-bottom: 40px;
+        }
+        
+        .section-title h2 {
+            font-weight: 400;
+            font-size: 36px;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+            letter-spacing: -0.02em;
+        }
+        
+        .section-title p {
+            color: var(--secondary-color);
+            max-width: 700px;
+        }
+        
+        /* Code Blocks */
+        .code-block {
+            background-color: var(--code-bg);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+        
+        .code-block pre {
+            margin: 0;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .code-block code {
+            color: #24292e;
+        }
+        
+        /* Configuration Tables */
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        .config-table th {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 15px;
+            text-align: left;
+        }
+        
+        .config-table td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .config-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Footer */
+        .footer {
+            background-color: var(--dark-color);
+            color: white;
+            padding: 40px 0;
+            text-align: center;
+        }
+        
+        .footer p {
+            margin-bottom: 10px;
+        }
+        
+        .footer a {
+            color: white;
+            text-decoration: none;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .nav-container {
+                flex-direction: column;
+            }
+            
+            .nav-links {
+                margin-top: 20px;
+            }
+            
+            .nav-links li {
+                margin: 0 15px;
+            }
+            
+            .section-title h2 {
+                font-size: 30px;
+            }
+        }
+
+        h1, h2, h3 {
+            font-weight: 400;
+            letter-spacing: -0.02em;
+        }
+    
+        .gap {
+            background-color: #fff8e1;
+            border-left: 4px solid #f0ad4e;
+            padding: 12px 18px;
+            margin: 18px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        .gap strong { color: #8a6d3b; }
+        .note {
+            background-color: #eef3ff;
+            border-left: 4px solid var(--primary-color);
+            padding: 12px 18px;
+            margin: 18px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        .lvl {
+            display: inline-block;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #eef3ff;
+            color: var(--primary-color);
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .lvl.none { background: #f5f5f5; color: var(--secondary-color); }
+        h3 { margin-top: 28px; margin-bottom: 10px; color: var(--dark-color); }
+        h4 { margin-top: 20px; margin-bottom: 8px; color: var(--dark-color); }
+        .section p { margin-bottom: 12px; }
+        .section ul { margin: 0 0 14px 22px; }
+        .section li { margin-bottom: 6px; }
+    </style>
+</head>
+<body>
+<nav class="navbar">
+<div class="container nav-container">
+<div class="logo-wrapper">
+<a href="index.html" class="logo"><img src="images/logo.png" width="250" alt="Woodpecker Logo" /> <span class="logo-dot">·</span><span class="logo-beta">beta</span></a>
+</div>
+<ul class="nav-links">
+<li><a href="index.html">Home</a></li>
+<li><a href="quickstart.html">Quick Start</a></li>
+<li><a href="operations.html">Operations</a></li>
+<li><a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a></li>
+</ul>
+</div>
+</nav>
+
+<section class="hero">
+<div class="container">
+<div class="hero-content">
+<div class="hero-text">
+<h1>Operations Guide</h1>
+<p>Observing and intervening in a running Woodpecker cluster</p>
+</div>
+</div>
+</div>
+</section>
+
+<section class="section">
+<div class="container">
+<h2 class="section-title" id="setup">Before you start</h2>
+<p>This guide tracks the operational surface on current master for v0.1.46. Commands shown as steps are
+examples to adapt to your cluster; captured output and illustrative output are distinguished below.</p>
+<p>Jump to <a href="#commands">command overview</a>, <a href="#workflows">incident workflows</a> or
+<a href="#exit-codes">script exit codes</a>.</p>
+
+<p>Every Woodpecker node serves an admin HTTP API on port <code>9091</code> (<code>METRICS_PORT</code>), and the
+<code>wp</code> CLI is bundled into the server images from v0.1.32 onward. Inside a pod it needs no configuration —
+the images set <code>WOODPECKER_ENDPOINT=http://localhost:9091</code>:</p>
+
+<div class="code-block"><pre>kubectl exec -it &lt;woodpecker-pod&gt; -- wp node list</pre></div>
+
+<h3 id="external-access">Running outside Kubernetes</h3>
+<p>The seed endpoint discovers membership; it does not proxy requests to replicas. Pod FQDNs and IPs advertised
+in memberlist or segment metadata may be unreachable from your workstation. Expose each replica's admin HTTP
+port separately and map its original service address to that reachable origin:</p>
+<div class="code-block"><pre># Run each port forward in a separate terminal.
+kubectl -n woodpecker port-forward pod/wp-0 19091:9091
+kubectl -n woodpecker port-forward pod/wp-1 29091:9091
+kubectl -n woodpecker port-forward pod/wp-2 39091:9091</pre></div>
+<div class="code-block"><pre>current-context: external
+contexts:
+  external:
+    endpoint: http://127.0.0.1:19091
+    node_admin_urls:
+      "wp-0.wp-headless.woodpecker.svc.cluster.local:18080": http://127.0.0.1:19091
+      "wp-1.wp-headless.woodpecker.svc.cluster.local:18080": http://127.0.0.1:29091
+      "wp-2.wp-headless.woodpecker.svc.cluster.local:18080": http://127.0.0.1:39091</pre></div>
+<p>Use your actual advertised service addresses as keys. Repeated <code>--node-admin-url KEY=URL</code> flags
+merge into the context map and override the same key (last value wins). Lookup prefers the exact service address,
+then node ID, exact gossip address, service hostname and gossip hostname; without a match, the existing advertised
+host and admin-port behavior applies. Values are HTTP(S) origins, with optional ports and no credentials,
+path, query or fragment. Several replicas can map to localhost with different ports.</p>
+<div class="code-block"><pre>wp --context external node list --strict
+wp --context external \
+  --node-admin-url 'wp-0.wp-headless.woodpecker.svc.cluster.local:18080=http://127.0.0.1:49091' \
+  node show wp-0</pre></div>
+<p>Mappings apply to memberlist fan-out, quorum reads and writes, and single-node targets. Original node and
+quorum identities stay intact; a mapped historical quorum address can be contacted even when absent from the
+current memberlist. An external URL is never a substitute for a quorum identity. Each destination must reach
+its intended replica; a Service that can send the request to any pod cannot stand in for per-replica access.</p>
+<p>Reachable etcd endpoints are a separate requirement. Node mappings rewrite neither <code>--endpoint</code>
+nor <code>--etcd</code>, and do not create tunnels or change SDK gRPC destinations. For an isolated single-node
+command, an explicit target such as <code>127.0.0.1:19091</code> remains supported; most node commands still
+require a reachable Woodpecker seed for discovery. See the
+<a href="https://github.com/zilliztech/woodpecker/blob/master/docs/admin-guides/wpcli/configuration.md#running-outside-kubernetes">configuration reference</a>.</p>
+
+<p>Settings come from <code>cli.yaml</code>, looked for in <code>$WOODPECKER_CLI_CONFIG</code>, then the directory
+holding the <code>wp</code> binary, then <code>$XDG_CONFIG_HOME/woodpecker/</code>, then <code>~/.woodpecker/</code>.
+The binary&rsquo;s own directory comes second on purpose: a fixed cluster can be handed over as one folder, binary
+and config together, with nothing to pass per invocation. The working directory is deliberately not searched —
+adopting a config because of where the shell happens to be would let any directory point this tool at a cluster
+nobody chose.</p>
+
+<p>Text output prints the resolved source and configured mappings on stderr; JSON/YAML output suppresses these
+diagnostics. Check the context and endpoint before acting:</p>
+
+<div class="code-block"><pre>wp: config /opt/wp/cli.yaml &middot; context prod &middot; endpoint http://10.0.1.5:9091</pre></div>
+
+<div class="note">
+<strong>Every endpoint answers for one node.</strong> No admin endpoint queries its peers; each reports only its own
+state. <code>wp</code> is what fans out. This matters when you read any cluster-wide output: it is an assembled view,
+and a node that did not answer is missing from it rather than reported as empty. Commands report partial failures; where supported, <code>--strict</code> turns an incomplete view into an
+error. No node answering is an error, not evidence that a cluster is empty. Scan/probe/inspect have their own
+finding-based exit codes, explained below.
+</div>
+
+<p>Field-by-field semantics for every endpoint live in
+<a href="https://github.com/zilliztech/woodpecker/blob/master/common/http/README.md" target="_blank"><code>common/http/README.md</code></a>.
+This page covers when to reach for something and how to read the result.</p>
+</div>
+</section>
+
+<section class="section" style="background-color: var(--light-color);">
+<div class="container">
+<h2 class="section-title" id="commands">Part 1 &mdash; Commands by level</h2>
+
+<p>Output examples below are captured from real runs unless marked otherwise. Command-only blocks are usage examples. Coverage is uneven, and the gaps are
+marked rather than glossed over: knowing in advance that something cannot be answered is worth more during an incident than
+discovering it there.</p>
+
+<h3>Cluster and node <span class="lvl">good coverage</span></h3>
+
+<h4>Who is in the cluster, and where</h4>
+<div class="code-block"><pre>$ wp cluster info
+
+Cluster Overview
+  Cluster:     default
+  Endpoint:    http://localhost:9091
+  Total Nodes: 6
+
+By State
+  active: 6
+
+default
+└── us-west-2
+    ├── us-west-2a
+    │   └── default
+    │       ├── wp-wpawsusw-dab462fa-5  active
+    │       └── wp-wpawsusw-dab462fa-2  active
+    ├── us-west-2b
+    │   └── default
+    │       └── wp-wpawsusw-dab462fa-4  active</pre></div>
+
+<p>Groups nodes by region, availability zone and resource group. Use it to confirm placement spread — a quorum
+whose replicas share an AZ is a single-failure-domain quorum, whatever the replica count says.</p>
+
+<p><code>wp node list</code> gives the same membership as a flat table with each node&rsquo;s advertised address and
+health. <code>wp cluster health</code> reduces it to red/yellow/green and exits 8 on a yellow finding, 9 on red.</p>
+
+<p>Two narrower health questions have their own commands. <code>wp node healthz</code> returns the readiness probe
+Kubernetes itself acts on — the one that decides whether a pod receives traffic — and exits non-zero when it
+reports unhealthy. <code>wp node log-health</code> returns the node&rsquo;s own per-log view of how reading and
+writing are going, derived from real operation outcomes rather than synthetic probes; when every tracked log is
+stalled or failed the endpoint answers 503 and the command reports the finding with the full per-log table
+rather than the status alone.</p>
+
+<h4>Can this node be terminated</h4>
+<div class="code-block"><pre>$ wp node drain-status wp-wpawsusw-dab462fa-0
+
+Drain status for wp-wpawsusw-dab462fa-0
+  state:                 active
+  remaining_processors:  68
+  has_local_data:        true
+  safe_to_terminate:     false</pre></div>
+
+<p><code>safe_to_terminate</code> is decided by <code>has_local_data</code> alone — whether any segment data remains
+on local disk. <code>remaining_processors</code> is informational: processors are in-memory objects that vanish on
+shutdown, and the highest segment per log is deliberately never evicted, so the count does not reach zero.</p>
+
+<h3>Writer and logstore <span class="lvl">partial</span></h3>
+
+<h4>What is being written on this node</h4>
+<div class="code-block"><pre>$ wp logstore segments wp-wpawsusw-dab462fa-0
+
+LOG_ID  SEG_ID  BACKEND        WRITABLE  FENCED  FINALIZED  ENTRIES  BLOCKS
+31      0       stagedstorage  true      false   false      2        2
+10      0       stagedstorage  true      false   false      2        2
+8       0       stagedstorage  true      false   false      2        2</pre></div>
+
+<p>One row per segment with a live writer on this node. <code>wp logstore segment-show</code> adds the detail that
+matters when a write is not progressing: buffered bytes and entries, flush-queue depth against its capacity,
+sync-scheduler scheduled/running/waiting counts, and the last entry submitted for flushing.</p>
+
+<p>Those fields separate the stalls that look alike from the outside:</p>
+<ul>
+<li>buffer neither growing nor draining &mdash; nothing is arriving; the writer is not the problem</li>
+<li>buffer growing, flush queue static &mdash; flushing is stuck</li>
+<li>flush queue depth equal to capacity &mdash; backpressure is saturated</li>
+<li>scheduler waiting high with nothing running &mdash; the scheduler is starved</li>
+<li>last submitted flushing entry not advancing &mdash; submission is stuck</li>
+</ul>
+
+<h4>Is anything in flight right now</h4>
+<div class="code-block"><pre>$ wp ops stats wp-wpawsusw-dab462fa-0
+
+Capacity
+  capacity:  1024
+  in_use:    0  (0.0%)
+  warn_age:  30000ms
+
+Eviction Totals
+  total:  0
+  young:  0
+  old:    0</pre></div>
+
+<p>The op registry tracks in-flight server-side operations, appends among them. <code>in_use: 0</code> above means
+this node is serving nothing at that instant. To ask about one log, or about operations that have been running too
+long:</p>
+
+<div class="code-block"><pre>wp ops list &lt;node&gt; --type logstore.add_entry --log 42
+wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</pre></div>
+
+<p>This is the most direct answer available to &ldquo;is anything still writing to this log&rdquo; and
+&ldquo;has an append been outstanding too long&rdquo;.</p>
+
+<h4>How far is this segment confirmed readable</h4>
+<div class="code-block"><pre>$ wp logstore lac my-channel 3 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+
+Segment 3 of log my-channel &mdash; state Active, quorum 1 (es 3, wq 3, aq 2)
+
+NODE            NODE_ID                 DURABLE_ENTRY  STATE
+10.0.1.5:18080  wp-wpawsusw-dab462fa-0  4900           ok
+10.0.1.6:18080  wp-wpawsusw-dab462fa-1  4821           ok
+10.0.1.7:18080  wp-wpawsusw-dab462fa-2  4650           ok
+
+quorum LAC: 4821 (aq=2 of 3 nodes at or past it)</pre></div>
+<p class="muted" style="font-size:0.85rem">Illustrative; the shape is the command&rsquo;s, the numbers are not from
+a captured run.</p>
+
+<p>Each node reports only how far it has durably written. No node can report the quorum&rsquo;s position, because
+that is a property of the set: a position is confirmed readable once <code>aq</code> nodes have reached it, so the
+answer is the <code>aq</code>-th highest of the per-node figures &mdash; 4821 above, not the 4900 one node has
+reached alone.</p>
+
+<p>The spread is the point. Nodes agreeing means the quorum is healthy and the tail is where it says; one node
+trailing, as the third does here, is a replica falling behind while the quorum still holds. If fewer than
+<code>aq</code> nodes answer, the command reports no value at all rather than the best it has &mdash; one
+node&rsquo;s position presented as the quorum&rsquo;s would overstate what is readable, which is the mistake the
+command exists to prevent.</p>
+
+<p>A segment past Active takes its end from metadata instead, where it is authoritative: compaction, a processor
+close or idle eviction all leave a finished segment with no live writer on any node, and that is not a fault.</p>
+
+<h3>Local data and reclamation <span class="lvl">good coverage</span></h3>
+
+<p>From v0.1.45, <code>GET /admin/instance/data</code> reports which instances still hold data on a node:</p>
+
+<div class="code-block"><pre>$ wp instance data --all --strict
+
+NODE          BUCKET    ROOT_PATH             LOGS  SEGMENTS  LIVE  SIZE_BYTES  PROCS  DELETE_STATE
+woodpecker-0  a-bucket  in01-71ba8da6ff40c33  12    37        30    1234567     4
+woodpecker-0  a-bucket  in01-dead0beef000000  4     9         9     3589343     0</pre></div>
+
+<p>The second row is the shape of an orphan: nothing running against it, and data that has not been touched in
+weeks. <code>PROCS</code> and the data&rsquo;s age are what separate a genuine orphan from an instance created
+moments ago that has not flushed yet — on disk alone they are identical.</p>
+
+<p><code>--strict</code> is a safety flag rather than a formatting one. Without it an unreachable node is a row and
+the command still exits 0:</p>
+
+<div class="code-block"><pre>woodpecker-1  UNREACHABLE
+
+WARNING: 1/2 nodes unreachable — their instances are not listed; do not delete on this view</pre></div>
+
+<p>With it, the same situation exits 6:</p>
+
+<div class="code-block"><pre>wp: StrictPartial: 1/2 nodes unreachable in strict mode</pre></div>
+
+<h3>Metadata <span class="lvl none">minimal</span></h3>
+
+<p><code>wp marking list</code> / <code>confirm</code> handle compacted-mark distribution records;
+<code>wp log readers</code> reads reader checkpoints; <code>wp logstore lac</code>, <code>wp segment probe</code>,
+<code>wp segment inspect</code> and <code>wp log scan</code> resolve segment state and quorum from metadata.
+<code>wp log skip-range list</code> / <code>add</code> / <code>remove</code> manage operator declarations.
+These commands connect to etcd directly; quorum diagnostics also contact the replicas.</p>
+
+<div class="note">
+<strong>State the connection; do not expect it to be discovered.</strong> These commands read etcd, and the
+LogStore server does not, so the etcd section of its <code>/admin/config</code> is unvalidated — by default it
+points at loopback. Discovery is attempted as a convenience and refused when the address cannot work, naming the
+flag instead of spending the timeout. Expect to pass <code>--etcd</code> and <code>--meta-prefix</code> yourself.
+The prefix fails the more quietly of the two: a wrong one connects to the right etcd and lists an empty keyspace,
+so <code>marking list</code> prints the prefix it scanned for you to check against the client&rsquo;s
+<code>etcd.rootPath</code> and <code>woodpecker.meta.prefix</code>.
+</div>
+
+<div class="gap">
+<strong>Gap:</strong> there is still no way to list logs, and no command corrects a metadata record beyond
+<code>marking confirm</code> and the dedicated skip-range record. General metadata repair remains
+<a href="https://github.com/zilliztech/woodpecker/issues/254">#254</a>; do not substitute an unsupported
+<code>wp meta</code> command.
+</div>
+
+<h3>Readers <span class="lvl">partial</span></h3>
+
+<p><code>wp log readers</code> lists a log&rsquo;s readers with the position each opened at, the position each last
+read, and how long ago it reported. It reads metadata only, so it answers while a node is unreachable.
+<code>wp logstore lac</code> gives the tail those positions are measured against.</p>
+
+<div class="gap">
+<strong>Gap:</strong> the reader side is per log &mdash; you have to name the log, and nothing lists which logs have
+readers at all, so a reader stuck on a log nobody is watching is still found by looking for it.
+<p style="margin-top:0.6rem">One constraint comes with the positions: they are republished every 30 seconds, so
+any comparison sampling faster than that sees every reader frozen and calls them all stuck.</p>
+</div>
+
+<h3>Client-side writers and readers <span class="lvl">partial</span></h3>
+
+<p>The client library runs inside the embedding application. Its published read/write, compaction and
+truncation frontiers and append latencies belong to <em>that</em> process&rsquo;s metrics endpoint, not to any
+Woodpecker node. Submitted position and oldest-queue age are not part of that exported surface.</p>
+
+<p>They are still reachable from here. <code>wp metrics</code> takes an explicit <code>host:port</code> like any
+other target and scrapes whatever <code>/metrics</code> answers, and Milvus serves its own on 9091 as Woodpecker
+does, so the client side can be read without a dashboard:</p>
+
+<div class="code-block"><pre>wp metrics list &lt;milvus-pod-ip&gt;:9091 --filter woodpecker_client</pre></div>
+
+<p><code>metrics list</code> shows metric names, types and series counts, not their values. Use
+<code>metrics snapshot</code> for per-label values; <code>metrics watch</code> sums all series of the named metric
+on that process, so it is not a per-log reader position.</p>
+<div class="code-block"><pre>wp --endpoint http://127.0.0.1:19091 metrics snapshot 127.0.0.1:49091 \
+  --metric woodpecker_client_write_frontier_entry -o json</pre></div>
+<p>Here 19091 forwards a Woodpecker seed and 49091 forwards the embedding application
+(e.g. Milvus) metrics port. Inspect both segment and entry frontier with their labels; entry IDs restart in
+each segment. Useful ones are <code>write_frontier_segment</code> and <code>write_frontier_entry</code> — the position the
+quorum has <em>confirmed</em>, despite the name — together with the read frontier per reader, the compaction and
+truncation frontiers, and append latency.</p>
+
+<div class="gap">
+<strong>Gap:</strong> how much the client has submitted but not yet had confirmed is not published, so the client
+side cannot say on its own whether a writer is backed up or simply idle. Read it from the node side instead:
+<code>wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</code> names the appends the server has
+been holding too long, and their age is what an outstanding queue looks like from outside. The proposed submit-position/queue-age metrics were closed without merging
+(<a href="https://github.com/zilliztech/woodpecker/issues/371">#371</a>). A queue that never
+reached a node is not visible at all, but a full one only happens because the appends ahead of it are stuck
+server-side, and those do appear.
+</div>
+
+<h3>Other tools to use alongside the incident workflows</h3>
+<table class="config-table">
+<tr><th>Question</th><th>Commands</th><th>Scope</th></tr>
+<tr><td>Configuration or build drift?</td><td><code>config show / diff</code>, <code>env show / diff</code></td><td>Compare the nodes that answered; silence is reported separately.</td></tr>
+<tr><td>Which operation is stuck?</td><td><code>ops list / show / stats</code></td><td>In-flight operations, their age and registry capacity on one node.</td></tr>
+<tr><td>Which stage has backlog?</td><td><code>logstore segments / segment-show / buffer / flush-queue</code></td><td>Live local processors, not a complete historical segment inventory.</td></tr>
+<tr><td>What do the metrics say?</td><td><code>metrics list / snapshot / watch / top / report</code></td><td>Names, per-series values, aggregate trends, cross-node ranking and built-in scenarios.</td></tr>
+<tr><td>Need runtime evidence?</td><td><code>profile</code>, <code>logging get-level / set-level</code></td><td>One node or all nodes as supported; restore log levels after diagnosis.</td></tr>
+<tr><td>Manage access and Kubernetes?</td><td><code>ctx list / view / use</code>, <code>k8s status / logs / scale</code></td><td>Kubernetes commands print by default; <code>-x</code> executes.</td></tr>
+</table>
+<p><code>wp node restart</code> and <code>wp k8s doctor</code> are placeholders (exit 10). There is no CLI
+truncate command, generic replica resync/repair command, or background data scrub. Use <code>wp &lt;group&gt; --help</code>
+for exact syntax, and the <a href="https://github.com/zilliztech/woodpecker/blob/master/docs/admin-guides/wpcli/cookbook.md">CLI cookbook</a>
+for step-by-step examples.</p>
+
+</div>
+</section>
+
+<section class="section">
+<div class="container">
+<h2 class="section-title" id="workflows">Part 2 &mdash; By situation</h2>
+
+<table class="config-table">
+<thead><tr><th>Situation</th><th>Start here</th></tr></thead><tbody>
+<tr><td><a href="#drain">Safe drain / node replacement</a></td><td>Drain progress → local-instance data → idle rolling / reclamation.</td></tr>
+<tr><td><a href="#orphans">Orphaned data</a> / <a href="#disk">disk pressure</a></td><td>Strict inventory → ownership check → targeted delete → poll.</td></tr>
+<tr><td><a href="#writes">Writer stopped advancing</a></td><td>Ops → processor queues → quorum LAC → bounded failover or deliberate fencing.</td></tr>
+<tr><td><a href="#scan">Whole-log audit</a></td><td>Quick structure sweep → targeted raw survey → probe / inspect.</td></tr>
+<tr><td><a href="#readers">Reader stopped advancing</a></td><td>Reader checkpoint → confirmed tail → per-replica read → damage boundary.</td></tr>
+<tr><td><a href="#skip-range">Give up confirmed unreadable entries</a></td><td>Inspect → declaration preview → explicit acceptance → observe reader progress.</td></tr>
+<tr><td><a href="#compaction">Compaction / retention backlog</a></td><td>Completed coverage → auditor outcomes → marks → application truncation.</td></tr>
+<tr><td><a href="#drift">Drift and supporting evidence</a></td><td>Config / env / gossip comparisons → profiles and temporary debug logging.</td></tr>
+<tr><td><a href="#metadata">Metadata correction boundary</a></td><td>Specific marking and skip-range operations exist; general repair does not.</td></tr>
+</tbody></table>
+
+<h3 id="drain">A node will not drain</h3>
+
+<p>Decommission waits for both processors and live local data to clear; terminate only when
+<code>safe_to_terminate</code> is true. When it does not, ask what the node is still
+holding:</p>
+
+<div class="code-block"><pre># Inspect capacity and membership before removing a replica.
+wp node list --strict
+wp cluster health
+wp node drain-status node-3
+
+# Start decommission; acknowledge the interactive prompt, then watch in another terminal.
+wp node decommission node-3
+wp node drain-status node-3 -w
+
+# If it does not finish, identify the data and live processors.
+wp instance data node-3
+wp logstore segments node-3
+wp ops list node-3 --longer-than 30000
+
+# Abort decommission if the operational plan changes.
+wp node cancel-decommission node-3</pre></div>
+
+<p>Read the two together. <code>drain-status</code> says data remains; <code>instance data</code> attributes it to
+specific instances, which is what tells a cleanup still in flight apart from data stranded by an instance whose
+deletion never reached this node.</p>
+
+<p>A row whose <code>SEGMENTS</code> exceeds <code>LIVE</code> is the common false alarm: those segments are already
+durable in object storage and scheduled for removal, and they never block termination. The
+<code>has_local_data</code> flag ignores them for exactly that reason.</p>
+
+<p>A non-empty idle Active segment is now rolled by the client-side auditor using the same rolling policy as
+writes. With defaults, allow the 600s rolling interval plus an auditor tick (10s), and then compaction/cleanup
+time. The new empty Active segment has no data file and does not pin local data. This depends on a live client
+log handle and its auditor; a server alone does not coordinate rolling. If that client is gone, restore the
+application's writer lifecycle before expecting progress. A quiet log no longer needs an artificial append just
+to trigger rolling.</p>
+<p>After <code>safe_to_terminate</code>, perform the pod/node replacement through your deployment tooling, then
+verify <code>node list --strict</code>, <code>cluster gossip-diff</code> and application write/read progress. A
+readmitted node must be observed in peers' views, not only its own view; rejoin after an abrupt death is improved
+but still subject to failure detection and network health. Recreate its port forward if running externally.</p>
+
+<h3 id="orphans">Reclaiming an orphaned instance</h3>
+
+<p>An instance&rsquo;s local data is reclaimed when the control plane calls the delete on every node holding it.
+That broadcast is lossy — a node that was down at the time keeps its copy indefinitely, and nothing on it will ever
+notice.</p>
+
+<div class="code-block"><pre># 1. Query. Stop here if any node failed to answer or reported scan errors.
+wp instance data --all --strict
+
+# 2. Decide: diff against your live-instance registry, then keep only rows with
+#    PROCS == 0 and data old enough to rule out a just-created instance.
+
+# 3. Delete — per node, only the nodes step 1 listed for that instance.
+curl -X POST http://&lt;node&gt;:9091/admin/instance/delete \
+  -H 'Content-Type: application/json' \
+  -d '{"bucketName":"a-bucket","rootPath":"in01-dead0beef000000"}'
+
+# 4. Poll until it is absent everywhere.
+wp instance data --all --strict --bucket a-bucket --root in01-dead0beef000000</pre></div>
+
+<p>When using port forwards, <code>curl</code> must use the mapped reachable admin origin for that specific node;
+the CLI map does not rewrite raw curl requests. Deletion stays per-node and explicit on purpose: step 1 names exactly which nodes to send it to. Reclamation is
+asynchronous, so step 4 is a poll rather than a single check.</p>
+
+<div class="note">
+An incomplete view must not authorise a delete. A node that is merely unreachable holds intact data, and acting on a
+partial snapshot is the accident this workflow exists to prevent — hence <code>--strict</code> throughout.
+</div>
+
+<h3 id="disk">Local disk filling up</h3>
+
+<p>Before expanding a PVC or scaling out, confirm the space is held by live instances. An instance whose data was
+never reclaimed keeps occupying the disk, and none of the usual remedies frees it:</p>
+
+<div class="code-block"><pre>wp instance data &lt;node&gt;</pre></div>
+
+<p>A row with <code>PROCS</code> at zero and a last-modified time long in the past, for an instance the control plane
+no longer knows about, is stranded rather than idle — reclaim it as above. If the usage is genuine, the sizing and
+watermark guidance is in
+<a href="https://github.com/zilliztech/woodpecker/blob/master/docs/admin-guides/disk-watermark.md" target="_blank">disk-watermark.md</a>.</p>
+
+<h3 id="writes">Writes are not progressing</h3>
+
+<p>Check the embedding application is actually submitting writes, then inspect every replica involved.
+An empty op-registry snapshot on one node alone cannot prove the application is idle:</p>
+
+<div class="code-block"><pre>wp ops list &lt;node&gt; --type logstore.add_entry --log 42
+wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</pre></div>
+
+<p>If nothing arrives on any involved replica, check whether the embedding application is stopped, idle, or
+blocked before its send path. Appends outstanding past 30 seconds point at the node side,
+and <code>wp logstore segment-show</code> narrows it to a stage using the buffer, flush-queue and scheduler counts
+listed in Part 1.</p>
+
+<p>A single slow replica is not a reason to intervene. A write completes once the ack quorum is satisfied, so one
+lagging node is absorbed; a write only fails when enough replicas fail that the ack quorum cannot be reached.</p>
+
+<p>Three commands answer this between them; there is no single view that assembles them, and none is needed,
+because each one rules out a different explanation.</p>
+
+<table class="config-table">
+<thead><tr><th>Question</th><th>Command</th><th>What the answer means</th></tr></thead>
+<tbody>
+<tr>
+<td>Is anything outstanding, and for how long?</td>
+<td><code>wp ops list &lt;node&gt; --type logstore.add_entry --longer-than 30000</code></td>
+<td>Nothing listed: this node has no matching in-flight append at this instant; inspect the application and other replicas. An append held past 30s is the
+node&rsquo;s own admission that it has not finished one.</td>
+</tr>
+<tr>
+<td>Which stage is it held at?</td>
+<td><code>wp logstore segment-show</code></td>
+<td>Buffer, flush queue and scheduler counts separate a writer nothing is arriving at from one whose flushing
+has stopped. The readings and what each combination means are in Part 1.</td>
+</tr>
+<tr>
+<td>Is the quorum still confirming, and which replica lags?</td>
+<td><code>wp logstore lac &lt;logName&gt; &lt;segmentId&gt;</code></td>
+<td>A confirmed position that advances between two runs means writing is working. One node trailing is a lagging
+replica the quorum absorbs; fewer than <code>aq</code> answering is a quorum that cannot confirm at all.</td>
+</tr>
+</tbody>
+</table>
+
+<div class="code-block"><pre># Example: my-channel has log ID 42, suspected segment 7.
+wp logstore segments node-1 --log 42
+wp logstore segment-show node-1 --log 42 --seg 7
+wp logstore buffer node-1
+wp logstore flush-queue node-1
+wp ops list node-1 --type logstore.add_entry --log 42 --seg 7
+wp logstore lac my-channel 7 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+# Repeat LAC and processor/ops samples; inspect the other quorum replicas too.</pre></div>
+<p>Run <code>lac</code> twice a little apart. The single most useful fact is whether the confirmed position moved,
+and one reading cannot tell you that.</p>
+
+<div class="gap">
+<strong>Gap:</strong> how far the client has submitted is not published, so &ldquo;submitted is ahead of confirmed&rdquo;
+cannot be read directly. The outstanding appends in <code>wp ops list</code> are the substitute: they are the same
+backlog seen from the node that is holding it. Appends still queued inside the client, which never reached a node,
+are invisible — though a client queue only fills because what is ahead of it is stuck server-side, and that part
+does show.
+</div>
+
+<p>Do not treat the CLI's <code>--timeout</code> as the application's append deadline. The client now defaults
+<code>woodpecker.client.segmentAppend.sendTimeout</code> to 2000ms for opening a stream and obtaining the
+first buffered response. Durability confirmation is a separate wait; retries, ordered queues, completion RPCs
+and rolling add time. Neither total append latency nor node readmission is promised to finish within 2s.
+Active quorum reads use <code>segmentRead.activeTimeout</code> (3000ms), settled reads use
+<code>segmentRead.settledTimeout</code> (20000ms), and state changes can trigger a settled-budget retry.</p>
+<p>When a writer has to be made to start over, fencing is the mechanism: a fenced segment fails the next append,
+and the application is expected to reopen its writer, which re-establishes state through the normal path. A write
+completes at <code>aq</code> acknowledgements, so fencing one node removes one and the write carries on through the
+rest; interrupting it takes <code>wq - aq + 1</code> nodes &mdash; two of three on the default quorum.</p>
+
+<div class="code-block"><pre>wp logstore fence-quorum &lt;logName&gt; &lt;segmentId&gt; --reason "stalled writer" \
+    --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>It reads the quorum from the segment&rsquo;s metadata, states how many nodes must be fenced before it touches
+anything, and without <code>-y</code> stops there. Naming fewer nodes than that with <code>--nodes</code> is refused
+outright rather than half-done: a fenced node fails the writer&rsquo;s append, which rolls the segment, while the
+writer still reaches <code>aq</code> and carries on &mdash; state changed, nothing interrupted. If fewer nodes than
+required could be reached, the outcome is reported as a conflict rather than as success, for the same reason.
+<code>wp logstore fence &lt;node&gt;</code> remains for the cases that want exactly one node.</p>
+<div class="code-block"><pre># Preview, with no write (exits 7 because acceptance was not given).
+wp logstore fence-quorum my-channel 7 --reason "incident: stalled writer" \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+
+# After reviewing the segment and quorum, execute the same operation.
+wp logstore fence-quorum my-channel 7 --reason "incident: stalled writer" \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker -y
+
+# Verify the application reopens its writer, then inspect the newly active segment.
+wp log scan my-channel --mode quick --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker</pre></div>
+<p>Fencing is per segment and does not disable future writers or decommission nodes. A partial execution may
+already have fenced some nodes even when the command exits with a conflict; inspect the reported outcomes before
+retrying. The application must handle its append error and follow the normal reopen/rolling path.</p>
+
+<div class="gap">
+<strong>Gap:</strong> a node fences through its live segment processor, so a node that has none refuses the
+request. It is reported with the node&rsquo;s own reason and does not count towards the required number. For a stuck
+write the nodes holding the pending appends are the ones with live processors, so this rarely bites; a quorum whose
+processors have all been evicted cannot be fenced through this path at all.
+</div>
+
+<h3 id="scan">Checking a whole log</h3>
+
+<p>Every command below starts from a segment id, which assumes you already suspect one. One sweep asks the
+question the other way round &mdash; does this log read through from end to end, and does what is on disk match
+what the metadata says:</p>
+
+<div class="code-block"><pre>wp log scan &lt;logName&gt; [--mode quick|raw] [--from-segment N] [--to-segment N] \
+    --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<div class="code-block"><pre>wp log scan my-channel --mode quick --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+# Narrow the expensive verification to the segment the first pass identified.
+wp log scan my-channel --mode raw --from-segment 7 --to-segment 7 \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker</pre></div>
+<p>One line per segment, then the findings. A clean log is a short report.</p>
+<p class="muted">The following output is illustrative, not a captured cluster run.</p>
+
+<div class="code-block"><pre>SEGMENT  STATE      META LAST  REACHES  REPLICAS  VERDICT     DETAIL
+0        Sealed     19         -        2/2       compacted   served from object storage; local replica copies are not the authority
+1        Completed  19         0-19     2/2       ok
+2        Completed  19         0-9      2/2       short       missing 10-19
+3        Active     -1 (open)  0-7      2/2       open</pre></div>
+
+<table>
+<tr><th>Verdict</th><th>What it means</th></tr>
+<tr><td><code>ok</code></td><td>Some replica holds everything the metadata claims.</td></tr>
+<tr><td><code>short</code></td><td>No replica holds part of it, and at least one replica surveyed to the end of
+its own copy, so that is an answer rather than a gap in what was looked at.</td></tr>
+<tr><td><code>open</code></td><td>Still being written; the metadata records no last entry to measure against.</td></tr>
+<tr><td><code>compacted</code></td><td>One shared object-storage copy, which this sweep does not read. The
+replicas&rsquo; local copies are not the authority in either direction.</td></tr>
+<tr><td><code>reclaimed</code></td><td>Retention is deleting it; a replica answering with nothing is expected.</td></tr>
+<tr><td><code>unknown</code></td><td>Nothing was established &mdash; no replica answered, or every replica stopped
+its survey before the end of the segment.</td></tr>
+</table>
+
+<p>The exit code says what the sweep established, which is not the same as what it found:
+<strong>0</strong> only when every segment was established and sound, <strong>9</strong> for a segment that is
+short or an open segment with a hole in the middle of what was written, and <strong>8</strong> when something
+could not be established. A sweep that learned nothing neither claims loss nor claims the log reads through, and
+it does not print a &ldquo;no problem found&rdquo; line next to a segment it could not judge. <code>--strict</code>
+promotes 8 to 9 for a script that wants an unestablished segment to fail its gate.</p>
+
+<p>The two modes cost three orders of magnitude apart because they answer different questions:</p>
+
+<table>
+<tr><th>Mode</th><th>Reads</th><th>Answers</th></tr>
+<tr><td><code>quick</code> (default)</td><td>the index and footer only &mdash; one trailer read per sealed segment,
+a few kilobytes whatever the segment weighs</td><td>Does the <strong>structure</strong> add up?</td></tr>
+<tr><td><code>raw</code></td><td>a verifying block survey using the data codec and checksums</td><td>Which
+entry ranges can a <strong>reader</strong> obtain?</td></tr>
+</table>
+
+<p>That is what makes sweeping a whole log affordable: a 256MB segment costs a quick scan the same as an empty one.
+An active segment has no index, so quick mode walks the chain for each block&rsquo;s header, but not its body. Raw
+mode asks each node for the whole segment rather than taking its default bound of 64 blocks, which a
+default-sized segment exceeds at about 128 &mdash; and a survey that stopped before the segment&rsquo;s end is
+read as a lower bound, never as missing data.</p>
+
+<p>A replica that reports no local data at all is read through the <strong>compacted mark</strong>, the tombstone
+the cleanup writes before it drops a compacted segment&rsquo;s <code>data.log</code>: with the mark the copy was
+reclaimed and the object is the authority, without it the replica looked and holds nothing, which is loss. The
+segment&rsquo;s metadata state is a weaker second signal only &mdash; the cleanup keys off the object-storage
+footer and that mark, never off the state, and the metadata update after compaction is only warned about when it
+fails, so the state can lag the disk.</p>
+
+<p><code>REACHES</code> is the union across replicas, because a read needs one replica that holds the entry rather
+than a quorum. A replica short of that union is a replica that needs resyncing, not a loss, and is reported as such
+rather than as a fault. Entry ids restart at 0 in every segment, so a segment&rsquo;s expected range is
+<code>[0, lastEntryId]</code> and nothing is derived from its neighbours; an Active segment&rsquo;s
+<code>-1</code> is open, never a mismatch.</p>
+
+<p>Above the segment rows come the log-level findings. A gap in the segment ids is split by what to do about it:
+a node still holds the data (data nobody owns, which no reader reaches and no reclaim removes), no node holds it
+(the record is gone rather than the data), or no node could be asked. The walk for those gaps starts <em>at</em>
+the truncation point rather than above it, because truncation deliberately keeps the segment at the point &mdash;
+it is where readers resume &mdash; so that one record going missing is a loss and not retention. Only ids
+strictly below the point are expected to be gone.</p>
+
+<p>The Active segments are reported without failing the sweep. A roll that finds a non-empty append queue leaves
+the previous segment Active until its completion RPCs finish while the new one takes writes, so more than one
+Active segment, and an Active segment that is not the newest, are both states a healthy log passes through. One
+observation cannot tell either from a segment left behind &mdash; what separates them is time &mdash; so the
+report says what it saw and says to re-run.</p>
+
+<p>A scan summarizes coverage by segment; it does not provide the full block-level explanation. Use
+<code>wp segment inspect</code> for the question of whether the damage ends there.</p>
+
+<h3 id="readers">A reader is not progressing</h3>
+
+<p>Two positions answer this, and both are readable. Where each reader has read to comes from metadata alone,
+so it survives the unreachable node that is often the reason for looking:</p>
+
+<div class="code-block"><pre>wp log readers &lt;logName&gt; --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>Each row carries the position the reader opened at, the position it last read, and how long ago it reported.
+Two of those rows mean something on their own:</p>
+
+<table>
+<tr><th>Reading</th><th>What it means</th></tr>
+<tr><td><code>no read since open</code></td><td>The reader has not reported a read since it opened. Its current
+position is the one it started at, not one it reached.</td></tr>
+<tr><td><code>stale report</code></td><td>The reader has stopped reporting. A reader tailing an idle log keeps
+republishing with an unchanged position, so a fresh report proves it is alive; silence is what a reader blocked
+inside a read looks like.</td></tr>
+</table>
+
+<p>Then the tail to measure a position against:</p>
+
+<div class="code-block"><pre>wp logstore lac &lt;logName&gt; &lt;segmentId&gt; --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>The two are deliberately separate: the lag is not computed for you, because doing so would make an unreachable
+node fail a question that pure metadata already answers. Sample no faster than 30 seconds &mdash; positions are
+republished on that cadence, and a tighter interval shows every reader frozen and calls them all stuck.</p>
+
+<p>Those two say where a reader is and where the confirmed tail is. When a reader is stuck between them, the
+next question is whether the data at that position can be read at all &mdash; and on which replicas:</p>
+
+<div class="code-block"><pre>wp segment probe &lt;logName&gt; &lt;segmentId&gt; [--from-entry N] [--max-entries N] \
+    --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>Each replica attempts a bounded read of its own copy and reports what it holds and how far it got. Three
+readings mean different things, and the command states which one it found rather than leaving it to be derived:</p>
+
+<table>
+<tr><th>Reading</th><th>What it means</th></tr>
+<tr><td>every replica stops at the same entry, no error</td><td>The data ends there. Nothing is wrong; the reader
+is waiting for something not yet written.</td></tr>
+<tr><td>one replica stops earlier, with an error</td><td>That replica is damaged and failover is covering for it.
+Nothing else reports this &mdash; reads keep working.</td></tr>
+<tr><td>every replica fails at the same entry</td><td>The entry cannot be read anywhere. This is the case a reader
+waits on forever.</td></tr>
+</table>
+
+<p>Probe stops where a read would, at the first block it cannot serve. That leaves the question a recovery turns
+on &mdash; is one block damaged, or is everything after it gone? &mdash; so the survey goes past that point:</p>
+
+<div class="code-block"><pre>wp segment inspect &lt;logName&gt; &lt;segmentId&gt; [--from-block N] [--max-blocks N] \
+    --etcd &lt;endpoint&gt; --meta-prefix &lt;prefix&gt;</pre></div>
+
+<p>It walks each replica&rsquo;s blocks and keeps going after one fails, which is what separates it from every read
+path. The findings under the table are the part to act on: which entries are damaged on which replica, whether
+another replica still holds them, whether every replica actually looked, and <strong>where readable data
+resumes</strong> &mdash; that last one is what decides whether a recovery gives up four entries or the rest of the
+segment.</p>
+
+<table>
+<tr><th>Column</th><th>What it means</th></tr>
+<tr><td><code>READABLE</code></td><td><code>all</code> or <code>none</code>. A backend drops a block that fails its
+integrity check whole, so nothing in a failed block is readable.</td></tr>
+<tr><td><code>RECOVERABLE</code></td><td>The prefix of a failed block whose own records still verify. No reader
+serves it; it is what a repair could salvage.</td></tr>
+<tr><td><code>STATUS</code></td><td><code>checksum_failed</code>, <code>header_missing</code>,
+<code>data_unreadable</code>, or <code>data_incomplete</code> &mdash; the last being an unsealed tail whose data has
+not been written yet, which is not damage.</td></tr>
+</table>
+
+<p>Both commands are bounded by the node whatever you ask, because a full survey reads every byte of the segment on
+every replica. When the report says the bound rather than the segment ended the walk, raise
+<code>--max-blocks</code> or move <code>--from-block</code>. Note that <code>--from-block</code> is a per-replica
+position: replicas flush on their own timers, so the same block number covers different entries on different
+nodes, and a shorter replica returns nothing for a later page.</p>
+
+<p>Read them in that order. <code>lac</code> and <code>log readers</code> are cheap and answer most stalls;
+<code>log scan --mode quick</code> is cheap too and is the one to reach for when no particular segment is suspected
+yet; <code>probe</code> costs a bounded read per replica; <code>inspect</code> reads every byte of the blocks it
+walks and is worth reaching for once probe has shown there is something to explain.</p>
+
+<div class="note">
+A transient checksum failure at the active tail is not enough to declare data lost. A block may still be
+written, and normal reads fail over when another replica holds the entry. Compare with the confirmed end and
+repeat a settled survey. A lost Active block header can stop the walk before any later entry is accounted for;
+a bounded or unreachable survey does not prove those entries are unreadable. Compacted segments use shared
+object storage: inspect/scan do not verify that authoritative object copy, and a probe served from it is one
+shared source rather than an independent copy per replica.
+</div>
+<p>For a concrete investigation, suppose the reader of my-channel is parked in segment 7 around entry 50:</p>
+<div class="code-block"><pre>wp log readers my-channel --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+# Repeat after at least one 30s reporting interval and compare the CURRENT position.
+wp logstore lac my-channel 7 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp segment probe my-channel 7 --from-entry 50 --max-entries 100 \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp segment inspect my-channel 7 --max-blocks 4096 \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker</pre></div>
+<p>The reader checkpoint is the last published read position, not necessarily the exact entry now being retried;
+use probe/inspect to establish the boundary. If another replica serves it, preserve it and let failover work.
+If every replica has established the same unreadable span, proceed to the declaration workflow below.</p>
+
+<h3 id="skip-range">Move a stalled reader past confirmed unreadable data</h3>
+<p>A skip range is an operator's acceptance of loss, not a repair. Both entry boundaries are inclusive. Declare
+only the span established by the survey; a reachable replica still able to read any part, an unreachable replica,
+a bound-limited survey or an unaccounted remainder refuses the normal declaration. <code>--force</code> bypasses
+that gate and still requires <code>-y</code>; it is not an alternative to collecting evidence.</p>
+<div class="code-block"><pre># Example only: inspect established that entries 50 through 59 are unreadable everywhere.
+wp log skip-range list my-channel --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+
+# Preview: inspect the quorum and print the loss, then stop without writing (exit 7).
+wp log skip-range add my-channel 7 --from-entry 50 --to-entry 59 \
+  --reason "incident: completed segment damaged on every replica; survey saved" \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+
+# Accept only after reviewing that evidence; this writes the declaration with CAS.
+wp log skip-range add my-channel 7 --from-entry 50 --to-entry 59 \
+  --reason "incident: completed segment damaged on every replica; survey saved" \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker -y
+
+# Observe the declaration and the consumer's progress.
+wp log skip-range list my-channel --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp log readers my-channel --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker</pre></div>
+<p>Readers consult declarations only when their position is unchanged at a reporting tick. They jump to entry
+60 in this example, or to the next segment if the span reaches the completed end. Healthy readers do not
+unconditionally skip readable entries, even if a forced declaration covers them. This is not immediate: reader
+reporting is 30s, cache refresh is asynchronous, and a cold cache can require a second tick. The client setting
+<code>woodpecker.client.skipRangeRefreshInterval</code> (default 10s) bounds refresh frequency, not the latency
+from the CLI write to a reader jump. Check the embedding application's WARN and
+<code>woodpecker_client_reader_skip_range_skips_total</code>, alongside actual consumer progress.</p>
+<p>Once data has been restored, withdraw the declaration. This allows future reads to try the entries again; it
+neither restores bytes nor rewinds a reader that has already advanced. Reopen/replay through your application's
+reader lifecycle if recovery requires consuming those restored entries.</p>
+<div class="code-block"><pre>wp log skip-range remove my-channel 7 --from-entry 50 --to-entry 59 \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+
+# List across all logs, including declarations left behind by deleted logs.
+wp log skip-range list --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+# For a deleted log whose original ID was 42, withdraw by ID (no log name).
+wp log skip-range remove --log-id 42 7 --from-entry 50 --to-entry 59 \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker</pre></div>
+<p>Overlapping declarations are coalesced; withdrawing a subset can split a range. Declarations persist until
+explicitly removed, including after truncation/deletion, and size/revision conflicts are reported rather than
+silently overwriting another operator's update.</p>
+
+<h3 id="compaction">Completed corruption, compaction and retention</h3>
+<p>The reader needs any replica that can serve the requested entry. Compaction needs one copy that passes
+integrity verification and covers the completed metadata <code>LastEntryId</code>. These are different checks:
+several replicas together may serve a range while no single intact copy can compact the whole segment.</p>
+<table class="config-table">
+<tr><th>Completed segment</th><th>Reader</th><th>Compaction / action</th></tr>
+<tr><td>One or two damaged replicas, an intact copy covers the end</td><td>Failover can still read.</td><td>Compaction tries replicas and can use the intact complete copy. No skip range needed.</td></tr>
+<tr><td>No replica covers the original end or all relevant blocks are damaged</td><td>Waits at the unreadable entry.</td><td>The segment remains Completed. Establish loss, declare a skip range for readers, then expire data through retention when allowed.</td></tr>
+<tr><td>Retention has marked the segment Truncated</td><td>A declaration handles an already parked reader; truncation alone is not that recovery step.</td><td>The segment is no longer selected for Completed compaction; cleanup proceeds through normal retention.</td></tr>
+</table>
+<p>An individual compaction failure is logged and skipped within the auditor's pass; it does not categorically
+block later Completed segments. Count/time budgets or cancellation can defer later work, and a bad early segment
+can consume that budget. Once Truncated, it is excluded from the next Completed candidate set. Frontiers alone
+are not proof that every earlier segment is sealed: inspect the per-segment state and the auditor's
+<code>segmentsProcessed / segmentsCompacted / segmentsFailed / segmentsDeferred</code> summary in the embedding
+application's logs.</p>
+<p>Active recovery has a different boundary: on restart a damaged/incomplete record can truncate the local
+recovered prefix; reopening the writer fences and completes against the quorum-derived target. Do not treat that
+new completed end as the old end or automatically declare an Active tail lost. Recovery now emits
+<code>segment recovery truncated at ...</code> warnings with the file, log/segment, offset, entry and discarded
+bytes when the full scan stops on an incomplete/undecodable/unexpected record. This is diagnostic evidence, not a
+byte-level repair or a guarantee that every corruption is detected during recovery.</p>
+<div class="code-block"><pre>wp log scan my-channel --mode raw --from-segment 7 --to-segment 7 \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp metrics report node-1 --scenario slow-compact --window 1m
+wp marking list --log 42 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker</pre></div>
+<p>Truncation is owned by the application's retention policy / SDK <code>LogHandle.Truncate</code>; there is no
+<code>wp log truncate</code>. Completed and Sealed segments can be truncated once the application's retention
+and reader-protection requirements permit. A skip range changes reading only: it does not repair bytes, seal
+the segment, shorten its metadata end or perform truncation.</p>
+<h4>Compacted-mark distribution parked for manual handling</h4>
+<div class="code-block"><pre>wp marking list --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp marking list --all-states --log 42 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp node show node-3
+# Only after verifying the unacked node is permanently removed / accounted for:
+wp marking confirm 42 7 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+# Verify the record is settled, not deleted.
+wp marking list --all-states --log 42 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker</pre></div>
+<p><code>confirm</code> moves PENDING_MANUAL to OPERATOR_CONFIRMED; it does not declare loss, retry compaction,
+repair a footer, or delete the record. The record is physically reaped by truncation. IN_PROGRESS/COMPLETED
+records are refused unless forced; an unreachable node can reconcile its mark when it returns.</p>
+<h4>Manual flush and compact are per-node tools</h4>
+<div class="code-block"><pre>wp logstore force-flush node-1 --log 42 --seg 7
+# Use only the exact completed LastEntryId obtained from coordinator metadata (99 here).
+wp logstore compact node-1 --log 42 --seg 7 --expected-last-entry-id 99</pre></div>
+<p>Flush cannot repair checksum damage. Manual compact operates on one replica and is not a metadata repair
+transaction; the client auditor owns state advancement and mark distribution. Never guess its expected entry ID
+from one replica's longer tail. Check the backend and complete metadata before using this escape hatch.</p>
+
+<h3 id="drift">Drift, diagnostics and supporting evidence</h3>
+<div class="code-block"><pre>wp config diff --all --strict
+wp env diff --strict
+wp cluster gossip-diff --strict
+wp config show node-1 -o json
+wp env show node-1 -o json
+wp node healthz node-1
+wp node log-health node-1
+wp metrics report --list
+wp profile node-1 --type cpu --seconds 30 --output-file node1-cpu.pb.gz
+wp logging get-level node-1
+wp logging set-level node-1 --level debug
+# Collect a short reproduction, then restore the previously recorded level.
+wp logging set-level node-1 --level info</pre></div>
+<p>Config/env comparisons distinguish unreachable nodes from agreement; no replies fails the command. A
+partial comparison establishes agreement only among respondents. A readiness probe and per-log health answer
+different questions, so a healthy <code>healthz</code> does not establish reader progress. Treat a metrics report
+as supporting evidence and compare the actual labelled samples, operations and positions. For Kubernetes,
+<code>wp k8s status</code>, <code>logs</code> and <code>scale</code> print a plan by default; add <code>-x</code>
+only when execution is intended.</p>
+
+<h3 id="metadata">Correcting metadata</h3>
+
+<p>Use the dedicated diagnostics first. <code>wp logstore lac</code> shows a segment&rsquo;s state and quorum membership, and
+<code>wp marking list</code> shows compacted-mark distribution records. Both connect to etcd directly, with the
+endpoint and prefix given explicitly.</p>
+
+<div class="gap">
+<strong>Gap:</strong> there is still no way to list logs or perform general coordinator metadata repair (including a
+segment stuck in the wrong state). <code>log readers</code> does read checkpoints now, and
+<code>log skip-range</code> edits its specific declaration record; neither is a segment metadata editor.
+<code>marking confirm</code> settles a notification record rather than repairing one.
+<p style="margin-top:0.6rem">None of this will appear on the admin API. Metadata is owned by the client library,
+not by the LogStore nodes, which never connect to etcd — so it belongs to <code>wp</code> talking to etcd directly,
+with the connection stated rather than discovered.</p>
+</div>
+
+<h3 id="exit-codes">Exit codes in operational scripts</h3>
+<table class="config-table">
+<tr><th>Code</th><th>Meaning</th><th>Action</th></tr>
+<tr><td>0</td><td>Command succeeded.</td><td>Check command scope: quick scan has not verified payload CRC or shared object-storage data.</td></tr>
+<tr><td>1 / 3 / 12</td><td>Network error / target absent / configuration error.</td><td>Check the seed, mapped origins, quorum address, etcd endpoint and metadata prefix.</td></tr>
+<tr><td>2 / 4</td><td>Usage error / state conflict.</td><td>Correct arguments or collect fresh evidence; a quorum gate or CAS refused the operation.</td></tr>
+<tr><td>5 / 6</td><td>Wait timeout / strict partial failure.</td><td>Keep waiting or restore reachability; timeout is not safe-to-terminate.</td></tr>
+<tr><td>7</td><td>Acceptance not given / user abort.</td><td>Expected for fence/skip-range previews without <code>-y</code>; nothing was committed by that preview.</td></tr>
+<tr><td>8 / 9</td><td>Yellow / red finding.</td><td>Investigate the command's findings; log scan promotes unknown (8) to red (9) with strict mode.</td></tr>
+<tr><td>10 / 11 / 13</td><td>Not implemented / resource absent / prerequisite missing.</td><td>Use the documented supported workflow.</td></tr>
+<tr><td>100 + N</td><td>Executed kubectl exited N.</td><td>Inspect its stderr and Kubernetes state.</td></tr>
+</table>
+<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/docs/admin-guides/wpcli/release-0.1.46.md">v0.1.46 documentation coverage review</a>
+records which milestone changes are delivered, intentionally not implemented, or still open.</p>
+</div>
+</section>
+
+<footer class="footer">
+<div class="container">
+<p>Woodpecker - High-Performance Distributed Log Storage System</p>
+<p>Licensed under the <a href="https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt">Server Side Public License (SSPL) v1</a></p>
+</div>
+</footer>
+</body>
+</html>

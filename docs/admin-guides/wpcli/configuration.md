@@ -5,8 +5,13 @@
 `wp` looks for `cli.yaml` in the following order (first found wins):
 
 1. `$WOODPECKER_CLI_CONFIG` (environment variable)
-2. `$XDG_CONFIG_HOME/woodpecker/cli.yaml`
-3. `~/.woodpecker/cli.yaml`
+2. `cli.yaml` beside the resolved `wp` executable
+3. `$XDG_CONFIG_HOME/woodpecker/cli.yaml`
+4. `~/.woodpecker/cli.yaml`
+
+The current working directory is not searched. A toolkit directory can carry its own
+cluster context beside the binary; verify the resolved source, context and endpoint
+shown on stderr for text output. JSON/YAML output suppresses those diagnostics.
 
 ## Structure
 
@@ -109,7 +114,7 @@ Values are resolved in this order (highest priority first):
 | `--timeout` | `contexts.<name>.timeout` | 30s |
 | `--concurrency` | `contexts.<name>.concurrency` | 8 |
 | `--strict` | `contexts.<name>.strict` | false |
-| `--context` | `current-context` | (first context) |
+| `--context` | `current-context` | active context |
 | `-o, --output` | `defaults.output` | table |
 | `--no-color` | `defaults.no_color` | false |
 | `-n, --namespace` | `contexts.<name>.k8s.namespace` | |
@@ -212,3 +217,30 @@ specific replica, rather than a load balancer that can route to any node.
 The seed endpoint and metadata `--etcd` endpoints must be independently
 reachable; mappings do not rewrite them or SDK/gRPC traffic and do not create
 port forwards automatically.
+
+## Metadata connections are separate
+
+`marking`, `log readers`, `log scan`, `segment probe/inspect`, `logstore lac/fence-quorum`,
+and `log skip-range` accept metadata connection flags:
+
+```bash
+wp --context external log readers my-channel \
+  --etcd 127.0.0.1:2379 --meta-prefix by-dev/woodpecker
+```
+
+Set the prefix to the embedding client's `etcd.rootPath` plus `woodpecker.meta.prefix`,
+not an assumed server default. LogStore nodes do not connect to etcd, so their config's
+etcd section is not validated for this purpose. An incorrect prefix can successfully
+connect while showing an empty keyspace.
+
+Giving both `--etcd` and `--meta-prefix` skips admin-config discovery. Pure metadata
+commands (`log readers`, skip-range `list`/`remove`, and `marking`) then need no seed;
+quorum operations still need a reachable seed and individually reachable replica admin
+origins. TLS and authentication overrides are `--etcd-cert`, `--etcd-key`,
+`--etcd-cacert`, `--etcd-tls-min-version`, `--etcd-username`, and `--etcd-password`.
+Certificate paths must be available on the machine running `wp`, rather than copied
+unexamined from a server-side path.
+
+`--timeout` controls CLI request budgets (node drain commands have local wait timeouts).
+It does not set application append/send/read deadlines or skip-range refresh latency.
+See the [cookbook](cookbook.md) for the difference between those budgets.
