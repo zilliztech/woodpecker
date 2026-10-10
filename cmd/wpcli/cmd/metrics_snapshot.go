@@ -33,7 +33,7 @@ func newMetricsSnapshotCommand() *cobra.Command {
 					targets = append(targets, target{nodeID: m.ID, peerURL: res.Client.PeerAdminURL(m)})
 				}
 			} else {
-				member, ok := res.Members.Resolve(args[0])
+				member, ok := res.Client.ResolveMember(res.Members, args[0])
 				if !ok {
 					return wperrors.NewTargetNotFoundError(args[0])
 				}

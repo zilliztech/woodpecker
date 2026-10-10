@@ -54,6 +54,15 @@ contexts:
 
 See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the full reference.
 
+## Running outside Kubernetes
+
+Set `node_admin_urls` in the active CLI context, or repeat
+`--node-admin-url 'ADVERTISED_ADDRESS=http://127.0.0.1:FORWARDED_PORT'` to route
+peer requests through separate per-node port forwards. This applies to both
+memberlist discovery and metadata quorum targets, including mapped historical
+nodes absent from memberlist. Original node identities remain unchanged.
+See the [external Kubernetes configuration example](../../docs/admin-guides/wpcli/configuration.md#running-outside-kubernetes).
+
 ## Commands
 
 ### Node lifecycle

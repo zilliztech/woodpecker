@@ -26,8 +26,8 @@ func newConfigDiffCommand() *cobra.Command {
 			// Decide targets.
 			var targets []client.Member
 			if len(args) == 2 {
-				a, okA := r.Members.Resolve(args[0])
-				b, okB := r.Members.Resolve(args[1])
+				a, okA := r.Client.ResolveMember(r.Members, args[0])
+				b, okB := r.Client.ResolveMember(r.Members, args[1])
 				if !okA {
 					return wperrors.NewTargetNotFoundError(args[0])
 				}

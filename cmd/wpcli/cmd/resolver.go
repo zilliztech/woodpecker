@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/client"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
@@ -64,6 +66,23 @@ func resolveAndDiscover() (*resolved, error) {
 		ctx.Strict = true
 	}
 
+	// Merge per-invocation overrides without mutating the context's stored map.
+	mappings := make(map[string]string, len(ctx.NodeAdminURLs))
+	for key, value := range ctx.NodeAdminURLs {
+		mappings[key] = value
+	}
+	for _, entry := range Globals.NodeAdminURLs {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, wperrors.NewUsageError("--node-admin-url requires KEY=URL")
+		}
+		mappings[key] = value
+	}
+	normalized, err := client.ValidateNodeAdminURLs(mappings)
+	if err != nil {
+		return nil, wperrors.NewConfigError(err.Error())
+	}
+	ctx.NodeAdminURLs = normalized
 	// 3. Validate.
 	if ctx.Endpoint == "" {
 		return nil, wperrors.NewUsageError("no endpoint configured (set --endpoint, $WOODPECKER_ENDPOINT, or cli.yaml context)")
@@ -71,8 +90,9 @@ func resolveAndDiscover() (*resolved, error) {
 
 	// 4. Build the seed client and fetch memberlist.
 	c := client.New(ctx.Endpoint, client.ClientOpts{
-		Timeout:   ctx.Timeout,
-		AdminPort: ctx.AdminPort,
+		Timeout:       ctx.Timeout,
+		AdminPort:     ctx.AdminPort,
+		NodeAdminURLs: ctx.NodeAdminURLs,
 	})
 	ml, err := c.GetMemberlist()
 	if err != nil {
@@ -81,6 +101,16 @@ func resolveAndDiscover() (*resolved, error) {
 
 	r := &resolved{Context: ctx, Client: c, Members: ml, ConfigPath: configPath, ContextName: contextName}
 	r.announceSource()
+	if sourceWriter != nil && !renderedOutput() {
+		keys := make([]string, 0, len(ctx.NodeAdminURLs))
+		for key := range ctx.NodeAdminURLs {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(sourceWriter, "wp: node admin mapping %s -> %s\n", key, ctx.NodeAdminURLs[key])
+		}
+	}
 	return r, nil
 }
 

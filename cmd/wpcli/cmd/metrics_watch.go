@@ -27,7 +27,7 @@ func newMetricsWatchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			member, ok := res.Members.Resolve(nodeTarget)
+			member, ok := res.Client.ResolveMember(res.Members, nodeTarget)
 			if !ok {
 				return wperrors.NewTargetNotFoundError(nodeTarget)
 			}

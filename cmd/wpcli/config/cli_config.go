@@ -21,12 +21,13 @@ type K8sConfig struct {
 
 // Context is one named cluster context in cli.yaml.
 type Context struct {
-	Endpoint    string        `yaml:"endpoint"`
-	AdminPort   int           `yaml:"admin_port"`
-	Timeout     time.Duration `yaml:"timeout"`
-	Concurrency int           `yaml:"concurrency"`
-	Strict      bool          `yaml:"strict"`
-	K8s         K8sConfig     `yaml:"k8s,omitempty"`
+	Endpoint      string            `yaml:"endpoint"`
+	AdminPort     int               `yaml:"admin_port"`
+	Timeout       time.Duration     `yaml:"timeout"`
+	Concurrency   int               `yaml:"concurrency"`
+	Strict        bool              `yaml:"strict"`
+	NodeAdminURLs map[string]string `yaml:"node_admin_urls,omitempty"`
+	K8s           K8sConfig         `yaml:"k8s,omitempty"`
 }
 
 // Defaults carries the `defaults:` section of cli.yaml.

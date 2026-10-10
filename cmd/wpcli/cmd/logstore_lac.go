@@ -187,15 +187,14 @@ func runSegmentLAC(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder
 }
 
 // collectQuorumPositions asks each node the segment's quorum names for its own durable position.
-// A node absent from the memberlist is not dialed: the quorum records service addresses, and the
-// admin port is a separate thing only a memberlist entry can supply.
+// A node absent from the memberlist is contacted only with an explicit admin URL mapping.
 func collectQuorumPositions(ac *client.Client, members *client.Memberlist, quorum *proto.QuorumInfo,
 	logID, segmentID int64,
 ) []nodePosition {
 	positions := make([]nodePosition, 0, len(quorum.Nodes))
 	for _, addr := range quorum.Nodes {
 		p := nodePosition{Node: addr, Durable: -1, State: posUnreachable}
-		member, found := memberByAddr(members, addr)
+		member, found := ac.QuorumMember(members, addr)
 		if !found {
 			p.State = posUnknownNode
 			positions = append(positions, p)

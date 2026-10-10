@@ -23,7 +23,7 @@ func newLogstoreSegmentsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, ok := res.Members.Resolve(args[0])
+			target, ok := res.Client.ResolveMember(res.Members, args[0])
 			if !ok {
 				return wperrors.NewTargetNotFoundError(args[0])
 			}
@@ -101,7 +101,7 @@ func newLogstoreSegmentShowCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, ok := res.Members.Resolve(args[0])
+			target, ok := res.Client.ResolveMember(res.Members, args[0])
 			if !ok {
 				return wperrors.NewTargetNotFoundError(args[0])
 			}
@@ -179,7 +179,7 @@ func logstoreAggCommand(cmd *cobra.Command, node, sortField string, topN int, he
 	if err != nil {
 		return err
 	}
-	target, ok := res.Members.Resolve(node)
+	target, ok := res.Client.ResolveMember(res.Members, node)
 	if !ok {
 		return wperrors.NewTargetNotFoundError(node)
 	}

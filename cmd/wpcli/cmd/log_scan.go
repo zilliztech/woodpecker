@@ -232,13 +232,15 @@ func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentM
 	nodes := make([]scanNode, 0, len(quorum.Nodes))
 	for _, addr := range quorum.Nodes {
 		node := scanNode{label: addr, state: posUnreachable}
-		member, found := memberByAddr(members, addr)
+		member, found := ac.QuorumMember(members, addr)
 		if !found {
 			node.state = posUnknownNode
 			nodes = append(nodes, node)
 			continue
 		}
-		node.label = member.ID
+		if member.ID != "" {
+			node.label = member.ID
+		}
 
 		path := fmt.Sprintf("/admin/logstore/segment/inspect?log_id=%d&segment_id=%d&max_blocks=%d",
 			logID, sm.id, scanMaxBlocks)
