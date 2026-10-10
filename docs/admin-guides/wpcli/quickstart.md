@@ -46,6 +46,12 @@ contexts:
       cluster: wp-staging
 ```
 
+For access from outside Kubernetes, forwarding only the seed is insufficient for
+multi-node operations. Forward each replica's admin port separately and configure
+`node_admin_urls` in the context, or use repeated `--node-admin-url KEY=URL` flags.
+See the [external access example](configuration.md#running-outside-kubernetes) before
+running quorum diagnostics. Metadata commands also need independently reachable etcd.
+
 ## 3. First commands
 
 ```bash
@@ -103,6 +109,26 @@ wp logging set-level node-1 --level info    # restore
 wp metrics report node-1 --scenario stuck-flush --window 1m
 ```
 
+### Diagnose a reader or audit a log
+
+```bash
+# Use your application's actual etcd endpoint and metadata prefix.
+wp log readers my-channel --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp log scan my-channel --mode quick --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp logstore lac my-channel 7 --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp segment probe my-channel 7 --from-entry 50 --max-entries 100 \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+wp segment inspect my-channel 7 --max-blocks 4096 \
+  --etcd etcd-a:2379 --meta-prefix by-dev/woodpecker
+```
+
+Compare reader positions after at least a 30s reporting interval. Quick scan checks
+structure, not payload integrity or shared object-storage data. For verified unreadable
+entries, see the [skip-range recovery workflow](cookbook.md#17-recover-a-stalled-reader-with-an-explicit-skip-declaration)
+for evidence gates, preview/acceptance, delayed propagation and withdrawal. A skip declaration
+gives up entries; it does not repair or truncate data. For deliberate write interruption,
+use the [quorum fencing workflow](cookbook.md#15-diagnose-writes-that-stopped-advancing).
+
 ## 6. K8s integration
 
 If running on Kubernetes with the Woodpecker operator:
@@ -123,11 +149,13 @@ wp k8s scale --replicas 5 --wp-cluster wp-prod -n woodpecker -x
 
 ## 7. Global flags
 
-Every command accepts these flags:
+These are root flags; some commands define a local flag with a more specific meaning
+(for example, decommission `--timeout` bounds its wait):
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--endpoint` | from cli.yaml | Admin HTTP seed endpoint |
+| `--node-admin-url KEY=URL` | empty | Repeatable per-node admin origin override |
 | `--admin-port` | 9091 | Admin port |
 | `--timeout` | 30s | Per-request timeout |
 | `--concurrency` | 8 | Fan-out concurrency |
@@ -140,5 +168,6 @@ Every command accepts these flags:
 ## Next steps
 
 - [Configuration reference](configuration.md) — full cli.yaml documentation
-- [Cookbook](cookbook.md) — 10 incident response recipes
-- [Design spec](../wpcli-design.md) — architecture and rationale
+- [Cookbook](cookbook.md) — incident workflows from diagnosis through recovery
+- [Design spec](../../wip/wpcli/wpcli-design.md) — architecture and rationale
+- [v0.1.46 coverage review](release-0.1.46.md) — delivered features and retained boundaries
