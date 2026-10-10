@@ -54,7 +54,7 @@ func newLoggingGetLevelCommand() *cobra.Command {
 
 			// Single node
 			target := args[0]
-			member, ok := res.Members.Resolve(target)
+			member, ok := res.Client.ResolveMember(res.Members, target)
 			if !ok {
 				return wperrors.NewTargetNotFoundError(target)
 			}

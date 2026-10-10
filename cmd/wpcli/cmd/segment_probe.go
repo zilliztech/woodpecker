@@ -193,15 +193,14 @@ func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 	return unreadable
 }
 
-// probeEachNode asks each node the segment's quorum names. A node absent from the memberlist is not
-// dialed: the quorum records service addresses, and only a memberlist entry supplies the admin port.
+// probeEachNode asks each node the segment's quorum names. A node absent from the memberlist is contacted only with an explicit admin URL mapping.
 func probeEachNode(ac *client.Client, members *client.Memberlist, quorum *proto.QuorumInfo,
 	logID, segmentID, fromEntry, maxEntries int64,
 ) []probeNode {
 	results := make([]probeNode, 0, len(quorum.Nodes))
 	for _, addr := range quorum.Nodes {
 		r := probeNode{Node: addr, State: posUnreachable, FirstEntry: -1, LastEntry: -1}
-		member, found := memberByAddr(members, addr)
+		member, found := ac.QuorumMember(members, addr)
 		if !found {
 			r.State = posUnknownNode
 			results = append(results, r)

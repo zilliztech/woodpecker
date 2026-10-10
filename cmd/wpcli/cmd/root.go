@@ -28,6 +28,7 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	pf := root.PersistentFlags()
+	pf.StringArrayVar(&Globals.NodeAdminURLs, "node-admin-url", nil, "Map a node ID, advertised address, or host to an admin URL (KEY=URL; repeatable; overrides context mappings)")
 	pf.StringVar(&Globals.Context, "context", "", "CLI context name (overrides current-context in cli.yaml)")
 	pf.StringVar(&Globals.Endpoint, "endpoint", "", "Admin HTTP seed endpoint (e.g. http://node:9091)")
 	pf.IntVar(&Globals.AdminPort, "admin-port", 9091, "Admin port for fan-out peer discovery")

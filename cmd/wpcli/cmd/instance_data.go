@@ -80,7 +80,7 @@ deleted on the strength of it. Use --strict to turn that into a non-zero exit.`,
 
 			targets := res.Members.Members
 			if !allNodes && len(args) == 1 {
-				member, ok := res.Members.Resolve(args[0])
+				member, ok := res.Client.ResolveMember(res.Members, args[0])
 				if !ok {
 					return wperrors.NewTargetNotFoundError(args[0])
 				}

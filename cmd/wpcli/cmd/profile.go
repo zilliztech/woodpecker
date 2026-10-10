@@ -27,7 +27,7 @@ func newProfileCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, ok := r.Members.Resolve(args[0])
+			target, ok := r.Client.ResolveMember(r.Members, args[0])
 			if !ok {
 				return wperrors.NewTargetNotFoundError(args[0])
 			}

@@ -266,16 +266,14 @@ func renderedOutput() bool {
 	return Globals.Output == "json" || Globals.Output == "yaml"
 }
 
-// fenceEachNode posts the fence to every target in turn. A node absent from the memberlist is not
-// dialed: the quorum records service addresses, and the admin port is a separate thing only a
-// memberlist entry can supply.
+// fenceEachNode posts the fence to every target in turn. A node absent from the memberlist is contacted only with an explicit admin URL mapping.
 func fenceEachNode(ac *client.Client, members *client.Memberlist, targets []string,
 	logID, segmentID int64, reason string,
 ) []nodeFence {
 	results := make([]nodeFence, 0, len(targets))
 	for _, addr := range targets {
 		r := nodeFence{Node: addr, State: posUnreachable}
-		member, found := memberByAddr(members, addr)
+		member, found := ac.QuorumMember(members, addr)
 		if !found {
 			r.State = posUnknownNode
 			results = append(results, r)

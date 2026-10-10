@@ -114,7 +114,8 @@ func (c *Client) GetMemberlist() (*Memberlist, error) {
 
 // PeerAdminURL returns the admin HTTP URL for a given member, using the configured admin port.
 //
-// Address resolution order:
+// Explicit node_admin_urls mappings take precedence over the advertised host and port.
+// Without a mapping, address resolution order:
 //  1. If the member has an "admin_port" tag, use it with the service_addr host.
 //  2. Otherwise use service_addr host + the configured AdminPort.
 //  3. Fall back to gossip_addr host + AdminPort if service_addr is empty.
@@ -123,6 +124,9 @@ func (c *Client) GetMemberlist() (*Memberlist, error) {
 // environments where gossip_addr is an internal container IP not reachable from
 // the host machine.
 func (c *Client) PeerAdminURL(m Member) string {
+	if mapped, ok := c.mappedAdminURL(m); ok {
+		return mapped
+	}
 	// Pick the host from service_addr (preferred) or gossip_addr (fallback).
 	host := extractHost(m.ServiceAddr)
 	if host == "" {

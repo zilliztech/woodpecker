@@ -199,7 +199,7 @@ func inspectEachNode(ac *client.Client, members *client.Memberlist, quorum *prot
 	results := make([]inspectNode, 0, len(quorum.Nodes))
 	for _, addr := range quorum.Nodes {
 		n := inspectNode{Node: addr, State: posUnreachable, TotalBlocks: -1}
-		member, found := memberByAddr(members, addr)
+		member, found := ac.QuorumMember(members, addr)
 		if !found {
 			n.State = posUnknownNode
 			results = append(results, n)

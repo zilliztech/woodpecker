@@ -72,6 +72,7 @@ defaults:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `endpoint` | string | (required) | Admin HTTP seed endpoint |
+| `node_admin_urls` | map[string]string | empty | Original node identity/address to reachable admin HTTP origin |
 | `admin_port` | int | 9091 | Admin port for peer discovery |
 | `timeout` | duration | 30s | Per-request timeout |
 | `concurrency` | int | 8 | Fan-out concurrency |
@@ -103,6 +104,7 @@ Values are resolved in this order (highest priority first):
 | Flag | cli.yaml field | Default |
 |------|---------------|---------|
 | `--endpoint` | `contexts.<name>.endpoint` | (required) |
+| `--node-admin-url KEY=URL` (repeatable) | `contexts.<name>.node_admin_urls` | empty |
 | `--admin-port` | `contexts.<name>.admin_port` | 9091 |
 | `--timeout` | `contexts.<name>.timeout` | 30s |
 | `--concurrency` | `contexts.<name>.concurrency` | 8 |
@@ -153,3 +155,60 @@ contexts:
       cluster: wp-prod
       kube_context: prod-gke
 ```
+
+### Running outside Kubernetes
+
+The seed `endpoint` only bootstraps discovery. Subsequent node requests use
+advertised identities from memberlist or metadata, which may contain pod FQDNs
+that your workstation cannot resolve. Forward each node's admin port separately
+and map its original address to the corresponding reachable HTTP origin:
+
+```bash
+# Run each forward in a separate terminal.
+kubectl -n woodpecker port-forward pod/wp-0 19091:9091
+kubectl -n woodpecker port-forward pod/wp-1 29091:9091
+kubectl -n woodpecker port-forward pod/wp-2 39091:9091
+```
+
+```yaml
+current-context: external
+contexts:
+  external:
+    endpoint: http://127.0.0.1:19091
+    node_admin_urls:
+      "wp-0.wp-headless.woodpecker.svc.cluster.local:18080": http://127.0.0.1:19091
+      "wp-1.wp-headless.woodpecker.svc.cluster.local:18080": http://127.0.0.1:29091
+      "wp-2.wp-headless.woodpecker.svc.cluster.local:18080": http://127.0.0.1:39091
+```
+
+Use the actual advertised service addresses from your cluster. To override a
+mapping for one invocation, repeat `--node-admin-url KEY=URL` as needed:
+
+```bash
+wp --context external \
+  --node-admin-url 'wp-0.wp-headless.woodpecker.svc.cluster.local:18080=http://127.0.0.1:49091' \
+  segment probe my-log 0 --etcd 127.0.0.1:2379
+```
+
+Flags merge into the context map, overriding the same key; the last repeated
+value for a key wins. For each node the lookup order is exact service address,
+node ID, exact gossip address, service hostname, then gossip hostname. Mapping
+values must be full `http://` or `https://` origins, with optional ports and no
+credentials, path, query or fragment. IPv6 origins use brackets.
+
+All CLI admin requests to peers, including memberlist fan-out and metadata
+quorum operations (LAC, probe, inspect, scan, skip-range inspection and fence),
+use these mappings. Single-node commands also support mapped identities.
+Mappings change only the connection destination: node identities, metadata,
+quorum validation and command-specific partial-failure/strict behavior remain
+unchanged. Text output reports configured mappings on stderr.
+
+A historical quorum address missing from memberlist can still be contacted
+when its original address or hostname has an explicit mapping. Without one it
+remains an unknown node. A mapped external URL is not a quorum identity and
+cannot be used to bypass fence target validation. Each mapping must reach the
+specific replica, rather than a load balancer that can route to any node.
+
+The seed endpoint and metadata `--etcd` endpoints must be independently
+reachable; mappings do not rewrite them or SDK/gRPC traffic and do not create
+port forwards automatically.

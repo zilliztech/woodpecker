@@ -212,7 +212,7 @@ func newMetricsReportCommand() *cobra.Command {
 			// Pick target node
 			var peerURL, nodeID string
 			if len(args) > 0 {
-				member, ok := res.Members.Resolve(args[0])
+				member, ok := res.Client.ResolveMember(res.Members, args[0])
 				if !ok {
 					return wperrors.NewTargetNotFoundError(args[0])
 				}

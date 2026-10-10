@@ -91,7 +91,7 @@ func logstorePost(cmd *cobra.Command, node, path string, payload map[string]any,
 	if err != nil {
 		return err
 	}
-	target, ok := res.Members.Resolve(node)
+	target, ok := res.Client.ResolveMember(res.Members, node)
 	if !ok {
 		return wperrors.NewTargetNotFoundError(node)
 	}

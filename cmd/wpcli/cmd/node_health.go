@@ -31,7 +31,7 @@ func newNodeLogHealthCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			member, ok := res.Members.Resolve(args[0])
+			member, ok := res.Client.ResolveMember(res.Members, args[0])
 			if !ok {
 				return wperrors.NewTargetNotFoundError(args[0])
 			}
@@ -139,7 +139,7 @@ func newNodeHealthzCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			member, ok := res.Members.Resolve(args[0])
+			member, ok := res.Client.ResolveMember(res.Members, args[0])
 			if !ok {
 				return wperrors.NewTargetNotFoundError(args[0])
 			}

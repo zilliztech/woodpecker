@@ -22,7 +22,7 @@ func newMetricsListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, ok := res.Members.Resolve(args[0])
+			target, ok := res.Client.ResolveMember(res.Members, args[0])
 			if !ok {
 				return wperrors.NewTargetNotFoundError(args[0])
 			}

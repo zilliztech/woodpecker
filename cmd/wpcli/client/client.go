@@ -8,8 +8,9 @@ import (
 
 // ClientOpts carries client-level options (timeout, admin port override, etc.).
 type ClientOpts struct {
-	Timeout   time.Duration
-	AdminPort int // port to use when constructing peer URLs from gossip hosts; 0 means extract from seed
+	Timeout       time.Duration
+	NodeAdminURLs map[string]string // original node identity/address -> reachable admin URL
+	AdminPort     int               // port to use when constructing peer URLs from gossip hosts; 0 means extract from seed
 }
 
 // Client talks to a Woodpecker server admin endpoint.
