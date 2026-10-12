@@ -239,15 +239,32 @@ wait_target() {
 
 restart_count() { kubectl get pod "$1" -o jsonpath='{.status.containerStatuses[0].restartCount}'; }
 
+# Container teardown can kill the exec process before pkill returns. Accept
+# SIGKILL's exit status, but keep unrelated exec errors as injection failures.
+send_sigkill() {
+  local pod="$1" rc=0
+  kubectl exec "$pod" -- pkill -KILL -x woodpecker || rc=$?
+  case "$rc" in
+    0|137) return 0 ;;
+    *) warn "SIGKILL command for $pod failed with exit code $rc"; return 1 ;;
+  esac
+}
+
 # SIGKILLs the server in pod $1 and waits until its container has restarted
 # (the restart count moved), so a later readiness wait does not see the old
 # container still marked Ready.
 kill_server() {
-  local pod="$1" before deadline=$((SECONDS + 120))
+  local pod="$1" before current deadline=$((SECONDS + 120))
   before=$(restart_count "$pod") || return 1
-  kubectl exec "$pod" -- pkill -KILL -x woodpecker || return 1
+  [[ "$before" =~ ^[0-9]+$ ]] || return 1
+  send_sigkill "$pod" || return 1
   while [ $SECONDS -lt $deadline ]; do
-    [ "$(restart_count "$pod")" -gt "$before" ] && return 0
+    # Status may be briefly unavailable while the container restarts.
+    if current=$(restart_count "$pod" 2>/dev/null); then
+      if [[ "$current" =~ ^[0-9]+$ ]] && [ "$current" -gt "$before" ]; then
+        return 0
+      fi
+    fi
     sleep 1
   done
   warn "container of $pod did not restart within 120s after SIGKILL"
@@ -302,7 +319,7 @@ run_case() {  # $1 = case name
       # Kill abruptly first; pod-failure then keeps the restarted container
       # from serving. The kubelet may start the server again for a moment
       # before pod-failure takes effect.
-      kubectl exec "$pod" -- pkill -KILL -x woodpecker || { abort_case "$c" "$wl" "SIGKILL of $pod"; return 1; }
+      send_sigkill "$pod" || { abort_case "$c" "$wl" "SIGKILL of $pod"; return 1; }
       apply_chaos PodChaos stability-pod-failure "  action: pod-failure
   mode: one
   selector: { pods: { ${NAMESPACE}: [$pod] } }
