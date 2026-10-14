@@ -38,7 +38,7 @@ func TestMappedQuorumRequests(t *testing.T) {
 			case "/admin/logstore/segment/probe":
 				fmt.Fprint(w, `{"first_entry":0,"last_entry":9,"entries_read":10,"outcome":"ok"}`)
 			case "/admin/logstore/segment/inspect":
-				fmt.Fprint(w, `{"survey":{"blocks":[],"lac":9}}`)
+				fmt.Fprint(w, `{"survey":{"blocks":[{"first_entry_id":0,"last_entry_id":9,"status":"ok"}],"lac":9,"stop_reason":"end_of_segment"}}`)
 			case "/admin/logstore/fence":
 				require.Equal(t, http.MethodPost, r.Method)
 				fmt.Fprint(w, `{}`)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,12 +36,16 @@ const (
 func newLogScanCommand() *cobra.Command {
 	var flags metaEtcdFlags
 	var mode string
+	var bucket, rootPath string
 	var from, to int64
 	cmd := &cobra.Command{
 		Use:   "scan <logName>",
-		Short: "Sweep a log to check that reading runs through and the data matches its metadata",
+		Short: "Compare metadata with replica local coverage; raw verifies local block checksums",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if (bucket == "") != (rootPath == "") {
+				return wperrors.NewUsageError("--bucket and --root-path must be provided together")
+			}
 			if mode != scanModeQuick && mode != scanModeRaw {
 				return wperrors.NewUsageError(fmt.Sprintf("unknown --mode %q: use quick or raw", mode))
 			}
@@ -57,10 +62,12 @@ func newLogScanCommand() *cobra.Command {
 				return err
 			}
 			defer cli.Close()
-			return runLogScan(cmd, cli, conn.kb, res.Client, res.Members, args[0], mode, from, to)
+			return runLogScan(cmd, cli, conn.kb, res.Client, res.Members, args[0], mode, from, to, scanLocation{bucket, rootPath})
 		},
 	}
 	flags.register(cmd)
+	cmd.Flags().StringVar(&bucket, "bucket", "", "Storage bucket; pair with --root-path to locate unloaded or empty segments")
+	cmd.Flags().StringVar(&rootPath, "root-path", "", "Storage instance root path; pair with --bucket")
 	cmd.Flags().StringVar(&mode, "mode", scanModeQuick,
 		"quick reads only structure and metadata; raw reads the data through the real checksums")
 	cmd.Flags().Int64Var(&from, "from-segment", 0, "First segment to scan")
@@ -69,7 +76,7 @@ func newLogScanCommand() *cobra.Command {
 }
 
 func runLogScan(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
-	ac *client.Client, members *client.Memberlist, logName, mode string, from, to int64,
+	ac *client.Client, members *client.Memberlist, logName, mode string, from, to int64, location ...scanLocation,
 ) error {
 	ctx, cancel := metaCtx()
 	defer cancel()
@@ -95,7 +102,7 @@ func runLogScan(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
 		}
 		segments = append(segments, scanSegment{
 			id: sm.id, state: sm.meta.GetState(), metaLast: sm.meta.GetLastEntryId(),
-			nodes: scanSegmentNodes(ac, members, sm, logMeta.LogId, mode),
+			nodes: scanSegmentNodes(ac, members, sm, logMeta.LogId, mode, location...),
 		})
 	}
 
@@ -130,7 +137,10 @@ func runLogScan(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
 	for _, row := range rows {
 		metaLast := strconv.FormatInt(row.MetaLast, 10)
 		if row.MetaLast < 0 {
-			metaLast = "-1 (open)"
+			metaLast = "-1 (empty metadata)"
+			if row.State == "Active" {
+				metaLast = "-1 (open)"
+			}
 		}
 		table = append(table, []string{
 			strconv.FormatInt(row.SegmentID, 10), row.State, metaLast,
@@ -142,6 +152,16 @@ func runLogScan(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
 		return renderErr
 	}
 
+	fmt.Fprintln(w, "\nPer-replica inspection (local durable blocks; pending writes and object-storage contents are not verified):")
+	replicaRows := [][]string{}
+	for _, row := range rows {
+		for _, replica := range row.ReplicaDetails {
+			replicaRows = append(replicaRows, []string{fmt.Sprint(row.SegmentID), replica.Node, replica.Result, replica.Coverage, replica.StopReason, replica.Detail})
+		}
+	}
+	if err := output.RenderRowTable(w, []string{"SEGMENT", "NODE", "RESULT", "LOCAL RANGE", "STOP", "DETAIL"}, replicaRows); err != nil {
+		return err
+	}
 	fmt.Fprintln(w)
 	for _, line := range findings {
 		fmt.Fprintf(w, "%s\n", line)
@@ -224,7 +244,9 @@ func readSegmentMetas(ctx context.Context, cli *clientv3.Client, kb *meta.KeyBui
 // reconciliation reads as "not known" rather than as missing data.
 const scanMaxBlocks = 4096
 
-func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentMeta, logID int64, mode string) []scanNode {
+type scanLocation struct{ bucket, rootPath string }
+
+func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentMeta, logID int64, mode string, location ...scanLocation) []scanNode {
 	quorum := sm.meta.GetQuorum()
 	if quorum == nil || len(quorum.Nodes) == 0 {
 		return nil
@@ -244,6 +266,9 @@ func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentM
 
 		path := fmt.Sprintf("/admin/logstore/segment/inspect?log_id=%d&segment_id=%d&max_blocks=%d",
 			logID, sm.id, scanMaxBlocks)
+		if len(location) > 0 && location[0].bucket != "" {
+			path += "&bucket_name=" + url.QueryEscape(location[0].bucket) + "&root_path=" + url.QueryEscape(location[0].rootPath)
+		}
 		if mode == scanModeQuick {
 			path += "&verify=false"
 		}
@@ -251,10 +276,12 @@ func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentM
 		switch {
 		case err != nil:
 			node.state = posUnreachable
+			node.detail = err.Error()
 			nodes = append(nodes, node)
 			continue
 		case status != 200:
 			node.state = probeStateCannotAnswer
+			node.detail = fmt.Sprintf("HTTP %d: %s", status, adminErrorText(body, status))
 			nodes = append(nodes, node)
 			continue
 		}
@@ -275,10 +302,17 @@ func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentM
 		}
 		if jsonErr := json.Unmarshal(body, &resp); jsonErr != nil {
 			node.state = posBadResponse
+			node.detail = jsonErr.Error()
+			nodes = append(nodes, node)
+			continue
+		}
+		if resp.Survey.StopReason == "" {
+			node.state, node.detail = posBadResponse, "inspection response is missing survey stop_reason"
 			nodes = append(nodes, node)
 			continue
 		}
 		node.answered, node.stopped = true, resp.Survey.StopReason
+		node.blocksFound = len(resp.Survey.Blocks) > 0
 		node.compactedMark = resp.Local.CompactedMark
 		for _, block := range resp.Survey.Blocks {
 			if block.FirstEntryID < 0 || block.LastEntryID < block.FirstEntryID {
@@ -287,6 +321,7 @@ func scanSegmentNodes(ac *client.Client, members *client.Memberlist, sm segmentM
 			// In raw mode only a block that verified counts as reached; in quick mode nothing was
 			// verified, so the coverage is what the structure claims.
 			if mode == scanModeRaw && block.Status != blockStatusOK {
+				node.detail += fmt.Sprintf("block %d..%d: %s; ", block.FirstEntryID, block.LastEntryID, block.Status)
 				continue
 			}
 			node.coverage = node.coverage.add(entryRange{block.FirstEntryID, block.LastEntryID})
