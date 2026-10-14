@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -144,6 +145,17 @@ func metaGet(cli *clientv3.Client, key string) (*mvccpb.KeyValue, error) {
 		return nil, wperrors.NewTargetNotFoundError(key)
 	}
 	return r.Kvs[0], nil
+}
+
+// canonicalMetaSegmentID checks both the key's spelling and the immutable payload identity.
+func canonicalMetaSegmentID(key, logKey string, segment *proto.SegmentMetadata) (int64, error) {
+	prefix := logKey + "/segments/"
+	suffix := strings.TrimPrefix(key, prefix)
+	id, err := strconv.ParseInt(suffix, 10, 64)
+	if !strings.HasPrefix(key, prefix) || err != nil || id < 0 || suffix != strconv.FormatInt(id, 10) || id != segment.SegNo {
+		return 0, fmt.Errorf("%s: key must use canonical segment ID %d matching segNo", key, segment.SegNo)
+	}
+	return id, nil
 }
 
 func newMetaReadCommand(kind string, show bool) *cobra.Command {
@@ -323,6 +335,19 @@ func writeMetaBackup(file string, data any) error {
 	}
 	if syncErr != nil {
 		return syncErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	// Sync the new directory entry before allowing the caller to commit an etcd update.
+	dir, err := os.Open(filepath.Dir(file))
+	if err != nil {
+		return wperrors.NewConfigError("open backup directory: " + err.Error())
+	}
+	syncErr = dir.Sync()
+	closeErr = dir.Close()
+	if syncErr != nil {
+		return wperrors.NewConfigError("sync backup directory: " + syncErr.Error())
 	}
 	return closeErr
 }

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -14,6 +13,15 @@ import (
 )
 
 func validateMetaMessage(msg pb.Message) []string {
+	issues := validateMetaFields(msg)
+	if segment, ok := msg.(*proto.SegmentMetadata); ok && segment.Quorum != nil {
+		issues = append(issues, validateMetaFields(segment.Quorum)...)
+	}
+	return issues
+}
+
+// validateMetaFields checks a record's own fields without recursing into protected metadata.
+func validateMetaFields(msg pb.Message) []string {
 	issues := []string{}
 	switch m := msg.(type) {
 	case *proto.LogMeta:
@@ -68,9 +76,6 @@ func validateMetaMessage(msg pb.Message) []string {
 		}
 		if m.SealedTime != 0 && (m.CompletionTime == 0 || m.SealedTime < m.CompletionTime) {
 			issues = append(issues, "sealedTime precedes completionTime")
-		}
-		if m.Quorum != nil {
-			issues = append(issues, validateMetaMessage(m.Quorum)...)
 		}
 	case *proto.QuorumInfo:
 		if m.Id < 0 || m.Es <= 0 || m.Wq <= 0 || m.Aq <= 0 || m.Wq > m.Es || m.Aq > m.Wq || int(m.Es) != len(m.Nodes) {
@@ -147,12 +152,12 @@ func newMetaCheckCommand() *cobra.Command {
 				logMeta = msg.(*proto.LogMeta)
 			} else {
 				m := msg.(*proto.SegmentMetadata)
-				suffix := strings.TrimPrefix(k, key+"/segments/")
-				if suffix != strconv.FormatInt(m.SegNo, 10) {
-					issues = append(issues, fmt.Sprintf("%s: key must use canonical segment ID %d matching segNo", k, m.SegNo))
+				segmentID, err := canonicalMetaSegmentID(k, key, m)
+				if err != nil {
+					issues = append(issues, err.Error())
 					continue
 				}
-				segments[m.SegNo] = m
+				segments[segmentID] = m
 			}
 		}
 		if !found {

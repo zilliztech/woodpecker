@@ -69,6 +69,9 @@ quorums, readers, cleanup/compacted-notify status, version and skip ranges).
 Other JSON records are shown as JSON and text records as readable `value`.
 Each record also retains its original `value_base64`, lease and revision, in a new file
 with mode 0600. Patch backups use the same readable record format.
+Before a patch commits to etcd, the backup file and its parent directory are
+synced. A persistence error aborts the apply; filesystems that cannot sync a
+directory will return an error rather than allowing an unconfirmed backup.
 Unknown binary records remain base64; malformed known records include a
 `decode_error` without losing their raw bytes. Existing export files are not
 overwritten or converted automatically. `check` validates the
@@ -162,6 +165,16 @@ Apply uses the same required `--apply --offline --expected-revision --reason
 --backup` options as log patch. Changing lifecycle timestamps can change cleanup
 eligibility: cleanup uses these timestamps to determine retention age. A size
 correction changes metadata only; it does not resize or repair any data file.
+
+Patch rejects a segment whose canonical etcd key ID disagrees with its immutable
+`segNo`, before preview or apply. Segment bounds are checked against the ID in
+that key, so a corrupt identity cannot bypass the log's truncation frontier.
+
+An existing invalid embedded quorum does not block repairs to the supported
+segment fields. Preview and apply include `warnings` describing those unchanged
+quorum problems. Quorum itself remains protected; the command preserves it and
+`meta check` continues to report it until separately resolved. Scalar/lifecycle
+constraints and truncation-frontier checks still block invalid corrections.
 
 ## Repair lastEntryId and state after a metadata bug
 

@@ -102,7 +102,9 @@ func patchMetaMessage(kind string, original pb.Message, patch []byte) (pb.Messag
 	if kind == "log" {
 		msg.(*proto.LogMeta).ModificationTimestamp = uint64(time.Now().Unix())
 	}
-	if issues := validateMetaMessage(msg); len(issues) > 0 {
+	// Embedded quorum is immutable here. Report its pre-existing problems separately;
+	// they must not prevent repairing the segment's scalar fields and lifecycle invariants.
+	if issues := validateMetaFields(msg); len(issues) > 0 {
 		return nil, wperrors.NewStateConflictError(strings.Join(issues, "; "))
 	}
 	return msg, nil
@@ -204,6 +206,20 @@ func runMetaPatch(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
 	if err != nil {
 		return err
 	}
+	segmentID := int64(-1)
+	warnings := []string{}
+	if kind == "segment" {
+		segment := msg.(*proto.SegmentMetadata)
+		segmentID, err = canonicalMetaSegmentID(key, logKey, segment)
+		if err != nil {
+			return wperrors.NewStateConflictError(err.Error())
+		}
+		if segment.Quorum != nil {
+			for _, issue := range validateMetaMessage(segment.Quorum) {
+				warnings = append(warnings, "embedded quorum (unchanged): "+issue)
+			}
+		}
+	}
 	afterMsg, err := patchMetaMessage(kind, msg, patch)
 	if err != nil {
 		return err
@@ -215,7 +231,7 @@ func runMetaPatch(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
 		}
 		logMeta := logMsg.(*proto.LogMeta)
 		segment := afterMsg.(*proto.SegmentMetadata)
-		if segment.State != proto.SegmentState_Active && logMeta.TruncatedSegmentId == segment.SegNo && logMeta.TruncatedEntryId > segment.LastEntryId {
+		if segment.State != proto.SegmentState_Active && logMeta.TruncatedSegmentId == segmentID && logMeta.TruncatedEntryId > segment.LastEntryId {
 			return wperrors.NewStateConflictError("lastEntryId is below the log truncation frontier")
 		}
 	}
@@ -250,6 +266,9 @@ func runMetaPatch(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
 		}
 	}
 	preview := map[string]any{"applied": false, "before": before, "after": after, "changes": changes, "reason": opt.reason, "snapshot_revision": r.Header.Revision}
+	if len(warnings) > 0 {
+		preview["warnings"] = warnings
+	}
 	if !opt.apply {
 		return renderMeta(cmd, preview)
 	}
