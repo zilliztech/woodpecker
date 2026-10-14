@@ -125,6 +125,21 @@ go tool trace -http=127.0.0.1:8081 ./node-0-trace-TIMESTAMP.trace
 ### Log metadata
 - `wp log readers <logName>` — where each of a log's readers has read to (etcd only, no node contact)
 
+### Authoritative metadata
+- `wp meta log list|show`, `wp meta segment list|show`, `wp meta quorum list|show` — decoded etcd records, including unloaded historical segments, with keys, revisions and leases
+- `wp meta check <logName>` — validate metadata constraints and truncation bounds
+- `wp meta export --output-file <new-file>` — readable namespace snapshot with original bytes retained
+- `wp meta log patch <logName> --patch-file <json>` — preview a restricted log policy correction
+- `wp meta segment patch <logName> <segmentId> --patch-file <json>` — preview a correction to size, lifecycle timestamps, lastEntryId or state
+
+These commands accept `--etcd <endpoints>` and `--meta-prefix <complete-prefix>`.
+Inspection and checks cover metadata; they do not verify replica or object-storage
+contents. Patch defaults to preview. Applying requires `--apply --offline`, the
+target's `--expected-revision`, a `--reason` and a new `--backup` file, and refuses
+writer locks or concurrent target/log updates. Quorums, identities and log truncation
+positions are protected. See the [metadata command guide](../../docs/wp-meta-cli.md)
+for connection options, patch formats, output interpretation and executable examples.
+
 ### Log end to end
 - `wp log scan <logName> [--mode quick|raw] [--from-segment N] [--to-segment N]` — sweep every
   segment of a log and reconcile metadata with the replicas' local coverage. `quick`
