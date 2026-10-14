@@ -3,7 +3,9 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -94,7 +96,7 @@ func newLogstoreSegmentShowCommand() *cobra.Command {
 	var logID, segID int64
 	cmd := &cobra.Command{
 		Use:   "segment-show <node>",
-		Short: "Show detailed state of a single segment",
+		Short: "Show a segment's active writer on a node (not historical segment metadata)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			res, err := resolveAndDiscover()
@@ -107,21 +109,35 @@ func newLogstoreSegmentShowCommand() *cobra.Command {
 			}
 			peerURL := res.Client.PeerAdminURL(target)
 			path := fmt.Sprintf("/admin/logstore/segments/detail?log_id=%d&segment_id=%d", logID, segID)
-			body, err := fetchAdminJSON(peerURL, path)
+			body, status, err := fetchAdminJSONWithStatus(peerURL, path)
 			if err != nil {
 				return err
+			}
+			if status == http.StatusNotFound {
+				var detail struct {
+					Error string `json:"error"`
+				}
+				if json.Unmarshal(body, &detail) == nil && detail.Error != "" {
+					return wperrors.NewTargetNotFoundError(fmt.Sprintf(
+						"%s: %s; segment-show only inspects node-local active writers. A historical or unloaded segment may still exist. Use 'wp logstore segments %s' to list loaded writers, or 'wp log scan <logName>' to inspect historical segments",
+						target.ID, detail.Error, target.ID))
+				}
+			}
+			if status != http.StatusOK {
+				return wperrors.NewNetworkError(fmt.Sprintf("%s returned status %d: %s", path, status, strings.TrimSpace(string(body))))
+			}
+			var pretty json.RawMessage
+			if err := json.Unmarshal(body, &pretty); err != nil {
+				return wperrors.NewNetworkError(fmt.Sprintf("invalid segment response: %v", err))
 			}
 			if Globals.Output == "json" || Globals.Output == "yaml" {
 				_, _ = cmd.OutOrStdout().Write(body)
 				return nil
 			}
 			// Render as indented JSON for readability
-			var pretty json.RawMessage
-			if err := json.Unmarshal(body, &pretty); err == nil {
-				formatted, _ := json.MarshalIndent(pretty, "", "  ")
-				_, _ = cmd.OutOrStdout().Write(formatted)
-				_, _ = fmt.Fprintln(cmd.OutOrStdout())
-			}
+			formatted, _ := json.MarshalIndent(pretty, "", "  ")
+			_, _ = cmd.OutOrStdout().Write(formatted)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout())
 			return nil
 		},
 	}

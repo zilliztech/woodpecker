@@ -20,7 +20,7 @@ func newProfileCommand() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "profile <node>",
-		Short: "Download a Go pprof profile from a node",
+		Short: "Download a Go profile or execution trace from a node",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := resolveAndDiscover()
@@ -33,14 +33,22 @@ func newProfileCommand() *cobra.Command {
 			}
 			peerURL := r.Client.PeerAdminURL(target)
 
-			url := fmt.Sprintf("%s/debug/pprof/%s", peerURL, profileType)
+			profilePath := profileType
+			if profileType == "cpu" {
+				profilePath = "profile"
+			}
+			url := fmt.Sprintf("%s/debug/pprof/%s", peerURL, profilePath)
 			if profileType == "cpu" || profileType == "trace" {
 				url = fmt.Sprintf("%s?seconds=%d", url, seconds)
 			}
 
 			if outputFile == "" {
-				outputFile = fmt.Sprintf("./%s-%s-%s.pb.gz",
-					target.ID, profileType, time.Now().UTC().Format("20060102-150405"))
+				extension := "pb.gz"
+				if profileType == "trace" {
+					extension = "trace"
+				}
+				outputFile = fmt.Sprintf("./%s-%s-%s.%s",
+					target.ID, profileType, time.Now().UTC().Format("20060102-150405"), extension)
 			}
 
 			fmt.Fprintf(cmd.ErrOrStderr(), "Collecting %s profile from %s ...\n", profileType, target.ID)
@@ -64,12 +72,16 @@ func newProfileCommand() *cobra.Command {
 				return wperrors.NewNetworkError(fmt.Sprintf("write pprof: %v", err))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Saved: %s (%d bytes)\n", outputFile, n)
-			fmt.Fprintf(cmd.OutOrStdout(), "To analyze: go tool pprof -http=:0 %s\n", outputFile)
+			if profileType == "trace" {
+				fmt.Fprintf(cmd.OutOrStdout(), "To analyze: go tool trace -http=127.0.0.1:8081 %s\n", outputFile)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "To analyze: go tool pprof -http=127.0.0.1:8081 %s\n", outputFile)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&profileType, "type", "cpu", "profile type: cpu|heap|goroutine|allocs|mutex|block|threadcreate|trace")
 	cmd.Flags().IntVar(&seconds, "seconds", 30, "duration for cpu/trace profiles")
-	cmd.Flags().StringVar(&outputFile, "output-file", "", "output file path (default: ./<node>-<type>-<timestamp>.pb.gz)")
+	cmd.Flags().StringVar(&outputFile, "output-file", "", "output file path (default: ./<node>-<type>-<timestamp>.pb.gz; trace uses .trace)")
 	return cmd
 }
