@@ -155,3 +155,55 @@ func TestMetaSegmentValidationNamesInvalidFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, validateMetaMessage(repaired))
 }
+
+func TestMetaCheckReportsInvalidMetadataWithoutWriting(t *testing.T) {
+	cli, kb, endpoint := metaValidationFixture(t)
+	for _, tc := range []struct {
+		name, issue string
+		edit        func(*proto.LogMeta, *proto.SegmentMetadata)
+	}{
+		{"log_id", "logId must be nonnegative", func(l *proto.LogMeta, _ *proto.SegmentMetadata) { l.LogId = -1 }},
+		{"log_policy", "policy fields must be nonnegative", func(l *proto.LogMeta, _ *proto.SegmentMetadata) { l.MaxCompactionFileCount = -1 }},
+		{"negative_frontier", "invalid truncation frontier", func(l *proto.LogMeta, _ *proto.SegmentMetadata) { l.TruncatedEntryId = -2 }},
+		{"unset_frontier", "unset truncation segment requires entry -1", func(l *proto.LogMeta, _ *proto.SegmentMetadata) { l.TruncatedEntryId = 0 }},
+		{"segment_state", "unknown segment state", func(_ *proto.LogMeta, s *proto.SegmentMetadata) { s.State = 99 }},
+		{"quorum_sizes", "invalid quorum sizes or node count", func(_ *proto.LogMeta, s *proto.SegmentMetadata) { s.Quorum.Aq = 4 }},
+		{"duplicate_node", "empty or duplicate quorum endpoint", func(_ *proto.LogMeta, s *proto.SegmentMetadata) { s.Quorum.Nodes[1] = s.Quorum.Nodes[0] }},
+		{"empty_node", "empty or duplicate quorum endpoint", func(_ *proto.LogMeta, s *proto.SegmentMetadata) { s.Quorum.Nodes[1] = " " }},
+		{"topology_count", "replica topology count differs from nodes", func(_ *proto.LogMeta, s *proto.SegmentMetadata) { s.Quorum.Replicas = s.Quorum.Replicas[:1] }},
+		{"topology_endpoint", "replica endpoint is not in quorum nodes", func(_ *proto.LogMeta, s *proto.SegmentMetadata) { s.Quorum.Replicas[0].Endpoint = "other:18080" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logMeta := &proto.LogMeta{LogId: 1, TruncatedSegmentId: -1, TruncatedEntryId: -1}
+			segment := &proto.SegmentMetadata{
+				CreateTime: 100, LastEntryId: -1, State: proto.SegmentState_Active,
+				Quorum: &proto.QuorumInfo{
+					Id: 1, Es: 2, Wq: 2, Aq: 2, Nodes: []string{"node0:18080", "node1:18080"},
+					Replicas: []*proto.QuorumNode{{Endpoint: "node0:18080"}, {Endpoint: "node1:18080"}},
+				},
+			}
+			require.Empty(t, validateMetaMessage(logMeta))
+			require.Empty(t, validateMetaMessage(segment))
+			tc.edit(logMeta, segment)
+			logKey := kb.BuildLogKey(tc.name)
+			segmentKey := kb.BuildSegmentInstanceKey(tc.name, "0")
+			putMetaValidationRecord(t, cli, logKey, logMeta)
+			putMetaValidationRecord(t, cli, segmentKey, segment)
+			beforeLog, err := metaGet(cli, logKey)
+			require.NoError(t, err)
+			beforeSegment, err := metaGet(cli, segmentKey)
+			require.NoError(t, err)
+
+			out, err := runMetaCommand(t, endpoint, kb.Prefix(), "meta", "check", tc.name)
+			require.Equal(t, 9, wperrors.ExitCodeFor(err))
+			require.Contains(t, out, `"state": "invalid"`)
+			require.Contains(t, out, tc.issue)
+			afterLog, err := metaGet(cli, logKey)
+			require.NoError(t, err)
+			afterSegment, err := metaGet(cli, segmentKey)
+			require.NoError(t, err)
+			require.Equal(t, beforeLog, afterLog, "check must not repair the log implicitly")
+			require.Equal(t, beforeSegment, afterSegment, "check must not repair the segment implicitly")
+		})
+	}
+}
