@@ -1,0 +1,93 @@
+<section id="topic-env">
+<h2>Process environment</h2>
+<article class="command" id="env-diff">
+<h2>wp env diff</h2>
+<p>Compare env / runtime / host / build across all nodes</p>
+<pre>
+<code>wp env diff [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp env diff --strict</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>node-0: (reference)
+node-1: identical</code>
+</pre>
+<p>Compare build, Go runtime and deployment environment. Differences are evidence to investigate, not automatic data corruption.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>node-1: DRIFT (...)
+node-2: UNREACHABLE (not compared)</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Compare env / runtime / host / build across all nodes
+
+Usage:
+  wp env diff [flags]
+
+Flags:
+  -h, --help   help for diff</code>
+</pre>
+</details>
+</article>
+<article class="command" id="env-show">
+<h2>wp env show</h2>
+<p>Show env vars + runtime + host + build for a single node</p>
+<pre>
+<code>wp env show &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--section string</code>
+</td>
+<td>section filter: env|runtime|host|build|all (default &quot;all&quot;)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp env show node-0 -o json</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{&quot;env&quot;:{...},&quot;runtime&quot;:{...},&quot;host&quot;:{...},&quot;build&quot;:{...}}</code>
+</pre>
+<p>Compare build, Go runtime and deployment environment. Differences are evidence to investigate, not automatic data corruption.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: TargetNotFound: node-missing</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show env vars + runtime + host + build for a single node
+
+Usage:
+  wp env show &lt;node&gt; [flags]
+
+Flags:
+  -h, --help             help for show
+      --section string   section filter: env|runtime|host|build|all (default &quot;all&quot;)</code>
+</pre>
+</details>
+</article>
+</section>

@@ -1,0 +1,1107 @@
+<section id="overview">
+<h1>CLI Handbook · Overview</h1>
+<p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
+<p>
+<span class="badge">18 top-level commands/groups · 60 executable operations</span>
+</p>
+<p>
+<a href="cli.html#start">New to wp? Start with installation, connection setup and your first commands →</a>
+</p>
+<div class="note">This reference is generated from the CLI in this source checkout. Build that checkout for matching command help; a published release may contain fewer options. Check <code>wp version</code> and <code>wp --help</code> before following an example.</div>
+<p>Each topic has command syntax, parameter explanations, a demo, illustrative output and result interpretation. The overview lists executable operations: <code>node</code> is a command group, while <code>node list</code> is an operation within it.</p>
+<nav class="ops-topic-grid" aria-label="CLI topics">
+<a href="#local">
+<strong>CLI setup</strong>
+<span>ctx / completion / version</span>
+</a>
+<a href="#env">
+<strong>Process environment</strong>
+<span>env</span>
+</a>
+<a href="#cluster">
+<strong>Cluster &amp; node status</strong>
+<span>cluster / node</span>
+</a>
+<a href="#k8s">
+<strong>Kubernetes helpers</strong>
+<span>k8s</span>
+</a>
+<a href="#config">
+<strong>Server configuration</strong>
+<span>config</span>
+</a>
+<a href="#logging">
+<strong>Runtime log levels</strong>
+<span>logging</span>
+</a>
+<a href="#profile">
+<strong>Profiles &amp; trace</strong>
+<span>profile</span>
+</a>
+<a href="#ops">
+<strong>In-flight operations</strong>
+<span>ops</span>
+</a>
+<a href="#metrics">
+<strong>Metrics &amp; scenarios</strong>
+<span>metrics</span>
+</a>
+<a href="#logstore">
+<strong>Writer runtime</strong>
+<span>logstore</span>
+</a>
+<a href="#instance">
+<strong>Local data inventory</strong>
+<span>instance</span>
+</a>
+<a href="#log">
+<strong>Log progress &amp; coverage</strong>
+<span>log</span>
+</a>
+<a href="#segment">
+<strong>Segment diagnosis</strong>
+<span>segment</span>
+</a>
+<a href="#marking">
+<strong>Compacted-mark distribution</strong>
+<span>marking</span>
+</a>
+<a href="#etcd">
+<strong>Raw etcd exploration</strong>
+<span>etcd</span>
+</a>
+</nav>
+</section>
+<section id="command-lookup">
+<h2>All operations at a glance</h2>
+<p>Search by command, purpose or parameter, then click an operation to open its topic at the matching detail. Connection parameters are explained in CLI setup.</p>
+<label for="quick-search">Search operations</label>
+<input id="quick-search" type="search" placeholder="inspect, --op-id, profile…">
+</section>
+<section class="ops-quick-section" id="quick-local">
+<h2>CLI setup · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp completion</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#completion-bash">
+<code>wp completion bash</code>
+</a>
+</td>
+<td>Generate the autocompletion script for the bash shell.</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#completion-fish">
+<code>wp completion fish</code>
+</a>
+</td>
+<td>Generate the autocompletion script for the fish shell.</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#completion-powershell">
+<code>wp completion powershell</code>
+</a>
+</td>
+<td>Generate the autocompletion script for powershell.</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#completion-zsh">
+<code>wp completion zsh</code>
+</a>
+</td>
+<td>Generate the autocompletion script for the zsh shell.</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp ctx</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#ctx-list">
+<code>wp ctx list</code>
+</a>
+</td>
+<td>List all contexts defined in cli.yaml</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#ctx-use">
+<code>wp ctx use</code>
+</a>
+</td>
+<td>Switch current-context to the given name and persist to cli.yaml</td>
+<td>
+<code>&lt;name&gt;</code>: Local CLI context name</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#ctx-view">
+<code>wp ctx view</code>
+</a>
+</td>
+<td>Print the resolved fields of the active context</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-group-heading">
+<th colspan="3">Command: <code>wp version</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#version">
+<code>wp version</code>
+</a>
+</td>
+<td>Show wp CLI version and build info</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-env">
+<h2>Process environment · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp env</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#env-diff">
+<code>wp env diff</code>
+</a>
+</td>
+<td>Compare env / runtime / host / build across all nodes</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#env-show">
+<code>wp env show</code>
+</a>
+</td>
+<td>Show env vars + runtime + host + build for a single node</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-cluster">
+<h2>Cluster & node status · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp cluster</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#cluster-gossip-diff">
+<code>wp cluster gossip-diff</code>
+</a>
+</td>
+<td>Compare memberlist views across nodes to detect partitions</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#cluster-health">
+<code>wp cluster health</code>
+</a>
+</td>
+<td>Red/yellow/green health check for the cluster</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#cluster-info">
+<code>wp cluster info</code>
+</a>
+</td>
+<td>Show cluster overview (nodes, state, topology)</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp node</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#node-cancel-decommission">
+<code>wp node cancel-decommission</code>
+</a>
+</td>
+<td>Cancel an in-progress decommission (decommissioning -&gt; active)</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#node-decommission">
+<code>wp node decommission</code>
+</a>
+</td>
+<td>Trigger graceful node decommission (blocks until safe by default)</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#node-drain-status">
+<code>wp node drain-status</code>
+</a>
+</td>
+<td>Show (or watch) decommission progress for a node</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#node-healthz">
+<code>wp node healthz</code>
+</a>
+</td>
+<td>Query a node&#x27;s health probe (the one readiness uses)</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#node-list">
+<code>wp node list</code>
+</a>
+</td>
+<td>List all server nodes in the cluster</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#node-log-health">
+<code>wp node log-health</code>
+</a>
+</td>
+<td>Show per-log read/write health observed by a node</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#node-restart">
+<code>wp node restart</code>
+</a>
+</td>
+<td>(Not implemented) Restart a node — use your orchestrator instead</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#node-show">
+<code>wp node show</code>
+</a>
+</td>
+<td>Show detailed status for a single node</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-k8s">
+<h2>Kubernetes helpers · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp k8s</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#k8s-doctor">
+<code>wp k8s doctor</code>
+</a>
+</td>
+<td>Diagnose K8s cluster issues (not yet implemented)</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#k8s-logs">
+<code>wp k8s logs</code>
+</a>
+</td>
+<td>Tail logs from a Woodpecker pod</td>
+<td>
+<code>&lt;node-or-pod&gt;</code>: Actual pod name, or a node ordinal resolved with --wp-cluster</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#k8s-scale">
+<code>wp k8s scale</code>
+</a>
+</td>
+<td>Scale the cluster via kubectl patch</td>
+<td>
+<code>--replicas int</code>: Target replica count</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#k8s-status">
+<code>wp k8s status</code>
+</a>
+</td>
+<td>Show cluster status via kubectl</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-config">
+<h2>Server configuration · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp config</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#config-diff">
+<code>wp config diff</code>
+</a>
+</td>
+<td>Compare configurations across nodes</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#config-show">
+<code>wp config show</code>
+</a>
+</td>
+<td>Show the resolved configuration of a single node</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-logging">
+<h2>Runtime log levels · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp logging</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logging-get-level">
+<code>wp logging get-level</code>
+</a>
+</td>
+<td>Show current log level of a node (or all nodes)</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logging-set-level">
+<code>wp logging set-level</code>
+</a>
+</td>
+<td>Change log level of a node (or all nodes)</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-profile">
+<h2>Profiles & trace · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command: <code>wp profile</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#profile">
+<code>wp profile</code>
+</a>
+</td>
+<td>Download a Go profile or execution trace from a node</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-ops">
+<h2>In-flight operations · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp ops</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#ops-list">
+<code>wp ops list</code>
+</a>
+</td>
+<td>List in-flight operations</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#ops-show">
+<code>wp ops show</code>
+</a>
+</td>
+<td>Show detail of a single in-flight operation</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID<br>
+<code>--op-id string</code>: Operation ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#ops-stats">
+<code>wp ops stats</code>
+</a>
+</td>
+<td>Show op registry utilization and eviction statistics</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-metrics">
+<h2>Metrics & scenarios · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp metrics</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#metrics-list">
+<code>wp metrics list</code>
+</a>
+</td>
+<td>List all metric series exposed by a node</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#metrics-report">
+<code>wp metrics report</code>
+</a>
+</td>
+<td>Run scenario-based metrics analysis</td>
+<td>
+<code>--scenario</code>: analysis scenario, or <code>--list</code> to enumerate scenarios</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#metrics-snapshot">
+<code>wp metrics snapshot</code>
+</a>
+</td>
+<td>Point-in-time metric snapshot from one or all nodes</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#metrics-top">
+<code>wp metrics top</code>
+</a>
+</td>
+<td>Cross-node top-N comparison of a specific metric</td>
+<td>
+<code>--by string</code>: Metric name to rank by</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#metrics-watch">
+<code>wp metrics watch</code>
+</a>
+</td>
+<td>Real-time stream of a metric with trend arrows</td>
+<td>
+<code>&lt;metric-name&gt;</code>: Prometheus metric family to watch<br>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-logstore">
+<h2>Writer runtime · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp logstore</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-buffer">
+<code>wp logstore buffer</code>
+</a>
+</td>
+<td>Show buffer bytes summary, sorted by size</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-compact">
+<code>wp logstore compact</code>
+</a>
+</td>
+<td>Force compaction on a segment at an exact confirmed entry ID</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID<br>
+<code>--expected-last-entry-id int</code>: Exact LastEntryId from coordinator metadata; an incorrect value can publish an invalid footer (-1 only for an empty segment, required)<br>
+<code>--log int</code>: Log ID<br>
+<code>--seg int</code>: Segment ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-fence">
+<code>wp logstore fence</code>
+</a>
+</td>
+<td>Fence a segment on a single node.</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID<br>
+<code>--log int</code>: Log ID<br>
+<code>--reason string</code>: Reason for fencing<br>
+<code>--seg int</code>: Segment ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-fence-quorum">
+<code>wp logstore fence-quorum</code>
+</a>
+</td>
+<td>Fence a segment across enough of its quorum to interrupt writes (high-risk, requires --reason)</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>
+<code>--reason string</code>: Reason for fencing</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-flush-queue">
+<code>wp logstore flush-queue</code>
+</a>
+</td>
+<td>Show flush queue depth summary, sorted by depth</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-force-flush">
+<code>wp logstore force-flush</code>
+</a>
+</td>
+<td>Force sync on a specific segment or all segments</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-lac">
+<code>wp logstore lac</code>
+</a>
+</td>
+<td>Show how far a segment is confirmed readable across its quorum</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-segment-show">
+<code>wp logstore segment-show</code>
+</a>
+</td>
+<td>Show a segment&#x27;s active writer on a node (not historical segment metadata)</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID<br>
+<code>--log int</code>: Log ID<br>
+<code>--seg int</code>: Segment ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#logstore-segments">
+<code>wp logstore segments</code>
+</a>
+</td>
+<td>List active segments on a node</td>
+<td>
+<code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-instance">
+<h2>Local data inventory · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp instance</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#instance-data">
+<code>wp instance data</code>
+</a>
+</td>
+<td>List the instances holding node-local data.</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-log">
+<h2>Log progress & coverage · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp log</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#log-readers">
+<code>wp log readers</code>
+</a>
+</td>
+<td>Show where each of a log&#x27;s readers has read to</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#log-scan">
+<code>wp log scan</code>
+</a>
+</td>
+<td>Compare metadata with replica local coverage; raw verifies local block checksums</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>For explicit storage: paired <code>--bucket / --root-path</code>
+</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#log-skip-range-add">
+<code>wp log skip-range add</code>
+</a>
+</td>
+<td>Declare an entry range unreadable so readers move past it.</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>
+<code>--reason string</code>: Why these entries are being given up<br>
+<code>--from-entry / --to-entry</code>: inclusive entry range<br>
+<code>--reason</code>: accepted-loss reason; <code>-y</code> commits the reviewed declaration</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#log-skip-range-list">
+<code>wp log skip-range list</code>
+</a>
+</td>
+<td>Show the declared skip ranges.</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#log-skip-range-remove">
+<code>wp log skip-range remove</code>
+</a>
+</td>
+<td>Withdraw a declared range, so readers stop skipping it.</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>
+<code>--from-entry / --to-entry</code>: inclusive entry range</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-segment">
+<h2>Segment diagnosis · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp segment</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#segment-inspect">
+<code>wp segment inspect</code>
+</a>
+</td>
+<td>Walk a segment&#x27;s blocks on every replica and report what is wrong where</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>For explicit storage: paired <code>--bucket / --root-path</code>
+</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#segment-probe">
+<code>wp segment probe</code>
+</a>
+</td>
+<td>Ask every replica how far it can read a segment</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>For explicit storage: paired <code>--bucket / --root-path</code>
+</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-marking">
+<h2>Compacted-mark distribution · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp marking</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#marking-confirm">
+<code>wp marking confirm</code>
+</a>
+</td>
+<td>Confirm one compacted-mark distribution record.</td>
+<td>
+<code>&lt;logId&gt;</code>: Numeric log identity<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#marking-list">
+<code>wp marking list</code>
+</a>
+</td>
+<td>List compacted-mark distribution records (default: only NOTIFY_PENDING_MANUAL)</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-etcd">
+<h2>Raw etcd exploration · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp etcd</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#etcd-cat">
+<code>wp etcd cat</code>
+</a>
+</td>
+<td>Print only one key&#x27;s value; use --encoding raw for exact bytes</td>
+<td>
+<code>&lt;key&gt;</code>: Exact raw etcd key</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#etcd-get">
+<code>wp etcd get</code>
+</a>
+</td>
+<td>Show one exact key, revisions, lease and encoded value</td>
+<td>
+<code>&lt;key&gt;</code>: Exact raw etcd key</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#etcd-list">
+<code>wp etcd list</code>
+</a>
+</td>
+<td>List raw keys by literal prefix; omit prefix to explore all keys</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="setup">
+<h2>Connection and naming</h2>
+<p>Follow <a href="cli.html#start">CLI setup</a> for a Helm-installed Milvus/Woodpecker deployment, including access from outside Kubernetes.</p>
+<table>
+<tr>
+<th>Name</th>
+<th>Meaning</th>
+</tr>
+<tr>
+<td>logName / logId</td>
+<td>Logical metadata name / numeric log identity. Node-local logstore operations use the numeric ID.</td>
+</tr>
+<tr>
+<td>meta-prefix</td>
+<td>Complete etcd namespace configured by the client, for example milvus-prod/woodpecker.</td>
+</tr>
+<tr>
+<td>bucket + root-path</td>
+<td>The physical storage instance. Use both on scan, inspect and probe when automatic discovery cannot locate an empty or unloaded target. The instance data command uses --root.</td>
+</tr>
+</table>
+<p>Admin discovery supplies quorum identities; the workstation fans out to each node. Map every target to an accessible admin origin. A working seed connection alone does not establish peer reachability.</p>
+<p>If the metadata namespace is unknown, start with <a href="cli.html#etcd">Raw etcd exploration</a>: list literal keys, narrow the prefix, then inspect a value. Those read-only operations need an etcd connection but no admin endpoint or metadata prefix.</p>
+</section>
+<section id="shared">
+<h2>Shared parameters</h2>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--admin-port int</code>
+</td>
+<td>Admin port for fan-out peer discovery (default 9091)</td>
+</tr>
+<tr>
+<td>
+<code>--concurrency int</code>
+</td>
+<td>Fan-out concurrency (default 8)</td>
+</tr>
+<tr>
+<td>
+<code>--context string</code>
+</td>
+<td>CLI context name (overrides current-context in cli.yaml)</td>
+</tr>
+<tr>
+<td>
+<code>--endpoint string</code>
+</td>
+<td>Admin HTTP seed endpoint (e.g. http://node:9091)</td>
+</tr>
+<tr>
+<td>
+<code>-h, --help</code>
+</td>
+<td>help for wp</td>
+</tr>
+<tr>
+<td>
+<code>--no-color</code>
+</td>
+<td>Disable color in output</td>
+</tr>
+<tr>
+<td>
+<code>--node-admin-url stringArray</code>
+</td>
+<td>Map a node ID, advertised address, or host to an admin URL (KEY=URL; repeatable; overrides context mappings)</td>
+</tr>
+<tr>
+<td>
+<code>-o, --output string</code>
+</td>
+<td>Output format: table|wide|json|yaml (default &quot;table&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--strict</code>
+</td>
+<td>Treat partial fan-out failures as errors</td>
+</tr>
+<tr>
+<td>
+<code>--timeout duration</code>
+</td>
+<td>Per-request timeout (default 30s)</td>
+</tr>
+<tr>
+<td>
+<code>-v, --verbose count</code>
+</td>
+<td>Increase verbosity (-v, -vv, -vvv)</td>
+</tr>
+</tbody>
+</table>
+<p>Output formats vary by operation. Profile downloads binary data, and some diagnostic operations return findings with a nonzero exit code. Read the specific command's help and interpretation rather than treating every successful request as a health check.</p>
+</section>
+<section id="metrics-limits">
+<h2>Metrics scenario limits</h2>
+<p>stuck-read and stuck-write require persistent matching operations as well as zero successful completion progress during the window. An idle cluster alone is not a stall. Latency rules currently use window-average histogram latency rather than the advertised p99/baseline model. Several scenario names have only partial evaluators; use counters, operation IDs, reader positions and replica evidence together. A scenario reporting no findings is not proof that the whole cluster is healthy.</p>
+</section>
+<section id="exit-codes">
+<h2>Exit codes and expected findings</h2>
+<table>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+<tr>
+<td>0</td>
+<td>Completed within the command's stated scope.</td>
+</tr>
+<tr>
+<td>1 / 2 / 3 / 4</td>
+<td>Network / usage / target absent / state conflict.</td>
+</tr>
+<tr>
+<td>5 / 6 / 7</td>
+<td>Wait timeout / strict partial failure / acceptance not given or aborted.</td>
+</tr>
+<tr>
+<td>8 / 9</td>
+<td>Yellow / red diagnostic finding.</td>
+</tr>
+<tr>
+<td>10 / 11 / 12 / 13</td>
+<td>Not implemented / resource absent / configuration / prerequisite error.</td>
+</tr>
+<tr>
+<td>100 + N</td>
+<td>Executed kubectl exit code N.</td>
+</tr>
+</table>
+<p>Read the exit status immediately with <code>echo $?</code>. Piping through another command can hide the original status unless pipefail is enabled. Example output throughout the handbook is illustrative and may omit fields; replace names and IDs with values from your own cluster.</p>
+</section>

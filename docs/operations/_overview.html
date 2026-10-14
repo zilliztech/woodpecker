@@ -1,0 +1,39 @@
+<section id="overview">
+<h1>CLI Handbook · Overview</h1>
+<p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
+<p><span class="badge">{{SUMMARY}}</span></p>
+<p><a href="cli.html#start">New to wp? Start with installation, connection setup and your first commands →</a></p>
+<div class="note">This reference is generated from the CLI in this source checkout. Build that checkout for matching command help; a published release may contain fewer options. Check <code>wp version</code> and <code>wp --help</code> before following an example.</div>
+<p>Each topic has command syntax, parameter explanations, a demo, illustrative output and result interpretation. The overview lists executable operations: <code>node</code> is a command group, while <code>node list</code> is an operation within it.</p>
+{{TOPICS}}
+</section>
+<section id="setup">
+<h2>Connection and naming</h2>
+<p>Follow <a href="cli.html#start">CLI setup</a> for a Helm-installed Milvus/Woodpecker deployment, including access from outside Kubernetes.</p>
+<table><tr><th>Name</th><th>Meaning</th></tr>
+<tr><td>logName / logId</td><td>Logical metadata name / numeric log identity. Node-local logstore operations use the numeric ID.</td></tr>
+<tr><td>meta-prefix</td><td>Complete etcd namespace configured by the client, for example milvus-prod/woodpecker.</td></tr>
+<tr><td>bucket + root-path</td><td>The physical storage instance. Use both on scan, inspect and probe when automatic discovery cannot locate an empty or unloaded target. The instance data command uses --root.</td></tr></table>
+<p>Admin discovery supplies quorum identities; the workstation fans out to each node. Map every target to an accessible admin origin. A working seed connection alone does not establish peer reachability.</p>
+<p>If the metadata namespace is unknown, start with <a href="cli.html#etcd">Raw etcd exploration</a>: list literal keys, narrow the prefix, then inspect a value. Those read-only operations need an etcd connection but no admin endpoint or metadata prefix.</p>
+</section>
+<section id="shared">
+<h2>Shared parameters</h2>
+{{SHARED_FLAGS}}
+<p>Output formats vary by operation. Profile downloads binary data, and some diagnostic operations return findings with a nonzero exit code. Read the specific command's help and interpretation rather than treating every successful request as a health check.</p>
+</section>
+<section id="metrics-limits">
+<h2>Metrics scenario limits</h2>
+<p>stuck-read and stuck-write require persistent matching operations as well as zero successful completion progress during the window. An idle cluster alone is not a stall. Latency rules currently use window-average histogram latency rather than the advertised p99/baseline model. Several scenario names have only partial evaluators; use counters, operation IDs, reader positions and replica evidence together. A scenario reporting no findings is not proof that the whole cluster is healthy.</p>
+</section>
+<section id="exit-codes">
+<h2>Exit codes and expected findings</h2>
+<table><tr><th>Code</th><th>Meaning</th></tr>
+<tr><td>0</td><td>Completed within the command's stated scope.</td></tr>
+<tr><td>1 / 2 / 3 / 4</td><td>Network / usage / target absent / state conflict.</td></tr>
+<tr><td>5 / 6 / 7</td><td>Wait timeout / strict partial failure / acceptance not given or aborted.</td></tr>
+<tr><td>8 / 9</td><td>Yellow / red diagnostic finding.</td></tr>
+<tr><td>10 / 11 / 12 / 13</td><td>Not implemented / resource absent / configuration / prerequisite error.</td></tr>
+<tr><td>100 + N</td><td>Executed kubectl exit code N.</td></tr></table>
+<p>Read the exit status immediately with <code>echo $?</code>. Piping through another command can hide the original status unless pipefail is enabled. Example output throughout the handbook is illustrative and may omit fields; replace names and IDs with values from your own cluster.</p>
+</section>

@@ -1,0 +1,645 @@
+<section id="topic-local">
+<h2>CLI setup</h2>
+<h2 id="start">0. Install wp</h2>
+<p>Assume Milvus with Woodpecker is already installed by Helm. Run wp on your workstation using a released binary or a source build. The shell examples below use bash/zsh on macOS or Linux.</p>
+<h3>Download from GitHub</h3>
+<p>Select the release and OS/CPU architecture on the <a href="https://github.com/zilliztech/woodpecker/releases">GitHub Releases page</a>. These are standalone binaries, not archives. For example, macOS on Apple Silicon:</p>
+<pre>
+<code>export WP_VERSION=v0.1.46
+mkdir -p "$HOME/.local/bin"
+curl -fL "https://github.com/zilliztech/woodpecker/releases/download/${WP_VERSION}/wp-darwin-arm64" \
+  -o "$HOME/.local/bin/wp"
+chmod +x "$HOME/.local/bin/wp"
+export PATH="$HOME/.local/bin:$PATH"
+wp version</code>
+</pre>
+<p>For Linux, use <code>wp-linux-amd64</code> or <code>wp-linux-arm64</code>; Windows uses <code>wp-windows-amd64.exe</code>. Use an available asset matching your machine.</p>
+<details class="ops-help">
+<summary>Alternative: build from source</summary>
+<pre>
+<code>git clone https://github.com/zilliztech/woodpecker.git
+cd woodpecker
+# Optionally check out the release/branch you want to build.
+# git checkout v0.1.46
+make wpcli
+mkdir -p "$HOME/.local/bin"
+cp bin/wp "$HOME/.local/bin/wp"
+export PATH="$HOME/.local/bin:$PATH"
+wp version</code>
+</pre>
+<p>Install Git, make and the Go version required by go.mod first. You may also run <code>./bin/wp</code> directly. A source build exposes the commands in that checkout; a released binary may not contain later development additions documented in this handbook. Check <code>wp --help</code>.</p>
+</details>
+<h2 id="external-access">1. Connect to the Helm deployment</h2>
+<p>Use your real kubeconfig and namespace. Find the Woodpecker and etcd pods:</p>
+<pre>
+<code>export KUBECONFIG=/path/to/your/kubeconfig
+kubectl -n milvus get pods -o wide</code>
+</pre>
+<p>The examples below assume namespace <code>milvus</code>, Woodpecker pods <code>milvus-woodpecker-0/1/2</code> and etcd pod <code>milvus-etcd-0</code>. Replace these names with the Helm deployment's actual names. Start each needed forward in its own terminal:</p>
+<pre>
+<code>kubectl -n milvus port-forward pod/milvus-woodpecker-0 19091:9091
+kubectl -n milvus port-forward pod/milvus-woodpecker-1 29091:9091
+kubectl -n milvus port-forward pod/milvus-woodpecker-2 39091:9091
+# Needed when querying coordinator metadata or raw etcd keys:
+kubectl -n milvus port-forward pod/milvus-etcd-0 32379:2379</code>
+</pre>
+<p>The seed discovers membership; it does not proxy other nodes. Inspect the advertised node IDs/addresses, then map every node you need to reach:</p>
+<pre>
+<code>wp cluster info --endpoint http://127.0.0.1:19091</code>
+</pre>
+<h2 id="cli-yaml">2. Save the connection in cli.yaml</h2>
+<p>The usual personal location is <code>~/.woodpecker/cli.yaml</code>. Create the directory and save this example YAML there, using the node IDs reported by your cluster:</p>
+<pre>
+<code>mkdir -p "$HOME/.woodpecker"</code>
+</pre>
+<pre>
+<code>current-context: milvus-prod
+contexts:
+  milvus-prod:
+    endpoint: http://127.0.0.1:19091
+    node_admin_urls:
+      milvus-woodpecker-0: http://127.0.0.1:19091
+      milvus-woodpecker-1: http://127.0.0.1:29091
+      milvus-woodpecker-2: http://127.0.0.1:39091
+    k8s:
+      namespace: milvus
+      kubeconfig: /path/to/your/kubeconfig
+    # Current source builds; v0.1.46 uses explicit etcd flags instead.
+    etcd:
+      endpoints:
+        - 127.0.0.1:32379
+      meta_prefix: milvus-prod/woodpecker</code>
+</pre>
+<p>
+<code>endpoint</code> is the admin seed. <code>node_admin_urls</code> maps discovered node IDs or advertised service addresses to reachable admin origins. <code>current-context</code> selects milvus-prod when --context is omitted:</p>
+<pre>
+<code>wp node list
+wp --context milvus-prod node list</code>
+</pre>
+<p>To keep cli.yaml in another directory, select it explicitly:</p>
+<pre>
+<code>export WOODPECKER_CLI_CONFIG=/path/to/your/cli.yaml
+wp ctx list
+wp --context milvus-prod ctx view</code>
+</pre>
+<details class="ops-help">
+<summary>Config locations and precedence</summary>
+<p>Search order: WOODPECKER_CLI_CONFIG → cli.yaml beside the resolved wp binary → $XDG_CONFIG_HOME/woodpecker/cli.yaml → ~/.woodpecker/cli.yaml. The working directory and /etc/woodpecker are not default locations. Explicit command flags override matching context fields. WOODPECKER_ENDPOINT overrides the context's endpoint unless --endpoint is given.</p>
+<p>The k8s block supplies defaults to wp k8s helpers, not to your shell's kubectl. Operator-specific helpers target a WoodpeckerCluster CR; for a Helm deployment without that CR, use kubectl directly. Do not use the Helm release name as k8s.cluster unless it is also the actual CR name.</p>
+</details>
+<h2 id="shell-functions">3. Run without cli.yaml, or add shortcuts</h2>
+<p>A config file is optional. Supply the admin endpoint and node mappings directly:</p>
+<pre>
+<code>wp node list --endpoint http://127.0.0.1:19091 \
+  --node-admin-url milvus-woodpecker-0=http://127.0.0.1:19091 \
+  --node-admin-url milvus-woodpecker-1=http://127.0.0.1:29091 \
+  --node-admin-url milvus-woodpecker-2=http://127.0.0.1:39091</code>
+</pre>
+<p>Replace node IDs with the discovered IDs, full advertised addresses or hostnames. Repeat --node-admin-url for each peer; --endpoint alone only makes the seed reachable. CLI flags can also override an existing cli.yaml for one invocation.</p>
+<details class="ops-help">
+<summary>Optional: source shell functions for shorter commands</summary>
+<p>After creating the milvus-prod context, save this as a file of your choice, for example <code>~/wp-env.sh</code>:</p>
+<pre>
+<code>export KUBECONFIG=/path/to/your/kubeconfig
+# Set this only when cli.yaml is outside the usual personal location:
+# export WOODPECKER_CLI_CONFIG=/path/to/your/cli.yaml
+
+k() { kubectl --kubeconfig "$KUBECONFIG" -n milvus "$@"; }
+w() { wp --context milvus-prod "$@"; }</code>
+</pre>
+<pre>
+<code>source ~/wp-env.sh
+k get pods
+w node list
+w cluster health</code>
+</pre>
+<p>source defines the functions in the current shell. w forwards arguments to wp and selects milvus-prod for each invocation; it does not change current-context in the file.</p>
+</details>
+<h2 id="etcd-connection">4. Configure etcd for metadata queries</h2>
+<p>
+<strong>Current source builds support the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
+<p>
+<strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Use the explicit flags below on that release, or to override a context for one invocation:</p>
+<table>
+<tr>
+<th>Parameters</th>
+<th>Use</th>
+</tr>
+<tr>
+<td>--etcd</td>
+<td>Reachable etcd endpoints; use commas for multiple addresses.</td>
+</tr>
+<tr>
+<td>--meta-prefix</td>
+<td>Complete Woodpecker metadata prefix configured by the Milvus client. The example below uses milvus-prod/woodpecker; use the actual prefix, not an assumed Helm release name.</td>
+</tr>
+<tr>
+<td>--etcd-username / --etcd-password</td>
+<td>Etcd authentication credentials when required.</td>
+</tr>
+<tr>
+<td>--etcd-cacert</td>
+<td>CA certificate file on the workstation.</td>
+</tr>
+<tr>
+<td>--etcd-cert / --etcd-key</td>
+<td>Workstation client certificate and private-key files.</td>
+</tr>
+<tr>
+<td>--etcd-tls-min-version</td>
+<td>Minimum TLS version: 1.0, 1.1, 1.2 or 1.3.</td>
+</tr>
+</table>
+<p>For example, inspect registrations for a real Milvus log name using explicit connection settings:</p>
+<pre>
+<code>wp log readers my-channel \
+  --etcd 127.0.0.1:32379 \
+  --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<table>
+<tr>
+<th>Commands</th>
+<th>Need etcd settings?</th>
+</tr>
+<tr>
+<td>log readers, log scan, log skip-range; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td>
+<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery.</td>
+</tr>
+<tr>
+<td>etcd list/get/cat (current source builds)</td>
+<td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="cli.html#etcd">Raw etcd exploration</a>.</td>
+</tr>
+<tr>
+<td>cluster, node, config, env, logging, profile, ops, metrics, instance; other node-local logstore commands</td>
+<td>No etcd parameters: these use node admin endpoints. Do not append --etcd to commands that do not accept it.</td>
+</tr>
+<tr>
+<td>ctx, completion, version; k8s helpers</td>
+<td>No etcd connection. These use local config/build information or kubectl.</td>
+</tr>
+</table>
+<details class="ops-help">
+<summary>Authentication/TLS example</summary>
+<pre>
+<code>wp log readers my-channel \
+  --etcd etcd.example.com:2379 --meta-prefix milvus-prod/woodpecker \
+  --etcd-username operator --etcd-password 'YOUR_PASSWORD' \
+  --etcd-cacert /path/to/ca.crt \
+  --etcd-cert /path/to/client.crt --etcd-key /path/to/client.key \
+  --etcd-tls-min-version 1.2</code>
+</pre>
+<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. Current source builds also support these optional context fields under <code>etcd</code>:</p>
+<pre>
+<code>username: operator
+password: YOUR_PASSWORD
+tls_enabled: true
+cacert: /path/to/ca.crt
+# cert/key are a pair, required only for mutual TLS:
+cert: /path/to/client.crt
+key: /path/to/client.key
+tls_min_version: "1.2"</code>
+</pre>
+<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit certificate flags enable TLS even if the context disables it. <code>ctx view</code> shows configured etcd endpoints, prefix, TLS mode and username when endpoints are configured; it does not print the password or test the connection.</p>
+</details>
+<h2 id="first-run">5. Check the connection and interpret the result</h2>
+<pre>
+<code>wp ctx list
+wp ctx view
+wp node list
+wp cluster health</code>
+</pre>
+<p>Illustrative excerpts:</p>
+<pre>
+<code>NAME         ENDPOINT                ACTIVE
+milvus-prod  http://127.0.0.1:19091   *
+
+wp: config /home/alice/.woodpecker/cli.yaml · context milvus-prod · endpoint http://127.0.0.1:19091
+
+NAME                  STATE   HEALTH
+milvus-woodpecker-0    active  OK
+milvus-woodpecker-1    active  OK
+milvus-woodpecker-2    active  OK
+
+Cluster Health: YELLOW
+  active: 3  decommissioning: 0  unreachable: 0
+  - zero redundancy (active == N)</code>
+</pre>
+<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on current source builds, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
+<p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
+<article class="command" id="completion-bash">
+<h2>wp completion bash</h2>
+<p>Generate the autocompletion script for the bash shell.</p>
+<pre>
+<code>wp completion bash</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--no-descriptions</code>
+</td>
+<td>disable completion descriptions</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp completion bash &gt; wp-completion.bash</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Generated shell completion script</code>
+</pre>
+<p>Generation only writes stdout; it does not edit shell startup files. Load it using your shell’s completion mechanism. For zsh: initialize compinit, then source the generated file.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Shell setup does not load the script</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Generate the autocompletion script for the bash shell.
+
+This script depends on the &#x27;bash-completion&#x27; package.
+If it is not installed already, you can install it via your OS&#x27;s package manager.
+
+To load completions in your current shell session:
+
+	source &lt;(wp completion bash)
+
+To load completions for every new session, execute once:
+
+#### Linux:
+
+	wp completion bash &gt; /etc/bash_completion.d/wp
+
+#### macOS:
+
+	wp completion bash &gt; $(brew --prefix)/etc/bash_completion.d/wp
+
+You will need to start a new shell for this setup to take effect.
+
+Usage:
+  wp completion bash
+
+Flags:
+  -h, --help              help for bash
+      --no-descriptions   disable completion descriptions</code>
+</pre>
+</details>
+</article>
+<article class="command" id="completion-fish">
+<h2>wp completion fish</h2>
+<p>Generate the autocompletion script for the fish shell.</p>
+<pre>
+<code>wp completion fish [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--no-descriptions</code>
+</td>
+<td>disable completion descriptions</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp completion fish &gt; wp-completion.fish</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Generated shell completion script</code>
+</pre>
+<p>Generation only writes stdout; it does not edit shell startup files. Load it using your shell’s completion mechanism. For zsh: initialize compinit, then source the generated file.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Shell setup does not load the script</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Generate the autocompletion script for the fish shell.
+
+To load completions in your current shell session:
+
+	wp completion fish | source
+
+To load completions for every new session, execute once:
+
+	wp completion fish &gt; ~/.config/fish/completions/wp.fish
+
+You will need to start a new shell for this setup to take effect.
+
+Usage:
+  wp completion fish [flags]
+
+Flags:
+  -h, --help              help for fish
+      --no-descriptions   disable completion descriptions</code>
+</pre>
+</details>
+</article>
+<article class="command" id="completion-powershell">
+<h2>wp completion powershell</h2>
+<p>Generate the autocompletion script for powershell.</p>
+<pre>
+<code>wp completion powershell [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--no-descriptions</code>
+</td>
+<td>disable completion descriptions</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp completion powershell &gt; wp-completion.powershell</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Generated shell completion script</code>
+</pre>
+<p>Generation only writes stdout; it does not edit shell startup files. Load it using your shell’s completion mechanism. For zsh: initialize compinit, then source the generated file.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Shell setup does not load the script</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Generate the autocompletion script for powershell.
+
+To load completions in your current shell session:
+
+	wp completion powershell | Out-String | Invoke-Expression
+
+To load completions for every new session, add the output of the above command
+to your powershell profile.
+
+Usage:
+  wp completion powershell [flags]
+
+Flags:
+  -h, --help              help for powershell
+      --no-descriptions   disable completion descriptions</code>
+</pre>
+</details>
+</article>
+<article class="command" id="completion-zsh">
+<h2>wp completion zsh</h2>
+<p>Generate the autocompletion script for the zsh shell.</p>
+<pre>
+<code>wp completion zsh [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--no-descriptions</code>
+</td>
+<td>disable completion descriptions</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp completion zsh &gt; wp-completion.zsh</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Generated shell completion script</code>
+</pre>
+<p>Generation only writes stdout; it does not edit shell startup files. Load it using your shell’s completion mechanism. For zsh: initialize compinit, then source the generated file.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Shell setup does not load the script</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Generate the autocompletion script for the zsh shell.
+
+If shell completion is not already enabled in your environment you will need
+to enable it.  You can execute the following once:
+
+	echo &quot;autoload -U compinit; compinit&quot; &gt;&gt; ~/.zshrc
+
+To load completions in your current shell session:
+
+	source &lt;(wp completion zsh)
+
+To load completions for every new session, execute once:
+
+#### Linux:
+
+	wp completion zsh &gt; &quot;${fpath[1]}/_wp&quot;
+
+#### macOS:
+
+	wp completion zsh &gt; $(brew --prefix)/share/zsh/site-functions/_wp
+
+You will need to start a new shell for this setup to take effect.
+
+Usage:
+  wp completion zsh [flags]
+
+Flags:
+  -h, --help              help for zsh
+      --no-descriptions   disable completion descriptions</code>
+</pre>
+</details>
+</article>
+<article class="command" id="ctx-list">
+<h2>wp ctx list</h2>
+<p>List all contexts defined in cli.yaml</p>
+<pre>
+<code>wp ctx list [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp ctx list</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>NAME         ENDPOINT                ACTIVE
+milvus-prod  http://127.0.0.1:19091   *</code>
+</pre>
+<p>list and view inspect local CLI configuration. use persists current-context; --context selects one invocation without changing it. No server configuration is changed.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Context does not exist / config parse or write error</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>List all contexts defined in cli.yaml
+
+Usage:
+  wp ctx list [flags]
+
+Flags:
+  -h, --help   help for list</code>
+</pre>
+</details>
+</article>
+<article class="command" id="ctx-use">
+<h2>wp ctx use</h2>
+<p>Switch current-context to the given name and persist to cli.yaml</p>
+<pre>
+<code>wp ctx use &lt;name&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp ctx use milvus-prod</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Switched to context &quot;milvus-prod&quot;</code>
+</pre>
+<p>list and view inspect local CLI configuration. use persists current-context; --context selects one invocation without changing it. No server configuration is changed.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Context does not exist / config parse or write error</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Switch current-context to the given name and persist to cli.yaml
+
+Usage:
+  wp ctx use &lt;name&gt; [flags]
+
+Flags:
+  -h, --help   help for use</code>
+</pre>
+</details>
+</article>
+<article class="command" id="ctx-view">
+<h2>wp ctx view</h2>
+<p>Print the resolved fields of the active context</p>
+<pre>
+<code>wp ctx view [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp --context milvus-prod ctx view</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Active context:
+  endpoint:     http://127.0.0.1:19091
+  admin_port:   9091
+  timeout:      30s
+  concurrency:  8
+  strict:       false</code>
+</pre>
+<p>list and view inspect local CLI configuration. use persists current-context; --context selects one invocation without changing it. No server configuration is changed.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Context does not exist / config parse or write error</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Print the resolved fields of the active context
+
+Usage:
+  wp ctx view [flags]
+
+Flags:
+  -h, --help   help for view</code>
+</pre>
+</details>
+</article>
+<article class="command" id="version">
+<h2>wp version</h2>
+<p>Show wp CLI version and build info</p>
+<pre>
+<code>wp version [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp version</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>wp version ...
+# Version, commit and build details reflect this CLI binary.</code>
+</pre>
+<p>This reports the CLI build, not all node versions. Use env show or cluster info for remote builds.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Unavailable build fields in an unversioned build</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show wp CLI version and build info
+
+Usage:
+  wp version [flags]
+
+Flags:
+  -h, --help   help for version</code>
+</pre>
+</details>
+</article>
+</section>

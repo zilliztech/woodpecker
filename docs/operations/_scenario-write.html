@@ -1,0 +1,86 @@
+<h1>Write Stalls</h1>
+<p class="page-desc">Find where append progress stops: application submission, node operations, buffering/flush, or quorum confirmation.</p>
+<h2 id="plan">Plan: workload → operations → writer queues → LAC → recovery</h2>
+<table><tr><th>Step</th><th>Command</th><th>Intent</th></tr>
+<tr><td>1</td><td>node list/healthz; application append evidence</td><td>Confirm the app is submitting and the relevant replicas are reachable.</td></tr>
+<tr><td>2</td><td>ops list/show/stats</td><td>Locate long-running append or flush operations without mistaking idle for a stall.</td></tr>
+<tr><td>3</td><td>logstore segments/segment-show/buffer/flush-queue</td><td>Identify the loaded writer and its buffer or flush bottleneck.</td></tr>
+<tr><td>4</td><td>logstore lac, twice</td><td>Determine whether the ack quorum's durable frontier advances.</td></tr>
+<tr><td>5</td><td>Targeted fix, or reviewed fence-quorum</td><td>Restore the failing stage, then verify application append success and LAC progress.</td></tr></table>
+{{WORKFLOW_CONNECTION}}
+<h2 id="submission">1. Confirm activity and reachability</h2>
+<pre><code>w node list --strict
+w node healthz "$WP_NODE"</code></pre>
+<p>First inspect the application's append attempts, returned errors and deadlines. Healthz answers process health, not write progress. One slow replica can be absorbed by the ack quorum; a cluster health color does not identify which segment stopped.</p>
+<table><tr><th>Result</th><th>Interpretation</th></tr>
+<tr><td>All nodes reachable; no application append attempts</td><td>Start with workload/submission. There is no server-side write stall to prove yet.</td></tr>
+<tr><td>App submits but no relevant operation reaches any replica</td><td>Check the client's queue, RPC path and discovery/configuration before the node.</td></tr>
+<tr><td>Replica unreachable</td><td>Check the address mapping/port-forward, pod state and network; then measure whether the remaining quorum still confirms writes.</td></tr></table>
+<h2 id="operations">2. Find the long-running operation</h2>
+<pre><code>w ops list "$WP_NODE" --log "$WP_LOG_ID" --seg "$WP_SEG" \
+  --longer-than 30000 -o json
+w ops stats "$WP_NODE"
+# Use an ID actually returned above:
+w ops show "$WP_NODE" --op-id REAL_OP_ID</code></pre>
+<pre><code># Illustrative operation excerpt:
+{"op_type":"logstore.add_entry", "op_id":"append-op-123",
+ "log_id":42, "segment_id":7, "started_at":"..."}</code></pre>
+<p>Repeat on all quorum members. Compare IDs and ages across samples: the same append persisting is different from many short-lived appends. file.flush points at the flush path. Empty output is an instant snapshot; registry evictions and app work that never reached a node can be invisible.</p>
+<table><tr><th>Output</th><th>Interpretation</th></tr>
+<tr><td>ops list has no matching items; stats in_use=0</td><td>No tracked operation is in flight at this instant. With no workload this is normal; with pending client appends, check submission and other nodes.</td></tr>
+<tr><td>The same OP_ID remains older than 30000ms in consecutive samples</td><td>A tracked operation is long-running. Use show to inspect its type, context and stage.</td></tr>
+<tr><td>ops show returns TargetNotFound</td><td>The operation finished or was evicted before the query. Refresh list rather than treating it as a missing segment.</td></tr>
+<tr><td>stats old eviction total grows</td><td>Old operations are being dropped from this bounded registry. Investigate alongside queues and errors; the cumulative total alone does not prove a current stall.</td></tr></table>
+<h2 id="writer">3. Inspect the loaded writer</h2>
+<pre><code>w logstore segments "$WP_NODE" --log "$WP_LOG_ID"
+w logstore segment-show "$WP_NODE" --log "$WP_LOG_ID" --seg "$WP_SEG"
+w logstore buffer "$WP_NODE"
+w logstore flush-queue "$WP_NODE"</code></pre>
+<pre><code># Buffer / flush-queue excerpts under load:
+LOG:SEG  BUFFER_BYTES  BUFFER_ENTRIES
+42:7     1048576       100
+
+LOG:SEG  QUEUE_DEPTH  QUEUE_CAP
+42:7     8            16</code></pre>
+<p>These are current occupancies, not latency measurements. Re-run while appends are outstanding: buffers draining and queue depth returning toward zero indicate progress; growing or persistently full queues need correlation with flush operations and backend errors. A single nonzero sample can be normal batching.</p>
+<table><tr><th>Pattern</th><th>Meaning / next check</th></tr>
+<tr><td>Buffer/queue increases; flush operation does not finish</td><td>Inspect disk/object-storage errors, I/O latency and flush scheduling; correlate operation details.</td></tr>
+<tr><td>No arriving appends and little queued work</td><td>Likely upstream inactivity or a client/RPC issue; not evidence of a blocked flush.</td></tr>
+<tr><td>segments shows only headers / segment-show is absent</td><td>These list loaded writer objects, not all persisted segments. Confirm the current segment and owner; do not infer no data.</td></tr>
+<tr><td>One node behind; others advance</td><td>Measure quorum confirmation. A lagging replica need not stall the application.</td></tr></table>
+<p>Read metadata when the writer registry is insufficient:</p>
+<pre><code>wm log scan "$WP_LOG" --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
+<h2 id="quorum">4. Compare LAC twice</h2>
+<pre><code>wm logstore lac "$WP_LOG" "$WP_SEG"
+sleep 10
+wm logstore lac "$WP_LOG" "$WP_SEG"</code></pre>
+<pre><code>NODE_ID                DURABLE_ENTRY  STATE
+milvus-woodpecker-0     99             ok
+milvus-woodpecker-1     99             ok
+milvus-woodpecker-2     70             ok
+quorum LAC: 99 (aq=2 of 3 nodes at or past it)</code></pre>
+<table><tr><th>Result</th><th>Interpretation</th></tr>
+<tr><td>LAC advances</td><td>Durability confirmation progresses. Investigate client completion/latency rather than assuming every append is blocked.</td></tr>
+<tr><td>LAC unchanged while appends remain outstanding</td><td>Confirmation is not advancing. Combine queues, errors and quorum-member evidence to locate the stage.</td></tr>
+<tr><td>Fewer than AQ usable replies</td><td>LAC is unknown; restore reachability or replica availability. Unknown is not a confirmed smaller frontier.</td></tr>
+<tr><td>no writer</td><td>Node answered but has no loaded writer for this segment. Completed/Sealed metadata may still establish a boundary; check whether the application has rolled to a newer segment.</td></tr></table>
+<p>The CLI's --timeout is an HTTP deadline, not the application's append deadline. A 2s send budget does not guarantee an end-to-end append within 2s: confirmation, retries and rolling add time.</p>
+<h2 id="recovery">5. Restore the stage, then re-test append</h2>
+<p>Fix verified connectivity, storage or deployment failures first. A manual flush applies to a loaded writer and does not repair corrupted data:</p>
+<pre><code>w logstore force-flush "$WP_NODE" --log "$WP_LOG_ID" --seg "$WP_SEG"</code></pre>
+<p>If the intended recovery is to fence the old writer and let the application roll/reopen through its normal recovery path, review quorum impact first:</p>
+<pre><code># Preview: no -y means no commit and exit code 7.
+wm logstore fence-quorum "$WP_LOG" "$WP_SEG" \
+  --reason "Reviewed recovery of stalled writer"
+# After reviewing the selected nodes and impact:
+wm logstore fence-quorum "$WP_LOG" "$WP_SEG" \
+  --reason "Reviewed recovery of stalled writer" -y</code></pre>
+<p>Fencing can interrupt writes. The default WQ=3/AQ=2 needs two selected members to cross the interruption gate; fencing only one does not guarantee an interrupted quorum. StateConflict/insufficient reachable members means no verified quorum intervention, not success. Check <a href="cli.html#logstore-fence-quorum">fence-quorum</a> for selection details.</p>
+<h2 id="verify">6. Verify at the application and quorum</h2>
+<pre><code>w ops list "$WP_NODE" --log "$WP_LOG_ID" --longer-than 30000
+wm log scan "$WP_LOG" --mode quick \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
+# Select the actual current segment if rolling changed it:
+wm logstore lac "$WP_LOG" "$WP_SEG"</code></pre>
+<p>Require new application appends to succeed, the durable frontier to advance under workload, and old operations/queues to clear. A fence RPC or healthy pod alone is not the recovery result. If physical reads fail or CRC errors appear, switch to the <a href="scenarios.html#corruption">corruption workflow</a>.</p>

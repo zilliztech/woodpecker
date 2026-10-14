@@ -1,0 +1,82 @@
+<h1>Read Stalls</h1>
+<p class="page-desc">Decide whether the reader is caught up, not reporting, unable to reach a replica, or blocked by unreadable data.</p>
+<h2 id="plan">Plan: position → tail → actual reads → recovery</h2>
+<table><tr><th>Step</th><th>Command</th><th>Intent</th></tr>
+<tr><td>1</td><td>log readers, twice</td><td>Identify the reader and determine whether its reported position moves.</td></tr>
+<tr><td>2</td><td>logstore lac; log scan</td><td>Compare the reader with confirmed progress and the authoritative segment state/boundary.</td></tr>
+<tr><td>3</td><td>segment probe</td><td>Ask all quorum members to actually read at the suspected position.</td></tr>
+<tr><td>4</td><td>segment inspect; ops list/show</td><td>Locate damaged blocks/records or a long-running request; distinguish data failures from transport failures.</td></tr>
+<tr><td>5</td><td>Repeat the reader sample and application read</td><td>Verify the same reader resumes and reaches the expected tail after the appropriate recovery.</td></tr></table>
+{{WORKFLOW_CONNECTION}}
+<h2 id="readers">1. Observe the reader twice</h2>
+<pre><code>wm log readers "$WP_LOG"
+sleep 35
+wm log readers "$WP_LOG"</code></pre>
+<p>Readers normally report on a 30-second cadence. A single unchanged checkpoint is not a stall. For example, the application last returned 7:49 and is waiting for 7:50; the registry can report that pending position:</p>
+<pre><code>READER       OPEN_POS  CURRENT  LAST_REPORT  OPEN_FOR  STATE
+reader-123   7:0       7:50     3s           5m        live
+# A later sample still reports CURRENT 7:50.</code></pre>
+<table><tr><th>Result</th><th>Interpretation / next step</th></tr>
+<tr><td>Position advances</td><td>Reading is progressing. Compare application consumption/processing latency instead of treating this as a Woodpecker read stall.</td></tr>
+<tr><td>Fresh report, unchanged position</td><td>The reader is reporting, but could simply be caught up. Compare with the confirmed tail next.</td></tr>
+<tr><td>stale report</td><td>Reporting is not keeping up. Inspect client logs, blocked calls and connectivity; this alone does not prove corruption.</td></tr>
+<tr><td>no read since open</td><td>No new position has been reported since opening; this is not proof of an unreadable first entry.</td></tr>
+<tr><td>no live readers</td><td>No usable leased reader registration exists under this metadata namespace. Check context/prefix, client activity and leases. Milvus query traffic does not imply an open WAL reader.</td></tr></table>
+<p>CURRENT is the reader's reported position at a report tick, not a count of delivered records or an exact last-returned entry. Use application logs/checkpoints to identify the next entry actually required.</p>
+<h2 id="tail">2. Compare the confirmed tail and metadata</h2>
+<pre><code>wm logstore lac "$WP_LOG" "$WP_SEG"
+wm log scan "$WP_LOG" --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
+<pre><code># Illustrative scan summary:
+SEGMENT  STATE      META LAST  REACHES  REPLICAS  VERDICT
+7        Completed  99         0-99     3/3       ok
+
+NODE_ID                 DURABLE_ENTRY  STATE
+milvus-woodpecker-0      99             ok
+milvus-woodpecker-1      99             ok
+milvus-woodpecker-2      99             ok
+quorum LAC: 99 (aq=2 of 3 nodes at or past it)</code></pre>
+<p>If the application needs 50 and the finalized boundary is 99, there should be data to read. If an Active reader is already at the current tail, waiting can be normal. Active metadata is not a final boundary. LAC establishes confirmed progress, not checksum integrity; for Completed/Sealed segments the CLI can use metadata when no live writer remains.</p>
+<h2 id="probe">3. Read the suspected position on every replica</h2>
+<pre><code>wm segment probe "$WP_LOG" "$WP_SEG" \
+  --from-entry 50 --max-entries 100 \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
+<p>A readable Completed segment returns the requested range through its final entry. These excerpts keep only the result columns:</p>
+<pre><code># Normal: all three nodes reach the expected final entry 99.
+NODE_ID                 SOURCE      SERVED      OUTCOME      VERDICT
+milvus-woodpecker-0      local_disk  50-99 (50)  end_of_file  served
+milvus-woodpecker-1      local_disk  50-99 (50)  end_of_file  served
+milvus-woodpecker-2      local_disk  50-99 (50)  end_of_file  served
+
+# Abnormal: entry 50 cannot be read on any copy.
+NODE_ID                 SOURCE      SERVED   OUTCOME  VERDICT
+milvus-woodpecker-0      local_disk  nothing  error    cannot serve
+milvus-woodpecker-1      local_disk  nothing  error    cannot serve
+milvus-woodpecker-2      local_disk  nothing  error    cannot serve</code></pre>
+<p>SERVED=50-99 (50) means 50 returned entries, IDs 50 through 99 inclusive. nothing means no entry was returned from this requested start, not that the entire segment is empty. Read DETAIL for the actual error before deciding on recovery.</p>
+<table><tr><th>Probe result</th><th>Meaning / action</th></tr>
+<tr><td>served, end_of_file at 99</td><td>The requested finalized tail was readable. Investigate client handling, retries or processing above Woodpecker.</td></tr>
+<tr><td>cap_reached</td><td>The requested window ended; this is not EOF. Increase max-entries or move from-entry.</td></tr>
+<tr><td>Active: entry_not_found / no local data</td><td>The final boundary is unknown. It may be an unwritten/caught-up tail; pending writes are not established by a no-local-data response.</td></tr>
+<tr><td>One or two replicas fail; another reaches 99</td><td>Failover can cover the failed copies. Preserve the healthy copy and diagnose the unhealthy nodes.</td></tr>
+<tr><td>All reachable replicas fail at required entry 50</td><td>There is no usable local alternative at that position. Inspect the exact damage and healthy tail before any data-loss decision.</td></tr>
+<tr><td>unreachable / not in memberlist / HTTP 404 / cannot answer</td><td>Coverage is not established. Fix connectivity, mapping or storage-instance selection; do not interpret a failed request as confirmed data loss.</td></tr></table>
+<p>For Sealed segments, SOURCE=object_storage means the probe reads the shared compacted object. Three such replies are three reads of one shared copy, not three independent copies. See <a href="cli.html#segment-probe">probe parameters and output fields</a>.</p>
+<h2 id="inspect">4. Locate the blocker</h2>
+<pre><code>wm segment inspect "$WP_LOG" "$WP_SEG" --max-blocks 4096 \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
+w ops list "$WP_NODE" --type logstore.get_batch_entries \
+  --log "$WP_LOG_ID" --seg "$WP_SEG" --longer-than 30000
+# Copy a real OP_ID from the list:
+w ops show "$WP_NODE" --op-id REAL_OP_ID</code></pre>
+<p>Inspect walks beyond the first damaged block and can expose recoverable records after the bad entry. checksum_failed/record_checksum_failed differs from a bound or missing local data. Ops list is only the instantaneous in-flight registry; empty output on one node does not prove the client is idle. Check the other quorum nodes too.</p>
+<h2 id="recover">5. Choose recovery and prove progress</h2>
+<table><tr><th>Evidence</th><th>Recovery</th><th>Verify</th></tr>
+<tr><td>Endpoint/mapping failure</td><td>Restore the relevant connection or node availability.</td><td>Probe now returns usable results; application reader progresses.</td></tr>
+<tr><td>Healthy tail; no physical fault</td><td>Inspect/fix the client retry, reporting or application processing path.</td><td>Same reader resumes; application checkpoint advances.</td></tr>
+<tr><td>Confirmed unrecoverable range on every copy</td><td>Follow the <a href="scenarios.html#corruption">corruption workflow</a>, including explicit acceptance of any skipped entries.</td><td>Same reader passes the range and reaches the verified healthy tail; record the accepted loss.</td></tr></table>
+<pre><code>sleep 35
+wm log readers "$WP_LOG"
+wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 51 --max-entries 100 \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
+<p>The CLI probe confirms data readability; it does not automatically advance the application's reader. The closure is the same reader progressing plus application-level read success, not just a green command.</p>

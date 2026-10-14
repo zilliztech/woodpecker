@@ -1,0 +1,77 @@
+<section id="topic-instance">
+<h2>Local data inventory</h2>
+<article class="command" id="instance-data">
+<h2>wp instance data</h2>
+<p>List the instances holding node-local data.</p>
+<pre>
+<code>wp instance data [node] [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--all</code>
+</td>
+<td>Query every node in the cluster</td>
+</tr>
+<tr>
+<td>
+<code>--bucket string</code>
+</td>
+<td>Filter to one instance&#x27;s bucket (requires --root)</td>
+</tr>
+<tr>
+<td>
+<code>--root string</code>
+</td>
+<td>Filter to one instance&#x27;s root path (requires --bucket)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp instance data --all --strict</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>NODE    BUCKET         ROOT_PATH  LOGS  SEGMENTS  LIVE  SIZE_BYTES  PROCS  DELETE_STATE
+node-0  milvus-bucket  milvus/wp  1     2         1     1048576     1      active</code>
+</pre>
+<p>Inventory local instances before deleting or draining. --bucket requires --root (this command uses --root, unlike segment --root-path). No CLI instance-delete command is currently registered; the scenario guide documents the admin API.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>A node has scan_errors or is unreachable. A partial inventory does not establish that no data remains.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>List the instances holding node-local data.
+
+Pair this with &#x27;POST /admin/instance/delete&#x27; to reclaim an orphaned instance: query
+first, decide, then delete only the nodes that reported the instance.
+
+An unreachable node still holds its data, so a node shown as UNREACHABLE — or any
+node reporting scan errors — means the picture is incomplete and nothing should be
+deleted on the strength of it. Use --strict to turn that into a non-zero exit.
+
+Usage:
+  wp instance data [node] [flags]
+
+Flags:
+      --all             Query every node in the cluster
+      --bucket string   Filter to one instance&#x27;s bucket (requires --root)
+  -h, --help            help for data
+      --root string     Filter to one instance&#x27;s root path (requires --bucket)</code>
+</pre>
+</details>
+</article>
+</section>

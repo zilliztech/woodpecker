@@ -1,0 +1,140 @@
+<section id="topic-marking">
+<h2>Compacted-mark distribution</h2>
+<article class="command" id="marking-confirm">
+<h2>wp marking confirm</h2>
+<p>Confirm one compacted-mark distribution record.</p>
+<pre>
+<code>wp marking confirm &lt;logId&gt; &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--force</code>
+</td>
+<td>confirm (transition to OPERATOR_CONFIRMED) even if the record is not PENDING_MANUAL; IN_PROGRESS/COMPLETED are normally managed automatically</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp marking confirm 2 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Record set to OPERATOR_CONFIRMED</code>
+</pre>
+<p>After verifying the permanently unavailable/unacked replica, settle notification retries. This preserves the record until truncation reaps it; it does not repair a segment or delete data immediately.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>StateConflict for IN_PROGRESS / COMPLETED without --force</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Confirm one compacted-mark distribution record.
+
+Meant for records parked as NOTIFY_PENDING_MANUAL: after verifying the unacked node
+(typically permanently dead or removed from the cluster), confirm transitions the record
+to NOTIFY_OPERATOR_CONFIRMED, which settles it (the auditor stops retrying and stops
+counting it against the log). The etcd record itself is intentionally NOT deleted here;
+it is reaped when the segment is truncated, like every other marking record.
+Refuses records still IN_PROGRESS or COMPLETED unless --force is given (those are
+managed automatically and normally need no operator action).
+
+Usage:
+  wp marking confirm &lt;logId&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+      --force                         confirm (transition to OPERATOR_CONFIRMED) even if the record is not PENDING_MANUAL; IN_PROGRESS/COMPLETED are normally managed automatically
+  -h, --help                          help for confirm
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+<article class="command" id="marking-list">
+<h2>wp marking list</h2>
+<p>List compacted-mark distribution records (default: only NOTIFY_PENDING_MANUAL)</p>
+<pre>
+<code>wp marking list [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--all-states</code>
+</td>
+<td>include IN_PROGRESS and COMPLETED records, not just PENDING_MANUAL</td>
+</tr>
+<tr>
+<td>
+<code>--log int</code>
+</td>
+<td>restrict to one log id (default: all logs)</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp marking list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>COMPLETED / operator-confirmed records</code>
+</pre>
+<p>Records describe compacted-mark distribution, not the data payload. Investigate unacked nodes and physical cleanup before manual settlement.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>NOTIFY_PENDING_MANUAL with unacked nodes</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>List compacted-mark distribution records (default: only NOTIFY_PENDING_MANUAL)
+
+Usage:
+  wp marking list [flags]
+
+Flags:
+      --all-states                    include IN_PROGRESS and COMPLETED records, not just PENDING_MANUAL
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for list
+      --log int                       restrict to one log id (default: all logs)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+</section>

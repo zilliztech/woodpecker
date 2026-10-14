@@ -1,0 +1,48 @@
+<h2 id="discover">1. Discover keys before choosing a metadata prefix</h2>
+<p>This command group is available in current source builds and is not included in released v0.1.46. Build the current checkout and confirm <code>wp etcd --help</code> before using these examples.</p>
+<p>Use this read-only group when you can reach etcd but do not yet know the Woodpecker namespace. It connects directly to etcd: no Woodpecker admin endpoint, node mapping or metadata prefix is required. Supply a reachable endpoint, or save it in a context as shown below.</p>
+<pre><code># Omit the prefix to explore all keys (first page only).
+wp etcd list --etcd 127.0.0.1:32379 --limit 20
+# Narrow the listing using an actual prefix found in that output.
+wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20</code></pre>
+<p>Illustrative excerpt:</p>
+<pre><code>KEY                              MOD_REV  VERSION  LEASE
+milvus-prod/woodpecker/version    90       1        0
+
+1 keys shown; snapshot revision 105; more=false</code></pre>
+<p>A prefix is literal: <code>list /</code> lists only keys starting with a slash; it does not mean all keys. Empty results mean no matching keys in this snapshot, not an unhealthy cluster. A connection or permission error means the listing could not be established. This group never prepends the context's <code>etcd.meta_prefix</code>.</p>
+
+<h2 id="values">2. Inspect a key and understand its value</h2>
+<pre><code>wp etcd get milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 -o json
+wp etcd cat milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 --encoding base64</code></pre>
+<table><tr><th>Operation / option</th><th>What you get</th></tr>
+<tr><td>get; -o json / -o yaml</td><td>Exact key, key revision, lease, snapshot revision, encoding and value. Default get output is JSON.</td></tr>
+<tr><td>cat</td><td>The value alone. It is useful for piping or saving a single value.</td></tr>
+<tr><td>--encoding auto</td><td>Readable UTF-8 text is printed as text; binary/control-byte content becomes base64. get reports the selected value_encoding; cat prints a base64 notice on stderr.</td></tr>
+<tr><td>--encoding text / base64 / hex</td><td>Choose the representation explicitly. text rejects invalid UTF-8. Protobuf bytes do not become decoded metadata simply by selecting text.</td></tr>
+<tr><td>cat --encoding raw</td><td>Exact original bytes, without an appended newline. Redirect to a file rather than displaying binary content in a terminal.</td></tr></table>
+<pre><code>wp etcd cat milvus-prod/woodpecker/version \
+  --etcd 127.0.0.1:32379 --encoding raw &gt; /tmp/wp-version.pb</code></pre>
+<p>A TargetNotFound result means that exact key is absent at the requested snapshot. Base64 is a reversible byte representation, not evidence of damaged data. This raw group does not decode, patch or restore metadata; the file above preserves one value, not a complete etcd backup.</p>
+
+<h2 id="pagination">3. Continue a listing at the same snapshot</h2>
+<p>Use JSON output for pagination. When <code>more</code> is true, copy <code>next_key_base64</code> and <code>snapshot_revision</code> from that response into the next request, keeping the same prefix:</p>
+<pre><code>wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json
+
+# Replace these placeholders with the returned cursor and snapshot revision.
+wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json \
+  --after-key-base64 'CURSOR_FROM_PREVIOUS_RESPONSE' --revision 105</code></pre>
+<p>Repeat until <code>more=false</code>. The base64 cursor preserves binary keys. The <code>keys</code> array contains this page; <code>count</code> describes matching keys remaining in the queried range, so it can exceed the page length. <code>--after-key</code> is an alternative for ordinary text keys; never combine it with <code>--after-key-base64</code>.</p>
+<p>Use <code>--revision</code> on get/cat too when comparing values with a listing. If etcd has compacted that revision, restart the listing at a new snapshot; do not silently mix pages from different revisions.</p>
+
+<h2 id="context">4. Save an etcd-only context</h2>
+<p>Save the endpoint once for this command group. Select the file using the locations described in <a href="cli.html#cli-yaml">CLI setup</a>.</p>
+<pre><code>current-context: raw-etcd
+contexts:
+  raw-etcd:
+    etcd:
+      endpoints:
+        - 127.0.0.1:32379</code></pre>
+<pre><code>wp --context raw-etcd etcd list --limit 20
+wp --context raw-etcd etcd get milvus-prod/woodpecker/version</code></pre>
+<p>Add the context's authentication/TLS fields or their command-flag equivalents when etcd requires them; see <a href="cli.html#etcd-connection">etcd connection settings</a>. Explicit flags override context settings for one invocation. Raw etcd operations never discover a connection through a Woodpecker node.</p>

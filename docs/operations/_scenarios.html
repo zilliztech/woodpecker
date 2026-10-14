@@ -1,0 +1,19 @@
+<h1>Troubleshooting</h1>
+<p class="page-desc">Choose one of three troubleshooting paths. Each starts with a short command plan, then shows detailed steps, result interpretation and recovery verification.</p>
+<h2 id="workflows">Choose the symptom</h2>
+<table><tr><th>Scenario</th><th>Start when</th><th>Main path</th></tr>
+<tr><td><a href="scenarios.html#read">Read Stalls</a></td><td>A reader/checkpoint is not advancing or the application waits for a WAL entry.</td><td>Reader position → confirmed tail → replica probe → locate blocker → verify same-reader progress.</td></tr>
+<tr><td><a href="scenarios.html#write">Write Stalls</a></td><td>Appends remain outstanding or durable confirmation stops.</td><td>Submission → in-flight ops → writer queues → LAC → targeted recovery → append verification.</td></tr>
+<tr><td><a href="scenarios.html#corruption">Data Corruption Diagnosis &amp; Recovery</a></td><td>CRC/read errors, short replica coverage or replica coverage disagrees with the expected boundary.</td><td>Snapshot → scan → probe/inspect → preserve healthy copies or accept a verified loss → verify reader and auditor closure.</td></tr></table>
+<h2 id="before">Before running the steps</h2>
+<p>Complete <a href="cli.html#start">CLI setup</a>, including reachable admin origins for every quorum member. Each scenario includes a copyable connection block; replace its illustrative names and IDs with discovered values. Etcd parameters are used only by metadata-consuming commands.</p>
+<p>Use the CLI built from the documented source checkout. Examples are illustrative excerpts; actual names, IDs and outcomes come from your deployment.</p>
+<h2 id="outcomes">How to read a diagnostic result</h2>
+<table><tr><th>Result</th><th>What it means</th></tr>
+<tr><td>Idle / caught up</td><td>No new work may be available. Confirm workload and tail before declaring a stall.</td></tr>
+<tr><td>Unknown / unreachable / cannot answer</td><td>Evidence is incomplete. Restore transport, mappings or target location before treating it as missing data.</td></tr>
+<tr><td>Short / checksum failure / all replicas fail</td><td>Correlate with the finalized metadata boundary and identify the exact affected entry range.</td></tr>
+<tr><td>Compacted / object_storage</td><td>Scan does not verify shared objects; probe can read them. Replies from three nodes may represent one shared copy.</td></tr>
+<tr><td>Preview / acceptance not given</td><td>No intervention was committed; exit 7 can be an expected preview result.</td></tr>
+<tr><td>Command succeeded</td><td>Verify the application checkpoint/append result. An admin RPC succeeding is not the incident's closure.</td></tr></table>
+<p>Use the <a href="cli.html#exit-codes">exit-code reference</a> for scripts. For draining, configuration drift and disk inventory, use their <a href="cli.html">CLI topic pages</a> or the <a href="../admin-guides/wpcli/cookbook.md">maintenance cookbook</a>; these are separate from the three troubleshooting paths.</p>

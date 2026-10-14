@@ -1,0 +1,116 @@
+<section id="topic-logging">
+<h2>Runtime log levels</h2>
+<article class="command" id="logging-get-level">
+<h2>wp logging get-level</h2>
+<p>Show current log level of a node (or all nodes)</p>
+<pre>
+<code>wp logging get-level [node] [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--all</code>
+</td>
+<td>Show log level on all nodes</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logging get-level node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>NODE    LEVEL
+node-0  info</code>
+</pre>
+<p>Runtime logging changes affect this node. Record the old level and restore it after a short reproduction; this is separate from the log metadata command group.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>node-0  (unreachable)
+# In an --all report, inspect each row.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show current log level of a node (or all nodes)
+
+Usage:
+  wp logging get-level [node] [flags]
+
+Flags:
+      --all    Show log level on all nodes
+  -h, --help   help for get-level</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logging-set-level">
+<h2>wp logging set-level</h2>
+<p>Change log level of a node (or all nodes)</p>
+<pre>
+<code>wp logging set-level [node] [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--all</code>
+</td>
+<td>Set log level on all nodes</td>
+</tr>
+<tr>
+<td>
+<code>--level string</code>
+</td>
+<td>Target log level (debug, info, warn, error)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logging set-level node-0 --level debug</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Log level set to &quot;debug&quot; on node-0</code>
+</pre>
+<p>Runtime logging changes affect this node. Record the old level and restore it after a short reproduction; this is separate from the log metadata command group.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: Usage: invalid log level ...</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Change log level of a node (or all nodes)
+
+Usage:
+  wp logging set-level [node] [flags]
+
+Flags:
+      --all            Set log level on all nodes
+  -h, --help           help for set-level
+      --level string   Target log level (debug, info, warn, error)</code>
+</pre>
+</details>
+</article>
+</section>

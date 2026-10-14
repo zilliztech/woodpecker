@@ -1,0 +1,555 @@
+<section id="topic-logstore">
+<h2>Writer runtime</h2>
+<article class="command" id="logstore-buffer">
+<h2>wp logstore buffer</h2>
+<p>Show buffer bytes summary, sorted by size</p>
+<pre>
+<code>wp logstore buffer &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--top int</code>
+</td>
+<td>Show top N segments (default 20)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore buffer node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>LOG:SEG  BUFFER_BYTES  BUFFER_ENTRIES
+42:7     4096          4</code>
+</pre>
+<p>This inspects node-local runtime state. Take repeated samples and correlate long-running operations; one nonzero queue is not automatically a stall.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code># A sustained/growing value with outstanding appends requires flush-path investigation.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show buffer bytes summary, sorted by size
+
+Usage:
+  wp logstore buffer &lt;node&gt; [flags]
+
+Flags:
+  -h, --help      help for buffer
+      --top int   Show top N segments (default 20)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logstore-compact">
+<h2>wp logstore compact</h2>
+<p>Force compaction on a segment at an exact confirmed entry ID</p>
+<pre>
+<code>wp logstore compact &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--expected-last-entry-id int</code>
+</td>
+<td>Exact LastEntryId from coordinator metadata; an incorrect value can publish an invalid footer (-1 only for an empty segment, required)</td>
+</tr>
+<tr>
+<td>
+<code>--log int</code>
+</td>
+<td>Log ID (required)</td>
+</tr>
+<tr>
+<td>
+<code>--seg int</code>
+</td>
+<td>Segment ID (required)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore compact node-0 --log 2 --seg 0 --expected-last-entry-id 99</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>compact completed on node-0</code>
+</pre>
+<p>Use the exact LastEntryId from verified Completed metadata, never guess from a replica’s longer tail. This acts on one replica; client auditor owns lifecycle advancement and mark distribution.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: StateConflict: ...
+# Verify the exact coordinator last entry; inspect node logs for the rejected compaction.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Force compaction on a segment at an exact confirmed entry ID
+
+Usage:
+  wp logstore compact &lt;node&gt; [flags]
+
+Flags:
+      --expected-last-entry-id int   Exact LastEntryId from coordinator metadata; an incorrect value can publish an invalid footer (-1 only for an empty segment, required)
+  -h, --help                         help for compact
+      --log int                      Log ID (required)
+      --seg int                      Segment ID (required)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logstore-fence">
+<h2>wp logstore fence</h2>
+<p>Fence a segment on a single node.</p>
+<pre>
+<code>wp logstore fence &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--log int</code>
+</td>
+<td>Log ID (required)</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Reason for fencing (required)</td>
+</tr>
+<tr>
+<td>
+<code>--seg int</code>
+</td>
+<td>Segment ID (required)</td>
+</tr>
+<tr>
+<td>
+<code>-y, --yes</code>
+</td>
+<td>Skip confirmation</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore fence node-0 --log 2 --seg 0 --reason &quot;Reviewed recovery&quot;</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>About to fence log 2 segment 0 on node-0. Reason: Reviewed recovery
+# Preview only; no -y means no fencing and exit code 7.</code>
+</pre>
+<p>Changes write acceptance on one node. One-node fencing does not necessarily block an entire quorum; use fence-quorum for deliberate quorum intervention. Re-run with -y only after reviewing the node and quorum impact.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Missing writer / fence failure</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Fence a segment on a single node.
+
+On a multi-node quorum this removes one acknowledgement and the write carries on through the rest; interrupting a write takes wq-aq+1 nodes, which is what `fence-quorum` does.
+
+Usage:
+  wp logstore fence &lt;node&gt; [flags]
+
+Flags:
+  -h, --help            help for fence
+      --log int         Log ID (required)
+      --reason string   Reason for fencing (required)
+      --seg int         Segment ID (required)
+  -y, --yes             Skip confirmation</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logstore-fence-quorum">
+<h2>wp logstore fence-quorum</h2>
+<p>Fence a segment across enough of its quorum to interrupt writes (high-risk, requires --reason)</p>
+<pre>
+<code>wp logstore fence-quorum &lt;logName&gt; &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--nodes strings</code>
+</td>
+<td>Fence only these quorum members (default: every node in the quorum)</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Reason for fencing (required)</td>
+</tr>
+<tr>
+<td>
+<code>-y, --yes</code>
+</td>
+<td>Skip confirmation</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore fence-quorum my-channel 0 --reason &quot;Verified writer recovery&quot; --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Selected ...
+# Preview only; without -y no RPC fencing is committed (exit 7).</code>
+</pre>
+<p>The command previews quorum impact and requires acceptance (-y bypasses the prompt). Fencing can interrupt writes and trigger rolling/recovery; it does not repair data. Re-run the reviewed command with -y to commit.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Acceptance not given / too few selected reachable members</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Fence a segment across enough of its quorum to interrupt writes (high-risk, requires --reason)
+
+Usage:
+  wp logstore fence-quorum &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for fence-quorum
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --nodes strings                 Fence only these quorum members (default: every node in the quorum)
+      --reason string                 Reason for fencing (required)
+  -y, --yes                           Skip confirmation</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logstore-flush-queue">
+<h2>wp logstore flush-queue</h2>
+<p>Show flush queue depth summary, sorted by depth</p>
+<pre>
+<code>wp logstore flush-queue &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--top int</code>
+</td>
+<td>Show top N segments (default 20)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore flush-queue node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>LOG:SEG  QUEUE_DEPTH  QUEUE_CAP
+42:7     0            16</code>
+</pre>
+<p>This inspects node-local runtime state. Take repeated samples and correlate long-running operations; one nonzero queue is not automatically a stall.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>42:7     16           16
+# Correlate a persistently full queue with file.flush operations and backend latency.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show flush queue depth summary, sorted by depth
+
+Usage:
+  wp logstore flush-queue &lt;node&gt; [flags]
+
+Flags:
+  -h, --help      help for flush-queue
+      --top int   Show top N segments (default 20)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logstore-force-flush">
+<h2>wp logstore force-flush</h2>
+<p>Force sync on a specific segment or all segments</p>
+<pre>
+<code>wp logstore force-flush &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--log int</code>
+</td>
+<td>Log ID (0 = all)</td>
+</tr>
+<tr>
+<td>
+<code>--seg int</code>
+</td>
+<td>Segment ID (0 = all)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore force-flush node-0 --log 2 --seg 0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>force-flush completed on node-0</code>
+</pre>
+<p>Mutates a loaded writer. It cannot repair corrupted payloads; inspect queues and backend errors first.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: StateConflict: ...</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Force sync on a specific segment or all segments
+
+Usage:
+  wp logstore force-flush &lt;node&gt; [flags]
+
+Flags:
+  -h, --help      help for force-flush
+      --log int   Log ID (0 = all)
+      --seg int   Segment ID (0 = all)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logstore-lac">
+<h2>wp logstore lac</h2>
+<p>Show how far a segment is confirmed readable across its quorum</p>
+<pre>
+<code>wp logstore lac &lt;logName&gt; &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore lac my-channel 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>quorum LAC: 99 (aq=2 of 3 nodes at or past it)</code>
+</pre>
+<p>LAC is confirmed progress reported per replica, not a full checksum verification. Active metadata is not a final boundary. Map every quorum member’s admin address.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>quorum LAC: unknown — 1 of 3 nodes answered, fewer than aq=2</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show how far a segment is confirmed readable across its quorum
+
+Usage:
+  wp logstore lac &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for lac
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logstore-segment-show">
+<h2>wp logstore segment-show</h2>
+<p>Show a segment&#x27;s active writer on a node (not historical segment metadata)</p>
+<pre>
+<code>wp logstore segment-show &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--log int</code>
+</td>
+<td>Log ID (required)</td>
+</tr>
+<tr>
+<td>
+<code>--seg int</code>
+</td>
+<td>Segment ID (required)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore segment-show node-0 --log 2 --seg 0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>writer: ...
+buffer: ...
+flush_state: ...
+# Illustrative excerpt; fields depend on the storage backend.</code>
+</pre>
+<p>--log and --seg are numeric IDs. Historical/unloaded segments need segment inspect and log scan, not this active-writer endpoint.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: TargetNotFound: ...
+# No loaded writer; historical data may still exist.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show a segment&#x27;s active writer on a node (not historical segment metadata)
+
+Usage:
+  wp logstore segment-show &lt;node&gt; [flags]
+
+Flags:
+  -h, --help      help for segment-show
+      --log int   Log ID (required)
+      --seg int   Segment ID (required)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="logstore-segments">
+<h2>wp logstore segments</h2>
+<p>List active segments on a node</p>
+<pre>
+<code>wp logstore segments &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--log int</code>
+</td>
+<td>Filter by log ID</td>
+</tr>
+<tr>
+<td>
+<code>--writable string</code>
+</td>
+<td>Filter by writable state (true/false)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp logstore segments node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>LOG_ID SEG_ID BACKEND WRITABLE FENCED FINALIZED ENTRIES BLOCKS</code>
+</pre>
+<p>Lists loaded writer objects, not every segment on disk or in etcd. An empty table does not establish no stored data; use log scan and instance data.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Header only / node unavailable</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>List active segments on a node
+
+Usage:
+  wp logstore segments &lt;node&gt; [flags]
+
+Flags:
+  -h, --help              help for segments
+      --log int           Filter by log ID
+      --writable string   Filter by writable state (true/false)</code>
+</pre>
+</details>
+</article>
+</section>
