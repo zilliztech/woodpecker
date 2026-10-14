@@ -124,6 +124,12 @@ go tool trace -http=127.0.0.1:8081 ./node-0-trace-TIMESTAMP.trace
 
 ### Log metadata
 - `wp log readers <logName>` — where each of a log's readers has read to (etcd only, no node contact)
+- `wp log truncate <logName> --segment N --entry M` — preview a truncation-frontier
+  advance; apply requires `--apply --expected-revision --reason --backup`.
+  The target must be a non-empty Completed or Sealed segment. The frontier
+  segment is retained; earlier finalized segments become eligible for auditor
+  truncation and retention/reader-protected cleanup. See the
+  [truncation walkthrough](../../docs/wp-log-truncate-cli.md).
 
 ### Authoritative metadata
 - `wp meta log list|show`, `wp meta segment list|show`, `wp meta quorum list|show` — decoded etcd records, including unloaded historical segments, with keys, revisions and leases
