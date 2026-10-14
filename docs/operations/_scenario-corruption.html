@@ -1,0 +1,96 @@
+<h1>Data Corruption Diagnosis &amp; Recovery</h1>
+<p class="page-desc">Establish the metadata boundary, identify readable copies and exact bad entries, then choose recovery without discarding healthy data.</p>
+<h2 id="plan">Plan: preserve → compare → locate → choose → verify</h2>
+<table><tr><th>Step</th><th>Command</th><th>Intent</th></tr>
+<tr><td>1</td><td>log scan; deployment backup</td><td>Record the expected segment boundary and preserve deployment/data evidence before intervention.</td></tr>
+<tr><td>2</td><td>log scan quick/raw</td><td>Identify suspicious segments and distinguish failed inspection from confirmed missing coverage.</td></tr>
+<tr><td>3</td><td>segment probe/inspect</td><td>Find which copies read, where sequential reading stops and which later records remain recoverable.</td></tr>
+<tr><td>4</td><td>Supported replica recovery, or a verified skip-range</td><td>Choose based on verified healthy data, accepted loss or a proven metadata bug.</td></tr>
+<tr><td>5</td><td>Reader verification; application checkpoint/truncation; marking if retiring data</td><td>Prove resumed progress and observe auditor/retention closure separately from read recovery.</td></tr></table>
+{{WORKFLOW_CONNECTION}}
+<h2 id="preserve">1. Preserve evidence</h2>
+<p>Record the application checkpoint, log name/ID, segment ID, deployment version and replica locations. Preserve original replica files and relevant objects through your deployment's backup procedure before changing them. Capture the scan, probe and inspect results below; they are diagnostics, not a data backup.</p>
+<p>The scan summary includes the metadata state and last entry. A Completed boundary of 99 expects entries 0..99. If a software bug is suspected to have written a wrong boundary, preserve the raw metadata through your existing etcd backup procedure and use the <a href="#metadata">metadata escalation path</a>.</p>
+<h2 id="scan">2. Find the affected segment</h2>
+<pre><code>wm log scan "$WP_LOG" --mode quick \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
+wm log scan "$WP_LOG" --mode raw --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
+<pre><code># Example normal summary (DETAIL column omitted):
+SEGMENT  STATE      META LAST  REACHES  REPLICAS  VERDICT
+7        Completed  99         0-99     3/3       ok
+8        Active     -1 (open)  -        3/3       open
+
+# Example missing finalized tail, after a complete local survey:
+SEGMENT  STATE      META LAST  REACHES  REPLICAS  VERDICT
+7        Completed  99         0-49     3/3       short
+
+# Example failed inspection requests:
+SEGMENT  STATE      META LAST  REACHES  REPLICAS  VERDICT
+7        Completed  99         -        0/3       unknown</code></pre>
+<p>The short example establishes a local coverage gap at 50..99; it does not explain the cause. Inspect/probe next. The unknown example establishes no coverage at all; inspect the per-replica DETAIL (for example HTTP 404, timeout or missing mapping) before deciding there is missing data.</p>
+<table><tr><th>Verdict</th><th>What was established</th></tr>
+<tr><td>ok</td><td>Observed local coverage matches the metadata expectation within this survey.</td></tr>
+<tr><td>short</td><td>Every relevant replica survey completed, and some expected range is absent from their combined local coverage. Any incomplete/unreachable alternative makes that missing range unknown.</td></tr>
+<tr><td>unknown</td><td>Request, location, response or survey bound prevented a conclusion. Read the per-replica HTTP/error details.</td></tr>
+<tr><td>open / local_empty</td><td>Active boundary remains unknown; replicas found no local durable entries. This is not automatically corruption.</td></tr>
+<tr><td>compacted</td><td>Local copies are not authoritative. Scan has not verified shared object-storage data; use probe for actual reads.</td></tr>
+<tr><td>reclaimed</td><td>Truncated data is intentionally eligible for cleanup; absence is not automatically loss.</td></tr></table>
+<p>REACHES is the union of observed local ranges; '-' is no observed range. REPLICAS counts usable replies, not independent healthy copies. quick checks structure; raw verifies local block checksums. Neither establishes pending writes or end-to-end object readability.</p>
+<h2 id="locate">3. Separate two damaged copies from all three</h2>
+<pre><code>wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 0 --max-entries 200 \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
+wm segment inspect "$WP_LOG" "$WP_SEG" --max-blocks 4096 \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
+<pre><code># Two failed copies and one healthy copy, abbreviated:
+NODE                    SERVED       OUTCOME       VERDICT
+milvus-woodpecker-0      0-49 (50)    error         cannot serve
+milvus-woodpecker-1      0-49 (50)    error         cannot serve
+milvus-woodpecker-2      0-99 (100)   end_of_file   served</code></pre>
+<p>The healthy copy can support reader failover. Preserve it; do not declare readable entries lost. The CLI does not offer a generic copy/repair command. Recover damaged replicas through the supported deployment/recovery path, then verify their coverage. Compaction can still fail if it requires damaged copies.</p>
+<pre><code># If all three instead stop before entry 50:
+No replica can serve entry 50 ...
+# Inspect may separately identify:
+STATUS: checksum_failed
+record stop: record_checksum_failed at entry 50
+recoverable entries after the bad record: 51..99</code></pre>
+<p>Probe stops where sequential reading fails; inspect surveys beyond a bad block and can expose the tail. Confirm exact entry boundaries and each copy's result. A timeout, ambiguous path, 404 or cap_reached is not proof that an entry is unrecoverable. Object_storage replies inspect one shared copy, not three independent ones.</p>
+<pre><code># Inspect excerpt for one node, assuming entry 50 occupies its own block:
+BLOCK  ENTRIES  READABLE  RECOVERABLE  STATUS
+0      0-49     all       -            ok
+1      50-50    none      -            checksum_failed
+2      51-99    all       -            ok</code></pre>
+<p>READABLE=none means normal reads reject that block. RECOVERABLE describes individually verified records inside a rejected block; it is evidence for repair, not a promise that the SDK can return them. Here the later block is independently valid. If entry 50 instead shares a damaged block with other entries, verify that whole block's consequences rather than assuming only 50 is affected.</p>
+<h2 id="skip-range">4A. Accept a confirmed unreadable range</h2>
+<p>Use this branch only when every usable copy fails and the business accepts loss of the specific entries. The example assumes only entry 50 is confirmed unrecoverable, with 51..99 verified readable:</p>
+<pre><code># Preview and check the evidence/gate; no -y means no commit (exit 7).
+wm log skip-range add "$WP_LOG" "$WP_SEG" \
+  --from-entry 50 --to-entry 50 --reason "All copies fail at 50; verified healthy tail"
+# After explicit acceptance of losing entry 50:
+wm log skip-range add "$WP_LOG" "$WP_SEG" \
+  --from-entry 50 --to-entry 50 --reason "Accepted loss of entry 50" -y
+wm log skip-range list "$WP_LOG"</code></pre>
+<pre><code># Successful add for log ID 42, segment 7:
+Declared: log 42 segment 7 now skips 50-50</code></pre>
+<table><tr><th>Result</th><th>Meaning</th></tr>
+<tr><td>Gate refuses because a copy can serve</td><td>Preserve/read that copy; do not force past healthy data just to make a command pass.</td></tr>
+<tr><td>Acceptance not given</td><td>Expected preview behavior, no declaration committed.</td></tr>
+<tr><td>Declaration committed</td><td>Readers can skip the inclusive range. Files remain damaged; compaction is not repaired by the declaration.</td></tr></table>
+<p>Keep the same stalled reader running. Wait for refresh/report timing and verify it crosses 50 and reaches 99. For a reader returning original entries 0..99, skipping just 50 means 99 returned records; record IDs and application checkpoints establish what was lost. Removing the declaration does not restore data.</p>
+<h2 id="metadata">4B. Escalate a proven metadata bug</h2>
+<p>If independent file validation and acknowledged-write history disagree with the coordinator's last entry or state, preserve the evidence and identify the responsible software fix. Do not lower the boundary merely because a replica lost acknowledged data. This handbook's CLI does not include a general metadata patch operation; arrange a reviewed, version-specific repair with the maintainers.</p>
+<p>Metadata inspection and controlled patch tooling is tracked in <a href="https://github.com/zilliztech/woodpecker/pull/423">PR #423</a>. Follow its final merged command guide when available; the commands are not part of this source snapshot.</p>
+<h2 id="compaction">5. Close the compaction/retention loop</h2>
+<p>Reader recovery and compaction are separate. Skip-range does not fix a damaged Completed copy. Later eligible segments can be compacted independently; the damaged segment may continue failing until repaired or deliberately retired.</p>
+<p>After the application has durably checkpointed beyond the damaged segment, use its supported Woodpecker SDK truncation/checkpoint workflow to retire that range. For example, advancing the frontier into segment 8 permits retiring segment 7; truncating to 7:99 retains segment 7 itself. This CLI snapshot has no log truncate command.</p>
+<p>A live application log handle/auditor marks earlier finalized segments Truncated in subsequent rounds, then applies retention and reader protection. No active auditor means the background transition will not occur. Physical deletion is asynchronous; a metadata backup cannot restore deleted files. Use scan and marking to observe the result:</p>
+<pre><code>wm log scan "$WP_LOG" --mode quick \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
+wm marking list</code></pre>
+<details class="ops-help"><summary>Compacted-mark notification is pending manual handling</summary><p>Inspect marking records and verify the unacked node's disposition before using <code>wm marking confirm "$WP_LOG_ID" "$WP_SEG"</code>. It settles notification retries, not data corruption or segment metadata, and the record remains until truncation reaps it.</p></details>
+<h2 id="verify">6. Verify the chosen recovery</h2>
+<pre><code>sleep 35
+wm log readers "$WP_LOG"
+wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 51 --max-entries 100 \
+  --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
+<p>For read recovery, require the same reader and application checkpoint to progress through the verified tail. For replica repair, re-probe/inspect every repaired copy. For retirement, expect Truncated/reclaimed rather than readable data and verify the auditor no longer attempts compaction on the retired segment. In a controlled lab, restore original files before removing skip declarations and verifying the original full record count.</p>

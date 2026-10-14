@@ -15,3 +15,10 @@ exclude:
   # Grafana templating, Python f-string brace-escaping) that Jekyll's Liquid
   # engine fails to parse, which breaks the Pages build. See issue #204.
   - superpowers
+
+  # CLI handbook sources; only rendered HTML/CSS are public pages.
+  - operations/generate_cli.py
+  - operations/embed_operations.py
+  - operations/cli-examples.json
+  - operations/cli-categories.json
+  - operations/README.md

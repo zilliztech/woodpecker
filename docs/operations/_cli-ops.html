@@ -1,0 +1,184 @@
+<section id="topic-ops">
+<h2>In-flight operations</h2>
+<article class="command" id="ops-list">
+<h2>wp ops list</h2>
+<p>List in-flight operations</p>
+<pre>
+<code>wp ops list &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--limit int</code>
+</td>
+<td>Max results</td>
+</tr>
+<tr>
+<td>
+<code>--log int</code>
+</td>
+<td>Filter by log ID</td>
+</tr>
+<tr>
+<td>
+<code>--longer-than int</code>
+</td>
+<td>Only ops running longer than N ms</td>
+</tr>
+<tr>
+<td>
+<code>--seg int</code>
+</td>
+<td>Filter by segment ID</td>
+</tr>
+<tr>
+<td>
+<code>--type string</code>
+</td>
+<td>Filter by op type (e.g. file.flush)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp ops list node-0 --longer-than 30000</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>OP_TYPE  OP_ID  TRACE_ID  LOG:SEG
+# No rows means no matching tracked operation at this instant.</code>
+</pre>
+<p>An empty table means no tracked in-flight operations at this instant, not no historical workload. Compare age and operation IDs over time.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>logstore.add_entry  append-op-123  ...  42:7
+# The same old operation across samples needs investigation.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>List in-flight operations
+
+Usage:
+  wp ops list &lt;node&gt; [flags]
+
+Flags:
+  -h, --help              help for list
+      --limit int         Max results
+      --log int           Filter by log ID
+      --longer-than int   Only ops running longer than N ms
+      --seg int           Filter by segment ID
+      --type string       Filter by op type (e.g. file.flush)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="ops-show">
+<h2>wp ops show</h2>
+<p>Show detail of a single in-flight operation</p>
+<pre>
+<code>wp ops show &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--op-id string</code>
+</td>
+<td>Operation ID (required)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp ops show node-0 --op-id append-op-123</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Identity
+  op_id: append-op-123
+  op_type: logstore.add_entry
+Context
+  log_id: 42
+  segment_id: 7</code>
+</pre>
+<p>Copy a real OP_ID from ops list. A completed operation disappearing is expected; registry capacity is bounded. Replace append-op-123 with an ID returned by ops list.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: ResourceNotFound: ...
+# It may have completed or been evicted since listing.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show detail of a single in-flight operation
+
+Usage:
+  wp ops show &lt;node&gt; [flags]
+
+Flags:
+  -h, --help           help for show
+      --op-id string   Operation ID (required)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="ops-stats">
+<h2>wp ops stats</h2>
+<p>Show op registry utilization and eviction statistics</p>
+<pre>
+<code>wp ops stats &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp ops stats node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Capacity
+  capacity: 1024
+  in_use: 0 (0.0%)
+Eviction Totals
+  old: 0</code>
+</pre>
+<p>Counters can be cumulative. Compare snapshots and queue state; eviction can hide old operations, so no listed op is not always conclusive.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>old: 12 (STALL SIGNAL)
+# This counter is cumulative; sample again to see whether it is growing.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show op registry utilization and eviction statistics
+
+Usage:
+  wp ops stats &lt;node&gt; [flags]
+
+Flags:
+  -h, --help   help for stats</code>
+</pre>
+</details>
+</article>
+</section>

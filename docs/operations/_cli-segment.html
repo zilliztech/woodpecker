@@ -1,0 +1,168 @@
+<section id="topic-segment">
+<h2>Segment diagnosis</h2>
+<article class="command" id="segment-inspect">
+<h2>wp segment inspect</h2>
+<p>Walk a segment&#x27;s blocks on every replica and report what is wrong where</p>
+<pre>
+<code>wp segment inspect &lt;logName&gt; &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--bucket string</code>
+</td>
+<td>Storage bucket; pair with --root-path (otherwise discovered on each node)</td>
+</tr>
+<tr>
+<td>
+<code>--from-block int</code>
+</td>
+<td>First block to walk (default: the start of the segment)</td>
+</tr>
+<tr>
+<td>
+<code>--max-blocks int</code>
+</td>
+<td>Stop after this many blocks per node (default: the node&#x27;s own bound)</td>
+</tr>
+<tr>
+<td>
+<code>--root-path string</code>
+</td>
+<td>Storage instance root path; pair with --bucket</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp segment inspect my-channel 1 --bucket milvus-bucket --root-path milvus/wp --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>BLOCK ENTRIES READABLE RECOVERABLE STATUS
+- - - - no_local_blocks</code>
+</pre>
+<p>Walks local blocks and records to locate damage boundaries; it can report later recoverable entries despite a bad block. no_local_blocks says nothing about shared object integrity. Use actual timestamps/metadata separately; --max-blocks bounds the survey.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Block 0: checksum mismatch; entry 50 corrupt; later good entries</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Walk a segment&#x27;s blocks on every replica and report what is wrong where
+
+Usage:
+  wp segment inspect &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --bucket string                 Storage bucket; pair with --root-path (otherwise discovered on each node)
+      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
+      --etcd-cacert string            etcd TLS CA cert file; default: discovered
+      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
+      --etcd-key string               etcd TLS client key file; default: discovered
+      --etcd-password string          etcd auth password; default: discovered
+      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
+      --etcd-username string          etcd auth username; default: discovered
+      --from-block int                First block to walk (default: the start of the segment)
+  -h, --help                          help for inspect
+      --max-blocks int                Stop after this many blocks per node (default: the node&#x27;s own bound)
+      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --root-path string              Storage instance root path; pair with --bucket</code>
+</pre>
+</details>
+</article>
+<article class="command" id="segment-probe">
+<h2>wp segment probe</h2>
+<p>Ask every replica how far it can read a segment</p>
+<pre>
+<code>wp segment probe &lt;logName&gt; &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--bucket string</code>
+</td>
+<td>Storage bucket; pair with --root-path (otherwise discovered on each node)</td>
+</tr>
+<tr>
+<td>
+<code>--from-entry int</code>
+</td>
+<td>Entry to read from (default: the start of the segment)</td>
+</tr>
+<tr>
+<td>
+<code>--max-entries int</code>
+</td>
+<td>Stop after this many entries per node (default: the node&#x27;s own bound)</td>
+</tr>
+<tr>
+<td>
+<code>--root-path string</code>
+</td>
+<td>Storage instance root path; pair with --bucket</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp segment probe my-channel 1 --bucket milvus-bucket --root-path milvus/wp --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>SOURCE object_storage  SERVED 0-0 (1)  OUTCOME end_of_file  VERDICT served</code>
+</pre>
+<p>Actually probes sequential entry reads and stops at a failure or bound. 0-0 (1) means one entry, ID 0. Object storage responses share one copy. Active tail/no local data has unknown final boundary and must not be called a permanent stall; Completed shortfall is compared to metadata. cap_reached is a bound, not EOF.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Completed expected 99, replica stops at 49 → short / RedFinding if all fail</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Ask every replica how far it can read a segment
+
+Usage:
+  wp segment probe &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --bucket string                 Storage bucket; pair with --root-path (otherwise discovered on each node)
+      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
+      --etcd-cacert string            etcd TLS CA cert file; default: discovered
+      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
+      --etcd-key string               etcd TLS client key file; default: discovered
+      --etcd-password string          etcd auth password; default: discovered
+      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
+      --etcd-username string          etcd auth username; default: discovered
+      --from-entry int                Entry to read from (default: the start of the segment)
+  -h, --help                          help for probe
+      --max-entries int               Stop after this many entries per node (default: the node&#x27;s own bound)
+      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --root-path string              Storage instance root path; pair with --bucket</code>
+</pre>
+</details>
+</article>
+</section>

@@ -1,0 +1,103 @@
+{
+  "local": {
+    "title": "CLI setup",
+    "groups": [
+      "ctx",
+      "completion",
+      "version"
+    ],
+    "purpose": "Select the local CLI context, load shell completion and identify the CLI build."
+  },
+  "env": {
+    "title": "Process environment",
+    "groups": [
+      "env"
+    ],
+    "purpose": "Inspect and compare process, Go runtime, host and build information."
+  },
+  "cluster": {
+    "title": "Cluster & node status",
+    "groups": [
+      "cluster",
+      "node"
+    ],
+    "purpose": "Inspect membership, reachability, health, gossip and node drain lifecycle."
+  },
+  "k8s": {
+    "title": "Kubernetes helpers",
+    "groups": [
+      "k8s"
+    ],
+    "purpose": "Check kubectl prerequisites and plan or execute Kubernetes status, logs and scaling actions."
+  },
+  "config": {
+    "title": "Server configuration",
+    "groups": [
+      "config"
+    ],
+    "purpose": "Inspect server configuration and compare configuration drift across nodes."
+  },
+  "logging": {
+    "title": "Runtime log levels",
+    "groups": [
+      "logging"
+    ],
+    "purpose": "Read or temporarily change server logging levels."
+  },
+  "profile": {
+    "title": "Profiles & trace",
+    "groups": [
+      "profile"
+    ],
+    "purpose": "Collect CPU, memory, goroutine, mutex and execution-trace diagnostics."
+  },
+  "ops": {
+    "title": "In-flight operations",
+    "groups": [
+      "ops"
+    ],
+    "purpose": "Inspect running operations, their age and operation-registry pressure."
+  },
+  "metrics": {
+    "title": "Metrics & scenarios",
+    "groups": [
+      "metrics"
+    ],
+    "purpose": "Inspect Prometheus samples, trends and supported scenario findings."
+  },
+  "logstore": {
+    "title": "Writer runtime",
+    "groups": [
+      "logstore"
+    ],
+    "purpose": "Inspect loaded writers, buffers, flush queues and LAC; perform targeted flush, compact or fence actions."
+  },
+  "instance": {
+    "title": "Local data inventory",
+    "groups": [
+      "instance"
+    ],
+    "purpose": "List bucket/root instances holding node-local data before drain or reclamation."
+  },
+  "log": {
+    "title": "Log progress & coverage",
+    "groups": [
+      "log"
+    ],
+    "purpose": "Inspect reader progress and log coverage, and manage verified skip-range declarations."
+  },
+  "segment": {
+    "title": "Segment diagnosis",
+    "groups": [
+      "segment"
+    ],
+    "purpose": "Probe actual entry reads and inspect local blocks to locate damage on each quorum member."
+  },
+  "marking": {
+    "title": "Compacted-mark distribution",
+    "groups": [
+      "marking"
+    ],
+    "purpose": "Inspect notification records and settle verified manual mark-distribution cases."
+  }
+}

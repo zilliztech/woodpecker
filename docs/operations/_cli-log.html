@@ -1,0 +1,366 @@
+<section id="topic-log">
+<h2>Log progress & coverage</h2>
+<article class="command" id="log-readers">
+<h2>wp log readers</h2>
+<p>Show where each of a log&#x27;s readers has read to</p>
+<pre>
+<code>wp log readers &lt;logName&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp log readers my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>READER      OPEN_POS  CURRENT  LAST_REPORT  OPEN_FOR  STATE
+reader-123  7:0       7:50     3s           5m        live</code>
+</pre>
+<p>Reads leased registration under readers/&lt;logId&gt;/. No live readers means no usable registration here, not no Milvus queries. Reports normally refresh every 30 seconds; compare two snapshots to establish progress. Lease expiry or wrong namespace can hide readers.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Log my-channel (id 42) — no live readers
+# Or a stale report: check activity and namespace before declaring a stall.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show where each of a log&#x27;s readers has read to
+
+Usage:
+  wp log readers &lt;logName&gt; [flags]
+
+Flags:
+      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
+      --etcd-cacert string            etcd TLS CA cert file; default: discovered
+      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
+      --etcd-key string               etcd TLS client key file; default: discovered
+      --etcd-password string          etcd auth password; default: discovered
+      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
+      --etcd-username string          etcd auth username; default: discovered
+  -h, --help                          help for readers
+      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="log-scan">
+<h2>wp log scan</h2>
+<p>Compare metadata with replica local coverage; raw verifies local block checksums</p>
+<pre>
+<code>wp log scan &lt;logName&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--bucket string</code>
+</td>
+<td>Storage bucket; pair with --root-path to locate unloaded or empty segments</td>
+</tr>
+<tr>
+<td>
+<code>--from-segment int</code>
+</td>
+<td>First segment to scan</td>
+</tr>
+<tr>
+<td>
+<code>--mode string</code>
+</td>
+<td>quick reads only structure and metadata; raw reads the data through the real checksums (default &quot;quick&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--root-path string</code>
+</td>
+<td>Storage instance root path; pair with --bucket</td>
+</tr>
+<tr>
+<td>
+<code>--to-segment int</code>
+</td>
+<td>Last segment to scan (default: the newest) (default -1)</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp log scan my-channel --mode raw --bucket milvus-bucket --root-path milvus/wp --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>SEGMENT STATE META LAST REACHES REPLICAS VERDICT
+1 Active -1 (open) - 3/3 open
+Per replica: local_empty / none / no_local_blocks</code>
+</pre>
+<p>REACHES is the union of observed local ranges; - means none observed. 3/3 counts usable inspection responses, not three healthy data copies. quick checks structure; raw verifies local blocks. Sealed/compacted data in object storage is not verified. Explicit bucket/root-path resolves empty or unloaded targets; pending writes are not inspected.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>unknown: HTTP 404 ... / short: missing entries 50..99</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Compare metadata with replica local coverage; raw verifies local block checksums
+
+Usage:
+  wp log scan &lt;logName&gt; [flags]
+
+Flags:
+      --bucket string                 Storage bucket; pair with --root-path to locate unloaded or empty segments
+      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
+      --etcd-cacert string            etcd TLS CA cert file; default: discovered
+      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
+      --etcd-key string               etcd TLS client key file; default: discovered
+      --etcd-password string          etcd auth password; default: discovered
+      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
+      --etcd-username string          etcd auth username; default: discovered
+      --from-segment int              First segment to scan
+  -h, --help                          help for scan
+      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --mode string                   quick reads only structure and metadata; raw reads the data through the real checksums (default &quot;quick&quot;)
+      --root-path string              Storage instance root path; pair with --bucket
+      --to-segment int                Last segment to scan (default: the newest) (default -1)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="log-skip-range-add">
+<h2>wp log skip-range add</h2>
+<p>Declare an entry range unreadable so readers move past it.</p>
+<pre>
+<code>wp log skip-range add &lt;logName&gt; &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--force</code>
+</td>
+<td>Declare the range even though a replica can still read part of it</td>
+</tr>
+<tr>
+<td>
+<code>--from-entry int</code>
+</td>
+<td>First entry to skip (inclusive) (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Why these entries are being given up (required)</td>
+</tr>
+<tr>
+<td>
+<code>--to-entry int</code>
+</td>
+<td>Last entry to skip (inclusive) (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>-y, --yes</code>
+</td>
+<td>Proceed without the confirmation prompt</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp log skip-range add my-channel 0 --from-entry 50 --to-entry 50 --reason &quot;Confirmed unrecoverable entry&quot; --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Ranges and reasons / preview or committed declaration</code>
+</pre>
+<p>A declaration makes readers skip accepted data loss; it does not fix replicas or advance compaction. Entry bounds are inclusive. add previews before confirmation (-y accepts); remove does not restore skipped/reclaimed data. Inspect all replicas and the healthy tail first.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Gate refuses because a replica can serve / acceptance not given</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Declare an entry range unreadable so readers move past it.
+
+This gives up data. Entries in the range are never delivered to any reader of this log
+again, and nothing restores them: withdrawing the range only exposes whatever is still on
+disk. So the quorum is asked first, and a replica that can still read part of the range
+refuses the declaration.
+
+Usage:
+  wp log skip-range add &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
+      --etcd-cacert string            etcd TLS CA cert file; default: discovered
+      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
+      --etcd-key string               etcd TLS client key file; default: discovered
+      --etcd-password string          etcd auth password; default: discovered
+      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
+      --etcd-username string          etcd auth username; default: discovered
+      --force                         Declare the range even though a replica can still read part of it
+      --from-entry int                First entry to skip (inclusive) (default -1)
+  -h, --help                          help for add
+      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --reason string                 Why these entries are being given up (required)
+      --to-entry int                  Last entry to skip (inclusive) (default -1)
+  -y, --yes                           Proceed without the confirmation prompt</code>
+</pre>
+</details>
+</article>
+<article class="command" id="log-skip-range-list">
+<h2>wp log skip-range list</h2>
+<p>Show the declared skip ranges.</p>
+<pre>
+<code>wp log skip-range list [logName] [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp log skip-range list my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>log 42 segment 7: 50-50
+# Illustrative excerpt; inspect the recorded reason and age.</code>
+</pre>
+<p>A declaration makes readers skip accepted data loss; it does not fix replicas or advance compaction. Entry bounds are inclusive. add previews before confirmation (-y accepts); remove does not restore skipped/reclaimed data. Inspect all replicas and the healthy tail first.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code># No declarations is normal when no loss has been accepted.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show the declared skip ranges.
+
+With no log name every log is listed, including ranges whose log no longer exists: log ids
+are never reused, so such a range can never apply to anything again, but it stays in the
+record until it is removed.
+
+Usage:
+  wp log skip-range list [logName] [flags]
+
+Flags:
+      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
+      --etcd-cacert string            etcd TLS CA cert file; default: discovered
+      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
+      --etcd-key string               etcd TLS client key file; default: discovered
+      --etcd-password string          etcd auth password; default: discovered
+      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
+      --etcd-username string          etcd auth username; default: discovered
+  -h, --help                          help for list
+      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="log-skip-range-remove">
+<h2>wp log skip-range remove</h2>
+<p>Withdraw a declared range, so readers stop skipping it.</p>
+<pre>
+<code>wp log skip-range remove &lt;logName&gt; &lt;segmentId&gt; | --log-id N &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--from-entry int</code>
+</td>
+<td>First entry of the range to withdraw (inclusive) (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--log-id int</code>
+</td>
+<td>Withdraw by log id instead of name, for a range whose log has been deleted (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--to-entry int</code>
+</td>
+<td>Last entry of the range to withdraw (inclusive) (default -1)</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp log skip-range remove my-channel 0 --from-entry 50 --to-entry 50 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Removed: ...
+# Inspect list afterward to verify the remaining intervals.</code>
+</pre>
+<p>A declaration makes readers skip accepted data loss; it does not fix replicas or advance compaction. Entry bounds are inclusive. add previews before confirmation (-y accepts); remove does not restore skipped/reclaimed data. Inspect all replicas and the healthy tail first.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: StateConflict: ...
+# Refresh and retry after reviewing concurrent changes.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Withdraw a declared range, so readers stop skipping it.
+
+Withdrawing does not restore anything: it only lets readers try the entries again, which
+is what to do once a replica has been rebuilt. A reader that already moved past the range
+does not come back for it.
+
+Usage:
+  wp log skip-range remove &lt;logName&gt; &lt;segmentId&gt; | --log-id N &lt;segmentId&gt; [flags]
+
+Flags:
+      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
+      --etcd-cacert string            etcd TLS CA cert file; default: discovered
+      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
+      --etcd-key string               etcd TLS client key file; default: discovered
+      --etcd-password string          etcd auth password; default: discovered
+      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
+      --etcd-username string          etcd auth username; default: discovered
+      --from-entry int                First entry of the range to withdraw (inclusive) (default -1)
+  -h, --help                          help for remove
+      --log-id int                    Withdraw by log id instead of name, for a range whose log has been deleted (default -1)
+      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --to-entry int                  Last entry of the range to withdraw (inclusive) (default -1)</code>
+</pre>
+</details>
+</article>
+</section>
