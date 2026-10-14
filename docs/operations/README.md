@@ -3,7 +3,7 @@
 Both documents are native content pages in the existing Docs shell:
 
 - `docs.html#operations-cli`: overview and searchable operation lookup.
-- Fourteen topic pages, defined in `cli-categories.json`, each with one clear
+- Fifteen topic pages, defined in `cli-categories.json`, each with one clear
   operational purpose. Most correspond to exactly one command group; only
   local CLI setup (ctx/completion/version) and cluster/node status combine groups.
 - `docs.html#operations-scenarios`: choose a troubleshooting path.
@@ -29,7 +29,7 @@ The generator executes only --help, never a cluster operation. Update cli-catego
 examples and interpretation in cli-examples.json; missing examples fail the
 build. Edit scenario content in _scenario-read.html / _scenario-write.html /
 _scenario-corruption.html, the chooser in _scenarios.html, shared example
-variables in _workflow-connection.html, or CLI setup in _setup.html and the overview in _overview.html. Then run
+variables in _workflow-connection.html, CLI setup in _setup.html, raw etcd workflow in _etcd.html, or the overview in _overview.html. Then run
 the same generator.
 The _cli.html overview and _cli-*.html category fragments are generated. embed_operations.py namespaces fragment
 IDs and links, adds standard Docs code/table markup, and updates the marked

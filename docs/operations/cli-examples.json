@@ -340,5 +340,23 @@
     "Result: OK — no findings for scenario \"stuck-read\"",
     "Findings (1):\n  [RED] read_stall: ...\n    -> wp ops list ...\nError: RedFinding: ...",
     "Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below."
+  ],
+  "etcd list": [
+    "wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json",
+    "{\"prefix\":\"milvus-prod/\",\"snapshot_revision\":105,\"count\":1,\"more\":false,\"keys\":[{\"key\":\"milvus-prod/woodpecker/version\",\"mod_revision\":90,...}]}",
+    "Error: Usage: --after-key and --after-key-base64 are mutually exclusive\n# A compacted --revision instead produces a Network error.",
+    "Omit the prefix to explore all keys; list / searches only keys beginning with /. The limit controls page size, not the total count. When more=true, use the returned next_key_base64 and the same snapshot_revision for the next page. The context meta_prefix is never prepended."
+  ],
+  "etcd get": [
+    "wp etcd get milvus-prod/woodpecker/version --etcd 127.0.0.1:32379",
+    "{\"key\":{\"key\":\"milvus-prod/woodpecker/version\",\"mod_revision\":90,\"lease\":0,...},\"snapshot_revision\":105,\"value_encoding\":\"base64\",\"value\":\"CAEQACAu\"}",
+    "Error: TargetNotFound: milvus-prod/woodpecker/missing-key",
+    "get reads one exact key and returns key metadata plus an encoded value. auto keeps readable UTF-8 text and base64-encodes binary protobuf data; this command does not decode Woodpecker protobuf fields. Use --revision to read a retained historical snapshot and -o yaml for YAML."
+  ],
+  "etcd cat": [
+    "wp etcd cat milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 --encoding base64",
+    "CAEQACAu\n# Encoded value only; binary auto output also explains its encoding on stderr.",
+    "Error: Usage: value is not UTF-8; use --encoding base64, hex or raw\n# Only cat supports --encoding raw.",
+    "cat writes the value without an envelope. auto/text/base64/hex output ends with a newline; --encoding raw preserves exact bytes and adds none. Redirect raw output to a file for byte-exact inspection. Neither cat nor get changes the key."
   ]
 }

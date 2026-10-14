@@ -2,7 +2,7 @@
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">17 top-level commands/groups · 57 executable operations</span>
+<span class="badge">18 top-level commands/groups · 60 executable operations</span>
 </p>
 <p>
 <a href="cli.html#start">New to wp? Start with installation, connection setup and your first commands →</a>
@@ -65,6 +65,10 @@
 <a href="#marking">
 <strong>Compacted-mark distribution</strong>
 <span>marking</span>
+</a>
+<a href="#etcd">
+<strong>Raw etcd exploration</strong>
+<span>etcd</span>
 </a>
 </nav>
 </section>
@@ -912,6 +916,53 @@
 </tbody>
 </table>
 </section>
+<section class="ops-quick-section" id="quick-etcd">
+<h2>Raw etcd exploration · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp etcd</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#etcd-cat">
+<code>wp etcd cat</code>
+</a>
+</td>
+<td>Print only one key&#x27;s value; use --encoding raw for exact bytes</td>
+<td>
+<code>&lt;key&gt;</code>: Exact raw etcd key</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#etcd-get">
+<code>wp etcd get</code>
+</a>
+</td>
+<td>Show one exact key, revisions, lease and encoded value</td>
+<td>
+<code>&lt;key&gt;</code>: Exact raw etcd key</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#etcd-list">
+<code>wp etcd list</code>
+</a>
+</td>
+<td>List raw keys by literal prefix; omit prefix to explore all keys</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table>
+</section>
 <section id="setup">
 <h2>Connection and naming</h2>
 <p>Follow <a href="cli.html#start">CLI setup</a> for a Helm-installed Milvus/Woodpecker deployment, including access from outside Kubernetes.</p>
@@ -934,6 +985,7 @@
 </tr>
 </table>
 <p>Admin discovery supplies quorum identities; the workstation fans out to each node. Map every target to an accessible admin origin. A working seed connection alone does not establish peer reachability.</p>
+<p>If the metadata namespace is unknown, start with <a href="cli.html#etcd">Raw etcd exploration</a>: list literal keys, narrow the prefix, then inspect a value. Those read-only operations need an etcd connection but no admin endpoint or metadata prefix.</p>
 </section>
 <section id="shared">
 <h2>Shared parameters</h2>

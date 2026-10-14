@@ -15,6 +15,7 @@
 <tr><td>meta-prefix</td><td>Complete etcd namespace configured by the client, for example milvus-prod/woodpecker.</td></tr>
 <tr><td>bucket + root-path</td><td>The physical storage instance. Use both on scan, inspect and probe when automatic discovery cannot locate an empty or unloaded target. The instance data command uses --root.</td></tr></table>
 <p>Admin discovery supplies quorum identities; the workstation fans out to each node. Map every target to an accessible admin origin. A working seed connection alone does not establish peer reachability.</p>
+<p>If the metadata namespace is unknown, start with <a href="cli.html#etcd">Raw etcd exploration</a>: list literal keys, narrow the prefix, then inspect a value. Those read-only operations need an etcd connection but no admin endpoint or metadata prefix.</p>
 </section>
 <section id="shared">
 <h2>Shared parameters</h2>

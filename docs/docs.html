@@ -613,6 +613,7 @@
 <a class="sidebar-link" data-page="operations-cli-log" href="#operations-cli-log" onclick="showPage('operations-cli-log',this)">Log progress &amp; coverage</a>
 <a class="sidebar-link" data-page="operations-cli-segment" href="#operations-cli-segment" onclick="showPage('operations-cli-segment',this)">Segment diagnosis</a>
 <a class="sidebar-link" data-page="operations-cli-marking" href="#operations-cli-marking" onclick="showPage('operations-cli-marking',this)">Compacted-mark distribution</a>
+<a class="sidebar-link" data-page="operations-cli-etcd" href="#operations-cli-etcd" onclick="showPage('operations-cli-etcd',this)">Raw etcd exploration</a>
 </div>
         <a class="sidebar-link" data-page="operations-scenarios" href="#operations-scenarios" onclick="showPage('operations-scenarios',this)">Troubleshooting</a>
 <!-- INCIDENT SCENARIO NAV --><div class="sidebar-subitems" aria-label="Troubleshooting scenarios"><a class="sidebar-link" data-page="operations-scenarios-read" href="#operations-scenarios-read" onclick="showPage('operations-scenarios-read',this)">Read Stalls</a>
@@ -643,12 +644,12 @@
 
 <!-- BEGIN OPERATIONS CONTENT -->
 <div class="doc-page ops-page" id="page-operations-cli">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & coverage</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & coverage</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
 <section id="ops-cli-overview">
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">17 top-level commands/groups · 57 executable operations</span>
+<span class="badge">18 top-level commands/groups · 60 executable operations</span>
 </p>
 <p>
 <a href="#operations-cli-local/start">New to wp? Start with installation, connection setup and your first commands →</a>
@@ -711,6 +712,10 @@
 <a href="#operations-cli-marking">
 <strong>Compacted-mark distribution</strong>
 <span>marking</span>
+</a>
+<a href="#operations-cli-etcd">
+<strong>Raw etcd exploration</strong>
+<span>etcd</span>
 </a>
 </nav>
 </section>
@@ -1558,6 +1563,53 @@
 </tbody>
 </table></div>
 </section>
+<section class="ops-quick-section" id="ops-cli-quick-etcd">
+<h2>Raw etcd exploration · quick lookup</h2>
+<div class="ops-table-wrap"><table class="doc-table ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp etcd</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-etcd/etcd-cat">
+<code>wp etcd cat</code>
+</a>
+</td>
+<td>Print only one key&#x27;s value; use --encoding raw for exact bytes</td>
+<td>
+<code>&lt;key&gt;</code>: Exact raw etcd key</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-etcd/etcd-get">
+<code>wp etcd get</code>
+</a>
+</td>
+<td>Show one exact key, revisions, lease and encoded value</td>
+<td>
+<code>&lt;key&gt;</code>: Exact raw etcd key</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-etcd/etcd-list">
+<code>wp etcd list</code>
+</a>
+</td>
+<td>List raw keys by literal prefix; omit prefix to explore all keys</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table></div>
+</section>
 <section id="ops-cli-setup">
 <h2>Connection and naming</h2>
 <p>Follow <a href="#operations-cli-local/start">CLI setup</a> for a Helm-installed Milvus/Woodpecker deployment, including access from outside Kubernetes.</p>
@@ -1580,6 +1632,7 @@
 </tr>
 </table></div>
 <p>Admin discovery supplies quorum identities; the workstation fans out to each node. Map every target to an accessible admin origin. A working seed connection alone does not establish peer reachability.</p>
+<p>If the metadata namespace is unknown, start with <a href="#operations-cli-etcd">Raw etcd exploration</a>: list literal keys, narrow the prefix, then inspect a value. Those read-only operations need an etcd connection but no admin endpoint or metadata prefix.</p>
 </section>
 <section id="ops-cli-shared">
 <h2>Shared parameters</h2>
@@ -1702,7 +1755,7 @@
 
 </div>
 <div class="doc-page ops-page" id="page-operations-cli-local">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-local/start">0. Install wp</a><a href="#operations-cli-local/external-access">1. Connect to the Helm deployment</a><a href="#operations-cli-local/cli-yaml">2. Save the connection in cli.yaml</a><a href="#operations-cli-local/shell-functions">3. Run without cli.yaml, or add shortcuts</a><a href="#operations-cli-local/etcd-connection">4. Supply etcd parameters for metadata queries</a><a href="#operations-cli-local/first-run">5. Check the connection and interpret the result</a><a href="#operations-cli-local/completion-bash">wp completion bash</a><a href="#operations-cli-local/completion-fish">wp completion fish</a><a href="#operations-cli-local/completion-powershell">wp completion powershell</a><a href="#operations-cli-local/completion-zsh">wp completion zsh</a><a href="#operations-cli-local/ctx-list">wp ctx list</a><a href="#operations-cli-local/ctx-use">wp ctx use</a><a href="#operations-cli-local/ctx-view">wp ctx view</a><a href="#operations-cli-local/version">wp version</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-local/start">0. Install wp</a><a href="#operations-cli-local/external-access">1. Connect to the Helm deployment</a><a href="#operations-cli-local/cli-yaml">2. Save the connection in cli.yaml</a><a href="#operations-cli-local/shell-functions">3. Run without cli.yaml, or add shortcuts</a><a href="#operations-cli-local/etcd-connection">4. Configure etcd for metadata queries</a><a href="#operations-cli-local/first-run">5. Check the connection and interpret the result</a><a href="#operations-cli-local/completion-bash">wp completion bash</a><a href="#operations-cli-local/completion-fish">wp completion fish</a><a href="#operations-cli-local/completion-powershell">wp completion powershell</a><a href="#operations-cli-local/completion-zsh">wp completion zsh</a><a href="#operations-cli-local/ctx-list">wp ctx list</a><a href="#operations-cli-local/ctx-use">wp ctx use</a><a href="#operations-cli-local/ctx-view">wp ctx view</a><a href="#operations-cli-local/version">wp version</a></nav></details></aside>
 <p class="small"><a href="#operations-cli">CLI Handbook overview</a> / CLI setup</p><h1>CLI setup</h1><p class="page-desc">Configure wp and run your first commands from outside Kubernetes.</p><section id="ops-cli-local-topic-local">
 
 <h2 id="ops-cli-local-start">0. Install wp</h2>
@@ -1738,7 +1791,7 @@ kubectl -n milvus get pods -o wide</code></pre></div></div>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>kubectl -n milvus port-forward pod/milvus-woodpecker-0 19091:9091
 kubectl -n milvus port-forward pod/milvus-woodpecker-1 29091:9091
 kubectl -n milvus port-forward pod/milvus-woodpecker-2 39091:9091
-# Needed only when querying coordinator metadata:
+# Needed when querying coordinator metadata or raw etcd keys:
 kubectl -n milvus port-forward pod/milvus-etcd-0 32379:2379</code></pre></div></div>
 <p>The seed discovers membership; it does not proxy other nodes. Inspect the advertised node IDs/addresses, then map every node you need to reach:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp cluster info --endpoint http://127.0.0.1:19091</code></pre></div></div>
@@ -1755,7 +1808,12 @@ contexts:
       milvus-woodpecker-2: http://127.0.0.1:39091
     k8s:
       namespace: milvus
-      kubeconfig: /path/to/your/kubeconfig</code></pre></div></div>
+      kubeconfig: /path/to/your/kubeconfig
+    # Current source builds; v0.1.46 uses explicit etcd flags instead.
+    etcd:
+      endpoints:
+        - 127.0.0.1:32379
+      meta_prefix: milvus-prod/woodpecker</code></pre></div></div>
 <p>
 <code>endpoint</code> is the admin seed. <code>node_admin_urls</code> maps discovered node IDs or advertised service addresses to reachable admin origins. <code>current-context</code> selects milvus-prod when --context is omitted:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp node list
@@ -1791,9 +1849,11 @@ w node list
 w cluster health</code></pre></div></div>
 <p>source defines the functions in the current shell. w forwards arguments to wp and selects milvus-prod for each invocation; it does not change current-context in the file.</p>
 </details>
-<h2 id="ops-cli-local-etcd-connection">4. Supply etcd parameters for metadata queries</h2>
+<h2 id="ops-cli-local-etcd-connection">4. Configure etcd for metadata queries</h2>
 <p>
-<strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Pass the parameters on metadata-consuming commands. Do not add an etcd block to that release's config and expect it to take effect.</p>
+<strong>Current source builds support the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
+<p>
+<strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Use the explicit flags below on that release, or to override a context for one invocation:</p>
 <div class="ops-table-wrap"><table class="doc-table ">
 <tr>
 <th>Parameters</th>
@@ -1824,7 +1884,7 @@ w cluster health</code></pre></div></div>
 <td>Minimum TLS version: 1.0, 1.1, 1.2 or 1.3.</td>
 </tr>
 </table></div>
-<p>For example, inspect registrations for a real Milvus log name:</p>
+<p>For example, inspect registrations for a real Milvus log name using explicit connection settings:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp log readers my-channel \
   --etcd 127.0.0.1:32379 \
   --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -1835,7 +1895,11 @@ w cluster health</code></pre></div></div>
 </tr>
 <tr>
 <td>log readers, log scan, log skip-range; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td>
-<td>Yes: they look up log/segment/quorum or operational metadata. Provide endpoint and full prefix.</td>
+<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery.</td>
+</tr>
+<tr>
+<td>etcd list/get/cat (current source builds)</td>
+<td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="#operations-cli-etcd">Raw etcd exploration</a>.</td>
 </tr>
 <tr>
 <td>cluster, node, config, env, logging, profile, ops, metrics, instance; other node-local logstore commands</td>
@@ -1854,7 +1918,16 @@ w cluster health</code></pre></div></div>
   --etcd-cacert /path/to/ca.crt \
   --etcd-cert /path/to/client.crt --etcd-key /path/to/client.key \
   --etcd-tls-min-version 1.2</code></pre></div></div>
-<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. Use the explicit etcd flags supported by your CLI build.</p>
+<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. Current source builds also support these optional context fields under <code>etcd</code>:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>username: operator
+password: YOUR_PASSWORD
+tls_enabled: true
+cacert: /path/to/ca.crt
+# cert/key are a pair, required only for mutual TLS:
+cert: /path/to/client.crt
+key: /path/to/client.key
+tls_min_version: "1.2"</code></pre></div></div>
+<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit certificate flags enable TLS even if the context disables it. <code>ctx view</code> shows configured etcd endpoints, prefix, TLS mode and username when endpoints are configured; it does not print the password or test the connection.</p>
 </details>
 <h2 id="ops-cli-local-first-run">5. Check the connection and interpret the result</h2>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp ctx list
@@ -1875,7 +1948,7 @@ milvus-woodpecker-2    active  OK
 Cluster Health: YELLOW
   active: 3  decommissioning: 0  unreachable: 0
   - zero redundancy (active == N)</code></pre></div></div>
-<p>The star marks the saved default context; ctx view shows resolved basic admin settings. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
+<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on current source builds, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
 <article class="command" data-command-anchor="completion-bash" id="ops-cli-local-completion-bash">
 <h2>wp completion bash</h2>
@@ -3952,15 +4025,15 @@ Usage:
   wp logstore fence-quorum &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
   -h, --help                          help for fence-quorum
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --nodes strings                 Fence only these quorum members (default: every node in the quorum)
       --reason string                 Reason for fencing (required)
   -y, --yes                           Skip confirmation</code></pre></div></div>
@@ -4083,15 +4156,15 @@ Usage:
   wp logstore lac &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
   -h, --help                          help for lac
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code></pre></div></div>
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="logstore-segment-show" id="ops-cli-logstore-logstore-segment-show">
@@ -4300,15 +4373,15 @@ Usage:
   wp log readers &lt;logName&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
   -h, --help                          help for readers
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code></pre></div></div>
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="log-scan" id="ops-cli-log-log-scan">
@@ -4377,16 +4450,16 @@ Usage:
 
 Flags:
       --bucket string                 Storage bucket; pair with --root-path to locate unloaded or empty segments
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --from-segment int              First segment to scan
   -h, --help                          help for scan
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --mode string                   quick reads only structure and metadata; raw reads the data through the real checksums (default &quot;quick&quot;)
       --root-path string              Storage instance root path; pair with --bucket
       --to-segment int                Last segment to scan (default: the newest) (default -1)</code></pre></div></div>
@@ -4460,17 +4533,17 @@ Usage:
   wp log skip-range add &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --force                         Declare the range even though a replica can still read part of it
       --from-entry int                First entry to skip (inclusive) (default -1)
   -h, --help                          help for add
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --reason string                 Why these entries are being given up (required)
       --to-entry int                  Last entry to skip (inclusive) (default -1)
   -y, --yes                           Proceed without the confirmation prompt</code></pre></div></div>
@@ -4505,15 +4578,15 @@ Usage:
   wp log skip-range list [logName] [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
   -h, --help                          help for list
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code></pre></div></div>
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="log-skip-range-remove" id="ops-cli-log-log-skip-range-remove">
@@ -4573,17 +4646,17 @@ Usage:
   wp log skip-range remove &lt;logName&gt; &lt;segmentId&gt; | --log-id N &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --from-entry int                First entry of the range to withdraw (inclusive) (default -1)
   -h, --help                          help for remove
       --log-id int                    Withdraw by log id instead of name, for a range whose log has been deleted (default -1)
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --to-entry int                  Last entry of the range to withdraw (inclusive) (default -1)</code></pre></div></div>
 </details>
 </article>
@@ -4653,17 +4726,17 @@ Usage:
 
 Flags:
       --bucket string                 Storage bucket; pair with --root-path (otherwise discovered on each node)
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --from-block int                First block to walk (default: the start of the segment)
   -h, --help                          help for inspect
       --max-blocks int                Stop after this many blocks per node (default: the node&#x27;s own bound)
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --root-path string              Storage instance root path; pair with --bucket</code></pre></div></div>
 </details>
 </article>
@@ -4725,17 +4798,17 @@ Usage:
 
 Flags:
       --bucket string                 Storage bucket; pair with --root-path (otherwise discovered on each node)
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --from-entry int                Entry to read from (default: the start of the segment)
   -h, --help                          help for probe
       --max-entries int               Stop after this many entries per node (default: the node&#x27;s own bound)
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --root-path string              Storage instance root path; pair with --bucket</code></pre></div></div>
 </details>
 </article>
@@ -4793,16 +4866,16 @@ Usage:
   wp marking confirm &lt;logId&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --force                         confirm (transition to OPERATOR_CONFIRMED) even if the record is not PENDING_MANUAL; IN_PROGRESS/COMPLETED are normally managed automatically
   -h, --help                          help for confirm
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code></pre></div></div>
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="marking-list" id="ops-cli-marking-marking-list">
@@ -4851,16 +4924,276 @@ Usage:
 
 Flags:
       --all-states                    include IN_PROGRESS and COMPLETED records, not just PENDING_MANUAL
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
   -h, --help                          help for list
       --log int                       restrict to one log id (default: all logs)
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code></pre></div></div>
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+</details>
+</article>
+</section>
+
+</div>
+<div class="doc-page ops-page" id="page-operations-cli-etcd">
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-etcd/discover">1. Discover keys before choosing a metadata prefix</a><a href="#operations-cli-etcd/values">2. Inspect a key and understand its value</a><a href="#operations-cli-etcd/pagination">3. Continue a listing at the same snapshot</a><a href="#operations-cli-etcd/context">4. Save an etcd-only context</a><a href="#operations-cli-etcd/etcd-cat">wp etcd cat</a><a href="#operations-cli-etcd/etcd-get">wp etcd get</a><a href="#operations-cli-etcd/etcd-list">wp etcd list</a></nav></details></aside>
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Raw etcd exploration</p><h1>Raw etcd exploration</h1><p class="page-desc">Discover namespaces and inspect exact raw keys, revisions and values without writing etcd.</p><section id="ops-cli-etcd-topic-etcd">
+
+<h2 id="ops-cli-etcd-discover">1. Discover keys before choosing a metadata prefix</h2>
+<p>This command group is available in current source builds and is not included in released v0.1.46. Build the current checkout and confirm <code>wp etcd --help</code> before using these examples.</p>
+<p>Use this read-only group when you can reach etcd but do not yet know the Woodpecker namespace. It connects directly to etcd: no Woodpecker admin endpoint, node mapping or metadata prefix is required. Supply a reachable endpoint, or save it in a context as shown below.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Omit the prefix to explore all keys (first page only).
+wp etcd list --etcd 127.0.0.1:32379 --limit 20
+# Narrow the listing using an actual prefix found in that output.
+wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20</code></pre></div></div>
+<p>Illustrative excerpt:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>KEY                              MOD_REV  VERSION  LEASE
+milvus-prod/woodpecker/version    90       1        0
+
+1 keys shown; snapshot revision 105; more=false</code></pre></div></div>
+<p>A prefix is literal: <code>list /</code> lists only keys starting with a slash; it does not mean all keys. Empty results mean no matching keys in this snapshot, not an unhealthy cluster. A connection or permission error means the listing could not be established. This group never prepends the context's <code>etcd.meta_prefix</code>.</p>
+<h2 id="ops-cli-etcd-values">2. Inspect a key and understand its value</h2>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd get milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 -o json
+wp etcd cat milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 --encoding base64</code></pre></div></div>
+<div class="ops-table-wrap"><table class="doc-table ">
+<tr>
+<th>Operation / option</th>
+<th>What you get</th>
+</tr>
+<tr>
+<td>get; -o json / -o yaml</td>
+<td>Exact key, key revision, lease, snapshot revision, encoding and value. Default get output is JSON.</td>
+</tr>
+<tr>
+<td>cat</td>
+<td>The value alone. It is useful for piping or saving a single value.</td>
+</tr>
+<tr>
+<td>--encoding auto</td>
+<td>Readable UTF-8 text is printed as text; binary/control-byte content becomes base64. get reports the selected value_encoding; cat prints a base64 notice on stderr.</td>
+</tr>
+<tr>
+<td>--encoding text / base64 / hex</td>
+<td>Choose the representation explicitly. text rejects invalid UTF-8. Protobuf bytes do not become decoded metadata simply by selecting text.</td>
+</tr>
+<tr>
+<td>cat --encoding raw</td>
+<td>Exact original bytes, without an appended newline. Redirect to a file rather than displaying binary content in a terminal.</td>
+</tr>
+</table></div>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd cat milvus-prod/woodpecker/version \
+  --etcd 127.0.0.1:32379 --encoding raw &gt; /tmp/wp-version.pb</code></pre></div></div>
+<p>A TargetNotFound result means that exact key is absent at the requested snapshot. Base64 is a reversible byte representation, not evidence of damaged data. This raw group does not decode, patch or restore metadata; the file above preserves one value, not a complete etcd backup.</p>
+<h2 id="ops-cli-etcd-pagination">3. Continue a listing at the same snapshot</h2>
+<p>Use JSON output for pagination. When <code>more</code> is true, copy <code>next_key_base64</code> and <code>snapshot_revision</code> from that response into the next request, keeping the same prefix:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json
+
+# Replace these placeholders with the returned cursor and snapshot revision.
+wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json \
+  --after-key-base64 'CURSOR_FROM_PREVIOUS_RESPONSE' --revision 105</code></pre></div></div>
+<p>Repeat until <code>more=false</code>. The base64 cursor preserves binary keys. The <code>keys</code> array contains this page; <code>count</code> describes matching keys remaining in the queried range, so it can exceed the page length. <code>--after-key</code> is an alternative for ordinary text keys; never combine it with <code>--after-key-base64</code>.</p>
+<p>Use <code>--revision</code> on get/cat too when comparing values with a listing. If etcd has compacted that revision, restart the listing at a new snapshot; do not silently mix pages from different revisions.</p>
+<h2 id="ops-cli-etcd-context">4. Save an etcd-only context</h2>
+<p>Save the endpoint once for this command group. Select the file using the locations described in <a href="#operations-cli-local/cli-yaml">CLI setup</a>.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>current-context: raw-etcd
+contexts:
+  raw-etcd:
+    etcd:
+      endpoints:
+        - 127.0.0.1:32379</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context raw-etcd etcd list --limit 20
+wp --context raw-etcd etcd get milvus-prod/woodpecker/version</code></pre></div></div>
+<p>Add the context's authentication/TLS fields or their command-flag equivalents when etcd requires them; see <a href="#operations-cli-local/etcd-connection">etcd connection settings</a>. Explicit flags override context settings for one invocation. Raw etcd operations never discover a connection through a Woodpecker node.</p>
+<article class="command" data-command-anchor="etcd-cat" id="ops-cli-etcd-etcd-cat">
+<h2>wp etcd cat</h2>
+<p>Print only one key&#x27;s value; use --encoding raw for exact bytes</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd cat &lt;key&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--encoding string</code>
+</td>
+<td>Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--revision int</code>
+</td>
+<td>Read at this etcd revision (0: latest)</td>
+</tr>
+</tbody>
+</table></div>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd cat milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 --encoding base64</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>CAEQACAu
+# Encoded value only; binary auto output also explains its encoding on stderr.</code></pre></div></div>
+<p>cat writes the value without an envelope. auto/text/base64/hex output ends with a newline; --encoding raw preserves exact bytes and adds none. Redirect raw output to a file for byte-exact inspection. Neither cat nor get changes the key.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: Usage: value is not UTF-8; use --encoding base64, hex or raw
+# Only cat supports --encoding raw.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Print only one key&#x27;s value; use --encoding raw for exact bytes
+
+Usage:
+  wp etcd cat &lt;key&gt; [flags]
+
+Flags:
+      --encoding string               Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for cat
+      --revision int                  Read at this etcd revision (0: latest)</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="etcd-get" id="ops-cli-etcd-etcd-get">
+<h2>wp etcd get</h2>
+<p>Show one exact key, revisions, lease and encoded value</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd get &lt;key&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--encoding string</code>
+</td>
+<td>Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--revision int</code>
+</td>
+<td>Read at this etcd revision (0: latest)</td>
+</tr>
+</tbody>
+</table></div>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd get milvus-prod/woodpecker/version --etcd 127.0.0.1:32379</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{&quot;key&quot;:{&quot;key&quot;:&quot;milvus-prod/woodpecker/version&quot;,&quot;mod_revision&quot;:90,&quot;lease&quot;:0,...},&quot;snapshot_revision&quot;:105,&quot;value_encoding&quot;:&quot;base64&quot;,&quot;value&quot;:&quot;CAEQACAu&quot;}</code></pre></div></div>
+<p>get reads one exact key and returns key metadata plus an encoded value. auto keeps readable UTF-8 text and base64-encodes binary protobuf data; this command does not decode Woodpecker protobuf fields. Use --revision to read a retained historical snapshot and -o yaml for YAML.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: TargetNotFound: milvus-prod/woodpecker/missing-key</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Show one exact key, revisions, lease and encoded value
+
+Usage:
+  wp etcd get &lt;key&gt; [flags]
+
+Flags:
+      --encoding string               Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for get
+      --revision int                  Read at this etcd revision (0: latest)</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="etcd-list" id="ops-cli-etcd-etcd-list">
+<h2>wp etcd list</h2>
+<p>List raw keys by literal prefix; omit prefix to explore all keys</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd list [prefix] [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--after-key string</code>
+</td>
+<td>Exclusive page start; use the previous response&#x27;s next_key</td>
+</tr>
+<tr>
+<td>
+<code>--after-key-base64 string</code>
+</td>
+<td>Exclusive page start from next_key_base64; preserves binary keys</td>
+</tr>
+<tr>
+<td>
+<code>--limit int</code>
+</td>
+<td>Maximum keys per page (default 100)</td>
+</tr>
+<tr>
+<td>
+<code>--revision int</code>
+</td>
+<td>Read at this etcd snapshot revision (0: latest)</td>
+</tr>
+</tbody>
+</table></div>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{&quot;prefix&quot;:&quot;milvus-prod/&quot;,&quot;snapshot_revision&quot;:105,&quot;count&quot;:1,&quot;more&quot;:false,&quot;keys&quot;:[{&quot;key&quot;:&quot;milvus-prod/woodpecker/version&quot;,&quot;mod_revision&quot;:90,...}]}</code></pre></div></div>
+<p>Omit the prefix to explore all keys; list / searches only keys beginning with /. The limit controls page size, not the total count. When more=true, use the returned next_key_base64 and the same snapshot_revision for the next page. The context meta_prefix is never prepended.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: Usage: --after-key and --after-key-base64 are mutually exclusive
+# A compacted --revision instead produces a Network error.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>List raw keys by literal prefix; omit prefix to explore all keys
+
+Usage:
+  wp etcd list [prefix] [flags]
+
+Flags:
+      --after-key string              Exclusive page start; use the previous response&#x27;s next_key
+      --after-key-base64 string       Exclusive page start from next_key_base64; preserves binary keys
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for list
+      --limit int                     Maximum keys per page (default 100)
+      --revision int                  Read at this etcd snapshot revision (0: latest)</code></pre></div></div>
 </details>
 </article>
 </section>
@@ -4915,6 +5248,7 @@ export WP_DATA_ROOT=milvus/wp
 w() { wp --context "$WP_CONTEXT" "$@"; }
 wm() { w "$@" --etcd "$WP_ETCD" --meta-prefix "$WP_META_PREFIX"; }</code></pre></div></div>
 <p>Use w for admin-only operations and wm for commands that consume coordinator metadata. Add the authentication/TLS parameters from CLI setup to wm when required. Node URLs/mappings come from the selected context. Output below is illustrative and abbreviated; adapt positions to your actual evidence.</p>
+<p>Current source builds can also save etcd settings in the selected context. The explicit flags in wm override that context for each invocation, which is useful when switching between different metadata namespaces.</p>
 </details>
 
 <h2 id="ops-scenarios-read-readers">1. Observe the reader twice</h2>
@@ -5017,6 +5351,7 @@ export WP_DATA_ROOT=milvus/wp
 w() { wp --context "$WP_CONTEXT" "$@"; }
 wm() { w "$@" --etcd "$WP_ETCD" --meta-prefix "$WP_META_PREFIX"; }</code></pre></div></div>
 <p>Use w for admin-only operations and wm for commands that consume coordinator metadata. Add the authentication/TLS parameters from CLI setup to wm when required. Node URLs/mappings come from the selected context. Output below is illustrative and abbreviated; adapt positions to your actual evidence.</p>
+<p>Current source builds can also save etcd settings in the selected context. The explicit flags in wm override that context for each invocation, which is useful when switching between different metadata namespaces.</p>
 </details>
 
 <h2 id="ops-scenarios-write-submission">1. Confirm activity and reachability</h2>
@@ -5123,6 +5458,7 @@ export WP_DATA_ROOT=milvus/wp
 w() { wp --context "$WP_CONTEXT" "$@"; }
 wm() { w "$@" --etcd "$WP_ETCD" --meta-prefix "$WP_META_PREFIX"; }</code></pre></div></div>
 <p>Use w for admin-only operations and wm for commands that consume coordinator metadata. Add the authentication/TLS parameters from CLI setup to wm when required. Node URLs/mappings come from the selected context. Output below is illustrative and abbreviated; adapt positions to your actual evidence.</p>
+<p>Current source builds can also save etcd settings in the selected context. The explicit flags in wm override that context for each invocation, which is useful when switching between different metadata namespaces.</p>
 </details>
 
 <h2 id="ops-scenarios-corruption-preserve">1. Preserve evidence</h2>

@@ -113,8 +113,9 @@ def main():
     for category in GROUPS:
         match = re.search('<section id="topic-' + category + '">.*?</section>', sections, re.S)
         category_content = match.group(0)
-        if category == 'local':
-            category_content = category_content.replace('</h2>', '</h2>' + (HERE / '_setup.html').read_text(), 1)
+        if category in ['local', 'etcd']:
+            intro_file = '_setup.html' if category == 'local' else '_etcd.html'
+            category_content = category_content.replace('</h2>', '</h2>' + (HERE / intro_file).read_text(), 1)
         (HERE / ('_cli-' + category + '.html')).write_text(re.sub('>\\s*<', '>\n<', category_content) + '\n')
     overview_end = introduction.index('</section>') + len('</section>')
     (HERE / '_cli.html').write_text(re.sub('>\\s*<', '>\n<', introduction[:overview_end] + lookup + introduction[overview_end:]).rstrip() + '\n')

@@ -30,7 +30,7 @@ kubectl -n milvus get pods -o wide</code></pre>
 <pre><code>kubectl -n milvus port-forward pod/milvus-woodpecker-0 19091:9091
 kubectl -n milvus port-forward pod/milvus-woodpecker-1 29091:9091
 kubectl -n milvus port-forward pod/milvus-woodpecker-2 39091:9091
-# Needed only when querying coordinator metadata:
+# Needed when querying coordinator metadata or raw etcd keys:
 kubectl -n milvus port-forward pod/milvus-etcd-0 32379:2379</code></pre>
 <p>The seed discovers membership; it does not proxy other nodes. Inspect the advertised node IDs/addresses, then map every node you need to reach:</p>
 <pre><code>wp cluster info --endpoint http://127.0.0.1:19091</code></pre>
@@ -48,7 +48,12 @@ contexts:
       milvus-woodpecker-2: http://127.0.0.1:39091
     k8s:
       namespace: milvus
-      kubeconfig: /path/to/your/kubeconfig</code></pre>
+      kubeconfig: /path/to/your/kubeconfig
+    # Current source builds; v0.1.46 uses explicit etcd flags instead.
+    etcd:
+      endpoints:
+        - 127.0.0.1:32379
+      meta_prefix: milvus-prod/woodpecker</code></pre>
 <p><code>endpoint</code> is the admin seed. <code>node_admin_urls</code> maps discovered node IDs or advertised service addresses to reachable admin origins. <code>current-context</code> selects milvus-prod when --context is omitted:</p>
 <pre><code>wp node list
 wp --context milvus-prod node list</code></pre>
@@ -79,8 +84,9 @@ w node list
 w cluster health</code></pre>
 <p>source defines the functions in the current shell. w forwards arguments to wp and selects milvus-prod for each invocation; it does not change current-context in the file.</p></details>
 
-<h2 id="etcd-connection">4. Supply etcd parameters for metadata queries</h2>
-<p><strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Pass the parameters on metadata-consuming commands. Do not add an etcd block to that release's config and expect it to take effect.</p>
+<h2 id="etcd-connection">4. Configure etcd for metadata queries</h2>
+<p><strong>Current source builds support the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
+<p><strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Use the explicit flags below on that release, or to override a context for one invocation:</p>
 <table><tr><th>Parameters</th><th>Use</th></tr>
 <tr><td>--etcd</td><td>Reachable etcd endpoints; use commas for multiple addresses.</td></tr>
 <tr><td>--meta-prefix</td><td>Complete Woodpecker metadata prefix configured by the Milvus client. The example below uses milvus-prod/woodpecker; use the actual prefix, not an assumed Helm release name.</td></tr>
@@ -88,12 +94,13 @@ w cluster health</code></pre>
 <tr><td>--etcd-cacert</td><td>CA certificate file on the workstation.</td></tr>
 <tr><td>--etcd-cert / --etcd-key</td><td>Workstation client certificate and private-key files.</td></tr>
 <tr><td>--etcd-tls-min-version</td><td>Minimum TLS version: 1.0, 1.1, 1.2 or 1.3.</td></tr></table>
-<p>For example, inspect registrations for a real Milvus log name:</p>
+<p>For example, inspect registrations for a real Milvus log name using explicit connection settings:</p>
 <pre><code>wp log readers my-channel \
   --etcd 127.0.0.1:32379 \
   --meta-prefix milvus-prod/woodpecker</code></pre>
 <table><tr><th>Commands</th><th>Need etcd settings?</th></tr>
-<tr><td>log readers, log scan, log skip-range; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td><td>Yes: they look up log/segment/quorum or operational metadata. Provide endpoint and full prefix.</td></tr>
+<tr><td>log readers, log scan, log skip-range; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td><td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery.</td></tr>
+<tr><td>etcd list/get/cat (current source builds)</td><td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="cli.html#etcd">Raw etcd exploration</a>.</td></tr>
 <tr><td>cluster, node, config, env, logging, profile, ops, metrics, instance; other node-local logstore commands</td><td>No etcd parameters: these use node admin endpoints. Do not append --etcd to commands that do not accept it.</td></tr>
 <tr><td>ctx, completion, version; k8s helpers</td><td>No etcd connection. These use local config/build information or kubectl.</td></tr></table>
 <details class="ops-help"><summary>Authentication/TLS example</summary>
@@ -103,7 +110,16 @@ w cluster health</code></pre>
   --etcd-cacert /path/to/ca.crt \
   --etcd-cert /path/to/client.crt --etcd-key /path/to/client.key \
   --etcd-tls-min-version 1.2</code></pre>
-<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. Use the explicit etcd flags supported by your CLI build.</p></details>
+<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. Current source builds also support these optional context fields under <code>etcd</code>:</p>
+<pre><code>username: operator
+password: YOUR_PASSWORD
+tls_enabled: true
+cacert: /path/to/ca.crt
+# cert/key are a pair, required only for mutual TLS:
+cert: /path/to/client.crt
+key: /path/to/client.key
+tls_min_version: "1.2"</code></pre>
+<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit certificate flags enable TLS even if the context disables it. <code>ctx view</code> shows configured etcd endpoints, prefix, TLS mode and username when endpoints are configured; it does not print the password or test the connection.</p></details>
 
 <h2 id="first-run">5. Check the connection and interpret the result</h2>
 <pre><code>wp ctx list
@@ -124,5 +140,5 @@ milvus-woodpecker-2    active  OK
 Cluster Health: YELLOW
   active: 3  decommissioning: 0  unreachable: 0
   - zero redundancy (active == N)</code></pre>
-<p>The star marks the saved default context; ctx view shows resolved basic admin settings. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
+<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on current source builds, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>

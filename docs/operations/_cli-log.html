@@ -35,15 +35,15 @@ Usage:
   wp log readers &lt;logName&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
   -h, --help                          help for readers
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code>
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
 </pre>
 </details>
 </article>
@@ -122,16 +122,16 @@ Usage:
 
 Flags:
       --bucket string                 Storage bucket; pair with --root-path to locate unloaded or empty segments
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --from-segment int              First segment to scan
   -h, --help                          help for scan
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --mode string                   quick reads only structure and metadata; raw reads the data through the real checksums (default &quot;quick&quot;)
       --root-path string              Storage instance root path; pair with --bucket
       --to-segment int                Last segment to scan (default: the newest) (default -1)</code>
@@ -215,17 +215,17 @@ Usage:
   wp log skip-range add &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --force                         Declare the range even though a replica can still read part of it
       --from-entry int                First entry to skip (inclusive) (default -1)
   -h, --help                          help for add
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --reason string                 Why these entries are being given up (required)
       --to-entry int                  Last entry to skip (inclusive) (default -1)
   -y, --yes                           Proceed without the confirmation prompt</code>
@@ -270,15 +270,15 @@ Usage:
   wp log skip-range list [logName] [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
   -h, --help                          help for list
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)</code>
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
 </pre>
 </details>
 </article>
@@ -348,17 +348,17 @@ Usage:
   wp log skip-range remove &lt;logName&gt; &lt;segmentId&gt; | --log-id N &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --from-entry int                First entry of the range to withdraw (inclusive) (default -1)
   -h, --help                          help for remove
       --log-id int                    Withdraw by log id instead of name, for a range whose log has been deleted (default -1)
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --to-entry int                  Last entry of the range to withdraw (inclusive) (default -1)</code>
 </pre>
 </details>

@@ -13,4 +13,5 @@ export WP_DATA_ROOT=milvus/wp
 w() { wp --context "$WP_CONTEXT" "$@"; }
 wm() { w "$@" --etcd "$WP_ETCD" --meta-prefix "$WP_META_PREFIX"; }</code></pre>
 <p>Use w for admin-only operations and wm for commands that consume coordinator metadata. Add the authentication/TLS parameters from CLI setup to wm when required. Node URLs/mappings come from the selected context. Output below is illustrative and abbreviated; adapt positions to your actual evidence.</p>
+<p>Current source builds can also save etcd settings in the selected context. The explicit flags in wm override that context for each invocation, which is useful when switching between different metadata namespaces.</p>
 </details>

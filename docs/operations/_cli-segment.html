@@ -68,17 +68,17 @@ Usage:
 
 Flags:
       --bucket string                 Storage bucket; pair with --root-path (otherwise discovered on each node)
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --from-block int                First block to walk (default: the start of the segment)
   -h, --help                          help for inspect
       --max-blocks int                Stop after this many blocks per node (default: the node&#x27;s own bound)
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --root-path string              Storage instance root path; pair with --bucket</code>
 </pre>
 </details>
@@ -150,17 +150,17 @@ Usage:
 
 Flags:
       --bucket string                 Storage bucket; pair with --root-path (otherwise discovered on each node)
-      --etcd string                   etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this
-      --etcd-cacert string            etcd TLS CA cert file; default: discovered
-      --etcd-cert string              etcd TLS client cert file; default: discovered (server-side path, valid in-pod)
-      --etcd-key string               etcd TLS client key file; default: discovered
-      --etcd-password string          etcd auth password; default: discovered
-      --etcd-tls-min-version string   etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered
-      --etcd-username string          etcd auth username; default: discovered
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
       --from-entry int                Entry to read from (default: the start of the segment)
   -h, --help                          help for probe
       --max-entries int               Stop after this many entries per node (default: the node&#x27;s own bound)
-      --meta-prefix string            metadata key prefix; default: discovered from a node&#x27;s /admin/config (etcd.rootPath + woodpecker.meta.prefix)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --root-path string              Storage instance root path; pair with --bucket</code>
 </pre>
 </details>

@@ -99,5 +99,12 @@
       "marking"
     ],
     "purpose": "Inspect notification records and settle verified manual mark-distribution cases."
+  },
+  "etcd": {
+    "title": "Raw etcd exploration",
+    "groups": [
+      "etcd"
+    ],
+    "purpose": "Discover namespaces and inspect exact raw keys, revisions and values without writing etcd."
   }
 }

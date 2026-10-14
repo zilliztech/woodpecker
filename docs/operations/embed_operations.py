@@ -56,8 +56,7 @@ def fragment(kind):
     if kind.startswith('cli-'):
         entries = re.findall('<article class="command"[^>]*id="([^"]+)"[^>]*>\\s*<h2>(.*?)</h2>', content, re.S)
         navigation = [(a, re.sub('<[^>]*>', '', label)) for (a, label) in entries]
-        if category == 'local':
-            navigation = [(a, re.sub('<[^>]*>', '', label)) for (a, label) in re.findall('<h2 id="([^"]+)">(.*?)</h2>', content, re.S)] + navigation
+        navigation = [(a, re.sub('<[^>]*>', '', label)) for (a, label) in re.findall('<h2 id="([^"]+)">(.*?)</h2>', content, re.S)] + navigation
     elif kind == 'cli':
         navigation = [('overview', 'Overview'), ('command-lookup', 'Quick lookup')] + [('quick-' + c, t) for (c, t) in CATEGORIES.items()] + [('setup', 'Connection & naming'), ('shared', 'Shared parameters'), ('repair-format', 'Patch format'), ('metrics-limits', 'Metrics limits'), ('exit-codes', 'Exit codes')]
     else:
