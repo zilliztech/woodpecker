@@ -358,5 +358,71 @@
     "CAEQACAu\n# Encoded value only; binary auto output also explains its encoding on stderr.",
     "Error: Usage: value is not UTF-8; use --encoding base64, hex or raw\n# Only cat supports --encoding raw.",
     "cat writes the value without an envelope. auto/text/base64/hex output ends with a newline; --encoding raw preserves exact bytes and adds none. Redirect raw output to a file for byte-exact inspection. Neither cat nor get changes the key."
+  ],
+  "meta log list": [
+    "wp meta log list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"prefix\": \"milvus-prod/woodpecker\",\n  \"snapshot_revision\": 18000,\n  \"records\": [\n    {\n      \"kind\": \"log\",\n      \"key\": \"milvus-prod/woodpecker/logs/my-channel\",\n      \"revision\": 17099,\n      \"lease\": 0,\n      \"metadata\": {\n        \"logId\": \"42\",\n        \"truncated_segment_id\": \"6\",\n        \"truncated_entry_id\": \"99\"\n      }\n    }\n  ]\n}",
+    "# records: [] means this listing has no matching records.\n# An undecodable record instead returns a configuration error.",
+    "Lists top-level log records, including unloaded history. records is a snapshot, not a list of live node writers. Narrow with meta log show; use the record revision for a patch."
+  ],
+  "meta log show": [
+    "wp meta log show my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"kind\": \"log\",\n  \"key\": \"milvus-prod/woodpecker/logs/my-channel\",\n  \"revision\": 17099,\n  \"lease\": 0,\n  \"metadata\": {\n    \"logId\": \"42\",\n    \"truncated_segment_id\": \"6\",\n    \"truncated_entry_id\": \"99\"\n  }\n}",
+    "Error: TargetNotFound: target not found: milvus-prod/woodpecker/logs/my-channel",
+    "Shows the exact log key, ModRevision, lease and decoded fields. int64 values are decimal strings. A missing target means the key is absent in this namespace, not a damaged replica. Log truncation fields are changed with log truncate, not generic patch."
+  ],
+  "meta segment list": [
+    "wp meta segment list my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"prefix\": \"milvus-prod/woodpecker\",\n  \"snapshot_revision\": 18000,\n  \"records\": [\n    {\n      \"kind\": \"segment\",\n      \"key\": \"milvus-prod/woodpecker/logs/my-channel/segments/7\",\n      \"revision\": 174,\n      \"lease\": 0,\n      \"metadata\": {\n        \"segNo\": \"7\",\n        \"lastEntryId\": \"99\",\n        \"state\": \"Completed\"\n      }\n    }\n  ]\n}",
+    "# records: [] means this listing has no matching records.\n# An undecodable record instead returns a configuration error.",
+    "Lists persisted segments under this exact log, including unloaded history. The parent log must exist. State and lastEntryId are metadata claims; probe/inspect physical data separately."
+  ],
+  "meta segment show": [
+    "wp meta segment show my-channel 7 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"kind\": \"segment\",\n  \"key\": \"milvus-prod/woodpecker/logs/my-channel/segments/7\",\n  \"revision\": 174,\n  \"lease\": 0,\n  \"metadata\": {\n    \"segNo\": \"7\",\n    \"lastEntryId\": \"99\",\n    \"state\": \"Completed\"\n  }\n}",
+    "Error: TargetNotFound: target not found: milvus-prod/woodpecker/logs/my-channel/segments/7",
+    "Shows authoritative persisted metadata and its embedded quorum when present. Active lastEntryId=-1 is an unknown final boundary; Completed/Sealed lastEntryId=-1 means finalized empty. A key/segNo mismatch blocks patching. This read does not verify local or object-storage payloads."
+  ],
+  "meta quorum list": [
+    "wp meta quorum list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"prefix\": \"milvus-prod/woodpecker\",\n  \"snapshot_revision\": 18000,\n  \"records\": [\n    {\n      \"kind\": \"quorum\",\n      \"key\": \"milvus-prod/woodpecker/quorums/1\",\n      \"revision\": 100,\n      \"lease\": 0,\n      \"metadata\": {\n        \"id\": \"1\",\n        \"es\": 3,\n        \"wq\": 3,\n        \"aq\": 2,\n        \"nodes\": [\n          \"node0:18080\",\n          \"node1:18080\",\n          \"node2:18080\"\n        ]\n      }\n    }\n  ]\n}",
+    "# records: [] means this listing has no matching records.\n# An undecodable record instead returns a configuration error.",
+    "Lists separately stored quorum records. Modern segments embed their quorum, so an empty list can be normal; inspect meta segment show to see that topology. This group cannot patch quorum records."
+  ],
+  "meta quorum show": [
+    "wp meta quorum show 1 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"kind\": \"quorum\",\n  \"key\": \"milvus-prod/woodpecker/quorums/1\",\n  \"revision\": 100,\n  \"lease\": 0,\n  \"metadata\": {\n    \"id\": \"1\",\n    \"es\": 3,\n    \"wq\": 3,\n    \"aq\": 2,\n    \"nodes\": [\n      \"node0:18080\",\n      \"node1:18080\",\n      \"node2:18080\"\n    ]\n  }\n}",
+    "Error: TargetNotFound: target not found: milvus-prod/woodpecker/quorums/1",
+    "Shows one separately stored quorum by numeric ID; it does not fan out or test node health. es is ensemble size, wq write quorum, aq acknowledgement quorum. Modern embedded quorum is read through meta segment show."
+  ],
+  "meta check": [
+    "wp meta check my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"issues\": [],\n  \"log_name\": \"my-channel\",\n  \"scope\": \"metadata only; use segment inspect/log scan for physical data\",\n  \"segments_checked\": 2,\n  \"snapshot_revision\": 18000,\n  \"state\": \"ok\"\n}",
+    "{\n  \"state\": \"invalid\",\n  \"issues\": [\n    \"milvus-prod/woodpecker/logs/my-channel/segments/7: key must use canonical segment ID 8 matching segNo\"\n  ]\n}\nError: RedFinding: 1 metadata constraint violations",
+    "Checks log policy/frontier fields, segment identity/state/timestamps, embedded quorum structure and frontier bounds at one snapshot. Exit 9 plus issues means inconsistent metadata. state=ok establishes metadata consistency only; it does not prove payload readability or application progress."
+  ],
+  "meta export": [
+    "wp meta export --output-file ./metadata-snapshot.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"file\": \"./metadata-snapshot.json\",\n  \"keys\": 5,\n  \"snapshot_revision\": 18000\n}",
+    "Error: Config: create new backup file: open ./metadata-snapshot.json: file exists",
+    "Creates a new mode-0600 namespace snapshot. The file contains readable metadata for known protobuf records plus byte-exact value_base64, revisions and leases. Unknown/corrupt values retain bytes and encoding/decode errors. It is a metadata backup, not a payload backup or automatic restore command; an existing file is never overwritten."
+  ],
+  "meta log patch": [
+    "wp meta log patch my-channel --patch-file ./log-policy.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"applied\": false,\n  \"before\": {\n    \"revision\": 17099\n  },\n  \"changes\": {\n    \"max_segment_roll_time_seconds\": {\n      \"before\": \"60\",\n      \"after\": \"120\"\n    }\n  }\n}",
+    "Error: Usage: --apply requires --offline, --expected-revision, --reason, and --backup\n# A stale revision or live writer lock returns StateConflict; no correction is applied.",
+    "Create log-policy.json using the walkthrough above. Only max_segment_roll_time_seconds, max_segment_roll_size_bytes, compaction_buffer_size_bytes and max_compaction_file_count are patchable (nonnegative; zero allowed). They are reserved metadata fields, not live runtime configuration. Preview writes nothing. Apply uses the target before.revision plus offline acknowledgement, reason and a new durable backup; unknown fields and leases are preserved."
+  ],
+  "meta segment patch": [
+    "wp meta segment patch my-channel 7 --patch-file ./segment-repair.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"applied\": false,\n  \"before\": {\n    \"revision\": 174\n  },\n  \"changes\": {\n    \"lastEntryId\": {\n      \"before\": \"999\",\n      \"after\": \"99\"\n    }\n  }\n}",
+    "Error: StateConflict: lastEntryId is below the log truncation frontier\n# Other examples: key/segNo mismatch; Active segment requires lastEntryId -1; Sealed segment requires sealedTime.",
+    "Create segment-repair.json using the walkthrough above and independent data evidence. Writable fields are size, createTime, completionTime, sealedTime, lastEntryId and state. Lifecycle constraints remain strict; key identity, quorum and log truncation fields are protected. An existing invalid embedded quorum is preserved and reported in warnings rather than blocking a scalar repair. meta check will still report that unresolved quorum. A state edit does not create compacted files or repair replica contents."
+  ],
+  "log truncate": [
+    "wp log truncate my-channel --segment 8 --entry 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"applied\": false,\n  \"unchanged\": false,\n  \"before\": {\n    \"revision\": 17099,\n    \"metadata\": {\n      \"truncated_segment_id\": \"6\",\n      \"truncated_entry_id\": \"99\"\n    }\n  },\n  \"after\": {\n    \"revision\": 17099,\n    \"metadata\": {\n      \"truncated_segment_id\": \"8\",\n      \"truncated_entry_id\": \"0\"\n    }\n  },\n  \"target_segment_revision\": 175,\n  \"snapshot_revision\": 18000\n}",
+    "Error: StateConflict: truncation cannot move backward or restore deleted data\n# Active/empty targets, identity mismatches, stale revisions and concurrent updates are also rejected.",
+    "Preview requires a non-empty Completed/Sealed target and entry within 0..lastEntryId. Apply requires --apply --expected-revision (the log before.revision), --reason and a new --backup; no offline flag is required. The log and target revisions are compared and an audit record is written atomically. The frontier segment stays retained; earlier finalized segments become eligible for auditor/retention/reader-protected cleanup. Unchanged frontier means applied=false, unchanged=true with no artifacts. Verify application checkpoints first: metadata backup cannot restore reclaimed data."
   ]
 }

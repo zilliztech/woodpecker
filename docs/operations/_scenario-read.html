@@ -3,7 +3,7 @@
 <h2 id="plan">Plan: position → tail → actual reads → recovery</h2>
 <table><tr><th>Step</th><th>Command</th><th>Intent</th></tr>
 <tr><td>1</td><td>log readers, twice</td><td>Identify the reader and determine whether its reported position moves.</td></tr>
-<tr><td>2</td><td>logstore lac; log scan</td><td>Compare the reader with confirmed progress and the authoritative segment state/boundary.</td></tr>
+<tr><td>2</td><td>meta show/check; logstore lac; log scan</td><td>Compare the reader with metadata constraints, confirmed progress and physical coverage.</td></tr>
 <tr><td>3</td><td>segment probe</td><td>Ask all quorum members to actually read at the suspected position.</td></tr>
 <tr><td>4</td><td>segment inspect; ops list/show</td><td>Locate damaged blocks/records or a long-running request; distinguish data failures from transport failures.</td></tr>
 <tr><td>5</td><td>Repeat the reader sample and application read</td><td>Verify the same reader resumes and reaches the expected tail after the appropriate recovery.</td></tr></table>
@@ -24,7 +24,10 @@ reader-123   7:0       7:50     3s           5m        live
 <tr><td>no live readers</td><td>No usable leased reader registration exists under this metadata namespace. Check context/prefix, client activity and leases. Milvus query traffic does not imply an open WAL reader.</td></tr></table>
 <p>CURRENT is the reader's reported position at a report tick, not a count of delivered records or an exact last-returned entry. Use application logs/checkpoints to identify the next entry actually required.</p>
 <h2 id="tail">2. Compare the confirmed tail and metadata</h2>
-<pre><code>wm logstore lac "$WP_LOG" "$WP_SEG"
+<pre><code>wm meta log show "$WP_LOG"
+wm meta segment show "$WP_LOG" "$WP_SEG"
+wm meta check "$WP_LOG"
+wm logstore lac "$WP_LOG" "$WP_SEG"
 wm log scan "$WP_LOG" --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
 <pre><code># Illustrative scan summary:
@@ -37,6 +40,7 @@ milvus-woodpecker-1      99             ok
 milvus-woodpecker-2      99             ok
 quorum LAC: 99 (aq=2 of 3 nodes at or past it)</code></pre>
 <p>If the application needs 50 and the finalized boundary is 99, there should be data to read. If an Active reader is already at the current tail, waiting can be normal. Active metadata is not a final boundary. LAC establishes confirmed progress, not checksum integrity; for Completed/Sealed segments the CLI can use metadata when no live writer remains.</p>
+<p>check returns state=ok/issues=[] for metadata constraints only; state=invalid/exit 9 names inconsistent fields, identity or quorum. If a software bug is independently proven, use the <a href="scenarios.html#metadata">controlled metadata repair</a> workflow. An Active lastEntryId=-1 is normal and must not be replaced by an observed LAC to make it look finalized.</p>
 <h2 id="probe">3. Read the suspected position on every replica</h2>
 <pre><code>wm segment probe "$WP_LOG" "$WP_SEG" \
   --from-entry 50 --max-entries 100 \

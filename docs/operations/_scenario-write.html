@@ -48,9 +48,13 @@ LOG:SEG  QUEUE_DEPTH  QUEUE_CAP
 <tr><td>No arriving appends and little queued work</td><td>Likely upstream inactivity or a client/RPC issue; not evidence of a blocked flush.</td></tr>
 <tr><td>segments shows only headers / segment-show is absent</td><td>These list loaded writer objects, not all persisted segments. Confirm the current segment and owner; do not infer no data.</td></tr>
 <tr><td>One node behind; others advance</td><td>Measure quorum confirmation. A lagging replica need not stall the application.</td></tr></table>
-<p>Read metadata when the writer registry is insufficient:</p>
-<pre><code>wm log scan "$WP_LOG" --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
+<p>Read persisted metadata when the writer registry is insufficient:</p>
+<pre><code>wm meta segment list "$WP_LOG"
+wm meta segment show "$WP_LOG" "$WP_SEG"
+wm meta check "$WP_LOG"
+wm log scan "$WP_LOG" --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
+<p>meta list/show include unloaded history. check: state=ok validates metadata only; state=invalid/exit 9 identifies a constraint failure. For a proven metadata bug, use the <a href="scenarios.html#metadata">offline repair workflow</a> and restart affected clients afterward. Editing Active lastEntryId/state is not a substitute for writer recovery, and truncate is a retention operation rather than a fix for pending appends.</p>
 <h2 id="quorum">4. Compare LAC twice</h2>
 <pre><code>wm logstore lac "$WP_LOG" "$WP_SEG"
 sleep 10
@@ -65,7 +69,7 @@ quorum LAC: 99 (aq=2 of 3 nodes at or past it)</code></pre>
 <tr><td>LAC unchanged while appends remain outstanding</td><td>Confirmation is not advancing. Combine queues, errors and quorum-member evidence to locate the stage.</td></tr>
 <tr><td>Fewer than AQ usable replies</td><td>LAC is unknown; restore reachability or replica availability. Unknown is not a confirmed smaller frontier.</td></tr>
 <tr><td>no writer</td><td>Node answered but has no loaded writer for this segment. Completed/Sealed metadata may still establish a boundary; check whether the application has rolled to a newer segment.</td></tr></table>
-<p>The CLI's --timeout is an HTTP deadline, not the application's append deadline. A 2s send budget does not guarantee an end-to-end append within 2s: confirmation, retries and rolling add time.</p>
+<p>The CLI's --timeout bounds its own admin/metadata requests, not the application's append deadline. A 2s send budget does not guarantee an end-to-end append within 2s: confirmation, retries and rolling add time.</p>
 <h2 id="recovery">5. Restore the stage, then re-test append</h2>
 <p>Fix verified connectivity, storage or deployment failures first. A manual flush applies to a loaded writer and does not repair corrupted data:</p>
 <pre><code>w logstore force-flush "$WP_NODE" --log "$WP_LOG_ID" --seg "$WP_SEG"</code></pre>

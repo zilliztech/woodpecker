@@ -80,11 +80,11 @@
     "purpose": "List bucket/root instances holding node-local data before drain or reclamation."
   },
   "log": {
-    "title": "Log progress & coverage",
+    "title": "Log progress & retention",
     "groups": [
       "log"
     ],
-    "purpose": "Inspect reader progress and log coverage, and manage verified skip-range declarations."
+    "purpose": "Inspect reader progress and coverage, manage verified skip ranges, and advance checkpoint-backed retention."
   },
   "segment": {
     "title": "Segment diagnosis",
@@ -92,6 +92,13 @@
       "segment"
     ],
     "purpose": "Probe actual entry reads and inspect local blocks to locate damage on each quorum member."
+  },
+  "meta": {
+    "title": "Metadata inspection & repair",
+    "groups": [
+      "meta"
+    ],
+    "purpose": "Read decoded coordinator records, check metadata constraints, export snapshots and apply reviewed corrections."
   },
   "marking": {
     "title": "Compacted-mark distribution",

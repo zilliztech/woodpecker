@@ -162,8 +162,8 @@ w cluster health</code>
 <th>Need etcd settings?</th>
 </tr>
 <tr>
-<td>log readers, log scan, log skip-range; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td>
-<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery.</td>
+<td>meta; log readers/scan/skip-range/truncate; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td>
+<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery. meta and truncate need no admin connection when both etcd settings are supplied.</td>
 </tr>
 <tr>
 <td>etcd list/get/cat (current source builds)</td>

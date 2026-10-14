@@ -610,8 +610,9 @@
 <a class="sidebar-link" data-page="operations-cli-metrics" href="#operations-cli-metrics" onclick="showPage('operations-cli-metrics',this)">Metrics &amp; scenarios</a>
 <a class="sidebar-link" data-page="operations-cli-logstore" href="#operations-cli-logstore" onclick="showPage('operations-cli-logstore',this)">Writer runtime</a>
 <a class="sidebar-link" data-page="operations-cli-instance" href="#operations-cli-instance" onclick="showPage('operations-cli-instance',this)">Local data inventory</a>
-<a class="sidebar-link" data-page="operations-cli-log" href="#operations-cli-log" onclick="showPage('operations-cli-log',this)">Log progress &amp; coverage</a>
+<a class="sidebar-link" data-page="operations-cli-log" href="#operations-cli-log" onclick="showPage('operations-cli-log',this)">Log progress &amp; retention</a>
 <a class="sidebar-link" data-page="operations-cli-segment" href="#operations-cli-segment" onclick="showPage('operations-cli-segment',this)">Segment diagnosis</a>
+<a class="sidebar-link" data-page="operations-cli-meta" href="#operations-cli-meta" onclick="showPage('operations-cli-meta',this)">Metadata inspection &amp; repair</a>
 <a class="sidebar-link" data-page="operations-cli-marking" href="#operations-cli-marking" onclick="showPage('operations-cli-marking',this)">Compacted-mark distribution</a>
 <a class="sidebar-link" data-page="operations-cli-etcd" href="#operations-cli-etcd" onclick="showPage('operations-cli-etcd',this)">Raw etcd exploration</a>
 </div>
@@ -644,12 +645,12 @@
 
 <!-- BEGIN OPERATIONS CONTENT -->
 <div class="doc-page ops-page" id="page-operations-cli">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & coverage</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & retention</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-meta">Metadata inspection & repair</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/repair-format">Patch format</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
 <section id="ops-cli-overview">
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">18 top-level commands/groups · 60 executable operations</span>
+<span class="badge">19 top-level commands/groups · 71 executable operations</span>
 </p>
 <p>
 <a href="#operations-cli-local/start">New to wp? Start with installation, connection setup and your first commands →</a>
@@ -702,12 +703,16 @@
 <span>instance</span>
 </a>
 <a href="#operations-cli-log">
-<strong>Log progress &amp; coverage</strong>
+<strong>Log progress &amp; retention</strong>
 <span>log</span>
 </a>
 <a href="#operations-cli-segment">
 <strong>Segment diagnosis</strong>
 <span>segment</span>
+</a>
+<a href="#operations-cli-meta">
+<strong>Metadata inspection &amp; repair</strong>
+<span>meta</span>
 </a>
 <a href="#operations-cli-marking">
 <strong>Compacted-mark distribution</strong>
@@ -1410,7 +1415,7 @@
 </table></div>
 </section>
 <section class="ops-quick-section" id="ops-cli-quick-log">
-<h2>Log progress & coverage · quick lookup</h2>
+<h2>Log progress & retention · quick lookup</h2>
 <div class="ops-table-wrap"><table class="doc-table ops-quick-table">
 <thead>
 <tr>
@@ -1480,6 +1485,19 @@
 <code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>
 <code>--from-entry / --to-entry</code>: inclusive entry range</td>
 </tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-log/log-truncate">
+<code>wp log truncate</code>
+</a>
+</td>
+<td>Advance the truncation frontier with the SDK&#x27;s metadata-update semantics and additional operator guards</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>--entry int</code>: Target entry ID  (default -1)<br>
+<code>--segment int</code>: Target segment ID  (default -1)<br>Apply only: <code>--apply --expected-revision --reason --backup</code>
+</td>
+</tr>
 </tbody>
 </table></div>
 </section>
@@ -1521,6 +1539,128 @@
 <code>&lt;logName&gt;</code>: Logical log name in metadata<br>
 <code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>For explicit storage: paired <code>--bucket / --root-path</code>
 </td>
+</tr>
+</tbody>
+</table></div>
+</section>
+<section class="ops-quick-section" id="ops-cli-quick-meta">
+<h2>Metadata inspection & repair · quick lookup</h2>
+<div class="ops-table-wrap"><table class="doc-table ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp meta</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-check">
+<code>wp meta check</code>
+</a>
+</td>
+<td>Validate log/segment metadata constraints (does not verify physical data)</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-export">
+<code>wp meta export</code>
+</a>
+</td>
+<td>Export one metadata namespace at a consistent etcd revision</td>
+<td>
+<code>--output-file string</code>: New snapshot file (required; never overwritten)</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-log-list">
+<code>wp meta log list</code>
+</a>
+</td>
+<td>list log metadata and etcd revision</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-log-patch">
+<code>wp meta log patch</code>
+</a>
+</td>
+<td>Patch policy/statistics/timestamps, segment lastEntryId and state</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>--patch-file string</code>: JSON object containing supported scalar fields<br>Apply only: <code>--apply --offline --expected-revision --reason --backup</code>
+</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-log-show">
+<code>wp meta log show</code>
+</a>
+</td>
+<td>show log metadata and etcd revision</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-quorum-list">
+<code>wp meta quorum list</code>
+</a>
+</td>
+<td>list quorum metadata and etcd revision</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-quorum-show">
+<code>wp meta quorum show</code>
+</a>
+</td>
+<td>show quorum metadata and etcd revision</td>
+<td>
+<code>&lt;ID&gt;</code>: Numeric standalone quorum ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-segment-list">
+<code>wp meta segment list</code>
+</a>
+</td>
+<td>list segment metadata and etcd revision</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-segment-patch">
+<code>wp meta segment patch</code>
+</a>
+</td>
+<td>Patch policy/statistics/timestamps, segment lastEntryId and state</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>
+<code>--patch-file string</code>: JSON object containing supported scalar fields<br>Apply only: <code>--apply --offline --expected-revision --reason --backup</code>
+</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-meta/meta-segment-show">
+<code>wp meta segment show</code>
+</a>
+</td>
+<td>show segment metadata and etcd revision</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log</td>
 </tr>
 </tbody>
 </table></div>
@@ -1633,6 +1773,29 @@
 </table></div>
 <p>Admin discovery supplies quorum identities; the workstation fans out to each node. Map every target to an accessible admin origin. A working seed connection alone does not establish peer reachability.</p>
 <p>If the metadata namespace is unknown, start with <a href="#operations-cli-etcd">Raw etcd exploration</a>: list literal keys, narrow the prefix, then inspect a value. Those read-only operations need an etcd connection but no admin endpoint or metadata prefix.</p>
+<p>For decoded records, metadata consistency and controlled correction, use <a href="#operations-cli-meta">Metadata inspection &amp; repair</a>. Normal retention advancement uses <a href="#operations-cli-log/log-truncate">log truncate</a>; it is separate from metadata patching and skip-range declarations.</p>
+</section>
+<section id="ops-cli-repair-format">
+<h2>Choose the intended change</h2>
+<div class="ops-table-wrap"><table class="doc-table ">
+<tr>
+<th>Operation</th>
+<th>Intent / required preparation</th>
+</tr>
+<tr>
+<td>meta log/segment patch</td>
+<td>Correct proven metadata errors using a JSON file containing only supported fields. Apply needs stopped writers/auditors, target revision, reason and a new backup.</td>
+</tr>
+<tr>
+<td>log skip-range add</td>
+<td>Accept a precisely verified unreadable range when all usable alternatives fail. Requires explicit loss acceptance; it does not repair files or compaction.</td>
+</tr>
+<tr>
+<td>log truncate</td>
+<td>Advance verified application retention. Apply needs the log revision, reason and a new backup; later auditor rounds retire earlier finalized segments.</td>
+</tr>
+</table></div>
+<p>Preview success does not commit a change. Metadata patch/truncate previews normally exit 0; skip-range and fencing previews can exit 7 because acceptance was not given. Verify application recovery independently after any intervention.</p>
 </section>
 <section id="ops-cli-shared">
 <h2>Shared parameters</h2>
@@ -1894,8 +2057,8 @@ w cluster health</code></pre></div></div>
 <th>Need etcd settings?</th>
 </tr>
 <tr>
-<td>log readers, log scan, log skip-range; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td>
-<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery.</td>
+<td>meta; log readers/scan/skip-range/truncate; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td>
+<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery. meta and truncate need no admin connection when both etcd settings are supplied.</td>
 </tr>
 <tr>
 <td>etcd list/get/cat (current source builds)</td>
@@ -4344,8 +4507,8 @@ Flags:
 
 </div>
 <div class="doc-page ops-page" id="page-operations-cli-log">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-log/log-readers">wp log readers</a><a href="#operations-cli-log/log-scan">wp log scan</a><a href="#operations-cli-log/log-skip-range-add">wp log skip-range add</a><a href="#operations-cli-log/log-skip-range-list">wp log skip-range list</a><a href="#operations-cli-log/log-skip-range-remove">wp log skip-range remove</a></nav></details></aside>
-<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Log progress & coverage</p><h1>Log progress & coverage</h1><p class="page-desc">Inspect reader progress and log coverage, and manage verified skip-range declarations.</p><section id="ops-cli-log-topic-log">
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-log/log-readers">wp log readers</a><a href="#operations-cli-log/log-scan">wp log scan</a><a href="#operations-cli-log/log-skip-range-add">wp log skip-range add</a><a href="#operations-cli-log/log-skip-range-list">wp log skip-range list</a><a href="#operations-cli-log/log-skip-range-remove">wp log skip-range remove</a><a href="#operations-cli-log/log-truncate">wp log truncate</a></nav></details></aside>
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Log progress & retention</p><h1>Log progress & retention</h1><p class="page-desc">Inspect reader progress and coverage, manage verified skip ranges, and advance checkpoint-backed retention.</p><section id="ops-cli-log-topic-log">
 
 <article class="command" data-command-anchor="log-readers" id="ops-cli-log-log-readers">
 <h2>wp log readers</h2>
@@ -4660,6 +4823,113 @@ Flags:
       --to-entry int                  Last entry of the range to withdraw (inclusive) (default -1)</code></pre></div></div>
 </details>
 </article>
+<article class="command" data-command-anchor="log-truncate" id="ops-cli-log-log-truncate">
+<h2>wp log truncate</h2>
+<p>Advance the truncation frontier with the SDK&#x27;s metadata-update semantics and additional operator guards. Defaults to preview. The target must be a non-empty Completed or Sealed segment. Subsequent auditor rounds mark earlier finalized segments Truncated and reclaim data according to retention and reader protection. The frontier segment is retained. Apply can cause permanent data loss; verify application checkpoints first.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp log truncate &lt;logName&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--apply</code>
+</td>
+<td>Advance the frontier (default: preview only)</td>
+</tr>
+<tr>
+<td>
+<code>--backup string</code>
+</td>
+<td>New pre-change backup file; never overwritten</td>
+</tr>
+<tr>
+<td>
+<code>--entry int</code>
+</td>
+<td>Target entry ID (required) (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--expected-revision int</code>
+</td>
+<td>Log record ModRevision from preview</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Operator reason recorded in audit</td>
+</tr>
+<tr>
+<td>
+<code>--segment int</code>
+</td>
+<td>Target segment ID (required) (default -1)</td>
+</tr>
+</tbody>
+</table></div>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<p>Verify the application checkpoint first. For the preview/apply sequence and asynchronous cleanup, follow the <a href="#operations-scenarios-corruption/compaction">retention workflow</a>.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp log truncate my-channel --segment 8 --entry 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;applied&quot;: false,
+  &quot;unchanged&quot;: false,
+  &quot;before&quot;: {
+    &quot;revision&quot;: 17099,
+    &quot;metadata&quot;: {
+      &quot;truncated_segment_id&quot;: &quot;6&quot;,
+      &quot;truncated_entry_id&quot;: &quot;99&quot;
+    }
+  },
+  &quot;after&quot;: {
+    &quot;revision&quot;: 17099,
+    &quot;metadata&quot;: {
+      &quot;truncated_segment_id&quot;: &quot;8&quot;,
+      &quot;truncated_entry_id&quot;: &quot;0&quot;
+    }
+  },
+  &quot;target_segment_revision&quot;: 175,
+  &quot;snapshot_revision&quot;: 18000
+}</code></pre></div></div>
+<p>Preview requires a non-empty Completed/Sealed target and entry within 0..lastEntryId. Apply requires --apply --expected-revision (the log before.revision), --reason and a new --backup; no offline flag is required. The log and target revisions are compared and an audit record is written atomically. The frontier segment stays retained; earlier finalized segments become eligible for auditor/retention/reader-protected cleanup. Unchanged frontier means applied=false, unchanged=true with no artifacts. Verify application checkpoints first: metadata backup cannot restore reclaimed data.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: StateConflict: truncation cannot move backward or restore deleted data
+# Active/empty targets, identity mismatches, stale revisions and concurrent updates are also rejected.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Advance the truncation frontier with the SDK&#x27;s metadata-update semantics and additional operator guards. Defaults to preview. The target must be a non-empty Completed or Sealed segment. Subsequent auditor rounds mark earlier finalized segments Truncated and reclaim data according to retention and reader protection. The frontier segment is retained. Apply can cause permanent data loss; verify application checkpoints first.
+
+Usage:
+  wp log truncate &lt;logName&gt; [flags]
+
+Flags:
+      --apply                         Advance the frontier (default: preview only)
+      --backup string                 New pre-change backup file; never overwritten
+      --entry int                     Target entry ID (required) (default -1)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+      --expected-revision int         Log record ModRevision from preview
+  -h, --help                          help for truncate
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --reason string                 Operator reason recorded in audit
+      --segment int                   Target segment ID (required) (default -1)</code></pre></div></div>
+</details>
+</article>
 </section>
 
 </div>
@@ -4810,6 +5080,707 @@ Flags:
       --max-entries int               Stop after this many entries per node (default: the node&#x27;s own bound)
       --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --root-path string              Storage instance root path; pair with --bucket</code></pre></div></div>
+</details>
+</article>
+</section>
+
+</div>
+<div class="doc-page ops-page" id="page-operations-cli-meta">
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-meta/metadata-start">1. Read the record before choosing a repair</a><a href="#operations-cli-meta/patch-files">2. Create a small JSON patch file</a><a href="#operations-cli-meta/apply-guards">3. Preview, stop metadata writers, then apply</a><a href="#operations-cli-meta/metadata-results">4. Interpret checks, exports and failures</a><a href="#operations-cli-meta/meta-check">wp meta check</a><a href="#operations-cli-meta/meta-export">wp meta export</a><a href="#operations-cli-meta/meta-log-list">wp meta log list</a><a href="#operations-cli-meta/meta-log-patch">wp meta log patch</a><a href="#operations-cli-meta/meta-log-show">wp meta log show</a><a href="#operations-cli-meta/meta-quorum-list">wp meta quorum list</a><a href="#operations-cli-meta/meta-quorum-show">wp meta quorum show</a><a href="#operations-cli-meta/meta-segment-list">wp meta segment list</a><a href="#operations-cli-meta/meta-segment-patch">wp meta segment patch</a><a href="#operations-cli-meta/meta-segment-show">wp meta segment show</a></nav></details></aside>
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Metadata inspection & repair</p><h1>Metadata inspection & repair</h1><p class="page-desc">Read decoded coordinator records, check metadata constraints, export snapshots and apply reviewed corrections.</p><section id="ops-cli-meta-topic-meta">
+
+<h2 id="ops-cli-meta-metadata-start">1. Read the record before choosing a repair</h2>
+<p>Use a current source build containing <code>wp meta</code> and <code>wp log truncate</code>; these additions are not in v0.1.46. Complete <a href="#operations-cli-local/cli-yaml">CLI setup</a> first. The commands below assume the milvus-prod context has reachable etcd endpoints and the complete metadata prefix. With both configured, no node admin connection or bucket/root-path is needed.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context milvus-prod meta log list
+wp --context milvus-prod meta log show my-channel
+wp --context milvus-prod meta segment list my-channel
+wp --context milvus-prod meta segment show my-channel 7
+wp --context milvus-prod meta check my-channel</code></pre></div></div>
+<p>Use the real logical log name. list includes persisted history even when node-local writer objects are unloaded. show wraps decoded metadata with its exact key, modification revision and lease; int64 fields appear as decimal strings. For modern segments, inspect the embedded quorum in segment show; separately stored quorum records may be absent.</p>
+<h2 id="ops-cli-meta-patch-files">2. Create a small JSON patch file</h2>
+<p>Pass only fields to change, not the show envelope or a full exported record. For example, create the files used by the command demos below:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>cat &gt; ./log-policy.json &lt;&lt;'JSON'
+{"max_segment_roll_time_seconds": 120}
+JSON
+
+# Only after independently proving that 99 is the correct finalized tail:
+cat &gt; ./segment-repair.json &lt;&lt;'JSON'
+{"lastEntryId": "99"}
+JSON</code></pre></div></div>
+<div class="ops-table-wrap"><table class="doc-table ">
+<tr>
+<th>Patch target</th>
+<th>Writable fields / constraints</th>
+</tr>
+<tr>
+<td>log</td>
+<td>max_segment_roll_time_seconds, max_segment_roll_size_bytes, compaction_buffer_size_bytes, max_compaction_file_count. Nonnegative; zero is allowed. These are reserved metadata fields, not live client runtime configuration.</td>
+</tr>
+<tr>
+<td>segment</td>
+<td>size, createTime, completionTime, sealedTime, lastEntryId, state. Times are Unix milliseconds; size is bytes. Lifecycle times must agree with state. Integers may be numbers or decimal strings.</td>
+</tr>
+<tr>
+<td>Protected</td>
+<td>Identity (logId/segNo), quorum and log truncation fields. Quorums are read-only; advance normal retention with <a href="#operations-cli-log/log-truncate">log truncate</a>.</td>
+</tr>
+</table></div>
+<p>Active requires lastEntryId=-1 and zero completion/sealed times. A verified rollback to Active must reset all three together. Completed/Sealed lastEntryId=-1 means finalized empty; Sealed needs a valid sealedTime. A key/segNo mismatch is rejected. Changing state does not generate compacted objects, repair data or execute recovery; Truncated can enable cleanup.</p>
+<details class="ops-help">
+<summary>State-correction JSON examples</summary>
+<p>Use only the state independently verified for this segment. These are alternative patch-file contents, not automatic recovery steps. For a verified rollback to Active:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{"state":"Active","lastEntryId":"-1","completionTime":"0","sealedTime":"0"}</code></pre></div></div>
+<p>For a verified Completed-to-Sealed correction with existing compacted files and a known sealing time:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{"state":"Sealed","lastEntryId":"99","sealedTime":"1791806000000"}</code></pre></div></div>
+<p>The timestamp is illustrative: replace it with the verified Unix-millisecond value, after completionTime. State names are Active, Completed, Sealed and Truncated (numbers 0, 2, 3, 4); reserved state 1 is rejected. A legacy createTime=0 must also be corrected with a verified positive creation time.</p>
+</details>
+<h2 id="ops-cli-meta-apply-guards">3. Preview, stop metadata writers, then apply</h2>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context milvus-prod meta segment patch my-channel 7 \
+  --patch-file ./segment-repair.json</code></pre></div></div>
+<p>A preview returns applied=false, before/after records, changes and snapshot_revision. Review all changes. Use the target's <code>before.revision</code> for apply. If it is 174, stop the relevant writers/auditors and keep them stopped throughout the repair:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context milvus-prod meta segment patch my-channel 7 \
+  --patch-file ./segment-repair.json --apply --offline \
+  --expected-revision 174 --reason 'Correct verified tail after software fix' \
+  --backup ./segment-before-repair.json
+
+wp --context milvus-prod meta segment show my-channel 7
+wp --context milvus-prod meta check my-channel</code></pre></div></div>
+<p>--offline acknowledges your action; it does not stop clients. Apply checks revision and writer-lock absence, persists a new backup, and writes the correction and audit record atomically. Restart affected clients after repair so cached metadata is refreshed. applied=true/new_revision confirms the write, not data readability. Reused backup paths fail; stale revisions or concurrent changes require a fresh preview and a new backup filename.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Example warning on an otherwise valid scalar repair:
+"warnings": [
+  "embedded quorum (unchanged): invalid quorum sizes or node count"
+]</code></pre></div></div>
+<p>An existing embedded-quorum problem is preserved and reported in warnings; it does not block an independent scalar repair. meta check still reports that unresolved problem. Lifecycle and truncation-bound violations continue to block the patch. Do not mark a segment Sealed or lower a tail just to silence a physical corruption finding.</p>
+<h2 id="ops-cli-meta-metadata-results">4. Interpret checks, exports and failures</h2>
+<div class="ops-table-wrap"><table class="doc-table ">
+<tr>
+<th>Result</th>
+<th>Meaning / next step</th>
+</tr>
+<tr>
+<td>check: state=ok, issues=[]; exit 0</td>
+<td>The inspected metadata constraints passed. Probe/inspect separately for physical data; verify application progress separately.</td>
+</tr>
+<tr>
+<td>check: state=invalid; exit 9</td>
+<td>Read the exact key/field in issues. A bad frontier, lifecycle or quorum is metadata evidence, not automatic permission to rewrite it.</td>
+</tr>
+<tr>
+<td>TargetNotFound; exit 3</td>
+<td>The exact record is absent. Verify context, prefix and logical IDs before diagnosing missing payloads.</td>
+</tr>
+<tr>
+<td>Patch StateConflict; exit 4</td>
+<td>Read the constraint, revision or writer-lock error. Re-read records and correct the verified cause; do not blindly retry apply.</td>
+</tr>
+<tr>
+<td>export / backup</td>
+<td>New mode-0600 file with readable known metadata and original value_base64/revisions/leases. File and parent directory must sync before patch commits. Unknown/malformed records retain their bytes. This is not a payload backup or automatic rollback command.</td>
+</tr>
+</table></div>
+<p>If commit returns a network error, re-read the target and audit records before retrying: the write outcome may be unknown. For a complete operational example, follow <a href="#operations-scenarios-corruption/metadata">verified metadata repair</a> in Troubleshooting.</p>
+<article class="command" data-command-anchor="meta-check" id="ops-cli-meta-meta-check">
+<h2>wp meta check</h2>
+<p>Validate log/segment metadata constraints (does not verify physical data)</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta check &lt;logName&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta check my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;issues&quot;: [],
+  &quot;log_name&quot;: &quot;my-channel&quot;,
+  &quot;scope&quot;: &quot;metadata only; use segment inspect/log scan for physical data&quot;,
+  &quot;segments_checked&quot;: 2,
+  &quot;snapshot_revision&quot;: 18000,
+  &quot;state&quot;: &quot;ok&quot;
+}</code></pre></div></div>
+<p>Checks log policy/frontier fields, segment identity/state/timestamps, embedded quorum structure and frontier bounds at one snapshot. Exit 9 plus issues means inconsistent metadata. state=ok establishes metadata consistency only; it does not prove payload readability or application progress.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;state&quot;: &quot;invalid&quot;,
+  &quot;issues&quot;: [
+    &quot;milvus-prod/woodpecker/logs/my-channel/segments/7: key must use canonical segment ID 8 matching segNo&quot;
+  ]
+}
+Error: RedFinding: 1 metadata constraint violations</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Validate log/segment metadata constraints (does not verify physical data)
+
+Usage:
+  wp meta check &lt;logName&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for check
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-export" id="ops-cli-meta-meta-export">
+<h2>wp meta export</h2>
+<p>Export one metadata namespace at a consistent etcd revision</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta export [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--output-file string</code>
+</td>
+<td>New snapshot file (required; never overwritten)</td>
+</tr>
+</tbody>
+</table></div>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta export --output-file ./metadata-snapshot.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;file&quot;: &quot;./metadata-snapshot.json&quot;,
+  &quot;keys&quot;: 5,
+  &quot;snapshot_revision&quot;: 18000
+}</code></pre></div></div>
+<p>Creates a new mode-0600 namespace snapshot. The file contains readable metadata for known protobuf records plus byte-exact value_base64, revisions and leases. Unknown/corrupt values retain bytes and encoding/decode errors. It is a metadata backup, not a payload backup or automatic restore command; an existing file is never overwritten.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: Config: create new backup file: open ./metadata-snapshot.json: file exists</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Export one metadata namespace at a consistent etcd revision
+
+Usage:
+  wp meta export [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for export
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --output-file string            New snapshot file (required; never overwritten)</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-log-list" id="ops-cli-meta-meta-log-list">
+<h2>wp meta log list</h2>
+<p>list log metadata and etcd revision</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log list [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;prefix&quot;: &quot;milvus-prod/woodpecker&quot;,
+  &quot;snapshot_revision&quot;: 18000,
+  &quot;records&quot;: [
+    {
+      &quot;kind&quot;: &quot;log&quot;,
+      &quot;key&quot;: &quot;milvus-prod/woodpecker/logs/my-channel&quot;,
+      &quot;revision&quot;: 17099,
+      &quot;lease&quot;: 0,
+      &quot;metadata&quot;: {
+        &quot;logId&quot;: &quot;42&quot;,
+        &quot;truncated_segment_id&quot;: &quot;6&quot;,
+        &quot;truncated_entry_id&quot;: &quot;99&quot;
+      }
+    }
+  ]
+}</code></pre></div></div>
+<p>Lists top-level log records, including unloaded history. records is a snapshot, not a list of live node writers. Narrow with meta log show; use the record revision for a patch.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># records: [] means this listing has no matching records.
+# An undecodable record instead returns a configuration error.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>list log metadata and etcd revision
+
+Usage:
+  wp meta log list [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for list
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-log-patch" id="ops-cli-meta-meta-log-patch">
+<h2>wp meta log patch</h2>
+<p>Patch policy/statistics/timestamps, segment lastEntryId and state. Identity, quorum and log truncation are protected. Segment state correction does not create compacted files or repair replica contents; Truncated can enable cleanup. Applying requires stopped writers/auditors, a revision, reason, and a new backup file.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log patch &lt;logName&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--apply</code>
+</td>
+<td>Commit the previewed correction (default: no writes)</td>
+</tr>
+<tr>
+<td>
+<code>--backup string</code>
+</td>
+<td>New pre-change backup file (required for apply; never overwritten)</td>
+</tr>
+<tr>
+<td>
+<code>--expected-revision int</code>
+</td>
+<td>Required target ModRevision for apply</td>
+</tr>
+<tr>
+<td>
+<code>--offline</code>
+</td>
+<td>Confirm relevant writers/auditors are stopped and will remain stopped during repair</td>
+</tr>
+<tr>
+<td>
+<code>--patch-file string</code>
+</td>
+<td>JSON object containing supported scalar fields (required)</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Operator&#x27;s reason, recorded with the change</td>
+</tr>
+</tbody>
+</table></div>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<p>Create the patch file using the JSON examples in the <a href="#operations-cli-meta">metadata walkthrough</a> before running this preview. Applying requires separately reviewed evidence and the guards described there.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log patch my-channel --patch-file ./log-policy.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;applied&quot;: false,
+  &quot;before&quot;: {
+    &quot;revision&quot;: 17099
+  },
+  &quot;changes&quot;: {
+    &quot;max_segment_roll_time_seconds&quot;: {
+      &quot;before&quot;: &quot;60&quot;,
+      &quot;after&quot;: &quot;120&quot;
+    }
+  }
+}</code></pre></div></div>
+<p>Create log-policy.json using the walkthrough above. Only max_segment_roll_time_seconds, max_segment_roll_size_bytes, compaction_buffer_size_bytes and max_compaction_file_count are patchable (nonnegative; zero allowed). They are reserved metadata fields, not live runtime configuration. Preview writes nothing. Apply uses the target before.revision plus offline acknowledgement, reason and a new durable backup; unknown fields and leases are preserved.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: Usage: --apply requires --offline, --expected-revision, --reason, and --backup
+# A stale revision or live writer lock returns StateConflict; no correction is applied.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Patch policy/statistics/timestamps, segment lastEntryId and state. Identity, quorum and log truncation are protected. Segment state correction does not create compacted files or repair replica contents; Truncated can enable cleanup. Applying requires stopped writers/auditors, a revision, reason, and a new backup file.
+
+Usage:
+  wp meta log patch &lt;logName&gt; [flags]
+
+Flags:
+      --apply                         Commit the previewed correction (default: no writes)
+      --backup string                 New pre-change backup file (required for apply; never overwritten)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+      --expected-revision int         Required target ModRevision for apply
+  -h, --help                          help for patch
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --offline                       Confirm relevant writers/auditors are stopped and will remain stopped during repair
+      --patch-file string             JSON object containing supported scalar fields (required)
+      --reason string                 Operator&#x27;s reason, recorded with the change</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-log-show" id="ops-cli-meta-meta-log-show">
+<h2>wp meta log show</h2>
+<p>show log metadata and etcd revision</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log show &lt;logName&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log show my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;kind&quot;: &quot;log&quot;,
+  &quot;key&quot;: &quot;milvus-prod/woodpecker/logs/my-channel&quot;,
+  &quot;revision&quot;: 17099,
+  &quot;lease&quot;: 0,
+  &quot;metadata&quot;: {
+    &quot;logId&quot;: &quot;42&quot;,
+    &quot;truncated_segment_id&quot;: &quot;6&quot;,
+    &quot;truncated_entry_id&quot;: &quot;99&quot;
+  }
+}</code></pre></div></div>
+<p>Shows the exact log key, ModRevision, lease and decoded fields. int64 values are decimal strings. A missing target means the key is absent in this namespace, not a damaged replica. Log truncation fields are changed with log truncate, not generic patch.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: TargetNotFound: target not found: milvus-prod/woodpecker/logs/my-channel</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>show log metadata and etcd revision
+
+Usage:
+  wp meta log show &lt;logName&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for show
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-quorum-list" id="ops-cli-meta-meta-quorum-list">
+<h2>wp meta quorum list</h2>
+<p>list quorum metadata and etcd revision</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta quorum list [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta quorum list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;prefix&quot;: &quot;milvus-prod/woodpecker&quot;,
+  &quot;snapshot_revision&quot;: 18000,
+  &quot;records&quot;: [
+    {
+      &quot;kind&quot;: &quot;quorum&quot;,
+      &quot;key&quot;: &quot;milvus-prod/woodpecker/quorums/1&quot;,
+      &quot;revision&quot;: 100,
+      &quot;lease&quot;: 0,
+      &quot;metadata&quot;: {
+        &quot;id&quot;: &quot;1&quot;,
+        &quot;es&quot;: 3,
+        &quot;wq&quot;: 3,
+        &quot;aq&quot;: 2,
+        &quot;nodes&quot;: [
+          &quot;node0:18080&quot;,
+          &quot;node1:18080&quot;,
+          &quot;node2:18080&quot;
+        ]
+      }
+    }
+  ]
+}</code></pre></div></div>
+<p>Lists separately stored quorum records. Modern segments embed their quorum, so an empty list can be normal; inspect meta segment show to see that topology. This group cannot patch quorum records.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># records: [] means this listing has no matching records.
+# An undecodable record instead returns a configuration error.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>list quorum metadata and etcd revision
+
+Usage:
+  wp meta quorum list [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for list
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-quorum-show" id="ops-cli-meta-meta-quorum-show">
+<h2>wp meta quorum show</h2>
+<p>show quorum metadata and etcd revision</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta quorum show &lt;ID&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta quorum show 1 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;kind&quot;: &quot;quorum&quot;,
+  &quot;key&quot;: &quot;milvus-prod/woodpecker/quorums/1&quot;,
+  &quot;revision&quot;: 100,
+  &quot;lease&quot;: 0,
+  &quot;metadata&quot;: {
+    &quot;id&quot;: &quot;1&quot;,
+    &quot;es&quot;: 3,
+    &quot;wq&quot;: 3,
+    &quot;aq&quot;: 2,
+    &quot;nodes&quot;: [
+      &quot;node0:18080&quot;,
+      &quot;node1:18080&quot;,
+      &quot;node2:18080&quot;
+    ]
+  }
+}</code></pre></div></div>
+<p>Shows one separately stored quorum by numeric ID; it does not fan out or test node health. es is ensemble size, wq write quorum, aq acknowledgement quorum. Modern embedded quorum is read through meta segment show.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: TargetNotFound: target not found: milvus-prod/woodpecker/quorums/1</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>show quorum metadata and etcd revision
+
+Usage:
+  wp meta quorum show &lt;ID&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for show
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-segment-list" id="ops-cli-meta-meta-segment-list">
+<h2>wp meta segment list</h2>
+<p>list segment metadata and etcd revision</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment list &lt;logName&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment list my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;prefix&quot;: &quot;milvus-prod/woodpecker&quot;,
+  &quot;snapshot_revision&quot;: 18000,
+  &quot;records&quot;: [
+    {
+      &quot;kind&quot;: &quot;segment&quot;,
+      &quot;key&quot;: &quot;milvus-prod/woodpecker/logs/my-channel/segments/7&quot;,
+      &quot;revision&quot;: 174,
+      &quot;lease&quot;: 0,
+      &quot;metadata&quot;: {
+        &quot;segNo&quot;: &quot;7&quot;,
+        &quot;lastEntryId&quot;: &quot;99&quot;,
+        &quot;state&quot;: &quot;Completed&quot;
+      }
+    }
+  ]
+}</code></pre></div></div>
+<p>Lists persisted segments under this exact log, including unloaded history. The parent log must exist. State and lastEntryId are metadata claims; probe/inspect physical data separately.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># records: [] means this listing has no matching records.
+# An undecodable record instead returns a configuration error.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>list segment metadata and etcd revision
+
+Usage:
+  wp meta segment list &lt;logName&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for list
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-segment-patch" id="ops-cli-meta-meta-segment-patch">
+<h2>wp meta segment patch</h2>
+<p>Patch policy/statistics/timestamps, segment lastEntryId and state. Identity, quorum and log truncation are protected. Segment state correction does not create compacted files or repair replica contents; Truncated can enable cleanup. Applying requires stopped writers/auditors, a revision, reason, and a new backup file.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment patch &lt;logName&gt; &lt;segmentId&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--apply</code>
+</td>
+<td>Commit the previewed correction (default: no writes)</td>
+</tr>
+<tr>
+<td>
+<code>--backup string</code>
+</td>
+<td>New pre-change backup file (required for apply; never overwritten)</td>
+</tr>
+<tr>
+<td>
+<code>--expected-revision int</code>
+</td>
+<td>Required target ModRevision for apply</td>
+</tr>
+<tr>
+<td>
+<code>--offline</code>
+</td>
+<td>Confirm relevant writers/auditors are stopped and will remain stopped during repair</td>
+</tr>
+<tr>
+<td>
+<code>--patch-file string</code>
+</td>
+<td>JSON object containing supported scalar fields (required)</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Operator&#x27;s reason, recorded with the change</td>
+</tr>
+</tbody>
+</table></div>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<p>Create the patch file using the JSON examples in the <a href="#operations-cli-meta">metadata walkthrough</a> before running this preview. Applying requires separately reviewed evidence and the guards described there.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment patch my-channel 7 --patch-file ./segment-repair.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;applied&quot;: false,
+  &quot;before&quot;: {
+    &quot;revision&quot;: 174
+  },
+  &quot;changes&quot;: {
+    &quot;lastEntryId&quot;: {
+      &quot;before&quot;: &quot;999&quot;,
+      &quot;after&quot;: &quot;99&quot;
+    }
+  }
+}</code></pre></div></div>
+<p>Create segment-repair.json using the walkthrough above and independent data evidence. Writable fields are size, createTime, completionTime, sealedTime, lastEntryId and state. Lifecycle constraints remain strict; key identity, quorum and log truncation fields are protected. An existing invalid embedded quorum is preserved and reported in warnings rather than blocking a scalar repair. meta check will still report that unresolved quorum. A state edit does not create compacted files or repair replica contents.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: StateConflict: lastEntryId is below the log truncation frontier
+# Other examples: key/segNo mismatch; Active segment requires lastEntryId -1; Sealed segment requires sealedTime.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Patch policy/statistics/timestamps, segment lastEntryId and state. Identity, quorum and log truncation are protected. Segment state correction does not create compacted files or repair replica contents; Truncated can enable cleanup. Applying requires stopped writers/auditors, a revision, reason, and a new backup file.
+
+Usage:
+  wp meta segment patch &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --apply                         Commit the previewed correction (default: no writes)
+      --backup string                 New pre-change backup file (required for apply; never overwritten)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+      --expected-revision int         Required target ModRevision for apply
+  -h, --help                          help for patch
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --offline                       Confirm relevant writers/auditors are stopped and will remain stopped during repair
+      --patch-file string             JSON object containing supported scalar fields (required)
+      --reason string                 Operator&#x27;s reason, recorded with the change</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="meta-segment-show" id="ops-cli-meta-meta-segment-show">
+<h2>wp meta segment show</h2>
+<p>show segment metadata and etcd revision</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment show &lt;logName&gt; &lt;segmentId&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment show my-channel 7 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{
+  &quot;kind&quot;: &quot;segment&quot;,
+  &quot;key&quot;: &quot;milvus-prod/woodpecker/logs/my-channel/segments/7&quot;,
+  &quot;revision&quot;: 174,
+  &quot;lease&quot;: 0,
+  &quot;metadata&quot;: {
+    &quot;segNo&quot;: &quot;7&quot;,
+    &quot;lastEntryId&quot;: &quot;99&quot;,
+    &quot;state&quot;: &quot;Completed&quot;
+  }
+}</code></pre></div></div>
+<p>Shows authoritative persisted metadata and its embedded quorum when present. Active lastEntryId=-1 is an unknown final boundary; Completed/Sealed lastEntryId=-1 means finalized empty. A key/segNo mismatch blocks patching. This read does not verify local or object-storage payloads.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Error: TargetNotFound: target not found: milvus-prod/woodpecker/logs/my-channel/segments/7</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>show segment metadata and etcd revision
+
+Usage:
+  wp meta segment show &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for show
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
 </details>
 </article>
 </section>
@@ -4988,6 +5959,7 @@ wp etcd cat milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 --encoding bas
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd cat milvus-prod/woodpecker/version \
   --etcd 127.0.0.1:32379 --encoding raw &gt; /tmp/wp-version.pb</code></pre></div></div>
 <p>A TargetNotFound result means that exact key is absent at the requested snapshot. Base64 is a reversible byte representation, not evidence of damaged data. This raw group does not decode, patch or restore metadata; the file above preserves one value, not a complete etcd backup.</p>
+<p>Once you know the Woodpecker prefix, use <a href="#operations-cli-meta">Metadata inspection &amp; repair</a> for decoded log/segment records and readable namespace exports. Supply that complete prefix through context or --meta-prefix.</p>
 <h2 id="ops-cli-etcd-pagination">3. Continue a listing at the same snapshot</h2>
 <p>Use JSON output for pagination. When <code>more</code> is true, copy <code>next_key_base64</code> and <code>snapshot_revision</code> from that response into the next request, keeping the same prefix:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json
@@ -5207,7 +6179,7 @@ Flags:
 <div class="ops-table-wrap"><table class="doc-table "><tr><th>Scenario</th><th>Start when</th><th>Main path</th></tr>
 <tr><td><a href="#operations-scenarios-read">Read Stalls</a></td><td>A reader/checkpoint is not advancing or the application waits for a WAL entry.</td><td>Reader position → confirmed tail → replica probe → locate blocker → verify same-reader progress.</td></tr>
 <tr><td><a href="#operations-scenarios-write">Write Stalls</a></td><td>Appends remain outstanding or durable confirmation stops.</td><td>Submission → in-flight ops → writer queues → LAC → targeted recovery → append verification.</td></tr>
-<tr><td><a href="#operations-scenarios-corruption">Data Corruption Diagnosis &amp; Recovery</a></td><td>CRC/read errors, short replica coverage or replica coverage disagrees with the expected boundary.</td><td>Snapshot → scan → probe/inspect → preserve healthy copies or accept a verified loss → verify reader and auditor closure.</td></tr></table></div>
+<tr><td><a href="#operations-scenarios-corruption">Data Corruption Diagnosis &amp; Recovery</a></td><td>CRC/read errors, short replica coverage or replica coverage disagrees with the expected boundary.</td><td>Metadata/data evidence → scan → probe/inspect → replica recovery, verified repair or accepted loss → application verification → checkpoint-backed retention.</td></tr></table></div>
 <h2 id="ops-scenarios-before">Before running the steps</h2>
 <p>Complete <a href="#operations-cli-local/start">CLI setup</a>, including reachable admin origins for every quorum member. Each scenario includes a copyable connection block; replace its illustrative names and IDs with discovered values. Etcd parameters are used only by metadata-consuming commands.</p>
 <p>Use the CLI built from the documented source checkout. Examples are illustrative excerpts; actual names, IDs and outcomes come from your deployment.</p>
@@ -5217,7 +6189,8 @@ Flags:
 <tr><td>Unknown / unreachable / cannot answer</td><td>Evidence is incomplete. Restore transport, mappings or target location before treating it as missing data.</td></tr>
 <tr><td>Short / checksum failure / all replicas fail</td><td>Correlate with the finalized metadata boundary and identify the exact affected entry range.</td></tr>
 <tr><td>Compacted / object_storage</td><td>Scan does not verify shared objects; probe can read them. Replies from three nodes may represent one shared copy.</td></tr>
-<tr><td>Preview / acceptance not given</td><td>No intervention was committed; exit 7 can be an expected preview result.</td></tr>
+<tr><td>Preview / acceptance not given</td><td>No intervention was committed. meta patch/truncate previews normally exit 0; skip-range/fencing previews can exit 7 because acceptance was not given.</td></tr>
+<tr><td>meta check: invalid / exit 9</td><td>Metadata constraints failed; inspect issues. An independently verified metadata repair uses the guarded patch workflow, while physical damage needs its own recovery.</td></tr>
 <tr><td>Command succeeded</td><td>Verify the application checkpoint/append result. An admin RPC succeeding is not the incident's closure.</td></tr></table></div>
 <p>Use the <a href="#operations-cli/exit-codes">exit-code reference</a> for scripts. For draining, configuration drift and disk inventory, use their <a href="#operations-cli">CLI topic pages</a> or the <a href="admin-guides/wpcli/cookbook.md">maintenance cookbook</a>; these are separate from the three troubleshooting paths.</p>
 
@@ -5229,7 +6202,7 @@ Flags:
 <h2 id="ops-scenarios-read-plan">Plan: position → tail → actual reads → recovery</h2>
 <div class="ops-table-wrap"><table class="doc-table "><tr><th>Step</th><th>Command</th><th>Intent</th></tr>
 <tr><td>1</td><td>log readers, twice</td><td>Identify the reader and determine whether its reported position moves.</td></tr>
-<tr><td>2</td><td>logstore lac; log scan</td><td>Compare the reader with confirmed progress and the authoritative segment state/boundary.</td></tr>
+<tr><td>2</td><td>meta show/check; logstore lac; log scan</td><td>Compare the reader with metadata constraints, confirmed progress and physical coverage.</td></tr>
 <tr><td>3</td><td>segment probe</td><td>Ask all quorum members to actually read at the suspected position.</td></tr>
 <tr><td>4</td><td>segment inspect; ops list/show</td><td>Locate damaged blocks/records or a long-running request; distinguish data failures from transport failures.</td></tr>
 <tr><td>5</td><td>Repeat the reader sample and application read</td><td>Verify the same reader resumes and reaches the expected tail after the appropriate recovery.</td></tr></table></div>
@@ -5267,7 +6240,10 @@ reader-123   7:0       7:50     3s           5m        live
 <tr><td>no live readers</td><td>No usable leased reader registration exists under this metadata namespace. Check context/prefix, client activity and leases. Milvus query traffic does not imply an open WAL reader.</td></tr></table></div>
 <p>CURRENT is the reader's reported position at a report tick, not a count of delivered records or an exact last-returned entry. Use application logs/checkpoints to identify the next entry actually required.</p>
 <h2 id="ops-scenarios-read-tail">2. Compare the confirmed tail and metadata</h2>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm logstore lac "$WP_LOG" "$WP_SEG"
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm meta log show "$WP_LOG"
+wm meta segment show "$WP_LOG" "$WP_SEG"
+wm meta check "$WP_LOG"
+wm logstore lac "$WP_LOG" "$WP_SEG"
 wm log scan "$WP_LOG" --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre></div></div>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Illustrative scan summary:
@@ -5280,6 +6256,7 @@ milvus-woodpecker-1      99             ok
 milvus-woodpecker-2      99             ok
 quorum LAC: 99 (aq=2 of 3 nodes at or past it)</code></pre></div></div>
 <p>If the application needs 50 and the finalized boundary is 99, there should be data to read. If an Active reader is already at the current tail, waiting can be normal. Active metadata is not a final boundary. LAC establishes confirmed progress, not checksum integrity; for Completed/Sealed segments the CLI can use metadata when no live writer remains.</p>
+<p>check returns state=ok/issues=[] for metadata constraints only; state=invalid/exit 9 names inconsistent fields, identity or quorum. If a software bug is independently proven, use the <a href="#operations-scenarios-corruption/metadata">controlled metadata repair</a> workflow. An Active lastEntryId=-1 is normal and must not be replaced by an observed LAC to make it look finalized.</p>
 <h2 id="ops-scenarios-read-probe">3. Read the suspected position on every replica</h2>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm segment probe "$WP_LOG" "$WP_SEG" \
   --from-entry 50 --max-entries 100 \
@@ -5394,9 +6371,13 @@ LOG:SEG  QUEUE_DEPTH  QUEUE_CAP
 <tr><td>No arriving appends and little queued work</td><td>Likely upstream inactivity or a client/RPC issue; not evidence of a blocked flush.</td></tr>
 <tr><td>segments shows only headers / segment-show is absent</td><td>These list loaded writer objects, not all persisted segments. Confirm the current segment and owner; do not infer no data.</td></tr>
 <tr><td>One node behind; others advance</td><td>Measure quorum confirmation. A lagging replica need not stall the application.</td></tr></table></div>
-<p>Read metadata when the writer registry is insufficient:</p>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm log scan "$WP_LOG" --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
+<p>Read persisted metadata when the writer registry is insufficient:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm meta segment list "$WP_LOG"
+wm meta segment show "$WP_LOG" "$WP_SEG"
+wm meta check "$WP_LOG"
+wm log scan "$WP_LOG" --from-segment "$WP_SEG" --to-segment "$WP_SEG" \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre></div></div>
+<p>meta list/show include unloaded history. check: state=ok validates metadata only; state=invalid/exit 9 identifies a constraint failure. For a proven metadata bug, use the <a href="#operations-scenarios-corruption/metadata">offline repair workflow</a> and restart affected clients afterward. Editing Active lastEntryId/state is not a substitute for writer recovery, and truncate is a retention operation rather than a fix for pending appends.</p>
 <h2 id="ops-scenarios-write-quorum">4. Compare LAC twice</h2>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm logstore lac "$WP_LOG" "$WP_SEG"
 sleep 10
@@ -5411,7 +6392,7 @@ quorum LAC: 99 (aq=2 of 3 nodes at or past it)</code></pre></div></div>
 <tr><td>LAC unchanged while appends remain outstanding</td><td>Confirmation is not advancing. Combine queues, errors and quorum-member evidence to locate the stage.</td></tr>
 <tr><td>Fewer than AQ usable replies</td><td>LAC is unknown; restore reachability or replica availability. Unknown is not a confirmed smaller frontier.</td></tr>
 <tr><td>no writer</td><td>Node answered but has no loaded writer for this segment. Completed/Sealed metadata may still establish a boundary; check whether the application has rolled to a newer segment.</td></tr></table></div>
-<p>The CLI's --timeout is an HTTP deadline, not the application's append deadline. A 2s send budget does not guarantee an end-to-end append within 2s: confirmation, retries and rolling add time.</p>
+<p>The CLI's --timeout bounds its own admin/metadata requests, not the application's append deadline. A 2s send budget does not guarantee an end-to-end append within 2s: confirmation, retries and rolling add time.</p>
 <h2 id="ops-scenarios-write-recovery">5. Restore the stage, then re-test append</h2>
 <p>Fix verified connectivity, storage or deployment failures first. A manual flush applies to a loaded writer and does not repair corrupted data:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>w logstore force-flush "$WP_NODE" --log "$WP_LOG_ID" --seg "$WP_SEG"</code></pre></div></div>
@@ -5433,16 +6414,16 @@ wm logstore lac "$WP_LOG" "$WP_SEG"</code></pre></div></div>
 
 </div>
 <div class="doc-page ops-page" id="page-operations-scenarios-corruption">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-scenarios-corruption/plan">Plan: preserve → compare → locate → choose → verify</a><a href="#operations-scenarios-corruption/preserve">1. Preserve evidence</a><a href="#operations-scenarios-corruption/scan">2. Find the affected segment</a><a href="#operations-scenarios-corruption/locate">3. Separate two damaged copies from all three</a><a href="#operations-scenarios-corruption/skip-range">4A. Accept a confirmed unreadable range</a><a href="#operations-scenarios-corruption/metadata">4B. Escalate a proven metadata bug</a><a href="#operations-scenarios-corruption/compaction">5. Close the compaction/retention loop</a><a href="#operations-scenarios-corruption/verify">6. Verify the chosen recovery</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-scenarios-corruption/plan">Plan: preserve → compare → locate → choose → verify</a><a href="#operations-scenarios-corruption/preserve">1. Preserve evidence</a><a href="#operations-scenarios-corruption/scan">2. Find the affected segment</a><a href="#operations-scenarios-corruption/locate">3. Separate two damaged copies from all three</a><a href="#operations-scenarios-corruption/skip-range">4A. Accept a confirmed unreadable range</a><a href="#operations-scenarios-corruption/metadata">4B. Correct a proven metadata bug</a><a href="#operations-scenarios-corruption/compaction">5. Close the compaction/retention loop</a><a href="#operations-scenarios-corruption/verify">6. Verify the chosen recovery</a></nav></details></aside>
 <h1>Data Corruption Diagnosis &amp; Recovery</h1>
 <p class="page-desc">Establish the metadata boundary, identify readable copies and exact bad entries, then choose recovery without discarding healthy data.</p>
 <h2 id="ops-scenarios-corruption-plan">Plan: preserve → compare → locate → choose → verify</h2>
 <div class="ops-table-wrap"><table class="doc-table "><tr><th>Step</th><th>Command</th><th>Intent</th></tr>
-<tr><td>1</td><td>log scan; deployment backup</td><td>Record the expected segment boundary and preserve deployment/data evidence before intervention.</td></tr>
+<tr><td>1</td><td>meta export/show/check; deployment data backup</td><td>Preserve decoded/raw metadata and original payloads; distinguish inconsistent metadata from physical damage.</td></tr>
 <tr><td>2</td><td>log scan quick/raw</td><td>Identify suspicious segments and distinguish failed inspection from confirmed missing coverage.</td></tr>
 <tr><td>3</td><td>segment probe/inspect</td><td>Find which copies read, where sequential reading stops and which later records remain recoverable.</td></tr>
-<tr><td>4</td><td>Supported replica recovery, or a verified skip-range</td><td>Choose based on verified healthy data, accepted loss or a proven metadata bug.</td></tr>
-<tr><td>5</td><td>Reader verification; application checkpoint/truncation; marking if retiring data</td><td>Prove resumed progress and observe auditor/retention closure separately from read recovery.</td></tr></table></div>
+<tr><td>4</td><td>Replica recovery, verified skip-range, or meta segment patch</td><td>Choose based on healthy copies, accepted loss or an independently proven metadata bug.</td></tr>
+<tr><td>5</td><td>Application verification; log truncate; marking if retiring data</td><td>Verify recovery/checkpoints, then separately observe auditor/retention closure.</td></tr></table></div>
 <details class="ops-help"><summary>Set the example connection and log before running the commands</summary>
 <p>Complete <a href="#operations-cli-local/start">CLI setup</a> first. Replace the example context, log name/ID, segment, node and storage space with values from your cluster. Check your CLI version and operation help before running these examples.</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>export WP_CONTEXT=milvus-prod
@@ -5463,7 +6444,11 @@ wm() { w "$@" --etcd "$WP_ETCD" --meta-prefix "$WP_META_PREFIX"; }</code></pre><
 
 <h2 id="ops-scenarios-corruption-preserve">1. Preserve evidence</h2>
 <p>Record the application checkpoint, log name/ID, segment ID, deployment version and replica locations. Preserve original replica files and relevant objects through your deployment's backup procedure before changing them. Capture the scan, probe and inspect results below; they are diagnostics, not a data backup.</p>
-<p>The scan summary includes the metadata state and last entry. A Completed boundary of 99 expects entries 0..99. If a software bug is suspected to have written a wrong boundary, preserve the raw metadata through your existing etcd backup procedure and use the <a href="#operations-scenarios-corruption/metadata">metadata escalation path</a>.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm meta export --output-file ./metadata-before-corruption.json
+wm meta log show "$WP_LOG"
+wm meta segment show "$WP_LOG" "$WP_SEG"
+wm meta check "$WP_LOG"</code></pre></div></div>
+<p>Export creates a new file containing readable known metadata and byte-exact original values, revisions and leases. It does not back up replica files/objects. check exits 0 with state=ok or 9 with state=invalid and issues; either result is metadata-only. A valid Completed boundary of 99 expects entries 0..99, but check cannot establish that those payloads exist. If independently verified data/history proves the boundary is wrong, follow <a href="#operations-scenarios-corruption/metadata">metadata repair</a>.</p>
 <h2 id="ops-scenarios-corruption-scan">2. Find the affected segment</h2>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm log scan "$WP_LOG" --mode quick \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
@@ -5530,12 +6515,41 @@ Declared: log 42 segment 7 now skips 50-50</code></pre></div></div>
 <tr><td>Acceptance not given</td><td>Expected preview behavior, no declaration committed.</td></tr>
 <tr><td>Declaration committed</td><td>Readers can skip the inclusive range. Files remain damaged; compaction is not repaired by the declaration.</td></tr></table></div>
 <p>Keep the same stalled reader running. Wait for refresh/report timing and verify it crosses 50 and reaches 99. For a reader returning original entries 0..99, skipping just 50 means 99 returned records; record IDs and application checkpoints establish what was lost. Removing the declaration does not restore data.</p>
-<h2 id="ops-scenarios-corruption-metadata">4B. Escalate a proven metadata bug</h2>
-<p>If independent file validation and acknowledged-write history disagree with the coordinator's last entry or state, preserve the evidence and identify the responsible software fix. Do not lower the boundary merely because a replica lost acknowledged data. This handbook's CLI does not include a general metadata patch operation; arrange a reviewed, version-specific repair with the maintainers.</p>
-<p>Metadata inspection and controlled patch tooling is tracked in <a href="https://github.com/zilliztech/woodpecker/pull/423">PR #423</a>. Follow its final merged command guide when available; the commands are not part of this source snapshot.</p>
+<h2 id="ops-scenarios-corruption-metadata">4B. Correct a proven metadata bug</h2>
+<p>Use this branch only when independent file validation, acknowledged-write history and the responsible software fix establish the correct metadata. A replica losing acknowledged data does not justify lowering the expected boundary. Example: metadata incorrectly says lastEntryId=999, but verified history proves this finalized segment ended at 99.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>cat &gt; ./segment-repair.json &lt;&lt;'JSON'
+{"lastEntryId":"99"}
+JSON
+wm meta segment patch "$WP_LOG" "$WP_SEG" --patch-file ./segment-repair.json</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Illustrative preview excerpt:
+{"applied":false,"before":{"revision":174},
+ "changes":{"lastEntryId":{"before":"999","after":"99"}}}</code></pre></div></div>
+<p>Review before/after/changes, then stop relevant writers/auditors and keep them stopped. --offline only acknowledges this prerequisite. Use the target segment's before.revision (174 in this example), not the log or snapshot revision:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm meta segment patch "$WP_LOG" "$WP_SEG" --patch-file ./segment-repair.json \
+  --apply --offline --expected-revision 174 \
+  --reason 'Correct independently verified tail after software fix' \
+  --backup ./segment-before-repair.json
+wm meta segment show "$WP_LOG" "$WP_SEG"
+wm meta check "$WP_LOG"</code></pre></div></div>
+<div class="ops-table-wrap"><table class="doc-table "><tr><th>Result</th><th>Interpretation / action</th></tr>
+<tr><td>applied=true, new_revision, audit_key, backup</td><td>The metadata write committed. Re-read the record, restart affected clients to refresh caches, and verify physical reads/application progress.</td></tr>
+<tr><td>Key/segNo mismatch; tail below truncation frontier; invalid lifecycle</td><td>The correction is rejected. Resolve the identity or invariant with verified evidence; do not rewrite state simply to make check pass.</td></tr>
+<tr><td>warnings: embedded quorum (unchanged)</td><td>An independent scalar repair may proceed, preserving that bad quorum. check still reports the unresolved quorum; this is not a clean recovery result.</td></tr>
+<tr><td>Writer lock / stale revision / concurrent update</td><td>No correction was committed by this attempt. Stop the metadata writer or refresh the preview; use a new backup filename for retry.</td></tr>
+<tr><td>Commit network error</td><td>The outcome may be unknown. Inspect current metadata and audit records before retrying.</td></tr></table></div>
+<p>State and timestamp correction uses the same flow; follow the <a href="#operations-cli-meta">metadata field rules and examples</a>. A state edit cannot create compacted files or repair replicas. Log truncation fields are protected from generic patching.</p>
 <h2 id="ops-scenarios-corruption-compaction">5. Close the compaction/retention loop</h2>
 <p>Reader recovery and compaction are separate. Skip-range does not fix a damaged Completed copy. Later eligible segments can be compacted independently; the damaged segment may continue failing until repaired or deliberately retired.</p>
-<p>After the application has durably checkpointed beyond the damaged segment, use its supported Woodpecker SDK truncation/checkpoint workflow to retire that range. For example, advancing the frontier into segment 8 permits retiring segment 7; truncating to 7:99 retains segment 7 itself. This CLI snapshot has no log truncate command.</p>
+<p>After verifying resumed application progress and a durable checkpoint beyond the damaged segment, advance normal retention with log truncate. The example assumes segment 8 is non-empty Completed/Sealed and its entry 0 is a verified safe boundary. Advancing into 8 permits retiring segment 7; truncating to 7:99 retains segment 7 itself.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm meta segment show "$WP_LOG" 8
+wm log truncate "$WP_LOG" --segment 8 --entry 0</code></pre></div></div>
+<p>The preview has applied=false, unchanged=false, before/after and target_segment_revision. Use the <strong>log</strong> before.revision for apply (17099 in this illustrative example), not the target segment revision. No --offline flag is needed for this normal retention operation; coordinate it with the application's checkpoint policy.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm log truncate "$WP_LOG" --segment 8 --entry 0 \
+  --apply --expected-revision 17099 \
+  --reason 'Verified durable application checkpoint beyond damaged segment 7' \
+  --backup ./log-before-truncate.json
+wm meta log show "$WP_LOG"</code></pre></div></div>
+<p>applied=true/new_revision confirms the frontier update and audit record, not immediate deletion. An unchanged frontier returns unchanged=true/applied=false with no new artifacts. Active/empty targets, backward movement, bad identity, missing apply guards and stale/concurrent revisions are rejected; inspect the message and preview again rather than forcing a change.</p>
 <p>A live application log handle/auditor marks earlier finalized segments Truncated in subsequent rounds, then applies retention and reader protection. No active auditor means the background transition will not occur. Physical deletion is asynchronous; a metadata backup cannot restore deleted files. Use scan and marking to observe the result:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wm log scan "$WP_LOG" --mode quick \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
@@ -5544,9 +6558,10 @@ wm marking list</code></pre></div></div>
 <h2 id="ops-scenarios-corruption-verify">6. Verify the chosen recovery</h2>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>sleep 35
 wm log readers "$WP_LOG"
+# For read/metadata/replica recovery, while this segment remains retained:
 wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 51 --max-entries 100 \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre></div></div>
-<p>For read recovery, require the same reader and application checkpoint to progress through the verified tail. For replica repair, re-probe/inspect every repaired copy. For retirement, expect Truncated/reclaimed rather than readable data and verify the auditor no longer attempts compaction on the retired segment. In a controlled lab, restore original files before removing skip declarations and verifying the original full record count.</p>
+<p>For skip-range recovery, require the same reader and application checkpoint to progress through the verified tail. For metadata repair, restart affected clients and verify the resumed reader/application checkpoint plus physical reads. For replica repair, re-probe/inspect every repaired copy. For retirement, expect Truncated/reclaimed rather than readable data and verify the auditor no longer attempts compaction on the retired segment; do not require reading data intentionally reclaimed. In a controlled lab, restore original files before removing skip declarations and verifying the original full record count.</p>
 
 </div>
 <!-- END OPERATIONS CONTENT -->

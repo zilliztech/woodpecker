@@ -1,0 +1,811 @@
+<section id="topic-meta">
+<h2>Metadata inspection & repair</h2>
+<h2 id="metadata-start">1. Read the record before choosing a repair</h2>
+<p>Use a current source build containing <code>wp meta</code> and <code>wp log truncate</code>; these additions are not in v0.1.46. Complete <a href="cli.html#cli-yaml">CLI setup</a> first. The commands below assume the milvus-prod context has reachable etcd endpoints and the complete metadata prefix. With both configured, no node admin connection or bucket/root-path is needed.</p>
+<pre>
+<code>wp --context milvus-prod meta log list
+wp --context milvus-prod meta log show my-channel
+wp --context milvus-prod meta segment list my-channel
+wp --context milvus-prod meta segment show my-channel 7
+wp --context milvus-prod meta check my-channel</code>
+</pre>
+<p>Use the real logical log name. list includes persisted history even when node-local writer objects are unloaded. show wraps decoded metadata with its exact key, modification revision and lease; int64 fields appear as decimal strings. For modern segments, inspect the embedded quorum in segment show; separately stored quorum records may be absent.</p>
+<h2 id="patch-files">2. Create a small JSON patch file</h2>
+<p>Pass only fields to change, not the show envelope or a full exported record. For example, create the files used by the command demos below:</p>
+<pre>
+<code>cat &gt; ./log-policy.json &lt;&lt;'JSON'
+{"max_segment_roll_time_seconds": 120}
+JSON
+
+# Only after independently proving that 99 is the correct finalized tail:
+cat &gt; ./segment-repair.json &lt;&lt;'JSON'
+{"lastEntryId": "99"}
+JSON</code>
+</pre>
+<table>
+<tr>
+<th>Patch target</th>
+<th>Writable fields / constraints</th>
+</tr>
+<tr>
+<td>log</td>
+<td>max_segment_roll_time_seconds, max_segment_roll_size_bytes, compaction_buffer_size_bytes, max_compaction_file_count. Nonnegative; zero is allowed. These are reserved metadata fields, not live client runtime configuration.</td>
+</tr>
+<tr>
+<td>segment</td>
+<td>size, createTime, completionTime, sealedTime, lastEntryId, state. Times are Unix milliseconds; size is bytes. Lifecycle times must agree with state. Integers may be numbers or decimal strings.</td>
+</tr>
+<tr>
+<td>Protected</td>
+<td>Identity (logId/segNo), quorum and log truncation fields. Quorums are read-only; advance normal retention with <a href="cli.html#log-truncate">log truncate</a>.</td>
+</tr>
+</table>
+<p>Active requires lastEntryId=-1 and zero completion/sealed times. A verified rollback to Active must reset all three together. Completed/Sealed lastEntryId=-1 means finalized empty; Sealed needs a valid sealedTime. A key/segNo mismatch is rejected. Changing state does not generate compacted objects, repair data or execute recovery; Truncated can enable cleanup.</p>
+<details class="ops-help">
+<summary>State-correction JSON examples</summary>
+<p>Use only the state independently verified for this segment. These are alternative patch-file contents, not automatic recovery steps. For a verified rollback to Active:</p>
+<pre>
+<code>{"state":"Active","lastEntryId":"-1","completionTime":"0","sealedTime":"0"}</code>
+</pre>
+<p>For a verified Completed-to-Sealed correction with existing compacted files and a known sealing time:</p>
+<pre>
+<code>{"state":"Sealed","lastEntryId":"99","sealedTime":"1791806000000"}</code>
+</pre>
+<p>The timestamp is illustrative: replace it with the verified Unix-millisecond value, after completionTime. State names are Active, Completed, Sealed and Truncated (numbers 0, 2, 3, 4); reserved state 1 is rejected. A legacy createTime=0 must also be corrected with a verified positive creation time.</p>
+</details>
+<h2 id="apply-guards">3. Preview, stop metadata writers, then apply</h2>
+<pre>
+<code>wp --context milvus-prod meta segment patch my-channel 7 \
+  --patch-file ./segment-repair.json</code>
+</pre>
+<p>A preview returns applied=false, before/after records, changes and snapshot_revision. Review all changes. Use the target's <code>before.revision</code> for apply. If it is 174, stop the relevant writers/auditors and keep them stopped throughout the repair:</p>
+<pre>
+<code>wp --context milvus-prod meta segment patch my-channel 7 \
+  --patch-file ./segment-repair.json --apply --offline \
+  --expected-revision 174 --reason 'Correct verified tail after software fix' \
+  --backup ./segment-before-repair.json
+
+wp --context milvus-prod meta segment show my-channel 7
+wp --context milvus-prod meta check my-channel</code>
+</pre>
+<p>--offline acknowledges your action; it does not stop clients. Apply checks revision and writer-lock absence, persists a new backup, and writes the correction and audit record atomically. Restart affected clients after repair so cached metadata is refreshed. applied=true/new_revision confirms the write, not data readability. Reused backup paths fail; stale revisions or concurrent changes require a fresh preview and a new backup filename.</p>
+<pre>
+<code># Example warning on an otherwise valid scalar repair:
+"warnings": [
+  "embedded quorum (unchanged): invalid quorum sizes or node count"
+]</code>
+</pre>
+<p>An existing embedded-quorum problem is preserved and reported in warnings; it does not block an independent scalar repair. meta check still reports that unresolved problem. Lifecycle and truncation-bound violations continue to block the patch. Do not mark a segment Sealed or lower a tail just to silence a physical corruption finding.</p>
+<h2 id="metadata-results">4. Interpret checks, exports and failures</h2>
+<table>
+<tr>
+<th>Result</th>
+<th>Meaning / next step</th>
+</tr>
+<tr>
+<td>check: state=ok, issues=[]; exit 0</td>
+<td>The inspected metadata constraints passed. Probe/inspect separately for physical data; verify application progress separately.</td>
+</tr>
+<tr>
+<td>check: state=invalid; exit 9</td>
+<td>Read the exact key/field in issues. A bad frontier, lifecycle or quorum is metadata evidence, not automatic permission to rewrite it.</td>
+</tr>
+<tr>
+<td>TargetNotFound; exit 3</td>
+<td>The exact record is absent. Verify context, prefix and logical IDs before diagnosing missing payloads.</td>
+</tr>
+<tr>
+<td>Patch StateConflict; exit 4</td>
+<td>Read the constraint, revision or writer-lock error. Re-read records and correct the verified cause; do not blindly retry apply.</td>
+</tr>
+<tr>
+<td>export / backup</td>
+<td>New mode-0600 file with readable known metadata and original value_base64/revisions/leases. File and parent directory must sync before patch commits. Unknown/malformed records retain their bytes. This is not a payload backup or automatic rollback command.</td>
+</tr>
+</table>
+<p>If commit returns a network error, re-read the target and audit records before retrying: the write outcome may be unknown. For a complete operational example, follow <a href="scenarios.html#metadata">verified metadata repair</a> in Troubleshooting.</p>
+<article class="command" id="meta-check">
+<h2>wp meta check</h2>
+<p>Validate log/segment metadata constraints (does not verify physical data)</p>
+<pre>
+<code>wp meta check &lt;logName&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp meta check my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;issues&quot;: [],
+  &quot;log_name&quot;: &quot;my-channel&quot;,
+  &quot;scope&quot;: &quot;metadata only; use segment inspect/log scan for physical data&quot;,
+  &quot;segments_checked&quot;: 2,
+  &quot;snapshot_revision&quot;: 18000,
+  &quot;state&quot;: &quot;ok&quot;
+}</code>
+</pre>
+<p>Checks log policy/frontier fields, segment identity/state/timestamps, embedded quorum structure and frontier bounds at one snapshot. Exit 9 plus issues means inconsistent metadata. state=ok establishes metadata consistency only; it does not prove payload readability or application progress.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>{
+  &quot;state&quot;: &quot;invalid&quot;,
+  &quot;issues&quot;: [
+    &quot;milvus-prod/woodpecker/logs/my-channel/segments/7: key must use canonical segment ID 8 matching segNo&quot;
+  ]
+}
+Error: RedFinding: 1 metadata constraint violations</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Validate log/segment metadata constraints (does not verify physical data)
+
+Usage:
+  wp meta check &lt;logName&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for check
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-export">
+<h2>wp meta export</h2>
+<p>Export one metadata namespace at a consistent etcd revision</p>
+<pre>
+<code>wp meta export [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--output-file string</code>
+</td>
+<td>New snapshot file (required; never overwritten)</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp meta export --output-file ./metadata-snapshot.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;file&quot;: &quot;./metadata-snapshot.json&quot;,
+  &quot;keys&quot;: 5,
+  &quot;snapshot_revision&quot;: 18000
+}</code>
+</pre>
+<p>Creates a new mode-0600 namespace snapshot. The file contains readable metadata for known protobuf records plus byte-exact value_base64, revisions and leases. Unknown/corrupt values retain bytes and encoding/decode errors. It is a metadata backup, not a payload backup or automatic restore command; an existing file is never overwritten.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: Config: create new backup file: open ./metadata-snapshot.json: file exists</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Export one metadata namespace at a consistent etcd revision
+
+Usage:
+  wp meta export [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for export
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --output-file string            New snapshot file (required; never overwritten)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-log-list">
+<h2>wp meta log list</h2>
+<p>list log metadata and etcd revision</p>
+<pre>
+<code>wp meta log list [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp meta log list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;prefix&quot;: &quot;milvus-prod/woodpecker&quot;,
+  &quot;snapshot_revision&quot;: 18000,
+  &quot;records&quot;: [
+    {
+      &quot;kind&quot;: &quot;log&quot;,
+      &quot;key&quot;: &quot;milvus-prod/woodpecker/logs/my-channel&quot;,
+      &quot;revision&quot;: 17099,
+      &quot;lease&quot;: 0,
+      &quot;metadata&quot;: {
+        &quot;logId&quot;: &quot;42&quot;,
+        &quot;truncated_segment_id&quot;: &quot;6&quot;,
+        &quot;truncated_entry_id&quot;: &quot;99&quot;
+      }
+    }
+  ]
+}</code>
+</pre>
+<p>Lists top-level log records, including unloaded history. records is a snapshot, not a list of live node writers. Narrow with meta log show; use the record revision for a patch.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code># records: [] means this listing has no matching records.
+# An undecodable record instead returns a configuration error.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>list log metadata and etcd revision
+
+Usage:
+  wp meta log list [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for list
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-log-patch">
+<h2>wp meta log patch</h2>
+<p>Patch policy/statistics/timestamps, segment lastEntryId and state. Identity, quorum and log truncation are protected. Segment state correction does not create compacted files or repair replica contents; Truncated can enable cleanup. Applying requires stopped writers/auditors, a revision, reason, and a new backup file.</p>
+<pre>
+<code>wp meta log patch &lt;logName&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--apply</code>
+</td>
+<td>Commit the previewed correction (default: no writes)</td>
+</tr>
+<tr>
+<td>
+<code>--backup string</code>
+</td>
+<td>New pre-change backup file (required for apply; never overwritten)</td>
+</tr>
+<tr>
+<td>
+<code>--expected-revision int</code>
+</td>
+<td>Required target ModRevision for apply</td>
+</tr>
+<tr>
+<td>
+<code>--offline</code>
+</td>
+<td>Confirm relevant writers/auditors are stopped and will remain stopped during repair</td>
+</tr>
+<tr>
+<td>
+<code>--patch-file string</code>
+</td>
+<td>JSON object containing supported scalar fields (required)</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Operator&#x27;s reason, recorded with the change</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<p>Create the patch file using the JSON examples in the <a href="cli.html#meta">metadata walkthrough</a> before running this preview. Applying requires separately reviewed evidence and the guards described there.</p>
+<pre>
+<code>wp meta log patch my-channel --patch-file ./log-policy.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;applied&quot;: false,
+  &quot;before&quot;: {
+    &quot;revision&quot;: 17099
+  },
+  &quot;changes&quot;: {
+    &quot;max_segment_roll_time_seconds&quot;: {
+      &quot;before&quot;: &quot;60&quot;,
+      &quot;after&quot;: &quot;120&quot;
+    }
+  }
+}</code>
+</pre>
+<p>Create log-policy.json using the walkthrough above. Only max_segment_roll_time_seconds, max_segment_roll_size_bytes, compaction_buffer_size_bytes and max_compaction_file_count are patchable (nonnegative; zero allowed). They are reserved metadata fields, not live runtime configuration. Preview writes nothing. Apply uses the target before.revision plus offline acknowledgement, reason and a new durable backup; unknown fields and leases are preserved.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: Usage: --apply requires --offline, --expected-revision, --reason, and --backup
+# A stale revision or live writer lock returns StateConflict; no correction is applied.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Patch policy/statistics/timestamps, segment lastEntryId and state. Identity, quorum and log truncation are protected. Segment state correction does not create compacted files or repair replica contents; Truncated can enable cleanup. Applying requires stopped writers/auditors, a revision, reason, and a new backup file.
+
+Usage:
+  wp meta log patch &lt;logName&gt; [flags]
+
+Flags:
+      --apply                         Commit the previewed correction (default: no writes)
+      --backup string                 New pre-change backup file (required for apply; never overwritten)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+      --expected-revision int         Required target ModRevision for apply
+  -h, --help                          help for patch
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --offline                       Confirm relevant writers/auditors are stopped and will remain stopped during repair
+      --patch-file string             JSON object containing supported scalar fields (required)
+      --reason string                 Operator&#x27;s reason, recorded with the change</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-log-show">
+<h2>wp meta log show</h2>
+<p>show log metadata and etcd revision</p>
+<pre>
+<code>wp meta log show &lt;logName&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp meta log show my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;kind&quot;: &quot;log&quot;,
+  &quot;key&quot;: &quot;milvus-prod/woodpecker/logs/my-channel&quot;,
+  &quot;revision&quot;: 17099,
+  &quot;lease&quot;: 0,
+  &quot;metadata&quot;: {
+    &quot;logId&quot;: &quot;42&quot;,
+    &quot;truncated_segment_id&quot;: &quot;6&quot;,
+    &quot;truncated_entry_id&quot;: &quot;99&quot;
+  }
+}</code>
+</pre>
+<p>Shows the exact log key, ModRevision, lease and decoded fields. int64 values are decimal strings. A missing target means the key is absent in this namespace, not a damaged replica. Log truncation fields are changed with log truncate, not generic patch.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: TargetNotFound: target not found: milvus-prod/woodpecker/logs/my-channel</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>show log metadata and etcd revision
+
+Usage:
+  wp meta log show &lt;logName&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for show
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-quorum-list">
+<h2>wp meta quorum list</h2>
+<p>list quorum metadata and etcd revision</p>
+<pre>
+<code>wp meta quorum list [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp meta quorum list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;prefix&quot;: &quot;milvus-prod/woodpecker&quot;,
+  &quot;snapshot_revision&quot;: 18000,
+  &quot;records&quot;: [
+    {
+      &quot;kind&quot;: &quot;quorum&quot;,
+      &quot;key&quot;: &quot;milvus-prod/woodpecker/quorums/1&quot;,
+      &quot;revision&quot;: 100,
+      &quot;lease&quot;: 0,
+      &quot;metadata&quot;: {
+        &quot;id&quot;: &quot;1&quot;,
+        &quot;es&quot;: 3,
+        &quot;wq&quot;: 3,
+        &quot;aq&quot;: 2,
+        &quot;nodes&quot;: [
+          &quot;node0:18080&quot;,
+          &quot;node1:18080&quot;,
+          &quot;node2:18080&quot;
+        ]
+      }
+    }
+  ]
+}</code>
+</pre>
+<p>Lists separately stored quorum records. Modern segments embed their quorum, so an empty list can be normal; inspect meta segment show to see that topology. This group cannot patch quorum records.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code># records: [] means this listing has no matching records.
+# An undecodable record instead returns a configuration error.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>list quorum metadata and etcd revision
+
+Usage:
+  wp meta quorum list [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for list
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-quorum-show">
+<h2>wp meta quorum show</h2>
+<p>show quorum metadata and etcd revision</p>
+<pre>
+<code>wp meta quorum show &lt;ID&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp meta quorum show 1 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;kind&quot;: &quot;quorum&quot;,
+  &quot;key&quot;: &quot;milvus-prod/woodpecker/quorums/1&quot;,
+  &quot;revision&quot;: 100,
+  &quot;lease&quot;: 0,
+  &quot;metadata&quot;: {
+    &quot;id&quot;: &quot;1&quot;,
+    &quot;es&quot;: 3,
+    &quot;wq&quot;: 3,
+    &quot;aq&quot;: 2,
+    &quot;nodes&quot;: [
+      &quot;node0:18080&quot;,
+      &quot;node1:18080&quot;,
+      &quot;node2:18080&quot;
+    ]
+  }
+}</code>
+</pre>
+<p>Shows one separately stored quorum by numeric ID; it does not fan out or test node health. es is ensemble size, wq write quorum, aq acknowledgement quorum. Modern embedded quorum is read through meta segment show.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: TargetNotFound: target not found: milvus-prod/woodpecker/quorums/1</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>show quorum metadata and etcd revision
+
+Usage:
+  wp meta quorum show &lt;ID&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for show
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-segment-list">
+<h2>wp meta segment list</h2>
+<p>list segment metadata and etcd revision</p>
+<pre>
+<code>wp meta segment list &lt;logName&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp meta segment list my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;prefix&quot;: &quot;milvus-prod/woodpecker&quot;,
+  &quot;snapshot_revision&quot;: 18000,
+  &quot;records&quot;: [
+    {
+      &quot;kind&quot;: &quot;segment&quot;,
+      &quot;key&quot;: &quot;milvus-prod/woodpecker/logs/my-channel/segments/7&quot;,
+      &quot;revision&quot;: 174,
+      &quot;lease&quot;: 0,
+      &quot;metadata&quot;: {
+        &quot;segNo&quot;: &quot;7&quot;,
+        &quot;lastEntryId&quot;: &quot;99&quot;,
+        &quot;state&quot;: &quot;Completed&quot;
+      }
+    }
+  ]
+}</code>
+</pre>
+<p>Lists persisted segments under this exact log, including unloaded history. The parent log must exist. State and lastEntryId are metadata claims; probe/inspect physical data separately.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code># records: [] means this listing has no matching records.
+# An undecodable record instead returns a configuration error.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>list segment metadata and etcd revision
+
+Usage:
+  wp meta segment list &lt;logName&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for list
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-segment-patch">
+<h2>wp meta segment patch</h2>
+<p>Patch policy/statistics/timestamps, segment lastEntryId and state. Identity, quorum and log truncation are protected. Segment state correction does not create compacted files or repair replica contents; Truncated can enable cleanup. Applying requires stopped writers/auditors, a revision, reason, and a new backup file.</p>
+<pre>
+<code>wp meta segment patch &lt;logName&gt; &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--apply</code>
+</td>
+<td>Commit the previewed correction (default: no writes)</td>
+</tr>
+<tr>
+<td>
+<code>--backup string</code>
+</td>
+<td>New pre-change backup file (required for apply; never overwritten)</td>
+</tr>
+<tr>
+<td>
+<code>--expected-revision int</code>
+</td>
+<td>Required target ModRevision for apply</td>
+</tr>
+<tr>
+<td>
+<code>--offline</code>
+</td>
+<td>Confirm relevant writers/auditors are stopped and will remain stopped during repair</td>
+</tr>
+<tr>
+<td>
+<code>--patch-file string</code>
+</td>
+<td>JSON object containing supported scalar fields (required)</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Operator&#x27;s reason, recorded with the change</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<p>Create the patch file using the JSON examples in the <a href="cli.html#meta">metadata walkthrough</a> before running this preview. Applying requires separately reviewed evidence and the guards described there.</p>
+<pre>
+<code>wp meta segment patch my-channel 7 --patch-file ./segment-repair.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;applied&quot;: false,
+  &quot;before&quot;: {
+    &quot;revision&quot;: 174
+  },
+  &quot;changes&quot;: {
+    &quot;lastEntryId&quot;: {
+      &quot;before&quot;: &quot;999&quot;,
+      &quot;after&quot;: &quot;99&quot;
+    }
+  }
+}</code>
+</pre>
+<p>Create segment-repair.json using the walkthrough above and independent data evidence. Writable fields are size, createTime, completionTime, sealedTime, lastEntryId and state. Lifecycle constraints remain strict; key identity, quorum and log truncation fields are protected. An existing invalid embedded quorum is preserved and reported in warnings rather than blocking a scalar repair. meta check will still report that unresolved quorum. A state edit does not create compacted files or repair replica contents.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: StateConflict: lastEntryId is below the log truncation frontier
+# Other examples: key/segNo mismatch; Active segment requires lastEntryId -1; Sealed segment requires sealedTime.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Patch policy/statistics/timestamps, segment lastEntryId and state. Identity, quorum and log truncation are protected. Segment state correction does not create compacted files or repair replica contents; Truncated can enable cleanup. Applying requires stopped writers/auditors, a revision, reason, and a new backup file.
+
+Usage:
+  wp meta segment patch &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --apply                         Commit the previewed correction (default: no writes)
+      --backup string                 New pre-change backup file (required for apply; never overwritten)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+      --expected-revision int         Required target ModRevision for apply
+  -h, --help                          help for patch
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --offline                       Confirm relevant writers/auditors are stopped and will remain stopped during repair
+      --patch-file string             JSON object containing supported scalar fields (required)
+      --reason string                 Operator&#x27;s reason, recorded with the change</code>
+</pre>
+</details>
+</article>
+<article class="command" id="meta-segment-show">
+<h2>wp meta segment show</h2>
+<p>show segment metadata and etcd revision</p>
+<pre>
+<code>wp meta segment show &lt;logName&gt; &lt;segmentId&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp meta segment show my-channel 7 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;kind&quot;: &quot;segment&quot;,
+  &quot;key&quot;: &quot;milvus-prod/woodpecker/logs/my-channel/segments/7&quot;,
+  &quot;revision&quot;: 174,
+  &quot;lease&quot;: 0,
+  &quot;metadata&quot;: {
+    &quot;segNo&quot;: &quot;7&quot;,
+    &quot;lastEntryId&quot;: &quot;99&quot;,
+    &quot;state&quot;: &quot;Completed&quot;
+  }
+}</code>
+</pre>
+<p>Shows authoritative persisted metadata and its embedded quorum when present. Active lastEntryId=-1 is an unknown final boundary; Completed/Sealed lastEntryId=-1 means finalized empty. A key/segNo mismatch blocks patching. This read does not verify local or object-storage payloads.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: TargetNotFound: target not found: milvus-prod/woodpecker/logs/my-channel/segments/7</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>show segment metadata and etcd revision
+
+Usage:
+  wp meta segment show &lt;logName&gt; &lt;segmentId&gt; [flags]
+
+Flags:
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+  -h, --help                          help for show
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+</pre>
+</details>
+</article>
+</section>
