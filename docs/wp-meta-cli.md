@@ -165,12 +165,31 @@ correction changes metadata only; it does not resize or repair any data file.
 
 ## Repair lastEntryId and state after a metadata bug
 
-`lastEntryId` accepts an integer or decimal string >= -1 (`-1`: empty segment).
+`lastEntryId` accepts an integer or decimal string >= -1. Active segments require
+`-1`, meaning their completion boundary is not yet established; this does not
+mean their replicas contain no data. For finalized segments, `-1` means empty.
 `state` accepts `Active`, `Completed`, `Sealed`, `Truncated`, or the corresponding
 numbers 0, 2, 3, 4. State 1 is reserved and rejected. The complete proposed
 record must satisfy the lifecycle timestamp rules; include corrected timestamps
 in the same patch if necessary. A finalized segment's lastEntryId cannot be
 below the log's truncation entry when it is the frontier segment.
+
+If a verified repair requires reverting a segment to `Active`, reset
+`lastEntryId` to `-1` and clear both lifecycle timestamps in the same patch:
+
+```json
+{
+  "state": "Active",
+  "lastEntryId": "-1",
+  "completionTime": "0",
+  "sealedTime": "0"
+}
+```
+
+Leaving a previous finalized tail in Active metadata would seed recovery with
+that old completion boundary. The command rejects this inconsistent record.
+All other constraints still apply: for example, a legacy record with
+`createTime=0` must also include a verified positive `createTime` in its repair.
 
 For example, after verifying that the segment really has entries through 99
 and its compacted files are present, correct an erroneous lastEntryId and state:

@@ -30,14 +30,29 @@ func validateMetaMessage(msg pb.Message) []string {
 			issues = append(issues, "unset truncation segment requires entry -1")
 		}
 	case *proto.SegmentMetadata:
-		if m.SegNo < 0 || m.LastEntryId < -1 || m.Size < 0 || m.CreateTime <= 0 {
-			issues = append(issues, "invalid segment ID, lastEntryId, size or createTime")
+		if m.SegNo < 0 {
+			issues = append(issues, "segNo must be nonnegative")
+		}
+		if m.LastEntryId < -1 {
+			issues = append(issues, "lastEntryId must be >= -1")
+		}
+		if m.Size < 0 {
+			issues = append(issues, "size must be nonnegative")
+		}
+		if m.CreateTime <= 0 {
+			issues = append(issues, "createTime must be positive")
 		}
 		if _, ok := proto.SegmentState_name[int32(m.State)]; !ok {
 			issues = append(issues, "unknown segment state")
 		}
-		if m.CompletionTime < 0 || m.SealedTime < 0 {
-			issues = append(issues, "timestamps must be nonnegative")
+		if m.CompletionTime < 0 {
+			issues = append(issues, "completionTime must be nonnegative")
+		}
+		if m.SealedTime < 0 {
+			issues = append(issues, "sealedTime must be nonnegative")
+		}
+		if m.State == proto.SegmentState_Active && m.LastEntryId != -1 {
+			issues = append(issues, "Active segment requires lastEntryId -1")
 		}
 		if m.State == proto.SegmentState_Active && (m.CompletionTime != 0 || m.SealedTime != 0) {
 			issues = append(issues, "Active segment must not have completionTime or sealedTime")
@@ -132,9 +147,10 @@ func newMetaCheckCommand() *cobra.Command {
 				logMeta = msg.(*proto.LogMeta)
 			} else {
 				m := msg.(*proto.SegmentMetadata)
-				id, err := strconv.ParseInt(strings.TrimPrefix(k, key+"/segments/"), 10, 64)
-				if err != nil || id != m.SegNo {
-					issues = append(issues, k+": key and segNo differ")
+				suffix := strings.TrimPrefix(k, key+"/segments/")
+				if suffix != strconv.FormatInt(m.SegNo, 10) {
+					issues = append(issues, fmt.Sprintf("%s: key must use canonical segment ID %d matching segNo", k, m.SegNo))
+					continue
 				}
 				segments[m.SegNo] = m
 			}
