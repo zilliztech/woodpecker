@@ -63,6 +63,31 @@ memberlist discovery and metadata quorum targets, including mapped historical
 nodes absent from memberlist. Original node identities remain unchanged.
 See the [external Kubernetes configuration example](../../docs/admin-guides/wpcli/configuration.md#running-outside-kubernetes).
 
+### Etcd connections
+
+Metadata-consuming commands can read their connection from the selected context:
+
+```yaml
+current-context: external
+contexts:
+  external:
+    endpoint: http://127.0.0.1:19091
+    etcd:
+      endpoints: [127.0.0.1:32379]
+      meta_prefix: milvus-prod/woodpecker
+```
+
+Command flags override context settings; metadata commands use admin discovery
+only for missing endpoints/prefix. Optional context fields include username,
+password, tls_enabled, cacert, cert, key and tls_min_version. Certificate paths
+refer to files on the machine running wp. See the
+[etcd configuration reference](../../docs/admin-guides/wpcli/configuration.md#etcd-connections).
+
+An etcd-only context can omit endpoint and meta_prefix for the raw commands:
+`wp etcd list`, `wp etcd get <key>` and `wp etcd cat <key>`. They are read-only,
+use literal keys, and never discover a Woodpecker admin endpoint. See the
+[raw etcd walkthrough](../../docs/wp-etcd-cli.md).
+
 ## Commands
 
 ### Node lifecycle

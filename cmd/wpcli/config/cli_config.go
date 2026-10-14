@@ -19,6 +19,19 @@ type K8sConfig struct {
 	Kubectl     string `yaml:"kubectl,omitempty"`
 }
 
+// EtcdConfig holds host-accessible metadata connection settings.
+type EtcdConfig struct {
+	Endpoints     []string `yaml:"endpoints,omitempty"`
+	MetaPrefix    string   `yaml:"meta_prefix,omitempty"`
+	Username      string   `yaml:"username,omitempty"`
+	Password      string   `yaml:"password,omitempty"`
+	Cert          string   `yaml:"cert,omitempty"`
+	Key           string   `yaml:"key,omitempty"`
+	CACert        string   `yaml:"cacert,omitempty"`
+	TLSMinVersion string   `yaml:"tls_min_version,omitempty"`
+	TLSEnabled    *bool    `yaml:"tls_enabled,omitempty"`
+}
+
 // Context is one named cluster context in cli.yaml.
 type Context struct {
 	Endpoint      string            `yaml:"endpoint"`
@@ -27,6 +40,7 @@ type Context struct {
 	Concurrency   int               `yaml:"concurrency"`
 	Strict        bool              `yaml:"strict"`
 	NodeAdminURLs map[string]string `yaml:"node_admin_urls,omitempty"`
+	Etcd          EtcdConfig        `yaml:"etcd,omitempty"`
 	K8s           K8sConfig         `yaml:"k8s,omitempty"`
 }
 

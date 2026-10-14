@@ -76,7 +76,7 @@ defaults:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `endpoint` | string | (required) | Admin HTTP seed endpoint |
+| `endpoint` | string | (required for admin commands) | Admin HTTP seed endpoint; raw etcd commands do not need it |
 | `node_admin_urls` | map[string]string | empty | Original node identity/address to reachable admin HTTP origin |
 | `admin_port` | int | 9091 | Admin port for peer discovery |
 | `timeout` | duration | 30s | Per-request timeout |
@@ -122,6 +122,75 @@ Values are resolved in this order (highest priority first):
 | `--kube-context` | `contexts.<name>.k8s.kube_context` | |
 | `--kubeconfig` | `contexts.<name>.k8s.kubeconfig` | |
 | `--kubectl` | `contexts.<name>.k8s.kubectl` | kubectl |
+
+## Etcd connections
+
+Store etcd settings under the selected context. Use host-reachable endpoints and
+certificate files local to the machine running wp:
+
+```yaml
+current-context: external
+contexts:
+  external:
+    endpoint: http://127.0.0.1:19091
+    etcd:
+      endpoints: [127.0.0.1:32379]
+      meta_prefix: milvus-prod/woodpecker
+      # Add username/password if the deployed etcd requires authentication.
+      # username: operator
+      # password: YOUR_PASSWORD
+      # For TLS, set these to actual local files; cert/key are needed only for mTLS.
+      # tls_enabled: true
+      # cacert: /path/to/ca.pem
+      # cert: /path/to/client.pem
+      # key: /path/to/client-key.pem
+      # tls_min_version: "1.3"
+```
+
+The metadata prefix is the full deployed namespace, for example a Milvus root
+path followed by `woodpecker`; it is independent of the data bucket/root path.
+
+| Context field | CLI override | Meaning |
+|---|---|---|
+| `etcd.endpoints` | `--etcd` | YAML list of endpoints; flag accepts a comma-separated list |
+| `etcd.meta_prefix` | `--meta-prefix` | Full Woodpecker metadata namespace |
+| `etcd.username` / `etcd.password` | `--etcd-username` / `--etcd-password` | Etcd authentication |
+| `etcd.cacert` | `--etcd-cacert` | Local PEM trust bundle; omitted uses system roots for TLS |
+| `etcd.cert` / `etcd.key` | `--etcd-cert` / `--etcd-key` | Local client certificate/private key pair for mutual TLS |
+| `etcd.tls_min_version` | `--etcd-tls-min-version` | Minimum TLS version; default 1.2 |
+| `etcd.tls_enabled` | — | Explicit TLS configuration switch; absent infers TLS from certificate settings |
+
+Connection fields resolve as **flags → context → admin discovery**. Explicit
+empty flags can clear optional settings, for example `--etcd-password=`. A
+certificate flag enables TLS even when the context's tls_enabled is false.
+Cert/key must be supplied together; unreadable or invalid local TLS files are
+configuration errors. An invalid context name is an error.
+
+These settings apply to `marking`, `log readers/skip-range/scan`, `segment
+inspect/probe`, and `logstore lac/fence-quorum`. With both endpoints and
+meta_prefix supplied by flags/context, the metadata connection does not need
+admin-config discovery. Commands that also query quorum members still need
+their reachable admin endpoints and mappings.
+
+`wp etcd list/get/cat` use the same connection fields but **always skip admin
+discovery** and do not require meta_prefix. Input keys/prefixes are literal;
+meta_prefix is never prepended. An etcd-only context can therefore omit the
+admin endpoint entirely:
+
+```yaml
+current-context: raw-etcd
+contexts:
+  raw-etcd:
+    etcd:
+      endpoints: [127.0.0.1:32379]
+```
+
+```bash
+wp --context raw-etcd etcd list
+```
+
+See the [raw etcd guide](../../wp-etcd-cli.md) for value encodings and
+revision-pinned pagination.
 
 ## Examples
 
