@@ -86,6 +86,16 @@ See the [external Kubernetes configuration example](../../docs/admin-guides/wpcl
 
 ### Diagnostics
 - `wp profile <node> --type cpu --seconds 30` — download pprof profile
+- `wp profile <node> --type trace --seconds 10` — download a Go execution trace
+
+CPU profiles use `/debug/pprof/profile`; `--seconds` controls CPU/trace collection.
+Profiles default to `.pb.gz` and traces to `.trace`. Analyze the saved file with
+the command printed by the CLI, for example:
+
+```bash
+go tool pprof -http=127.0.0.1:8081 ./node-0-cpu-TIMESTAMP.pb.gz
+go tool trace -http=127.0.0.1:8081 ./node-0-trace-TIMESTAMP.trace
+```
 
 ### Log metadata
 - `wp log readers <logName>` — where each of a log's readers has read to (etcd only, no node contact)
@@ -168,7 +178,7 @@ on that ask and only starts the refresh, so a lone reader sees a new range on it
 
 ### Logstore runtime
 - `wp logstore segments <node>` — list active segments
-- `wp logstore segment-show <node> --log X --seg Y` — detailed segment view
+- `wp logstore segment-show <node> --log X --seg Y` — details of a loaded node-local writer
 - `wp logstore buffer <node>` — buffer bytes summary
 - `wp logstore flush-queue <node>` — flush queue depth summary
 - `wp logstore force-flush <node>` — force sync
@@ -177,12 +187,28 @@ on that ask and only starts the refresh, so a lone reader sees a new range on it
 - `wp logstore fence-quorum <logName> <segmentId> --reason "..." -y` — fence enough of the quorum (wq-aq+1 nodes) to interrupt a write
 - `wp logstore compact <node> --log X --seg Y` — force compaction
 
+The writer registry is not a persisted-segment inventory. An unloaded writer
+returns TargetNotFound; its historical data may still exist. Use `log scan` or
+`segment inspect` for historical segments.
+
 ### Metrics analysis
 - `wp metrics list <node>` — list all metric series
 - `wp metrics snapshot [<node>|--all]` — point-in-time snapshot
 - `wp metrics top --by <metric>` — cross-node top-N
 - `wp metrics watch <metric> <node>` — real-time trend stream
 - `wp metrics report --scenario <name>` — scenario-based analysis (12 built-in)
+
+`stuck-read` and `stuck-write` compare relevant completion counters and the
+in-flight operation registry over the sampled window. A finding requires the
+same matching operation to remain pending with no successful completions for
+that log and operation family. An idle node is not a stall; read EOF counts as
+progress. Failed evidence collection returns an error. Findings retain their
+severity exit code in text, JSON and YAML output.
+
+This is a node-local heuristic: registry entries are bounded and do not describe
+every client-side wait. Successful operations on the same log can mask an
+individual slow operation; inspect `ops list/show` and application checkpoints
+when investigating that case.
 
 ### Ops registry
 - `wp ops list <node>` — in-flight operations

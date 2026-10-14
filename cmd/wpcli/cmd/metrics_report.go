@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/signal"
 	"strings"
@@ -204,6 +205,10 @@ func newMetricsReportCommand() *cobra.Command {
 				return wperrors.NewUsageError(fmt.Sprintf("unknown scenario %q (use --list)", scenario))
 			}
 
+			if interval <= 0 || window < interval {
+				return wperrors.NewUsageError("--interval must be positive and --window must be at least --interval")
+			}
+
 			res, err := resolveAndDiscover()
 			if err != nil {
 				return err
@@ -227,6 +232,9 @@ func newMetricsReportCommand() *cobra.Command {
 			}
 
 			w := cmd.OutOrStdout()
+			if Globals.Output == "json" || Globals.Output == "yaml" {
+				w = cmd.ErrOrStderr()
+			}
 			fmt.Fprintf(w, "Running scenario %q on %s (window=%s, interval=%s)\n", sc.Name, nodeID, window, interval)
 			fmt.Fprintf(w, "Description: %s\n\n", sc.Description)
 
@@ -237,15 +245,38 @@ func newMetricsReportCommand() *cobra.Command {
 			type sample struct {
 				ts       time.Time
 				families map[string]*prom.MetricFamily
+				ops      []pendingOp
 			}
 			var samples []sample
 			deadline := time.After(window)
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
 
-			// First scrape
-			if fam, err := prom.ScrapeNode(peerURL, Globals.Timeout); err == nil {
-				samples = append(samples, sample{ts: time.Now(), families: fam})
+			stallScenario := sc.Name == "stuck-read" || sc.Name == "stuck-write"
+			collect := func() (sample, error) {
+				fam, err := prom.ScrapeNode(peerURL, Globals.Timeout)
+				if err != nil {
+					return sample{}, err
+				}
+				s := sample{ts: time.Now(), families: fam}
+				if stallScenario {
+					body, err := fetchAdminJSON(peerURL, "/admin/runtime/ops")
+					if err != nil {
+						return sample{}, err
+					}
+					if err := json.Unmarshal(body, &s.ops); err != nil {
+						return sample{}, fmt.Errorf("decode pending operations: %w", err)
+					}
+					if s.ops == nil {
+						return sample{}, fmt.Errorf("decode pending operations: expected an array, got null")
+					}
+				}
+				return s, nil
+			}
+			if s, err := collect(); err == nil {
+				samples = append(samples, s)
+			} else if stallScenario {
+				return wperrors.NewNetworkError(err.Error())
 			}
 			fmt.Fprintf(w, "Collecting samples")
 
@@ -257,13 +288,18 @@ func newMetricsReportCommand() *cobra.Command {
 				case <-deadline:
 					break collectLoop
 				case <-ticker.C:
-					if fam, err := prom.ScrapeNode(peerURL, Globals.Timeout); err == nil {
-						samples = append(samples, sample{ts: time.Now(), families: fam})
+					if s, err := collect(); err == nil {
+						samples = append(samples, s)
 						fmt.Fprint(w, ".")
+					} else if stallScenario {
+						return wperrors.NewNetworkError(err.Error())
 					}
 				}
 			}
 			fmt.Fprintf(w, " %d samples collected\n\n", len(samples))
+			if stallScenario && len(samples) < 2 {
+				return wperrors.NewNetworkError("insufficient samples to assess a stall; need at least two observations")
+			}
 
 			// Evaluate rules using first and last samples for delta-based checks.
 			var findings []finding
@@ -274,7 +310,7 @@ func newMetricsReportCommand() *cobra.Command {
 					firstFamilies = samples[0].families
 				}
 				for _, rule := range sc.Rules {
-					f := evaluateRule(rule, sc, last.families, firstFamilies, nodeID)
+					f := evaluateRule(rule, sc, last.families, firstFamilies, nodeID, samples[0].ops, last.ops)
 					if f != nil {
 						findings = append(findings, *f)
 					}
@@ -282,28 +318,37 @@ func newMetricsReportCommand() *cobra.Command {
 			}
 
 			if Globals.Output == "json" || Globals.Output == "yaml" {
-				return output.RenderJSON(cmd.OutOrStdout(), map[string]any{
+				payload := map[string]any{
 					"scenario": sc.Name, "node": nodeID,
 					"samples": len(samples), "findings": findings,
-				})
-			}
-
-			if len(findings) == 0 {
+				}
+				var renderErr error
+				if Globals.Output == "yaml" {
+					renderErr = output.RenderYAML(cmd.OutOrStdout(), payload)
+				} else {
+					renderErr = output.RenderJSON(cmd.OutOrStdout(), payload)
+				}
+				if renderErr != nil {
+					return renderErr
+				}
+			} else if len(findings) == 0 {
 				fmt.Fprintf(w, "Result: OK — no findings for scenario %q\n", sc.Name)
-				return nil
+			} else {
+				fmt.Fprintf(w, "Findings (%d):\n", len(findings))
+				for _, f := range findings {
+					marker := "[YELLOW]"
+					if f.Severity == "red" {
+						marker = "[RED]"
+					}
+					fmt.Fprintf(w, "  %s %s: %s\n", marker, f.RuleID, f.Message)
+					for _, h := range f.Hints {
+						hint := strings.ReplaceAll(h, "{node}", nodeID)
+						fmt.Fprintf(w, "    -> %s\n", hint)
+					}
+				}
 			}
-
-			fmt.Fprintf(w, "Findings (%d):\n", len(findings))
-			for _, f := range findings {
-				marker := "[YELLOW]"
-				if f.Severity == "red" {
-					marker = "[RED]"
-				}
-				fmt.Fprintf(w, "  %s %s: %s\n", marker, f.RuleID, f.Message)
-				for _, h := range f.Hints {
-					hint := strings.ReplaceAll(h, "{node}", nodeID)
-					fmt.Fprintf(w, "    -> %s\n", hint)
-				}
+			if len(findings) == 0 {
+				return nil
 			}
 
 			// Exit code based on worst severity
@@ -324,7 +369,7 @@ func newMetricsReportCommand() *cobra.Command {
 
 // evaluateRule applies a simplified rule evaluation against the scraped families.
 // In Phase 2, this is a basic heuristic; the full YAML DSL engine is deferred.
-func evaluateRule(rule ruleDef, sc scenarioDef, families map[string]*prom.MetricFamily, firstFamilies map[string]*prom.MetricFamily, nodeID string) *finding {
+func evaluateRule(rule ruleDef, sc scenarioDef, families map[string]*prom.MetricFamily, firstFamilies map[string]*prom.MetricFamily, nodeID string, firstOps, lastOps []pendingOp) *finding {
 	// Check for "evicted_old > 0" pattern
 	if strings.Contains(rule.Condition, "evicted_old") {
 		if mf, ok := families["woodpecker_server_op_registry_evicted_total"]; ok {
@@ -385,36 +430,8 @@ func evaluateRule(rule ruleDef, sc scenarioDef, families map[string]*prom.Metric
 		}
 	}
 
-	// Check for rate == 0 patterns (stall detection) — compare first and last sample.
 	if strings.Contains(rule.Condition, "rate == 0") && firstFamilies != nil {
-		for _, metricName := range sc.Metrics {
-			lastMF, ok := families[metricName]
-			if !ok {
-				continue
-			}
-			firstMF, ok := firstFamilies[metricName]
-			if !ok {
-				continue
-			}
-			for _, m := range lastMF.GetMetric() {
-				lastVal := prom.MetricValue(m)
-				labels := prom.LabelMap(m)
-				for _, fm := range firstMF.GetMetric() {
-					if prom.LabelsMatch(fm, labels) {
-						firstVal := prom.MetricValue(fm)
-						if lastVal == firstVal && lastVal > 0 {
-							return &finding{
-								RuleID:   rule.ID,
-								Severity: rule.Severity,
-								Message:  fmt.Sprintf("zero rate in window (metric=%s, value=%.0f, labels=%v)", metricName, lastVal, labels),
-								Hints:    rule.Hints,
-							}
-						}
-						break
-					}
-				}
-			}
-		}
+		return evaluateStalledOps(rule, firstFamilies, families, nodeID, firstOps, lastOps)
 	}
 
 	return nil

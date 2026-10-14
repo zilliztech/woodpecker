@@ -95,6 +95,39 @@ func TestLogstoreSegmentShow(t *testing.T) {
 	assert.Contains(t, out, "42")
 }
 
+func TestLogstoreSegmentShow_UnloadedWriter(t *testing.T) {
+	srv := healthTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"/admin/logstore/segments/detail": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"segment 1:0 not found"}`))
+		},
+	})
+	defer srv.Close()
+	out, err := runLogstoreCmd(t, srv, "logstore", "segment-show", "node-1", "--log", "1", "--seg", "0", "--node-admin-url", "node-1="+srv.URL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TargetNotFound")
+	assert.Contains(t, out, "segment 1:0 not found")
+	assert.Contains(t, out, "node-local active writers")
+	assert.Contains(t, out, "wp log scan <logName>")
+}
+
+func TestLogstoreSegmentShow_InvalidResponse(t *testing.T) {
+	for _, format := range []string{"table", "json", "yaml"} {
+		t.Run(format, func(t *testing.T) {
+			srv := healthTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
+				"/admin/logstore/segments/detail": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte("invalid JSON"))
+				},
+			})
+			defer srv.Close()
+			_, err := runLogstoreCmd(t, srv, "logstore", "segment-show", "node-1", "--log", "1", "--seg", "0", "--node-admin-url", "node-1="+srv.URL, "--output", format)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "Network")
+			assert.Contains(t, err.Error(), "invalid segment response")
+		})
+	}
+}
+
 func TestLogstoreBuffer(t *testing.T) {
 	srv := logstoreTestServer(t)
 	defer srv.Close()
