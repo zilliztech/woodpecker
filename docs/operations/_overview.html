@@ -16,6 +16,15 @@
 <tr><td>bucket + root-path</td><td>The physical storage instance. Use both on scan, inspect and probe when automatic discovery cannot locate an empty or unloaded target. The instance data command uses --root.</td></tr></table>
 <p>Admin discovery supplies quorum identities; the workstation fans out to each node. Map every target to an accessible admin origin. A working seed connection alone does not establish peer reachability.</p>
 <p>If the metadata namespace is unknown, start with <a href="cli.html#etcd">Raw etcd exploration</a>: list literal keys, narrow the prefix, then inspect a value. Those read-only operations need an etcd connection but no admin endpoint or metadata prefix.</p>
+<p>For decoded records, metadata consistency and controlled correction, use <a href="cli.html#meta">Metadata inspection &amp; repair</a>. Normal retention advancement uses <a href="cli.html#log-truncate">log truncate</a>; it is separate from metadata patching and skip-range declarations.</p>
+</section>
+<section id="repair-format">
+<h2>Choose the intended change</h2>
+<table><tr><th>Operation</th><th>Intent / required preparation</th></tr>
+<tr><td>meta log/segment patch</td><td>Correct proven metadata errors using a JSON file containing only supported fields. Apply needs stopped writers/auditors, target revision, reason and a new backup.</td></tr>
+<tr><td>log skip-range add</td><td>Accept a precisely verified unreadable range when all usable alternatives fail. Requires explicit loss acceptance; it does not repair files or compaction.</td></tr>
+<tr><td>log truncate</td><td>Advance verified application retention. Apply needs the log revision, reason and a new backup; later auditor rounds retire earlier finalized segments.</td></tr></table>
+<p>Preview success does not commit a change. Metadata patch/truncate previews normally exit 0; skip-range and fencing previews can exit 7 because acceptance was not given. Verify application recovery independently after any intervention.</p>
 </section>
 <section id="shared">
 <h2>Shared parameters</h2>

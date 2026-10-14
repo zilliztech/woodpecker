@@ -2,15 +2,19 @@
 <p class="page-desc">Establish the metadata boundary, identify readable copies and exact bad entries, then choose recovery without discarding healthy data.</p>
 <h2 id="plan">Plan: preserve → compare → locate → choose → verify</h2>
 <table><tr><th>Step</th><th>Command</th><th>Intent</th></tr>
-<tr><td>1</td><td>log scan; deployment backup</td><td>Record the expected segment boundary and preserve deployment/data evidence before intervention.</td></tr>
+<tr><td>1</td><td>meta export/show/check; deployment data backup</td><td>Preserve decoded/raw metadata and original payloads; distinguish inconsistent metadata from physical damage.</td></tr>
 <tr><td>2</td><td>log scan quick/raw</td><td>Identify suspicious segments and distinguish failed inspection from confirmed missing coverage.</td></tr>
 <tr><td>3</td><td>segment probe/inspect</td><td>Find which copies read, where sequential reading stops and which later records remain recoverable.</td></tr>
-<tr><td>4</td><td>Supported replica recovery, or a verified skip-range</td><td>Choose based on verified healthy data, accepted loss or a proven metadata bug.</td></tr>
-<tr><td>5</td><td>Reader verification; application checkpoint/truncation; marking if retiring data</td><td>Prove resumed progress and observe auditor/retention closure separately from read recovery.</td></tr></table>
+<tr><td>4</td><td>Replica recovery, verified skip-range, or meta segment patch</td><td>Choose based on healthy copies, accepted loss or an independently proven metadata bug.</td></tr>
+<tr><td>5</td><td>Application verification; log truncate; marking if retiring data</td><td>Verify recovery/checkpoints, then separately observe auditor/retention closure.</td></tr></table>
 {{WORKFLOW_CONNECTION}}
 <h2 id="preserve">1. Preserve evidence</h2>
 <p>Record the application checkpoint, log name/ID, segment ID, deployment version and replica locations. Preserve original replica files and relevant objects through your deployment's backup procedure before changing them. Capture the scan, probe and inspect results below; they are diagnostics, not a data backup.</p>
-<p>The scan summary includes the metadata state and last entry. A Completed boundary of 99 expects entries 0..99. If a software bug is suspected to have written a wrong boundary, preserve the raw metadata through your existing etcd backup procedure and use the <a href="#metadata">metadata escalation path</a>.</p>
+<pre><code>wm meta export --output-file ./metadata-before-corruption.json
+wm meta log show "$WP_LOG"
+wm meta segment show "$WP_LOG" "$WP_SEG"
+wm meta check "$WP_LOG"</code></pre>
+<p>Export creates a new file containing readable known metadata and byte-exact original values, revisions and leases. It does not back up replica files/objects. check exits 0 with state=ok or 9 with state=invalid and issues; either result is metadata-only. A valid Completed boundary of 99 expects entries 0..99, but check cannot establish that those payloads exist. If independently verified data/history proves the boundary is wrong, follow <a href="#metadata">metadata repair</a>.</p>
 <h2 id="scan">2. Find the affected segment</h2>
 <pre><code>wm log scan "$WP_LOG" --mode quick \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
@@ -77,12 +81,41 @@ Declared: log 42 segment 7 now skips 50-50</code></pre>
 <tr><td>Acceptance not given</td><td>Expected preview behavior, no declaration committed.</td></tr>
 <tr><td>Declaration committed</td><td>Readers can skip the inclusive range. Files remain damaged; compaction is not repaired by the declaration.</td></tr></table>
 <p>Keep the same stalled reader running. Wait for refresh/report timing and verify it crosses 50 and reaches 99. For a reader returning original entries 0..99, skipping just 50 means 99 returned records; record IDs and application checkpoints establish what was lost. Removing the declaration does not restore data.</p>
-<h2 id="metadata">4B. Escalate a proven metadata bug</h2>
-<p>If independent file validation and acknowledged-write history disagree with the coordinator's last entry or state, preserve the evidence and identify the responsible software fix. Do not lower the boundary merely because a replica lost acknowledged data. This handbook's CLI does not include a general metadata patch operation; arrange a reviewed, version-specific repair with the maintainers.</p>
-<p>Metadata inspection and controlled patch tooling is tracked in <a href="https://github.com/zilliztech/woodpecker/pull/423">PR #423</a>. Follow its final merged command guide when available; the commands are not part of this source snapshot.</p>
+<h2 id="metadata">4B. Correct a proven metadata bug</h2>
+<p>Use this branch only when independent file validation, acknowledged-write history and the responsible software fix establish the correct metadata. A replica losing acknowledged data does not justify lowering the expected boundary. Example: metadata incorrectly says lastEntryId=999, but verified history proves this finalized segment ended at 99.</p>
+<pre><code>cat &gt; ./segment-repair.json &lt;&lt;'JSON'
+{"lastEntryId":"99"}
+JSON
+wm meta segment patch "$WP_LOG" "$WP_SEG" --patch-file ./segment-repair.json</code></pre>
+<pre><code># Illustrative preview excerpt:
+{"applied":false,"before":{"revision":174},
+ "changes":{"lastEntryId":{"before":"999","after":"99"}}}</code></pre>
+<p>Review before/after/changes, then stop relevant writers/auditors and keep them stopped. --offline only acknowledges this prerequisite. Use the target segment's before.revision (174 in this example), not the log or snapshot revision:</p>
+<pre><code>wm meta segment patch "$WP_LOG" "$WP_SEG" --patch-file ./segment-repair.json \
+  --apply --offline --expected-revision 174 \
+  --reason 'Correct independently verified tail after software fix' \
+  --backup ./segment-before-repair.json
+wm meta segment show "$WP_LOG" "$WP_SEG"
+wm meta check "$WP_LOG"</code></pre>
+<table><tr><th>Result</th><th>Interpretation / action</th></tr>
+<tr><td>applied=true, new_revision, audit_key, backup</td><td>The metadata write committed. Re-read the record, restart affected clients to refresh caches, and verify physical reads/application progress.</td></tr>
+<tr><td>Key/segNo mismatch; tail below truncation frontier; invalid lifecycle</td><td>The correction is rejected. Resolve the identity or invariant with verified evidence; do not rewrite state simply to make check pass.</td></tr>
+<tr><td>warnings: embedded quorum (unchanged)</td><td>An independent scalar repair may proceed, preserving that bad quorum. check still reports the unresolved quorum; this is not a clean recovery result.</td></tr>
+<tr><td>Writer lock / stale revision / concurrent update</td><td>No correction was committed by this attempt. Stop the metadata writer or refresh the preview; use a new backup filename for retry.</td></tr>
+<tr><td>Commit network error</td><td>The outcome may be unknown. Inspect current metadata and audit records before retrying.</td></tr></table>
+<p>State and timestamp correction uses the same flow; follow the <a href="cli.html#meta">metadata field rules and examples</a>. A state edit cannot create compacted files or repair replicas. Log truncation fields are protected from generic patching.</p>
 <h2 id="compaction">5. Close the compaction/retention loop</h2>
 <p>Reader recovery and compaction are separate. Skip-range does not fix a damaged Completed copy. Later eligible segments can be compacted independently; the damaged segment may continue failing until repaired or deliberately retired.</p>
-<p>After the application has durably checkpointed beyond the damaged segment, use its supported Woodpecker SDK truncation/checkpoint workflow to retire that range. For example, advancing the frontier into segment 8 permits retiring segment 7; truncating to 7:99 retains segment 7 itself. This CLI snapshot has no log truncate command.</p>
+<p>After verifying resumed application progress and a durable checkpoint beyond the damaged segment, advance normal retention with log truncate. The example assumes segment 8 is non-empty Completed/Sealed and its entry 0 is a verified safe boundary. Advancing into 8 permits retiring segment 7; truncating to 7:99 retains segment 7 itself.</p>
+<pre><code>wm meta segment show "$WP_LOG" 8
+wm log truncate "$WP_LOG" --segment 8 --entry 0</code></pre>
+<p>The preview has applied=false, unchanged=false, before/after and target_segment_revision. Use the <strong>log</strong> before.revision for apply (17099 in this illustrative example), not the target segment revision. No --offline flag is needed for this normal retention operation; coordinate it with the application's checkpoint policy.</p>
+<pre><code>wm log truncate "$WP_LOG" --segment 8 --entry 0 \
+  --apply --expected-revision 17099 \
+  --reason 'Verified durable application checkpoint beyond damaged segment 7' \
+  --backup ./log-before-truncate.json
+wm meta log show "$WP_LOG"</code></pre>
+<p>applied=true/new_revision confirms the frontier update and audit record, not immediate deletion. An unchanged frontier returns unchanged=true/applied=false with no new artifacts. Active/empty targets, backward movement, bad identity, missing apply guards and stale/concurrent revisions are rejected; inspect the message and preview again rather than forcing a change.</p>
 <p>A live application log handle/auditor marks earlier finalized segments Truncated in subsequent rounds, then applies retention and reader protection. No active auditor means the background transition will not occur. Physical deletion is asynchronous; a metadata backup cannot restore deleted files. Use scan and marking to observe the result:</p>
 <pre><code>wm log scan "$WP_LOG" --mode quick \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"
@@ -91,6 +124,7 @@ wm marking list</code></pre>
 <h2 id="verify">6. Verify the chosen recovery</h2>
 <pre><code>sleep 35
 wm log readers "$WP_LOG"
+# For read/metadata/replica recovery, while this segment remains retained:
 wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 51 --max-entries 100 \
   --bucket "$WP_BUCKET" --root-path "$WP_DATA_ROOT"</code></pre>
-<p>For read recovery, require the same reader and application checkpoint to progress through the verified tail. For replica repair, re-probe/inspect every repaired copy. For retirement, expect Truncated/reclaimed rather than readable data and verify the auditor no longer attempts compaction on the retired segment. In a controlled lab, restore original files before removing skip declarations and verifying the original full record count.</p>
+<p>For skip-range recovery, require the same reader and application checkpoint to progress through the verified tail. For metadata repair, restart affected clients and verify the resumed reader/application checkpoint plus physical reads. For replica repair, re-probe/inspect every repaired copy. For retirement, expect Truncated/reclaimed rather than readable data and verify the auditor no longer attempts compaction on the retired segment; do not require reading data intentionally reclaimed. In a controlled lab, restore original files before removing skip declarations and verifying the original full record count.</p>

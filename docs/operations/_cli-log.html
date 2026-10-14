@@ -1,5 +1,5 @@
 <section id="topic-log">
-<h2>Log progress & coverage</h2>
+<h2>Log progress & retention</h2>
 <article class="command" id="log-readers">
 <h2>wp log readers</h2>
 <p>Show where each of a log&#x27;s readers has read to</p>
@@ -360,6 +360,123 @@ Flags:
       --log-id int                    Withdraw by log id instead of name, for a range whose log has been deleted (default -1)
       --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --to-entry int                  Last entry of the range to withdraw (inclusive) (default -1)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="log-truncate">
+<h2>wp log truncate</h2>
+<p>Advance the truncation frontier with the SDK&#x27;s metadata-update semantics and additional operator guards. Defaults to preview. The target must be a non-empty Completed or Sealed segment. Subsequent auditor rounds mark earlier finalized segments Truncated and reclaim data according to retention and reader protection. The frontier segment is retained. Apply can cause permanent data loss; verify application checkpoints first.</p>
+<pre>
+<code>wp log truncate &lt;logName&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--apply</code>
+</td>
+<td>Advance the frontier (default: preview only)</td>
+</tr>
+<tr>
+<td>
+<code>--backup string</code>
+</td>
+<td>New pre-change backup file; never overwritten</td>
+</tr>
+<tr>
+<td>
+<code>--entry int</code>
+</td>
+<td>Target entry ID (required) (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--expected-revision int</code>
+</td>
+<td>Log record ModRevision from preview</td>
+</tr>
+<tr>
+<td>
+<code>--reason string</code>
+</td>
+<td>Operator reason recorded in audit</td>
+</tr>
+<tr>
+<td>
+<code>--segment int</code>
+</td>
+<td>Target segment ID (required) (default -1)</td>
+</tr>
+</tbody>
+</table>
+<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
+<h3>Demo</h3>
+<p>Verify the application checkpoint first. For the preview/apply sequence and asynchronous cleanup, follow the <a href="scenarios.html#compaction">retention workflow</a>.</p>
+<pre>
+<code>wp log truncate my-channel --segment 8 --entry 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{
+  &quot;applied&quot;: false,
+  &quot;unchanged&quot;: false,
+  &quot;before&quot;: {
+    &quot;revision&quot;: 17099,
+    &quot;metadata&quot;: {
+      &quot;truncated_segment_id&quot;: &quot;6&quot;,
+      &quot;truncated_entry_id&quot;: &quot;99&quot;
+    }
+  },
+  &quot;after&quot;: {
+    &quot;revision&quot;: 17099,
+    &quot;metadata&quot;: {
+      &quot;truncated_segment_id&quot;: &quot;8&quot;,
+      &quot;truncated_entry_id&quot;: &quot;0&quot;
+    }
+  },
+  &quot;target_segment_revision&quot;: 175,
+  &quot;snapshot_revision&quot;: 18000
+}</code>
+</pre>
+<p>Preview requires a non-empty Completed/Sealed target and entry within 0..lastEntryId. Apply requires --apply --expected-revision (the log before.revision), --reason and a new --backup; no offline flag is required. The log and target revisions are compared and an audit record is written atomically. The frontier segment stays retained; earlier finalized segments become eligible for auditor/retention/reader-protected cleanup. Unchanged frontier means applied=false, unchanged=true with no artifacts. Verify application checkpoints first: metadata backup cannot restore reclaimed data.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: StateConflict: truncation cannot move backward or restore deleted data
+# Active/empty targets, identity mismatches, stale revisions and concurrent updates are also rejected.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Advance the truncation frontier with the SDK&#x27;s metadata-update semantics and additional operator guards. Defaults to preview. The target must be a non-empty Completed or Sealed segment. Subsequent auditor rounds mark earlier finalized segments Truncated and reclaim data according to retention and reader protection. The frontier segment is retained. Apply can cause permanent data loss; verify application checkpoints first.
+
+Usage:
+  wp log truncate &lt;logName&gt; [flags]
+
+Flags:
+      --apply                         Advance the frontier (default: preview only)
+      --backup string                 New pre-change backup file; never overwritten
+      --entry int                     Target entry ID (required) (default -1)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+      --expected-revision int         Log record ModRevision from preview
+  -h, --help                          help for truncate
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --reason string                 Operator reason recorded in audit
+      --segment int                   Target segment ID (required) (default -1)</code>
 </pre>
 </details>
 </article>

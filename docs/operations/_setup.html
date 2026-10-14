@@ -99,7 +99,7 @@ w cluster health</code></pre>
   --etcd 127.0.0.1:32379 \
   --meta-prefix milvus-prod/woodpecker</code></pre>
 <table><tr><th>Commands</th><th>Need etcd settings?</th></tr>
-<tr><td>log readers, log scan, log skip-range; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td><td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery.</td></tr>
+<tr><td>meta; log readers/scan/skip-range/truncate; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td><td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery. meta and truncate need no admin connection when both etcd settings are supplied.</td></tr>
 <tr><td>etcd list/get/cat (current source builds)</td><td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="cli.html#etcd">Raw etcd exploration</a>.</td></tr>
 <tr><td>cluster, node, config, env, logging, profile, ops, metrics, instance; other node-local logstore commands</td><td>No etcd parameters: these use node admin endpoints. Do not append --etcd to commands that do not accept it.</td></tr>
 <tr><td>ctx, completion, version; k8s helpers</td><td>No etcd connection. These use local config/build information or kubectl.</td></tr></table>

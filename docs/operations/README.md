@@ -3,7 +3,7 @@
 Both documents are native content pages in the existing Docs shell:
 
 - `docs.html#operations-cli`: overview and searchable operation lookup.
-- Fifteen topic pages, defined in `cli-categories.json`, each with one clear
+- Sixteen topic pages, defined in `cli-categories.json`, each with one clear
   operational purpose. Most correspond to exactly one command group; only
   local CLI setup (ctx/completion/version) and cluster/node status combine groups.
 - `docs.html#operations-scenarios`: choose a troubleshooting path.
@@ -29,7 +29,8 @@ The generator executes only --help, never a cluster operation. Update cli-catego
 examples and interpretation in cli-examples.json; missing examples fail the
 build. Edit scenario content in _scenario-read.html / _scenario-write.html /
 _scenario-corruption.html, the chooser in _scenarios.html, shared example
-variables in _workflow-connection.html, CLI setup in _setup.html, raw etcd workflow in _etcd.html, or the overview in _overview.html. Then run
+variables in _workflow-connection.html, CLI setup in _setup.html, raw etcd workflow in _etcd.html,
+metadata repair in _meta.html, or the overview in _overview.html. Then run
 the same generator.
 The _cli.html overview and _cli-*.html category fragments are generated. embed_operations.py namespaces fragment
 IDs and links, adds standard Docs code/table markup, and updates the marked
@@ -45,7 +46,9 @@ Verify switching between Overview, CLI Handbook and Troubleshooting stays
 within docs.html. Check light/dark mode, search, section links, mobile layout
 and legacy redirects.
 
-The current handbook covers the operations registered on master. Add the typed
-metadata commands from PR #423 and the dedicated log-truncation command only
-after those implementations merge, updating examples and category configuration
-together. The generator fails if an operation lacks an authored example or topic.
+The current handbook covers the operations registered on master, including typed
+metadata inspection/repair and log truncation. It lists 19 top-level commands/groups
+and 71 executable operations across 16 topics; an operation such as `meta log show`
+is not a separate top-level command. Update examples and category configuration
+together when adding CLI capabilities. The generator fails if an operation lacks
+an authored example or topic.

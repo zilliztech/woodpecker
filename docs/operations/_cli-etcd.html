@@ -53,6 +53,7 @@ wp etcd cat milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 --encoding bas
   --etcd 127.0.0.1:32379 --encoding raw &gt; /tmp/wp-version.pb</code>
 </pre>
 <p>A TargetNotFound result means that exact key is absent at the requested snapshot. Base64 is a reversible byte representation, not evidence of damaged data. This raw group does not decode, patch or restore metadata; the file above preserves one value, not a complete etcd backup.</p>
+<p>Once you know the Woodpecker prefix, use <a href="cli.html#meta">Metadata inspection &amp; repair</a> for decoded log/segment records and readable namespace exports. Supply that complete prefix through context or --meta-prefix.</p>
 <h2 id="pagination">3. Continue a listing at the same snapshot</h2>
 <p>Use JSON output for pagination. When <code>more</code> is true, copy <code>next_key_base64</code> and <code>snapshot_revision</code> from that response into the next request, keeping the same prefix:</p>
 <pre>

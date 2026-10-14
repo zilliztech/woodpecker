@@ -2,7 +2,7 @@
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">18 top-level commands/groups · 60 executable operations</span>
+<span class="badge">19 top-level commands/groups · 71 executable operations</span>
 </p>
 <p>
 <a href="cli.html#start">New to wp? Start with installation, connection setup and your first commands →</a>
@@ -55,12 +55,16 @@
 <span>instance</span>
 </a>
 <a href="#log">
-<strong>Log progress &amp; coverage</strong>
+<strong>Log progress &amp; retention</strong>
 <span>log</span>
 </a>
 <a href="#segment">
 <strong>Segment diagnosis</strong>
 <span>segment</span>
+</a>
+<a href="#meta">
+<strong>Metadata inspection &amp; repair</strong>
+<span>meta</span>
 </a>
 <a href="#marking">
 <strong>Compacted-mark distribution</strong>
@@ -763,7 +767,7 @@
 </table>
 </section>
 <section class="ops-quick-section" id="quick-log">
-<h2>Log progress & coverage · quick lookup</h2>
+<h2>Log progress & retention · quick lookup</h2>
 <table class="ops-quick-table">
 <thead>
 <tr>
@@ -833,6 +837,19 @@
 <code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>
 <code>--from-entry / --to-entry</code>: inclusive entry range</td>
 </tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#log-truncate">
+<code>wp log truncate</code>
+</a>
+</td>
+<td>Advance the truncation frontier with the SDK&#x27;s metadata-update semantics and additional operator guards</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>--entry int</code>: Target entry ID  (default -1)<br>
+<code>--segment int</code>: Target segment ID  (default -1)<br>Apply only: <code>--apply --expected-revision --reason --backup</code>
+</td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -874,6 +891,128 @@
 <code>&lt;logName&gt;</code>: Logical log name in metadata<br>
 <code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>For explicit storage: paired <code>--bucket / --root-path</code>
 </td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-meta">
+<h2>Metadata inspection & repair · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp meta</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-check">
+<code>wp meta check</code>
+</a>
+</td>
+<td>Validate log/segment metadata constraints (does not verify physical data)</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-export">
+<code>wp meta export</code>
+</a>
+</td>
+<td>Export one metadata namespace at a consistent etcd revision</td>
+<td>
+<code>--output-file string</code>: New snapshot file (required; never overwritten)</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-log-list">
+<code>wp meta log list</code>
+</a>
+</td>
+<td>list log metadata and etcd revision</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-log-patch">
+<code>wp meta log patch</code>
+</a>
+</td>
+<td>Patch policy/statistics/timestamps, segment lastEntryId and state</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>--patch-file string</code>: JSON object containing supported scalar fields<br>Apply only: <code>--apply --offline --expected-revision --reason --backup</code>
+</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-log-show">
+<code>wp meta log show</code>
+</a>
+</td>
+<td>show log metadata and etcd revision</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-quorum-list">
+<code>wp meta quorum list</code>
+</a>
+</td>
+<td>list quorum metadata and etcd revision</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-quorum-show">
+<code>wp meta quorum show</code>
+</a>
+</td>
+<td>show quorum metadata and etcd revision</td>
+<td>
+<code>&lt;ID&gt;</code>: Numeric standalone quorum ID</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-segment-list">
+<code>wp meta segment list</code>
+</a>
+</td>
+<td>list segment metadata and etcd revision</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-segment-patch">
+<code>wp meta segment patch</code>
+</a>
+</td>
+<td>Patch policy/statistics/timestamps, segment lastEntryId and state</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log<br>
+<code>--patch-file string</code>: JSON object containing supported scalar fields<br>Apply only: <code>--apply --offline --expected-revision --reason --backup</code>
+</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#meta-segment-show">
+<code>wp meta segment show</code>
+</a>
+</td>
+<td>show segment metadata and etcd revision</td>
+<td>
+<code>&lt;logName&gt;</code>: Logical log name in metadata<br>
+<code>&lt;segmentId&gt;</code>: Numeric segment ID within that log</td>
 </tr>
 </tbody>
 </table>
@@ -986,6 +1125,29 @@
 </table>
 <p>Admin discovery supplies quorum identities; the workstation fans out to each node. Map every target to an accessible admin origin. A working seed connection alone does not establish peer reachability.</p>
 <p>If the metadata namespace is unknown, start with <a href="cli.html#etcd">Raw etcd exploration</a>: list literal keys, narrow the prefix, then inspect a value. Those read-only operations need an etcd connection but no admin endpoint or metadata prefix.</p>
+<p>For decoded records, metadata consistency and controlled correction, use <a href="cli.html#meta">Metadata inspection &amp; repair</a>. Normal retention advancement uses <a href="cli.html#log-truncate">log truncate</a>; it is separate from metadata patching and skip-range declarations.</p>
+</section>
+<section id="repair-format">
+<h2>Choose the intended change</h2>
+<table>
+<tr>
+<th>Operation</th>
+<th>Intent / required preparation</th>
+</tr>
+<tr>
+<td>meta log/segment patch</td>
+<td>Correct proven metadata errors using a JSON file containing only supported fields. Apply needs stopped writers/auditors, target revision, reason and a new backup.</td>
+</tr>
+<tr>
+<td>log skip-range add</td>
+<td>Accept a precisely verified unreadable range when all usable alternatives fail. Requires explicit loss acceptance; it does not repair files or compaction.</td>
+</tr>
+<tr>
+<td>log truncate</td>
+<td>Advance verified application retention. Apply needs the log revision, reason and a new backup; later auditor rounds retire earlier finalized segments.</td>
+</tr>
+</table>
+<p>Preview success does not commit a change. Metadata patch/truncate previews normally exit 0; skip-range and fencing previews can exit 7 because acceptance was not given. Verify application recovery independently after any intervention.</p>
 </section>
 <section id="shared">
 <h2>Shared parameters</h2>

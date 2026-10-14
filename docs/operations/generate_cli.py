@@ -76,7 +76,7 @@ def main():
                 quick_rows.append('<tr class="ops-group-heading"><th colspan="3">' + label + ': <code>wp ' + esc(root_name) + '</code></th></tr>')
                 previous_root = root_name
             required = []
-            positional_meanings = {'node': 'Discovered node ID', 'node-or-pod': 'Actual pod name, or a node ordinal resolved with --wp-cluster', 'logName': 'Logical log name in metadata', 'segmentId': 'Numeric segment ID within that log', 'logId': 'Numeric log identity', 'key': 'Exact raw etcd key', 'name': 'Local CLI context name', 'metric-name': 'Prometheus metric family to watch'}
+            positional_meanings = {'node': 'Discovered node ID', 'node-or-pod': 'Actual pod name, or a node ordinal resolved with --wp-cluster', 'logName': 'Logical log name in metadata', 'segmentId': 'Numeric segment ID within that log', 'logId': 'Numeric log identity', 'key': 'Exact raw etcd key', 'ID': 'Numeric standalone quorum ID', 'name': 'Local CLI context name', 'metric-name': 'Prometheus metric family to watch'}
             for arg in re.findall('<([^>]+)>', re.sub('\\[[^\\]]*\\]', '', usage).split('|', 1)[0]):
                 required.append('<code>&lt;' + esc(arg) + '&gt;</code>: ' + esc(positional_meanings.get(arg, 'Required positional argument')))
             for line in local.splitlines():
@@ -93,9 +93,18 @@ def main():
                 required.append('<code>--scenario</code>: analysis scenario, or <code>--list</code> to enumerate scenarios')
             if name in ['segment inspect', 'segment probe', 'log scan']:
                 required.append('For explicit storage: paired <code>--bucket / --root-path</code>')
-            quick_rows.append('<tr class="ops-quick-row"><td><a href="#' + ident + '"><code>wp ' + esc(name) + '</code></a></td><td>' + esc(purpose.splitlines()[0]) + '</td><td>' + ('<br>'.join(required) if required else 'No required command-specific arguments; uses selected context/defaults.') + '</td></tr>')
+            if name in ['meta log patch', 'meta segment patch']:
+                required.append('Apply only: <code>--apply --offline --expected-revision --reason --backup</code>')
+            if name == 'log truncate':
+                required.append('Apply only: <code>--apply --expected-revision --reason --backup</code>')
+            quick_purpose = purpose.splitlines()[0].split('. ', 1)[0]
+            quick_rows.append('<tr class="ops-quick-row"><td><a href="#' + ident + '"><code>wp ' + esc(name) + '</code></a></td><td>' + esc(quick_purpose) + '</td><td>' + ('<br>'.join(required) if required else 'No required command-specific arguments; uses selected context/defaults.') + '</td></tr>')
             help_without_global = help_text.split('\nGlobal Flags:')[0].strip()
             preparation = ''
+            if name in ['meta log patch', 'meta segment patch']:
+                preparation = '<p>Create the patch file using the JSON examples in the <a href="cli.html#meta">metadata walkthrough</a> before running this preview. Applying requires separately reviewed evidence and the guards described there.</p>'
+            if name == 'log truncate':
+                preparation = '<p>Verify the application checkpoint first. For the preview/apply sequence and asynchronous cleanup, follow the <a href="scenarios.html#compaction">retention workflow</a>.</p>'
             connections = '<p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>' if '--etcd' in local else ''
             sections += '<article class="command" id="' + ident + '"><h2>wp ' + name + '</h2><p>' + esc(purpose.splitlines()[0]) + '</p>' + block(usage) + '<h3>Parameters to know</h3>' + flags(local, compact=True) + connections + '<h3>Demo</h3>' + preparation + block(example) + '<h3>Output and interpretation</h3>' + block(ok) + '<p>' + esc(meaning) + '</p><details class="ops-help"><summary>Finding or error example</summary>' + block(bad) + '</details><details class="ops-help"><summary>Complete command help</summary>' + block(help_without_global) + '</details></article>'
         sections += '</section>'
@@ -113,8 +122,9 @@ def main():
     for category in GROUPS:
         match = re.search('<section id="topic-' + category + '">.*?</section>', sections, re.S)
         category_content = match.group(0)
-        if category in ['local', 'etcd']:
-            intro_file = '_setup.html' if category == 'local' else '_etcd.html'
+        intro_files = {'local': '_setup.html', 'etcd': '_etcd.html', 'meta': '_meta.html'}
+        if category in intro_files:
+            intro_file = intro_files[category]
             category_content = category_content.replace('</h2>', '</h2>' + (HERE / intro_file).read_text(), 1)
         (HERE / ('_cli-' + category + '.html')).write_text(re.sub('>\\s*<', '>\n<', category_content) + '\n')
     overview_end = introduction.index('</section>') + len('</section>')
