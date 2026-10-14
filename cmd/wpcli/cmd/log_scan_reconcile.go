@@ -40,10 +40,12 @@ const gapNameBudget = 32
 // scanNode is what one replica reported for one segment: the entries its structure claims, or the
 // entries a read actually reached, depending on the mode.
 type scanNode struct {
-	label    string
-	answered bool
-	state    string // why it did not answer, when it did not
-	coverage rangeSet
+	detail      string
+	blocksFound bool
+	label       string
+	answered    bool
+	state       string // why it did not answer, when it did not
+	coverage    rangeSet
 	// stopped is where the node's survey ended, and it decides what the coverage amounts to: a
 	// survey that reached the end of the segment makes the coverage a claim about what this replica
 	// holds, and any other ending makes it a lower bound.
@@ -63,6 +65,11 @@ func (n scanNode) completeClaim() bool {
 	return n.stopped == surveyStopEnd || (n.stopped == surveyStopNoBlocks && !n.compactedMark)
 }
 
+// An empty verified range is not an empty local copy if unverified/damaged blocks were found.
+func (n scanNode) confirmedLocalEmpty() bool {
+	return n.completeClaim() && len(n.coverage) == 0 && !n.blocksFound
+}
+
 // servedElsewhere reports whether this replica's local copy is gone by design, its data now being
 // the object every replica shares.
 func (n scanNode) servedElsewhere() bool {
@@ -78,15 +85,24 @@ type scanSegment struct {
 }
 
 // scanRow is one line of the report.
+type scanReplicaDetail struct {
+	Node       string `json:"node"`
+	Result     string `json:"result"`
+	Coverage   string `json:"local_range"`
+	StopReason string `json:"stop_reason,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+}
+
 type scanRow struct {
-	SegmentID int64  `json:"segment_id"`
-	State     string `json:"state"`
-	MetaLast  int64  `json:"meta_last_entry_id"`
-	Reaches   string `json:"reaches"`
-	Replicas  string `json:"replicas"`
-	Verdict   string `json:"verdict"`
-	Detail    string `json:"detail,omitempty"`
-	verdict   string
+	ReplicaDetails []scanReplicaDetail `json:"replica_details"`
+	SegmentID      int64               `json:"segment_id"`
+	State          string              `json:"state"`
+	MetaLast       int64               `json:"meta_last_entry_id"`
+	Reaches        string              `json:"reaches"`
+	Replicas       string              `json:"replicas"`
+	Verdict        string              `json:"verdict"`
+	Detail         string              `json:"detail,omitempty"`
+	verdict        string
 }
 
 // reconcileScan compares what metadata says against what the replicas reported, and returns one row
@@ -143,7 +159,7 @@ func reconcileScanWithGaps(segments []scanSegment, truncatedThrough, fromSegment
 		return rows, findings, wperrors.NewYellowFindingError(summary)
 	}
 	findings = append(findings, fmt.Sprintf(
-		"%d segments scanned; the log reads through with no problem found.", len(segments),
+		"%d segments scanned; no problem found in inspected local coverage. This does not establish end-to-end readability or verify object-storage contents.", len(segments),
 	))
 	return rows, findings, nil
 }
@@ -159,17 +175,35 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, segmentOutcome) {
 	findings := make([]string, 0, 2)
 
 	held := rangeSet{}
-	answered, settled, elsewhere := 0, false, false
+	answered, settled, elsewhere := 0, true, false
 	silent := make([]string, 0, len(segment.nodes))
 	for _, node := range segment.nodes {
+		result, coverage := node.state, "unknown"
+		if node.answered {
+			coverage = node.coverage.String()
+			if len(node.coverage) == 0 {
+				coverage = "none"
+			}
+			result = "inspected"
+			if node.confirmedLocalEmpty() {
+				result = "local_empty"
+			}
+			if node.servedElsewhere() {
+				result = "compacted"
+			}
+		}
+		row.ReplicaDetails = append(row.ReplicaDetails, scanReplicaDetail{node.label, result, coverage, node.stopped, node.detail})
 		if !node.answered {
-			silent = append(silent, fmt.Sprintf("%s (%s)", node.label, node.state))
+			settled = false
+			reason := node.state
+			if node.detail != "" {
+				reason += "; " + node.detail
+			}
+			silent = append(silent, fmt.Sprintf("%s (%s)", node.label, reason))
 			continue
 		}
 		answered++
-		if node.completeClaim() {
-			settled = true
-		}
+		settled = settled && node.completeClaim()
 		if node.servedElsewhere() {
 			elsewhere = true
 		}
@@ -178,7 +212,7 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, segmentOutcome) {
 	row.Replicas = fmt.Sprintf("%d/%d", answered, len(segment.nodes))
 	if answered == 0 {
 		findings = append(findings, fmt.Sprintf(
-			"segment %d: no replica answered (%s), so nothing is known about it.",
+			"segment %d: no replica answered with a usable inspection result (%s), so nothing is known about it.",
 			segment.id, strings.Join(silent, ", "),
 		))
 		return row, findings, outcomeInconclusive
@@ -195,7 +229,7 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, segmentOutcome) {
 	// read. This sweep does not read the object, so it says that rather than guessing.
 	if elsewhere || segment.state == proto.SegmentState_Sealed {
 		row.Verdict, row.verdict = scanVerdictCompacted, scanVerdictCompacted
-		row.Detail = "served from object storage; local replica copies are not the authority"
+		row.Detail = "served from object storage; object-storage contents not verified; local replica copies are not the authority"
 		return row, findings, outcomeSound
 	}
 	// Retention is deleting this segment's data on purpose. Between the state change and the
@@ -229,8 +263,28 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, segmentOutcome) {
 		// Still open: metadata records no last entry yet, so there is nothing to measure against.
 		// A hole inside what was written is still a hole, and the operator needs its position.
 		row.Verdict, row.verdict = scanVerdictOpen, scanVerdictOpen
+		if len(held) == 0 {
+			allEmpty := len(segment.nodes) > 0 && answered == len(segment.nodes)
+			for _, n := range segment.nodes {
+				allEmpty = allEmpty && n.confirmedLocalEmpty()
+			}
+			if allEmpty {
+				row.Detail = "all replicas confirm no local durable entries; pending writes are not checked"
+			} else {
+				row.Verdict, row.verdict = scanVerdictUnknown, scanVerdictUnknown
+				row.Detail = "no entries observed; some replicas or survey results are inconclusive"
+				findings = append(findings, fmt.Sprintf("segment %d: %s", segment.id, row.Detail))
+				return row, findings, outcomeInconclusive
+			}
+		}
 		if len(held) > 1 {
 			span := rangeSet{}.add(entryRange{held[0].From, held[len(held)-1].To})
+			if !settled {
+				row.Verdict, row.verdict = scanVerdictUnknown, scanVerdictUnknown
+				row.Detail = fmt.Sprintf("observed gap %s; replica coverage is incomplete", span.subtract(held))
+				findings = append(findings, fmt.Sprintf("segment %d: %s; an uninspected range or replica may cover the gap", segment.id, row.Detail))
+				return row, findings, outcomeInconclusive
+			}
 			findings = append(findings, fmt.Sprintf(
 				"segment %d is open and its coverage has a gap at %s — entries are missing in the middle of what was written.",
 				segment.id, span.subtract(held),
@@ -247,13 +301,12 @@ func reconcileSegment(segment scanSegment) (scanRow, []string, segmentOutcome) {
 		return row, findings, outcomeSound
 	}
 
-	// Every replica stopped before the end of its own copy, so the coverage is a lower bound and the
-	// entries past it were never looked at. Calling that a shortfall would report intact data as
-	// missing, which is what a node's own survey bound does to a segment larger than it.
+	// Missing ranges cannot be declared absent while any replica is unavailable or its survey
+	// is incomplete: that replica may still hold the entries absent from observed coverage.
 	if !settled {
-		row.Detail = "survey bounded; coverage is a lower bound"
+		row.Detail = "replica unavailable or survey bounded; coverage is a lower bound"
 		findings = append(findings, fmt.Sprintf(
-			"segment %d: no replica surveyed to the end of the segment (%s), so nothing could be established about %s. Run `wp segment inspect <logName> %d` to survey it without a whole-log sweep's bound.",
+			"segment %d: not every replica surveyed to the end of the segment (%s), so absence could not be established for %s. Run `wp segment inspect <logName> %d` to survey it without a whole-log sweep's bound.",
 			segment.id, boundedReasons(segment.nodes), missing, segment.id,
 		))
 		return row, findings, outcomeInconclusive
@@ -278,6 +331,7 @@ func boundedReasons(nodes []scanNode) string {
 	parts := make([]string, 0, len(nodes))
 	for _, node := range nodes {
 		if !node.answered {
+			parts = append(parts, fmt.Sprintf("%s: %s", node.label, node.state))
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("%s stopped at %s", node.label, node.stopped))

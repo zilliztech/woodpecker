@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,12 +37,16 @@ func newSegmentCommand() *cobra.Command {
 // The quorum lives in metadata, so --etcd applies as it does to `logstore lac`.
 func newSegmentProbeCommand() *cobra.Command {
 	var flags metaEtcdFlags
+	var bucket, rootPath string
 	var fromEntry, maxEntries int64
 	cmd := &cobra.Command{
 		Use:   "probe <logName> <segmentId>",
 		Short: "Ask every replica how far it can read a segment",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if (bucket == "") != (rootPath == "") {
+				return wperrors.NewUsageError("--bucket and --root-path must be provided together")
+			}
 			segmentID, parseErr := strconv.ParseInt(args[1], 10, 64)
 			if parseErr != nil {
 				return wperrors.NewUsageError(fmt.Sprintf("invalid segmentId %q", args[1]))
@@ -59,10 +64,12 @@ func newSegmentProbeCommand() *cobra.Command {
 				return err
 			}
 			defer cli.Close()
-			return runSegmentProbe(cmd, cli, conn.kb, res.Client, res.Members, args[0], segmentID, fromEntry, maxEntries)
+			return runSegmentProbe(cmd, cli, conn.kb, res.Client, res.Members, args[0], segmentID, fromEntry, maxEntries, scanLocation{bucket, rootPath})
 		},
 	}
 	flags.register(cmd)
+	cmd.Flags().StringVar(&bucket, "bucket", "", "Storage bucket; pair with --root-path (otherwise discovered on each node)")
+	cmd.Flags().StringVar(&rootPath, "root-path", "", "Storage instance root path; pair with --bucket")
 	cmd.Flags().Int64Var(&fromEntry, "from-entry", 0, "Entry to read from (default: the start of the segment)")
 	cmd.Flags().Int64Var(&maxEntries, "max-entries", 0, "Stop after this many entries per node (default: the node's own bound)")
 	return cmd
@@ -120,7 +127,7 @@ const (
 )
 
 func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
-	ac *client.Client, members *client.Memberlist, logName string, segmentID, fromEntry, maxEntries int64,
+	ac *client.Client, members *client.Memberlist, logName string, segmentID, fromEntry, maxEntries int64, location ...scanLocation,
 ) error {
 	ctx, cancel := metaCtx()
 	defer cancel()
@@ -141,7 +148,7 @@ func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 		))
 	}
 
-	results := probeEachNode(ac, members, quorum, logMeta.LogId, segmentID, fromEntry, maxEntries)
+	results := probeEachNode(ac, members, quorum, logMeta.LogId, segmentID, fromEntry, maxEntries, location...)
 	findings, results, unreadable := readProbeFindings(results, segMeta)
 
 	w := cmd.OutOrStdout()
@@ -195,7 +202,7 @@ func runSegmentProbe(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuild
 
 // probeEachNode asks each node the segment's quorum names. A node absent from the memberlist is contacted only with an explicit admin URL mapping.
 func probeEachNode(ac *client.Client, members *client.Memberlist, quorum *proto.QuorumInfo,
-	logID, segmentID, fromEntry, maxEntries int64,
+	logID, segmentID, fromEntry, maxEntries int64, location ...scanLocation,
 ) []probeNode {
 	results := make([]probeNode, 0, len(quorum.Nodes))
 	for _, addr := range quorum.Nodes {
@@ -210,6 +217,9 @@ func probeEachNode(ac *client.Client, members *client.Memberlist, quorum *proto.
 
 		path := fmt.Sprintf("/admin/logstore/segment/probe?log_id=%d&segment_id=%d&from_entry=%d",
 			logID, segmentID, fromEntry)
+		if len(location) > 0 && location[0].bucket != "" {
+			path += "&bucket_name=" + url.QueryEscape(location[0].bucket) + "&root_path=" + url.QueryEscape(location[0].rootPath)
+		}
 		if maxEntries > 0 {
 			path += fmt.Sprintf("&max_entries=%d", maxEntries)
 		}
@@ -364,6 +374,16 @@ func readProbeFindings(results []probeNode, segMeta *proto.SegmentMetadata) ([]s
 		))
 	}
 
+	if segMeta.GetState() == proto.SegmentState_Active && len(silent) == 0 {
+		allLocalEmpty := true
+		for _, r := range answered {
+			allLocalEmpty = allLocalEmpty && r.Outcome == probeOutcomeNoLocalData && !r.DeleteMarked && !r.CompactedMark
+		}
+		if allLocalEmpty {
+			findings = append(findings, "All replicas confirm no local durable data for this Active segment. Its final entry boundary is unknown; this may be an unwritten segment. Pending writes and prior acknowledged data are not established by this probe.")
+			return findings, judged, nil
+		}
+	}
 	switch {
 	case len(failing) == len(answered) && len(silent) == 0:
 		// No replica can serve past this point, and every replica was asked: a reader here has

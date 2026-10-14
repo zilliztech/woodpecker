@@ -102,10 +102,11 @@ go tool trace -http=127.0.0.1:8081 ./node-0-trace-TIMESTAMP.trace
 
 ### Log end to end
 - `wp log scan <logName> [--mode quick|raw] [--from-segment N] [--to-segment N]` — sweep every
-  segment of a log and reconcile what metadata claims against what the replicas hold. `quick`
-  (default) reads structure only — one trailer read per sealed segment — and answers "does the
-  shape add up". `raw` reads through the normal path with codec and CRC and answers "how far does
-  a reader actually get". Reports one line per segment plus the log-level findings.
+  segment of a log and reconcile metadata with the replicas' local coverage. `quick`
+  (default) reads structure only; `raw` verifies local blocks with codec and CRC checks.
+  Reports metadata state/lastEntryId, observed coverage, and per-replica ranges, survey
+  stop reasons and request errors. Neither mode verifies pending writes, compacted objects
+  in shared storage, or end-to-end application reads; use `segment probe` for actual reads.
 
   Per-segment verdicts: `ok`, `short` (no replica has some of what metadata claims), `open` (still
   being written), `compacted` (served from one shared object-storage copy, which this sweep does
@@ -175,6 +176,29 @@ on that ask and only starts the refresh, so a lone reader sees a new range on it
 ### Segment across its quorum
 - `wp segment probe <logName> <segmentId>` — ask every replica how far it can read the segment; names a damaged replica failover is covering for
 - `wp segment inspect <logName> <segmentId>` — walk the blocks on every replica: which entries are damaged where, whether the damage is bounded, and what a skip would cost
+
+`log scan`, `segment inspect` and `segment probe` accept an optional paired
+`--bucket` / `--root-path` to select the data storage instance. These are distinct
+from `--meta-prefix`, which selects coordinator metadata. Explicit location is
+useful for empty or unloaded segments whose instance cannot be discovered:
+
+```bash
+wp log scan my-channel --mode raw \
+  --bucket milvus-bucket --root-path milvus/wp \
+  --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker
+wp segment probe my-channel 7 --from-entry 50 --max-entries 100 \
+  --bucket milvus-bucket --root-path milvus/wp \
+  --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker
+```
+
+Omitting both location flags retains node-side discovery. Providing just one is
+a usage error. A 404 or unavailable node establishes no data coverage; the scan
+reports the per-replica reason rather than treating it as empty. `local_empty`
+confirms no local durable entries, not absence of pending writes. An Active
+segment has no final boundary; confirmed local emptiness alone is not a permanent
+read stall. Failed raw block checksums must not be labelled as local emptiness.
+Sealed/compacted local copies are not authoritative; scan does not verify their
+shared object contents, while probe can actually read them.
 
 ### Logstore runtime
 - `wp logstore segments <node>` — list active segments

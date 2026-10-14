@@ -444,20 +444,17 @@ func TestReconcileScan_BoundedSurveyIsNotAShortSegment(t *testing.T) {
 		"nothing was learned about 100-199, which is not the red that claims it is gone")
 }
 
-// TestReconcileScan_OneCompleteSurveyIsEnoughToCallItShort is the other side of the bound: a read
-// needs one replica that has the entry, so one replica whose survey reached the end of the segment
-// is enough to settle what the quorum holds.
-func TestReconcileScan_OneCompleteSurveyIsEnoughToCallItShort(t *testing.T) {
-	segments := []scanSegment{
-		seg(3, proto.SegmentState_Completed, 199,
-			boundedReplica("node-1", 0, 99), replica("node-2", 0, 149)),
+// One complete short copy cannot rule out a healthy tail on an uninspected replica.
+func TestReconcileScan_IncompleteReplicaCannotEstablishShortfall(t *testing.T) {
+	for _, incomplete := range []scanNode{boundedReplica("node-1", 0, 99), silentReplica("node-1", posUnreachable)} {
+		segments := []scanSegment{seg(3, proto.SegmentState_Completed, 199,
+			incomplete, replica("node-2", 0, 149))}
+		rows, findings, err := reconcileWholeLog(segments)
+		require.Equal(t, 8, wperrors.ExitCodeFor(err))
+		require.Equal(t, scanVerdictUnknown, rows[0].verdict)
+		require.Contains(t, joinFindings(findings), "150-199")
+		require.NotContains(t, joinFindings(findings), "no replica has")
 	}
-
-	rows, findings, err := reconcileWholeLog(segments)
-
-	require.Error(t, err)
-	require.Equal(t, scanVerdictShort, rows[0].verdict)
-	require.Contains(t, joinFindings(findings), "150-199")
 }
 
 // TestReconcileScan_OpenSegmentGapNamesTheRange covers the one finding an operator cannot act on
@@ -472,6 +469,11 @@ func TestReconcileScan_OpenSegmentGapNamesTheRange(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, joinFindings(findings), "6-8",
 		"a gap the operator is told about but not located is not actionable")
+	segments[0].nodes = append(segments[0].nodes, silentReplica("node-2", posUnreachable))
+	rows, findings, err := reconcileWholeLog(segments)
+	require.Equal(t, 8, wperrors.ExitCodeFor(err), "the uninspected replica could cover the gap")
+	require.Equal(t, scanVerdictUnknown, rows[0].verdict)
+	require.Contains(t, joinFindings(findings), "6-8")
 }
 
 // TestReconcileScan_NoReplicaAnsweredClaimsNothing keeps an unreachable quorum from reading as an
@@ -879,6 +881,7 @@ func TestLogScanNodes_ReportsWhyAReplicaDidNotAnswer(t *testing.T) {
 
 	_, refusing, refusingAddr := serve(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"storage instance unavailable"}`))
 	})
 	_, garbling, garblingAddr := serve(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -916,6 +919,10 @@ func TestLogScanNodes_ReportsWhyAReplicaDidNotAnswer(t *testing.T) {
 	require.Equal(t, probeStateCannotAnswer, byLabel[refusing.ID].state)
 	require.Equal(t, posBadResponse, byLabel[garbling.ID].state)
 	require.Equal(t, posUnreachable, byLabel[down.ID].state)
+	require.Contains(t, byLabel[refusing.ID].detail, "HTTP 503")
+	require.Contains(t, byLabel[refusing.ID].detail, "storage instance unavailable")
+	require.NotEmpty(t, byLabel[garbling.ID].detail)
+	require.Contains(t, byLabel[down.ID].detail, "GET")
 
 	// What an operator reads: the row says nothing is known, and names each reason.
 	row, findings, outcome := reconcileSegment(scanSegment{
@@ -926,6 +933,7 @@ func TestLogScanNodes_ReportsWhyAReplicaDidNotAnswer(t *testing.T) {
 	require.Equal(t, outcomeInconclusive, outcome,
 		"nothing is known about the segment, which is neither a problem nor a clean result")
 	require.Len(t, findings, 1)
+	require.Len(t, row.ReplicaDetails, 4)
 	for _, want := range []string{posUnknownNode, probeStateCannotAnswer, posBadResponse, posUnreachable} {
 		require.Contains(t, findings[0], want)
 	}
@@ -953,10 +961,11 @@ func TestLogScan_JSONCarriesRowsAndFindings(t *testing.T) {
 		LogID    int64  `json:"log_id"`
 		Mode     string `json:"mode"`
 		Segments []struct {
-			SegmentID int64  `json:"segment_id"`
-			Verdict   string `json:"verdict"`
-			Reaches   string `json:"reaches"`
-			Detail    string `json:"detail"`
+			SegmentID      int64               `json:"segment_id"`
+			Verdict        string              `json:"verdict"`
+			Reaches        string              `json:"reaches"`
+			Detail         string              `json:"detail"`
+			ReplicaDetails []scanReplicaDetail `json:"replica_details"`
 		} `json:"segments"`
 		Findings []string `json:"findings"`
 	}
@@ -969,6 +978,12 @@ func TestLogScan_JSONCarriesRowsAndFindings(t *testing.T) {
 	require.Equal(t, scanVerdictShort, payload.Segments[0].Verdict)
 	require.Equal(t, "0-9", payload.Segments[0].Reaches)
 	require.Equal(t, "missing 10-19", payload.Segments[0].Detail)
+	require.Len(t, payload.Segments[0].ReplicaDetails, 2)
+	for _, replica := range payload.Segments[0].ReplicaDetails {
+		require.Equal(t, "0-9", replica.Coverage)
+		require.Equal(t, "inspected", replica.Result)
+		require.Equal(t, surveyStopEnd, replica.StopReason)
+	}
 	require.NotEmpty(t, payload.Findings)
 }
 
@@ -1019,4 +1034,75 @@ func TestLogScan_UnknownLogIsTargetNotFound(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, 3, wperrors.ExitCodeFor(err))
 	require.Contains(t, err.Error(), "nosuchlog")
+}
+
+func TestLogScanExplicitInstanceAndEmptyActive(t *testing.T) {
+	scanTestGlobals(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "ops-bucket", r.URL.Query().Get("bucket_name"))
+		require.Equal(t, "milvus/wp", r.URL.Query().Get("root_path"))
+		require.Equal(t, "false", r.URL.Query().Get("verify"))
+		fmt.Fprint(w, `{"source":"none","local":{"compacted_mark":false},"survey":{"blocks":[],"stop_reason":"no_local_blocks"}}`)
+	}))
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+	member := client.Member{ID: "node", ServiceAddr: addr, Tags: map[string]string{"admin_port": extractPort(t, srv.URL)}}
+	ac := client.New(srv.URL, client.ClientOpts{Timeout: 2 * time.Second})
+	members := &client.Memberlist{Members: []client.Member{member}}
+	sm := segmentMeta{id: 1, meta: &proto.SegmentMetadata{State: proto.SegmentState_Active, LastEntryId: -1, Quorum: &proto.QuorumInfo{Nodes: []string{addr}}}}
+	nodes := scanSegmentNodes(ac, members, sm, 1, scanModeQuick, scanLocation{"ops-bucket", "milvus/wp"})
+	require.Len(t, nodes, 1)
+	row, _, outcome := reconcileSegment(scanSegment{id: 1, state: proto.SegmentState_Active, metaLast: -1, nodes: nodes})
+	require.Equal(t, outcomeSound, outcome)
+	require.Equal(t, "local_empty", row.ReplicaDetails[0].Result)
+	require.Contains(t, row.Detail, "no local durable entries")
+	nodes = append(nodes, scanNode{label: "unreachable", state: posUnreachable})
+	_, _, outcome = reconcileSegment(scanSegment{id: 1, state: proto.SegmentState_Active, metaLast: -1, nodes: nodes})
+	require.Equal(t, outcomeInconclusive, outcome)
+}
+
+func TestLogScanRawDamagedBlocksAreNotEmpty(t *testing.T) {
+	scanTestGlobals(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"survey":{"blocks":[{"first_entry_id":0,"last_entry_id":9,"status":"checksum_failed"}],"stop_reason":"end_of_segment"}}`))
+	}))
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+	members := &client.Memberlist{Members: []client.Member{{ID: "node", ServiceAddr: addr, Tags: map[string]string{"admin_port": extractPort(t, srv.URL)}}}}
+	ac := client.New(srv.URL, client.ClientOpts{Timeout: 2 * time.Second})
+	sm := segmentMeta{id: 0, meta: &proto.SegmentMetadata{Quorum: &proto.QuorumInfo{Nodes: []string{addr}}}}
+	nodes := scanSegmentNodes(ac, members, sm, 1, scanModeRaw)
+	require.Len(t, nodes, 1)
+	require.Empty(t, nodes[0].coverage)
+	row, _, outcome := reconcileSegment(scanSegment{id: 0, state: proto.SegmentState_Active, metaLast: -1, nodes: nodes})
+	require.Equal(t, outcomeInconclusive, outcome)
+	require.Equal(t, scanVerdictUnknown, row.Verdict)
+	require.NotEqual(t, "local_empty", row.ReplicaDetails[0].Result)
+	require.Contains(t, row.ReplicaDetails[0].Detail, "checksum_failed")
+	row, _, outcome = reconcileSegment(scanSegment{id: 0, state: proto.SegmentState_Completed, metaLast: 9, nodes: nodes})
+	require.Equal(t, outcomeProblem, outcome)
+	require.Equal(t, scanVerdictShort, row.Verdict)
+	nodes = scanSegmentNodes(ac, members, sm, 1, scanModeQuick)
+	require.Equal(t, "0-9", nodes[0].coverage.String(), "quick surveys structure, not checksums")
+}
+
+func TestLogScanRejectsMissingSurvey(t *testing.T) {
+	scanTestGlobals(t)
+	for _, body := range []string{"null", "{}"} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			addr := srv.Listener.Addr().String()
+			members := &client.Memberlist{Members: []client.Member{{ID: "node", ServiceAddr: addr, Tags: map[string]string{"admin_port": extractPort(t, srv.URL)}}}}
+			ac := client.New(srv.URL, client.ClientOpts{Timeout: 2 * time.Second})
+			sm := segmentMeta{id: 0, meta: &proto.SegmentMetadata{Quorum: &proto.QuorumInfo{Nodes: []string{addr}}}}
+			nodes := scanSegmentNodes(ac, members, sm, 1, scanModeQuick)
+			require.Len(t, nodes, 1)
+			require.False(t, nodes[0].answered)
+			require.Equal(t, posBadResponse, nodes[0].state)
+			require.Contains(t, nodes[0].detail, "missing survey")
+		})
+	}
 }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,12 +25,16 @@ import (
 // skipping the rest of the segment.
 func newSegmentInspectCommand() *cobra.Command {
 	var flags metaEtcdFlags
+	var bucket, rootPath string
 	var fromBlock, maxBlocks int64
 	cmd := &cobra.Command{
 		Use:   "inspect <logName> <segmentId>",
 		Short: "Walk a segment's blocks on every replica and report what is wrong where",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if (bucket == "") != (rootPath == "") {
+				return wperrors.NewUsageError("--bucket and --root-path must be provided together")
+			}
 			segmentID, parseErr := strconv.ParseInt(args[1], 10, 64)
 			if parseErr != nil {
 				return wperrors.NewUsageError(fmt.Sprintf("invalid segmentId %q", args[1]))
@@ -47,10 +52,12 @@ func newSegmentInspectCommand() *cobra.Command {
 				return err
 			}
 			defer cli.Close()
-			return runSegmentInspect(cmd, cli, conn.kb, res.Client, res.Members, args[0], segmentID, fromBlock, maxBlocks)
+			return runSegmentInspect(cmd, cli, conn.kb, res.Client, res.Members, args[0], segmentID, fromBlock, maxBlocks, scanLocation{bucket, rootPath})
 		},
 	}
 	flags.register(cmd)
+	cmd.Flags().StringVar(&bucket, "bucket", "", "Storage bucket; pair with --root-path (otherwise discovered on each node)")
+	cmd.Flags().StringVar(&rootPath, "root-path", "", "Storage instance root path; pair with --bucket")
 	cmd.Flags().Int64Var(&fromBlock, "from-block", 0, "First block to walk (default: the start of the segment)")
 	cmd.Flags().Int64Var(&maxBlocks, "max-blocks", 0, "Stop after this many blocks per node (default: the node's own bound)")
 	return cmd
@@ -103,7 +110,7 @@ type inspectNode struct {
 func (n inspectNode) answered() bool { return n.State == posOK }
 
 func runSegmentInspect(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder,
-	ac *client.Client, members *client.Memberlist, logName string, segmentID, fromBlock, maxBlocks int64,
+	ac *client.Client, members *client.Memberlist, logName string, segmentID, fromBlock, maxBlocks int64, location ...scanLocation,
 ) error {
 	ctx, cancel := metaCtx()
 	defer cancel()
@@ -124,7 +131,7 @@ func runSegmentInspect(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 		))
 	}
 
-	results := inspectEachNode(ac, members, quorum, logMeta.LogId, segmentID, fromBlock, maxBlocks)
+	results := inspectEachNode(ac, members, quorum, logMeta.LogId, segmentID, fromBlock, maxBlocks, location...)
 	findings, damaged := readInspectFindings(results, fromBlock)
 
 	w := cmd.OutOrStdout()
@@ -194,7 +201,7 @@ func runSegmentInspect(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBui
 
 // inspectEachNode asks each node the segment's quorum names to walk its own copy.
 func inspectEachNode(ac *client.Client, members *client.Memberlist, quorum *proto.QuorumInfo,
-	logID, segmentID, fromBlock, maxBlocks int64,
+	logID, segmentID, fromBlock, maxBlocks int64, location ...scanLocation,
 ) []inspectNode {
 	results := make([]inspectNode, 0, len(quorum.Nodes))
 	for _, addr := range quorum.Nodes {
@@ -209,6 +216,9 @@ func inspectEachNode(ac *client.Client, members *client.Memberlist, quorum *prot
 
 		path := fmt.Sprintf("/admin/logstore/segment/inspect?log_id=%d&segment_id=%d&from_block=%d",
 			logID, segmentID, fromBlock)
+		if len(location) > 0 && location[0].bucket != "" {
+			path += "&bucket_name=" + url.QueryEscape(location[0].bucket) + "&root_path=" + url.QueryEscape(location[0].rootPath)
+		}
 		if maxBlocks > 0 {
 			path += fmt.Sprintf("&max_blocks=%d", maxBlocks)
 		}
