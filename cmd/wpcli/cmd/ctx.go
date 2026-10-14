@@ -107,6 +107,18 @@ func newCtxViewCommand() *cobra.Command {
 			fmt.Fprintf(out, "  timeout:      %s\n", active.Timeout)
 			fmt.Fprintf(out, "  concurrency:  %d\n", active.Concurrency)
 			fmt.Fprintf(out, "  strict:       %v\n", active.Strict)
+			if len(active.Etcd.Endpoints) > 0 {
+				fmt.Fprintf(out, "  etcd.endpoints:   %v\n", active.Etcd.Endpoints)
+				fmt.Fprintf(out, "  etcd.meta_prefix: %s\n", active.Etcd.MetaPrefix)
+				tlsMode := "auto (certificate settings)"
+				if active.Etcd.TLSEnabled != nil {
+					tlsMode = fmt.Sprint(*active.Etcd.TLSEnabled)
+				}
+				fmt.Fprintf(out, "  etcd.tls_enabled: %s\n", tlsMode)
+				if active.Etcd.Username != "" {
+					fmt.Fprintf(out, "  etcd.username:    %s\n", active.Etcd.Username)
+				}
+			}
 			return nil
 		},
 	}

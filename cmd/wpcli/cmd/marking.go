@@ -2,9 +2,12 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -14,9 +17,9 @@ import (
 	"github.com/spf13/cobra"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
-	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -50,8 +53,9 @@ pull reconcile; nodes that never held the segment only lose a read optimization.
 	return cmd
 }
 
-// metaEtcdFlags are shared discovery overrides for the marking subcommands.
+// metaEtcdFlags are shared connection overrides for metadata and raw etcd commands.
 type metaEtcdFlags struct {
+	command       *cobra.Command
 	etcdEndpoints string // comma-separated override; with --meta-prefix, skips /admin/config discovery
 	metaPrefix    string // full meta prefix override (e.g. "woodpecker" or "by-dev/woodpecker")
 	// TLS/auth overrides. Defaults are discovered from a node's /admin/config (its cert PATHS
@@ -65,14 +69,15 @@ type metaEtcdFlags struct {
 }
 
 func (f *metaEtcdFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "etcd endpoints (comma-separated); discovery from /admin/config is attempted first but the server does not use that field, so expect to set this")
-	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "metadata key prefix; default: discovered from a node's /admin/config (etcd.rootPath + woodpecker.meta.prefix)")
-	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "etcd TLS client cert file; default: discovered (server-side path, valid in-pod)")
-	cmd.Flags().StringVar(&f.etcdKey, "etcd-key", "", "etcd TLS client key file; default: discovered")
-	cmd.Flags().StringVar(&f.etcdCACert, "etcd-cacert", "", "etcd TLS CA cert file; default: discovered")
-	cmd.Flags().StringVar(&f.etcdTLSMinVersion, "etcd-tls-min-version", "", "etcd TLS min version (1.0/1.1/1.2/1.3); default: discovered")
-	cmd.Flags().StringVar(&f.etcdUsername, "etcd-username", "", "etcd auth username; default: discovered")
-	cmd.Flags().StringVar(&f.etcdPassword, "etcd-password", "", "etcd auth password; default: discovered")
+	f.command = cmd
+	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery")
+	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "Full metadata prefix; overrides context etcd.meta_prefix and admin discovery")
+	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "Local etcd TLS client cert file; overrides context and discovery")
+	cmd.Flags().StringVar(&f.etcdKey, "etcd-key", "", "Local etcd TLS client key file; overrides context and discovery")
+	cmd.Flags().StringVar(&f.etcdCACert, "etcd-cacert", "", "Local etcd TLS CA cert file; overrides context and discovery")
+	cmd.Flags().StringVar(&f.etcdTLSMinVersion, "etcd-tls-min-version", "", "Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery")
+	cmd.Flags().StringVar(&f.etcdUsername, "etcd-username", "", "Etcd auth username; overrides context and discovery")
+	cmd.Flags().StringVar(&f.etcdPassword, "etcd-password", "", "Etcd auth password; overrides context and discovery")
 }
 
 // adminConfigSnapshot is the minimal shape of GET /admin/config we need. The server
@@ -111,19 +116,49 @@ type metaEtcdConn struct {
 	username, password                    string
 }
 
-// resolveMetaEtcd resolves the connection spec from flags or, when endpoints/prefix are not
-// both given, from the first reachable node's /admin/config — including the etcd TLS and auth
-// settings the cluster itself uses, so `wp marking` works against a secured etcd. Flags always
-// override discovered values.
-func resolveMetaEtcd(f *metaEtcdFlags) (*metaEtcdConn, error) {
-	conn := &metaEtcdConn{}
-	prefix := f.metaPrefix
+// isSet also supports callers that construct flags directly without Cobra.
+func (f *metaEtcdFlags) isSet(name, value string) bool {
+	return value != "" || (f.command != nil && f.command.Flags().Changed(name))
+}
 
-	if f.etcdEndpoints != "" {
+// resolveMetaEtcdContext loads metadata settings without requiring an admin endpoint.
+func resolveMetaEtcdContext() (config.EtcdConfig, error) {
+	for _, p := range config.DefaultConfigPaths() {
+		file, err := config.Load(p)
+		if err != nil {
+			continue
+		}
+		ctx, err := file.ResolveContext(Globals.Context)
+		if err != nil {
+			return config.EtcdConfig{}, wperrors.NewConfigError(err.Error())
+		}
+		return ctx.Etcd, nil
+	}
+	return config.EtcdConfig{}, nil
+}
+
+// resolveMetaEtcd resolves flags over context settings. Missing endpoints/prefix are discovered
+// from a reachable node's /admin/config, whose TLS/auth material is the lowest-priority fallback.
+func resolveMetaEtcd(f *metaEtcdFlags) (*metaEtcdConn, error) {
+	return resolveEtcd(f, true)
+}
+
+func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
+	ctx, err := resolveMetaEtcdContext()
+	if err != nil {
+		return nil, err
+	}
+	conn := &metaEtcdConn{}
+	prefix := ctx.MetaPrefix
+	conn.endpoints = append([]string(nil), ctx.Endpoints...)
+	if f.isSet("etcd", f.etcdEndpoints) {
 		conn.endpoints = strings.Split(f.etcdEndpoints, ",")
 	}
+	if f.isSet("meta-prefix", f.metaPrefix) {
+		prefix = f.metaPrefix
+	}
 
-	if len(conn.endpoints) == 0 || prefix == "" {
+	if discover && (len(conn.endpoints) == 0 || prefix == "") {
 		res, err := resolveAndDiscover()
 		if err != nil {
 			return nil, err
@@ -171,62 +206,99 @@ func resolveMetaEtcd(f *metaEtcdFlags) (*metaEtcdConn, error) {
 		}
 	}
 
-	// Flag overrides (also enable SSL/auth when only the flags are given, e.g. with discovery
-	// skipped via --etcd + --meta-prefix).
-	if f.etcdCert != "" || f.etcdKey != "" || f.etcdCACert != "" {
+	// Context settings override discovery; flags override context, including explicitly empty flags.
+	if ctx.TLSEnabled != nil {
+		conn.useSSL = *ctx.TLSEnabled
+	}
+	apply := func(dst *string, configured, flag, name string) {
+		if configured != "" {
+			*dst = configured
+		}
+		if f.isSet(name, flag) {
+			*dst = flag
+		}
+	}
+	apply(&conn.tlsCert, ctx.Cert, f.etcdCert, "etcd-cert")
+	apply(&conn.tlsKey, ctx.Key, f.etcdKey, "etcd-key")
+	apply(&conn.tlsCACert, ctx.CACert, f.etcdCACert, "etcd-cacert")
+	apply(&conn.tlsMinVer, ctx.TLSMinVersion, f.etcdTLSMinVersion, "etcd-tls-min-version")
+	apply(&conn.username, ctx.Username, f.etcdUsername, "etcd-username")
+	apply(&conn.password, ctx.Password, f.etcdPassword, "etcd-password")
+	// An explicit context TLS switch overrides discovered/context certificate paths.
+	// Explicit certificate flags still take precedence and enable TLS.
+	inferredTLS := conn.tlsCert != "" || conn.tlsKey != "" || conn.tlsCACert != ""
+	flagTLS := f.etcdCert != "" || f.etcdKey != "" || f.etcdCACert != ""
+	if (ctx.TLSEnabled == nil && inferredTLS) || flagTLS {
 		conn.useSSL = true
 	}
-	if f.etcdCert != "" {
-		conn.tlsCert = f.etcdCert
-	}
-	if f.etcdKey != "" {
-		conn.tlsKey = f.etcdKey
-	}
-	if f.etcdCACert != "" {
-		conn.tlsCACert = f.etcdCACert
-	}
-	if f.etcdTLSMinVersion != "" {
-		conn.tlsMinVer = f.etcdTLSMinVersion
-	}
-	if f.etcdUsername != "" {
-		conn.username = f.etcdUsername
-	}
-	if f.etcdPassword != "" {
-		conn.password = f.etcdPassword
+	for i, endpoint := range conn.endpoints {
+		conn.endpoints[i] = strings.TrimSpace(endpoint)
+		if conn.endpoints[i] == "" {
+			return nil, wperrors.NewUsageError("empty etcd endpoint")
+		}
 	}
 
 	if len(conn.endpoints) == 0 {
-		return nil, wperrors.NewUsageError("no etcd endpoints (discovery returned none; pass --etcd)")
+		return nil, wperrors.NewUsageError("no etcd endpoints (set context etcd.endpoints or pass --etcd)")
 	}
 	conn.kb = meta.NewKeyBuilder(prefix)
 	return conn, nil
 }
 
-// metaEtcdClient dials etcd with the resolved TLS/auth material, reusing the same
-// common/etcd constructors the server uses.
+// metaEtcdClient uses host-local TLS/auth material, including server-auth TLS
+// without a client certificate and mutual TLS when a cert/key pair is supplied.
 func metaEtcdClient(conn *metaEtcdConn) (*clientv3.Client, error) {
 	timeout := Globals.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	var cli *clientv3.Client
-	var err error
-	switch {
-	case conn.useSSL:
-		cli, err = etcd.GetRemoteEtcdSSLClientWithCfg(conn.endpoints, conn.tlsCert, conn.tlsKey, conn.tlsCACert, conn.tlsMinVer,
-			clientv3.Config{Username: conn.username, Password: conn.password})
-	case conn.username != "":
-		cli, err = etcd.GetRemoteEtcdClientWithAuth(conn.endpoints, conn.username, conn.password)
-	default:
-		cli, err = clientv3.New(clientv3.Config{
-			Endpoints:   conn.endpoints,
-			DialTimeout: timeout,
-		})
+	cfg := clientv3.Config{Endpoints: conn.endpoints, DialTimeout: timeout}
+	if conn.username != "" {
+		cfg.Username, cfg.Password = conn.username, conn.password
 	}
+	if conn.useSSL {
+		var err error
+		cfg.TLS, err = metaEtcdTLSConfig(conn)
+		if err != nil {
+			return nil, wperrors.NewConfigError(err.Error())
+		}
+	}
+	cli, err := clientv3.New(cfg)
 	if err != nil {
 		return nil, wperrors.NewNetworkError(fmt.Sprintf("connect etcd %v: %v", conn.endpoints, err))
 	}
 	return cli, nil
+}
+
+func metaEtcdTLSConfig(conn *metaEtcdConn) (*tls.Config, error) {
+	versions := map[string]uint16{"": tls.VersionTLS12, "1.0": tls.VersionTLS10, "1.1": tls.VersionTLS11, "1.2": tls.VersionTLS12, "1.3": tls.VersionTLS13}
+	version, ok := versions[conn.tlsMinVer]
+	if !ok {
+		return nil, fmt.Errorf("unknown etcd TLS minimum version %q", conn.tlsMinVer)
+	}
+	// #nosec G402 -- TLS defaults to 1.2; older versions require the existing explicit operator setting.
+	cfg := &tls.Config{MinVersion: version}
+	if (conn.tlsCert == "") != (conn.tlsKey == "") {
+		return nil, fmt.Errorf("etcd TLS client cert and key must be provided together")
+	}
+	if conn.tlsCert != "" {
+		cert, err := tls.LoadX509KeyPair(conn.tlsCert, conn.tlsKey)
+		if err != nil {
+			return nil, fmt.Errorf("load local etcd client cert/key: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+	if conn.tlsCACert != "" {
+		data, err := os.ReadFile(conn.tlsCACert)
+		if err != nil {
+			return nil, fmt.Errorf("read local etcd CA certificate: %w", err)
+		}
+		cfg.RootCAs = x509.NewCertPool()
+		if !cfg.RootCAs.AppendCertsFromPEM(data) {
+			return nil, fmt.Errorf("local etcd CA file contains no valid PEM certificates")
+		}
+	}
+	return cfg, nil
 }
 
 func metaCtx() (context.Context, context.CancelFunc) {
