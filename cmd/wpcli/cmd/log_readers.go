@@ -26,6 +26,7 @@ func newLogCommand() *cobra.Command {
 	cmd.AddCommand(newLogReadersCommand())
 	cmd.AddCommand(newLogScanCommand())
 	cmd.AddCommand(newLogSkipRangeCommand())
+	cmd.AddCommand(newLogTruncateCommand())
 	return cmd
 }
 
