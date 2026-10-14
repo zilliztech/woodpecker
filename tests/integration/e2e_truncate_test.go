@@ -1350,7 +1350,7 @@ func TestTruncateAndReopenClient(t *testing.T) {
 			t.Logf("Created %d segments: %v", len(segmentIds), segmentIds)
 			assert.GreaterOrEqual(t, len(segmentIds), 5, "Expected at least 5 segments to be created")
 
-			// Find the truncation point - we want to truncate the first two three segments
+			// Keep the frontier segment and clean up the first two segments.
 			truncatePoint := writtenIds[0]
 			for _, id := range writtenIds {
 				if id.SegmentId == segmentIds[2] { // Get an entry in the third segment
@@ -1371,22 +1371,23 @@ func TestTruncateAndReopenClient(t *testing.T) {
 			assert.Equal(t, truncatePoint.SegmentId, truncatedId.SegmentId)
 			assert.Equal(t, truncatePoint.EntryId, truncatedId.EntryId)
 
-			// wait auditor to mark segment as truncated and cleanup
-			time.Sleep(20 * time.Second)
-
-			// Get segments after truncation
-			segmentsAfterTruncation, err := logHandle.GetSegments(context.Background())
-			assert.NoError(t, err)
-
-			// Check which segments are marked as truncated
-			for segId, segMeta := range segmentsAfterTruncation {
-				if segMeta.Metadata.State == proto.SegmentState_Truncated {
-					t.Logf("Segment %d is now marked as truncated", segId)
-				} else {
-					t.Logf("Segment %d is now %v", segId, segMeta.Metadata.State)
+			// Data cleanup and segment metadata deletion can take separate auditor
+			// passes. Wait for both before closing the writer and stopping maintenance.
+			expectedSegmentIds := segmentIds[2:]
+			require.EventuallyWithT(t, func(c *assert.CollectT) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				remaining, err := logHandle.GetSegments(ctx)
+				if !assert.NoError(c, err) {
+					return
 				}
-			}
-			assert.Equal(t, len(segmentsAfterTruncation), len(segmentMap)-2, "Expected cleanup 2 segments, which 0,1")
+				var remainingIds []int64
+				for segId := range remaining {
+					remainingIds = append(remainingIds, segId)
+				}
+				sort.Slice(remainingIds, func(i, j int) bool { return remainingIds[i] < remainingIds[j] })
+				assert.Equal(c, expectedSegmentIds, remainingIds, "Only segments before the truncation frontier should be removed")
+			}, time.Minute, 200*time.Millisecond, "Truncated segment metadata was not cleaned up before restart")
 
 			// Identify the maximum segment ID
 			maxSegId := int64(0)
@@ -1421,17 +1422,16 @@ func TestTruncateAndReopenClient(t *testing.T) {
 			reopenedSegments, err := newLogHandle.GetSegments(context.Background())
 			assert.NoError(t, err)
 
-			// Verify reopened segments are consistent with segments after truncation
-			assert.Equal(t, len(segmentsAfterTruncation), len(reopenedSegments),
-				"Number of segments should be the same after reopening client")
-
-			// Check that truncated segments are still marked as truncated
-			for segId, segMeta := range reopenedSegments {
-				if segId <= truncatePoint.SegmentId && segId != truncatePoint.SegmentId {
-					assert.Equal(t, proto.SegmentState_Truncated, segMeta.Metadata.State,
-						"Segment %d should still be marked as truncated after client restart", segId)
-				}
+			// Restart must preserve every surviving segment, including the frontier.
+			var reopenedSegmentIds []int64
+			for segId := range reopenedSegments {
+				reopenedSegmentIds = append(reopenedSegmentIds, segId)
 			}
+			sort.Slice(reopenedSegmentIds, func(i, j int) bool { return reopenedSegmentIds[i] < reopenedSegmentIds[j] })
+			assert.Equal(t, expectedSegmentIds, reopenedSegmentIds, "Surviving segments should be unchanged after reopening client")
+			reopenedTruncatedId, err := newLogHandle.GetTruncatedRecordId(context.Background())
+			assert.NoError(t, err)
+			assert.Equal(t, truncatePoint, reopenedTruncatedId, "Truncation frontier should survive client restart")
 
 			// 6. Open a new writer with the new logHandle
 			newLogWriter, err := newLogHandle.OpenLogWriter(context.Background())
