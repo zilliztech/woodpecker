@@ -9,46 +9,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
-        /* ─── DARK THEME (used when html.dark) ─── */
-        :root {
-            --bg-deep: #ffffff;
-            --bg-surface: #f8fafc;
-            --bg-card: #f1f5f9;
-            --bg-card-hover: #e2e8f0;
-            --border: #e2e8f0;
-            --border-light: #cbd5e1;
-            --text-primary: #0f172a;
-            --text-secondary: #475569;
-            --text-muted: #94a3b8;
-            --accent: #0891b2;
-            --accent-green: #059669;
-            --accent-purple: #7c3aed;
-            --accent-orange: #ea580c;
-            --accent-rose: #e11d48;
-            --sidebar-width: 280px;
-            --nav-bg: rgba(255,255,255,0.82);
-            --code-bg: #f8fafc;
-            --code-text: #334155;
-        }
-        html.dark {
-            --bg-deep: #06090f;
-            --bg-surface: #0c1018;
-            --bg-card: #111827;
-            --bg-card-hover: #1a2332;
-            --border: #1e293b;
-            --border-light: #334155;
-            --text-primary: #f1f5f9;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            --accent: #22d3ee;
-            --accent-green: #34d399;
-            --accent-purple: #a78bfa;
-            --accent-orange: #fb923c;
-            --accent-rose: #fb7185;
-            --nav-bg: rgba(6,9,15,0.8);
-            --code-bg: #111827;
-            --code-text: #94a3b8;
-        }
+        /* Shared colors are defined in assets/theme.css. */
+        :root { --sidebar-width: 280px; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'DM Sans', sans-serif;
@@ -78,7 +40,7 @@
         html.dark .doc-nav-brand img { filter: invert(1) hue-rotate(180deg) brightness(0.75); }
         .doc-nav-brand .tag {
             font-size: 8px; font-weight: 600; letter-spacing: 0.06em;
-            color: var(--accent); border: 1px solid rgba(34,211,238,0.3);
+            color: var(--accent); border: 1px solid var(--wp-border-strong);
             padding: 1px 4px; border-radius: 2px; text-transform: uppercase;
         }
         .doc-nav-right {
@@ -132,7 +94,7 @@
             background: var(--bg-card); color: var(--text-primary);
         }
         .sidebar-link.active {
-            background: rgba(34,211,238,0.08);
+            background: var(--wp-glow);
             color: var(--accent);
             font-weight: 500;
         }
@@ -285,8 +247,8 @@
         }
         .callout-icon { flex-shrink: 0; margin-top: 2px; }
         .callout.info {
-            background: rgba(34,211,238,0.06);
-            border: 1px solid rgba(34,211,238,0.15);
+            background: var(--wp-glow);
+            border: 1px solid var(--wp-border-strong);
             color: var(--text-secondary);
         }
         .callout.warning {
@@ -381,7 +343,7 @@
 
         /* light sidebar active indicator color */
         .sidebar-link.active { position: relative; }
-        html.dark .sidebar-link.active { color: #22d3ee; background: rgba(34,211,238,0.08); }
+        html.dark .sidebar-link.active { color: #22d3ee; background: var(--wp-glow); }
 
         /* ─── ARCHITECTURE DIAGRAMS (isometric SVG) ─── */
         .arch-diagram-wrap {
@@ -395,7 +357,7 @@
         }
         .arch-diagram-wrap::before {
             content: ''; position: absolute; inset: 0;
-            background: radial-gradient(ellipse at 50% 30%, rgba(34,211,238,0.03) 0%, transparent 70%);
+            background: radial-gradient(ellipse at 50% 30%, var(--wp-glow) 0%, transparent 70%);
             pointer-events: none;
         }
         .arch-diagram-wrap svg { max-width: 100%; height: auto; }
@@ -507,6 +469,8 @@
         .ops-page .ops-quick-table th:first-child { width: 22%; }
         .ops-page section > .command:first-of-type { border-top: 0; margin-top: 16px; padding-top: 0; }
     </style>
+    <link rel="stylesheet" href="assets/theme.css">
+    <script src="assets/theme.js"></script>
 </head>
 <body>
 
@@ -517,13 +481,14 @@
     </button>
     <a href="index.html" class="doc-nav-brand">
         <img src="images/logo.png" alt="Woodpecker">
-        <span class="tag">Docs</span>
+        <span class="tag">v0.1.47</span>
     </a>
     <div class="doc-nav-right">
+        <a href="https://github.com/zilliztech/woodpecker/releases/tag/v0.1.47">Release notes</a>
         <a href="index.html">Home</a>
         <a href="#operations" onclick="showPage('operations',document.querySelector('[data-page=operations]'))">Operations</a>
         <a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a>
-        <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+        <button class="theme-toggle" data-theme-toggle aria-label="Toggle theme">
             <svg class="icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
             <svg class="icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
         </button>
@@ -655,7 +620,7 @@
 <p>
 <a href="#operations-cli-local/start">New to wp? Start with installation, connection setup and your first commands →</a>
 </p>
-<div class="note">This reference is generated from the CLI in this source checkout. Build that checkout for matching command help; a published release may contain fewer options. Check <code>wp version</code> and <code>wp --help</code> before following an example.</div>
+<div class="note">The operations in this handbook are available in v0.1.47. This reference is generated from source; when using another version, compare its command help. Check <code>wp version</code> and <code>wp --help</code> before following an example.</div>
 <p>Each topic has command syntax, parameter explanations, a demo, illustrative output and result interpretation. The overview lists executable operations: <code>node</code> is a command group, while <code>node list</code> is an operation within it.</p>
 <nav class="ops-topic-grid" aria-label="CLI topics">
 <a href="#operations-cli-local">
@@ -1925,7 +1890,7 @@
 <p>Assume Milvus with Woodpecker is already installed by Helm. Run wp on your workstation using a released binary or a source build. The shell examples below use bash/zsh on macOS or Linux.</p>
 <h3>Download from GitHub</h3>
 <p>Select the release and OS/CPU architecture on the <a href="https://github.com/zilliztech/woodpecker/releases">GitHub Releases page</a>. These are standalone binaries, not archives. For example, macOS on Apple Silicon:</p>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>export WP_VERSION=v0.1.46
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>export WP_VERSION=v0.1.47
 mkdir -p "$HOME/.local/bin"
 curl -fL "https://github.com/zilliztech/woodpecker/releases/download/${WP_VERSION}/wp-darwin-arm64" \
   -o "$HOME/.local/bin/wp"
@@ -1938,7 +1903,7 @@ wp version</code></pre></div></div>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>git clone https://github.com/zilliztech/woodpecker.git
 cd woodpecker
 # Optionally check out the release/branch you want to build.
-# git checkout v0.1.46
+# git checkout v0.1.47
 make wpcli
 mkdir -p "$HOME/.local/bin"
 cp bin/wp "$HOME/.local/bin/wp"
@@ -1972,7 +1937,7 @@ contexts:
     k8s:
       namespace: milvus
       kubeconfig: /path/to/your/kubeconfig
-    # Current source builds; v0.1.46 uses explicit etcd flags instead.
+    # v0.1.47 and later; v0.1.46 uses explicit etcd flags instead.
     etcd:
       endpoints:
         - 127.0.0.1:32379
@@ -2014,7 +1979,7 @@ w cluster health</code></pre></div></div>
 </details>
 <h2 id="ops-cli-local-etcd-connection">4. Configure etcd for metadata queries</h2>
 <p>
-<strong>Current source builds support the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
+<strong>Released v0.1.47 supports the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
 <p>
 <strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Use the explicit flags below on that release, or to override a context for one invocation:</p>
 <div class="ops-table-wrap"><table class="doc-table ">
@@ -2061,7 +2026,7 @@ w cluster health</code></pre></div></div>
 <td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery. meta and truncate need no admin connection when both etcd settings are supplied.</td>
 </tr>
 <tr>
-<td>etcd list/get/cat (current source builds)</td>
+<td>etcd list/get/cat (v0.1.47 and later)</td>
 <td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="#operations-cli-etcd">Raw etcd exploration</a>.</td>
 </tr>
 <tr>
@@ -2081,7 +2046,7 @@ w cluster health</code></pre></div></div>
   --etcd-cacert /path/to/ca.crt \
   --etcd-cert /path/to/client.crt --etcd-key /path/to/client.key \
   --etcd-tls-min-version 1.2</code></pre></div></div>
-<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. Current source builds also support these optional context fields under <code>etcd</code>:</p>
+<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. v0.1.47 also supports these optional context fields under <code>etcd</code>:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>username: operator
 password: YOUR_PASSWORD
 tls_enabled: true
@@ -2111,7 +2076,7 @@ milvus-woodpecker-2    active  OK
 Cluster Health: YELLOW
   active: 3  decommissioning: 0  unreachable: 0
   - zero redundancy (active == N)</code></pre></div></div>
-<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on current source builds, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
+<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on v0.1.47 and later, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
 <article class="command" data-command-anchor="completion-bash" id="ops-cli-local-completion-bash">
 <h2>wp completion bash</h2>
@@ -5915,7 +5880,7 @@ Flags:
 <p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Raw etcd exploration</p><h1>Raw etcd exploration</h1><p class="page-desc">Discover namespaces and inspect exact raw keys, revisions and values without writing etcd.</p><section id="ops-cli-etcd-topic-etcd">
 
 <h2 id="ops-cli-etcd-discover">1. Discover keys before choosing a metadata prefix</h2>
-<p>This command group is available in current source builds and is not included in released v0.1.46. Build the current checkout and confirm <code>wp etcd --help</code> before using these examples.</p>
+<p>This command group is included in v0.1.47 and later; it is not included in v0.1.46. Install a matching release or build from source, and confirm <code>wp etcd --help</code> before using these examples.</p>
 <p>Use this read-only group when you can reach etcd but do not yet know the Woodpecker namespace. It connects directly to etcd: no Woodpecker admin endpoint, node mapping or metadata prefix is required. Supply a reachable endpoint, or save it in a context as shown below.</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Omit the prefix to explore all keys (first page only).
 wp etcd list --etcd 127.0.0.1:32379 --limit 20
@@ -7796,15 +7761,7 @@ cd tests/docker/monitor
 </main>
 
 <script>
-// Theme toggle - docs defaults to light
-function toggleTheme() {
-    const isDark = document.documentElement.classList.toggle('dark');
-    localStorage.setItem('wp-theme', isDark ? 'dark' : 'light');
-}
-(function() {
-    const saved = localStorage.getItem('wp-theme');
-    if (saved === 'dark') document.documentElement.classList.add('dark');
-})();
+// Theme initialization and controls are shared in assets/theme.js.
 
 function showPage(pageId, linkEl) {
     document.body.classList.toggle('ops-reading', pageId.startsWith('operations-cli') || pageId.startsWith('operations-scenarios'));
@@ -7897,6 +7854,7 @@ function openDocRoute(route) {
     const link = document.querySelector('.sidebar-link[data-page="' + pageId + '"]') ||
         document.querySelector('.sidebar-link[onclick*="' + pageId + '"]');
     showPage(pageId, link);
+    if (pageId === 'quickstart' && ['service', 'embedded'].includes(section)) switchQS(section);
     if (section && pageId.startsWith('operations-')) {
         const prefix = 'ops-' + pageId.slice('operations-'.length) + '-';
         const target = document.getElementById(prefix + section);

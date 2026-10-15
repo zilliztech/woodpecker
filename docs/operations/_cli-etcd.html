@@ -1,7 +1,7 @@
 <section id="topic-etcd">
 <h2>Raw etcd exploration</h2>
 <h2 id="discover">1. Discover keys before choosing a metadata prefix</h2>
-<p>This command group is available in current source builds and is not included in released v0.1.46. Build the current checkout and confirm <code>wp etcd --help</code> before using these examples.</p>
+<p>This command group is included in v0.1.47 and later; it is not included in v0.1.46. Install a matching release or build from source, and confirm <code>wp etcd --help</code> before using these examples.</p>
 <p>Use this read-only group when you can reach etcd but do not yet know the Woodpecker namespace. It connects directly to etcd: no Woodpecker admin endpoint, node mapping or metadata prefix is required. Supply a reachable endpoint, or save it in a context as shown below.</p>
 <pre>
 <code># Omit the prefix to explore all keys (first page only).

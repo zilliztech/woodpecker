@@ -7,15 +7,6 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" href="images/icon.png" type="image/png">
     <style>
-        :root {
-            --primary-color: #4a6cf7;
-            --secondary-color: #6c757d;
-            --dark-color: #2c3e50;
-            --light-color: #f8f9fa;
-            --border-color: #e1e4e8;
-            --success-color: #28a745;
-            --code-bg: #f6f8fa;
-        }
         
         * {
             margin: 0;
@@ -76,7 +67,7 @@
             opacity: 0.7;
         }
         
-        .logo-beta {
+        .logo-release {
             font-size: 14px;
             opacity: 0.6;
             font-weight: 400;
@@ -282,20 +273,22 @@
             letter-spacing: -0.02em;
         }
     </style>
+    <link rel="stylesheet" href="assets/theme.css">
+    <script src="assets/theme.js"></script>
 </head>
-<body>
+<body class="legacy-doc">
     <!-- Navigation -->
     <nav class="navbar">
         <div class="container nav-container">
             <div class="logo-wrapper">
-                <a href="index.html" class="logo"><img src="images/logo.png" width="250" alt="Woodpecker Logo" /> <span class="logo-dot">·</span><span class="logo-beta">beta</span></a>
+                <a href="index.html" class="logo"><img src="images/logo.png" width="250" alt="Woodpecker Logo" /> <span class="logo-dot">·</span><span class="logo-release">v0.1.47</span></a>
             </div>
-            <ul class="nav-links">
+            <div class="theme-control"><button class="wp-theme-toggle" data-theme-toggle aria-label="Switch to light theme"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"></path></svg></button><ul class="nav-links">
                 <li><a href="index.html">Home</a></li>
                 <li><a href="quickstart.html">Quick Start</a></li>
 <li><a href="docs.html#operations">Operations</a></li>
                 <li><a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a></li>
-            </ul>
+            </ul></div>
         </div>
     </nav>
 

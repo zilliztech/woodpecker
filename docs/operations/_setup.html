@@ -2,7 +2,7 @@
 <p>Assume Milvus with Woodpecker is already installed by Helm. Run wp on your workstation using a released binary or a source build. The shell examples below use bash/zsh on macOS or Linux.</p>
 <h3>Download from GitHub</h3>
 <p>Select the release and OS/CPU architecture on the <a href="https://github.com/zilliztech/woodpecker/releases">GitHub Releases page</a>. These are standalone binaries, not archives. For example, macOS on Apple Silicon:</p>
-<pre><code>export WP_VERSION=v0.1.46
+<pre><code>export WP_VERSION=v0.1.47
 mkdir -p "$HOME/.local/bin"
 curl -fL "https://github.com/zilliztech/woodpecker/releases/download/${WP_VERSION}/wp-darwin-arm64" \
   -o "$HOME/.local/bin/wp"
@@ -14,7 +14,7 @@ wp version</code></pre>
 <pre><code>git clone https://github.com/zilliztech/woodpecker.git
 cd woodpecker
 # Optionally check out the release/branch you want to build.
-# git checkout v0.1.46
+# git checkout v0.1.47
 make wpcli
 mkdir -p "$HOME/.local/bin"
 cp bin/wp "$HOME/.local/bin/wp"
@@ -49,7 +49,7 @@ contexts:
     k8s:
       namespace: milvus
       kubeconfig: /path/to/your/kubeconfig
-    # Current source builds; v0.1.46 uses explicit etcd flags instead.
+    # v0.1.47 and later; v0.1.46 uses explicit etcd flags instead.
     etcd:
       endpoints:
         - 127.0.0.1:32379
@@ -85,7 +85,7 @@ w cluster health</code></pre>
 <p>source defines the functions in the current shell. w forwards arguments to wp and selects milvus-prod for each invocation; it does not change current-context in the file.</p></details>
 
 <h2 id="etcd-connection">4. Configure etcd for metadata queries</h2>
-<p><strong>Current source builds support the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
+<p><strong>Released v0.1.47 supports the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
 <p><strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Use the explicit flags below on that release, or to override a context for one invocation:</p>
 <table><tr><th>Parameters</th><th>Use</th></tr>
 <tr><td>--etcd</td><td>Reachable etcd endpoints; use commas for multiple addresses.</td></tr>
@@ -100,7 +100,7 @@ w cluster health</code></pre>
   --meta-prefix milvus-prod/woodpecker</code></pre>
 <table><tr><th>Commands</th><th>Need etcd settings?</th></tr>
 <tr><td>meta; log readers/scan/skip-range/truncate; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td><td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery. meta and truncate need no admin connection when both etcd settings are supplied.</td></tr>
-<tr><td>etcd list/get/cat (current source builds)</td><td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="cli.html#etcd">Raw etcd exploration</a>.</td></tr>
+<tr><td>etcd list/get/cat (v0.1.47 and later)</td><td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="cli.html#etcd">Raw etcd exploration</a>.</td></tr>
 <tr><td>cluster, node, config, env, logging, profile, ops, metrics, instance; other node-local logstore commands</td><td>No etcd parameters: these use node admin endpoints. Do not append --etcd to commands that do not accept it.</td></tr>
 <tr><td>ctx, completion, version; k8s helpers</td><td>No etcd connection. These use local config/build information or kubectl.</td></tr></table>
 <details class="ops-help"><summary>Authentication/TLS example</summary>
@@ -110,7 +110,7 @@ w cluster health</code></pre>
   --etcd-cacert /path/to/ca.crt \
   --etcd-cert /path/to/client.crt --etcd-key /path/to/client.key \
   --etcd-tls-min-version 1.2</code></pre>
-<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. Current source builds also support these optional context fields under <code>etcd</code>:</p>
+<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. v0.1.47 also supports these optional context fields under <code>etcd</code>:</p>
 <pre><code>username: operator
 password: YOUR_PASSWORD
 tls_enabled: true
@@ -140,5 +140,5 @@ milvus-woodpecker-2    active  OK
 Cluster Health: YELLOW
   active: 3  decommissioning: 0  unreachable: 0
   - zero redundancy (active == N)</code></pre>
-<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on current source builds, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
+<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on v0.1.47 and later, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
