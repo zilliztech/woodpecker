@@ -1,0 +1,173 @@
+/* Shared palette for the homepage, Docs shell, and standalone guides. */
+:root {
+  color-scheme: dark;
+  --wp-bg: #080d1a;
+  --wp-surface: #0e1629;
+  --wp-card: #121e35;
+  --wp-hover: #192943;
+  --wp-text: #edf3ff;
+  --wp-secondary: #a4b3ce;
+  --wp-muted: #8394b2;
+  --wp-border: #253451;
+  --wp-border-strong: #3a5075;
+  --wp-accent: #38d9f5;
+  --wp-purple: #a395ff;
+  --wp-success: #55d6ad;
+  --wp-warning: #f2c879;
+  --wp-error: #ff879c;
+  --wp-header: rgba(8, 13, 26, .94);
+  --wp-code: #0b1324;
+  --wp-code-text: #c5d2e9;
+  --wp-glow: rgba(56, 217, 245, .09);
+  --wp-purple-glow: rgba(139, 124, 255, .1);
+  --wp-button: #38d9f5;
+  --wp-button-hover: #83eaff;
+  --wp-button-text: #061827;
+  --wp-shadow: 0 24px 80px rgba(0, 4, 18, .3);
+}
+html.light {
+  color-scheme: light;
+  --wp-bg: #f7f9ff;
+  --wp-surface: #ffffff;
+  --wp-card: #eef3fc;
+  --wp-hover: #e6edfa;
+  --wp-text: #14233f;
+  --wp-secondary: #4d607d;
+  --wp-muted: #5b6e8d;
+  --wp-border: #d5dfef;
+  --wp-border-strong: #adbfdb;
+  --wp-accent: #1166c2;
+  --wp-purple: #7152d1;
+  --wp-success: #137a60;
+  --wp-warning: #98630b;
+  --wp-error: #bd3158;
+  --wp-header: rgba(247, 249, 255, .96);
+  --wp-code: #f0f4fc;
+  --wp-code-text: #2e4265;
+  --wp-glow: rgba(17, 102, 194, .06);
+  --wp-purple-glow: rgba(113, 82, 209, .045);
+  --wp-button: #1769d2;
+  --wp-button-hover: #1058b6;
+  --wp-button-text: #ffffff;
+  --wp-shadow: 0 24px 80px rgba(41, 66, 115, .08);
+}
+/* Existing layouts keep their names while sharing the same semantic colors. */
+:root {
+  --bg: var(--wp-bg);
+  --bg-deep: var(--wp-bg);
+  --surface: var(--wp-surface);
+  --bg-surface: var(--wp-surface);
+  --raised: var(--wp-card);
+  --bg-card: var(--wp-card);
+  --bg-card-hover: var(--wp-hover);
+  --text: var(--wp-text);
+  --text-primary: var(--wp-text);
+  --muted: var(--wp-secondary);
+  --text-secondary: var(--wp-secondary);
+  --text-muted: var(--wp-muted);
+  --line: var(--wp-border);
+  --border: var(--wp-border);
+  --border-light: var(--wp-border-strong);
+  --accent: var(--wp-accent);
+  --teal: var(--wp-accent);
+  --accent-purple: var(--wp-purple);
+  --accent-green: var(--wp-success);
+  --accent-orange: var(--wp-warning);
+  --accent-rose: var(--wp-error);
+  --amber: var(--wp-warning);
+  --header: var(--wp-header);
+  --nav-bg: var(--wp-header);
+  --diagram: var(--wp-code);
+  --code-bg: var(--wp-code);
+  --code-text: var(--wp-code-text);
+  --shadow: var(--wp-shadow);
+  --primary-color: var(--wp-accent);
+  --secondary-color: var(--wp-secondary);
+  --dark-color: var(--wp-text);
+  --light-color: var(--wp-surface);
+  --border-color: var(--wp-border);
+  --success-color: var(--wp-success);
+}
+::selection { background: var(--wp-purple); color: var(--wp-bg); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--wp-accent); outline-offset: 4px; }
+.wp-theme-toggle {
+  display: inline-grid; place-items: center; flex-shrink: 0;
+  width: 32px; height: 32px; padding: 5px;
+  border: 1px solid var(--wp-border); border-radius: 50%;
+  color: var(--wp-text); background: var(--wp-surface); cursor: pointer;
+}
+[data-theme-toggle] {
+  display: inline-grid;
+  place-items: center;
+  position: relative;
+  color: var(--wp-secondary);
+  background: var(--wp-surface);
+  border: 1px solid var(--wp-border);
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  transition: color .15s, background-color .15s, border-color .15s;
+}
+[data-theme-toggle]:hover {
+  color: var(--wp-accent);
+  background: var(--wp-card);
+  border-color: var(--wp-border-strong);
+}
+[data-theme-toggle] .wp-icon-sun,
+[data-theme-toggle] .wp-icon-moon { width: 18px; height: 18px; }
+[data-theme-toggle] .wp-icon-sun { display: block; }
+[data-theme-toggle] .wp-icon-moon { display: none; }
+html.light [data-theme-toggle] .wp-icon-sun { display: none; }
+html.light [data-theme-toggle] .wp-icon-moon { display: block; }
+/* Palette changes share one short transition, disabled for reduced motion. */
+body, .site-header, .engine, .client-node, .replica, .storage-node,
+.architecture-section, .evolution-section, .mode-card,
+.terminal, .start-grid > a, .doc-nav, .doc-sidebar, .code-container {
+  transition: background-color .18s, color .18s, border-color .18s;
+}
+@media (prefers-reduced-motion: reduce) {
+  body, .site-header, .engine, .client-node, .replica, .storage-node,
+  .architecture-section, .evolution-section, .mode-card,
+  .terminal, .start-grid > a, .doc-nav, .doc-sidebar, .code-container,
+  [data-theme-toggle] { transition: none; }
+}
+/* Native Docs components use the same surfaces, accent and semantic alerts. */
+.doc-nav-brand .tag { border-color: var(--wp-border-strong); }
+html.dark .sidebar-link.active { color: var(--wp-accent); }
+html.dark .hl-fn, .hl-fn { color: var(--wp-accent); }
+.hl-cm, html.dark .hl-cm { color: var(--wp-muted); }
+.sidebar-link.active, .sidebar-link:hover, .ops-right-nav a.current {
+  background: var(--wp-glow);
+}
+.doc-table tr:hover td { background: var(--wp-hover); }
+.callout.info { background: var(--wp-glow); border-color: var(--wp-border-strong); }
+.callout.tip { background: var(--wp-purple-glow); border-color: var(--wp-border-strong); }
+.callout.tip .callout-icon svg { stroke: var(--wp-purple); }
+/* Compatibility styling for older standalone guide URLs. */
+.legacy-doc { background: var(--wp-bg); color: var(--wp-text); }
+.legacy-doc .navbar { background: var(--wp-header); border-bottom: 1px solid var(--wp-border); box-shadow: none; }
+.legacy-doc .logo-release { color: var(--wp-accent); opacity: 1; }
+html.dark .legacy-doc .logo img { filter: invert(1) hue-rotate(180deg) brightness(.75); }
+.legacy-doc .hero {
+  background: radial-gradient(ellipse at 85% 10%, var(--wp-purple-glow), transparent 65%), var(--wp-surface);
+  color: var(--wp-text); border-bottom: 1px solid var(--wp-border);
+}
+.legacy-doc .hero-content { width: min(1080px, 100%); padding-inline: 20px; }
+.legacy-doc .hero-text { max-width: 100%; }
+.legacy-doc .hero p { color: var(--wp-secondary); }
+.legacy-doc .config-table, .legacy-doc .install-step, .legacy-doc .example-card {
+  background: var(--wp-surface); border: 1px solid var(--wp-border); box-shadow: none;
+}
+.legacy-doc .config-table th { background: var(--wp-card); color: var(--wp-text); }
+.legacy-doc .code-block code { color: var(--wp-code-text); }
+.legacy-doc .footer { background: var(--wp-surface); color: var(--wp-secondary); border-top: 1px solid var(--wp-border); }
+.legacy-doc .footer a { color: var(--wp-accent); }
+.legacy-doc .theme-control { display: flex; align-items: center; gap: 20px; }
+@media (max-width: 768px) {
+  .legacy-doc .nav-links { flex-wrap: wrap; justify-content: center; gap: 10px; }
+  .legacy-doc .nav-links li { margin: 0 8px; }
+  .legacy-doc .theme-control { gap: 12px; }
+  .legacy-doc .hero h1 { font-size: 36px; }
+  .legacy-doc .hero-diagram { display: none; }
+  .legacy-doc .config-table { display: block; overflow-x: auto; }
+}

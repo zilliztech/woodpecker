@@ -1,204 +1,106 @@
-![woodpecker logo](./docs/images/logo.png)
-# Woodpecker
-*A Cloud-Native WAL Storage Implementation*
+<p align="center"><img src="docs/images/logo.png" alt="Woodpecker" width="440"></p>
 
-> **Status**: Woodpecker is currently under active development and is being continuously improved. Stay tuned for future updates and releases!
+<h1 align="center">A Cloud-Native Write-Ahead Log Service</h1>
 
-## 🌟 Introduction
-**Woodpecker** is a cloud-native **Write-Ahead Log (WAL) storage** Implementation that leverages cloud object storage for **low-cost, high-throughput, and reliable** logging. Unlike traditional on-premises WAL storage or custom-built distributed logging solutions, Woodpecker is designed to **fully utilize cloud-native infrastructure** for scalability and durability.
+<p align="center">Ordered, durable logs built on object storage.<br>Deploy a replicated WAL service or embed the engine in your Go application.</p>
 
-With its **high-throughput writes, ordered durability guarantees, and efficient reads**, Woodpecker provides a lightweight yet powerful solution for cloud-native logging.
+<p align="center">
+  <a href="https://github.com/zilliztech/woodpecker/releases"><img src="https://img.shields.io/github/v/release/zilliztech/woodpecker?color=38d9f5" alt="Latest release"></a>
+  <a href="https://zilliztech.github.io/woodpecker/docs.html"><img src="https://img.shields.io/badge/docs-online-8b7cff" alt="Documentation"></a>
+</p>
 
-### **Use Cases**
-Although Woodpecker is initially built for vectordatabase use case [Milvus](https://milvus.io/) and [Zilliz Cloud](https://zilliz.com/), we believe it has strong potential to serve multiple different workloads on cloud. Woodpecker is suitable for **high-throughput, ordered, and durable log storage** scenarios, including:
+<p align="center"><a href="https://zilliztech.github.io/woodpecker/">Website</a> · <a href="https://zilliztech.github.io/woodpecker/docs.html#quickstart">Quick Start</a> · <a href="https://zilliztech.github.io/woodpecker/docs.html#operations-cli">CLI Handbook</a> · <a href="https://zilliztech.github.io/woodpecker/docs.html#operations-scenarios">Troubleshooting</a> · <a href="https://github.com/zilliztech/woodpecker/releases">Releases</a></p>
 
-- **Distributed WAL for databases** – Ensuring write-ahead logging with strict ordering and persistence.
-- **Streaming and event sourcing** – Providing a durable event log for stream processing frameworks.
-- **Consensus protocols** – Serving as a persistent log for distributed consensus algorithms (e.g., Raft, Paxos).
-- **Transaction logs** – Storing ordered, durable logs for financial or critical business applications.
+Woodpecker provides ordered, durable logs for databases and stateful cloud applications. Service mode separates WAL processing from application compute: clients write to a quorum of LogStore nodes, active data is staged locally, and completed segments are compacted into object storage. Etcd provides metadata and coordination.
 
----
+**Service mode is released, and Woodpecker is in an ongoing release cycle.** The next phase focuses on reliability, performance, operations, and observability. The current release is [v0.1.47](https://github.com/zilliztech/woodpecker/releases/tag/v0.1.47); check the release notes and integration requirements when selecting a version.
 
-### 🚀 Key Features
-✅ **Cloud-Native WAL** – Uses cloud object storage as the durable storage layer, ensuring scalability and cost-effectiveness.  
-✅ **High-Throughput Writes** – Optimized for cloud storage with specialized write strategies to maximize sequential write throughput.  
-✅ **Efficient Log Reads** – Utilizes memory management and prefetching strategies to optimize sequential log access.  
-✅ **Ordered Durability** – Guarantees strict sequential ordering for log persistence.  
-✅ **Flexible Deployment** – Can be deployed as a standalone service or integrated as an embedded library in your application.  
-✅ **Resilient & Fault-Tolerant** – Leverages cloud reliability features for strong durability guarantees.  
-✅ **One Write, Multiple Reads** – Adopts a "data-embedded metadata" design, enabling multiple read operations without the need for tight synchronization with the writer's metadata.
+## Choose your deployment
 
----
+| | Service mode | Embedded mode |
+|---|---|---|
+| Runs as | A dedicated LogStore cluster | A Go library inside your application |
+| Write path | Quorum-based replication with local staging | In-process LogStore with the configured storage backend |
+| Dependencies | LogStore nodes, etcd, object storage | Etcd and the configured storage backend |
+| Fits | Applications that manage WAL infrastructure separately | Applications that prefer in-process integration |
 
-## 🏗 Architecture Overview
+<p align="center"><img src="docs/images/service_architecture.png" alt="Service architecture: clients access replicated LogStore nodes, with object storage and etcd" width="820"></p>
 
-### **Embedded mode Architecture**
-In the embedded mode, **Woodpecker** is designed as a lightweight library with minimal dependencies. It does not require complex services but relies on **etcd** for metadata and coordination. This design ensures efficient operation while keeping the system simple and flexible.
+Read the [architecture guide](https://zilliztech.github.io/woodpecker/docs.html#architecture) for both modes and the [quorum guide](https://zilliztech.github.io/woodpecker/docs.html#quorum) for replication and placement.
 
-Woodpecker supports integration with a variety of cloud-native object storage backends, including those that are compatible with the **MinIO API**, as well as major cloud providers like **AWS, GCP, Azure and Aliyun**. This enables seamless deployment in multi-cloud environments, making it highly adaptable for different storage needs while leveraging the scalability and reliability of cloud object storage.
+## Get started
 
-![embedded mode architecture diagram](./docs/images/embedded_architecture.png)
+### Run a local service cluster
 
-### **Service mode Architecture**
+Install Git and Docker with the Compose plugin, then use the deployment template from a tagged release. This starts a local development environment with LogStore nodes, etcd, MinIO, and Jaeger; it uses local ports and development credentials.
 
-In the service mode, the WAL read/write operations and caching logic are decoupled into a dedicated **LogStore** component cluster service, acting as a caching layer for the object storage. This architecture further improves throughput and reduces latency by employing data prefetching and read/write caching strategies.
-
-![service mode architecture diagram](./docs/images/service_architecture.png)
-
-
-### **Core Components**
-
-- **Client** – Read/write protocol layer.
-- **LogStore** – Handles high-speed log writes, batching, and cloud storage uploads.
-- **ObjectStorage Backend** – Uses cloud object storage (e.g., S3, GCS, OSS) as a scalable, low-cost WAL backend.
-- **ETCD** – Uses etcd to store metadata and coordination .
-- **EmbeddedClient** – Client with LogStore component in it.
-
-### **Design Benefits**
-- **Lightweight deployment**, making it easy to integrate with various systems.
-- **Decouples compute & storage**, reducing operational complexity.
-- **Auto-scaling storage**, eliminating capacity planning overhead.
-- **Reduces local disk dependency**, making it ideal for cloud-native workloads.
-
----
-
-## 🏎 Benchmarks
-We ran comprehensive benchmarks to evaluate Woodpecker's performance in a single-node, single-client, single-log-stream setup. The results were impressive when compared to Kafka and Pulsar:
-
-| System     | Kafka      | Pulsar  | WP Minio | WP Local | WP S3   |
-| ---------- | ---------- | ------- | -------- | -------- | ------- |
-| Throughput | 129.96MB/s | 107MB/s | 71MB/s   | 450MB/s  | 750MB/s |
-| latency    | 58ms       | 35ms    | 184ms    | 1.8ms    | 166ms   |
-
-For context, we measured the theoretical throughput limits of different storage backends on our test machine:
-
-- MinIO: ~110 MB/s
-- Local file system: 600–750 MB/s
-- Amazon S3 (single EC2 instance): up to 1.1 GB/s
-
-Remarkably, Woodpecker consistently achieved 60-80% of the maximum possible throughput for each backend—an exceptional efficiency level for middleware.
-
----
-
-## 🎯 **Usage Examples**
-
-### **1. Install Woodpecker**
 ```bash
-go install github.com/zilliztech/woodpecker@latest
+git clone --branch v0.1.47 --depth 1 https://github.com/zilliztech/woodpecker.git
+cd woodpecker/deployments
+export WOODPECKER_IMAGE=docker.io/milvusdb/woodpecker:v0.1.46
+docker compose up -d
+docker compose ps
 ```
 
-### **2. Custom Config**
-```yaml
-# woodpecker.yaml
-woodpecker:
-  # Configuration of Woodpecker metadata storage.
-  meta:
-    type: etcd # Type of the meta data storage, currently only etcd is supported.
-    prefix: woodpecker # Root prefix of the key to where Woodpecker stores data in etcd.
-  # Configuration of Woodpecker Client.
-  client:
-    segmentAppend:
-      queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
-      maxRetries: 3 # Maximum number of retries for segment append operations
-    segmentRollingPolicy:
-      maxSize: 2000000000 # Maximum segment size in bytes, default is 2GB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
-      maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
-    auditor:
-      maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
-  # Configuration of Woodpecker LogStore Server.
-  logstore:
-    segmentSyncPolicy:
-      maxInterval: 200 # Maximum interval between two sync operations in milliseconds
-      maxIntervalForLocalStorage: 10 # Maximum interval between sync operations for local storage backend, in milliseconds
-      maxIntervalForService: 1 # Maximum interval between sync operations for service mode, in milliseconds (service mode also syncs on service-side events)
-      maxEntries: 10000 # Maximum entries number of write buffer
-      maxBytes: 256000000 # Maximum size of write buffer in bytes
-      maxFlushRetries: 5 # Maximum number of retries for sync operations
-      retryInterval: 1000 # Maximum interval between two retries in milliseconds
-      maxFlushSize: 4000000 # Maximum size of a fragment in bytes to flush, default is 4MB, which is the best practice for cloud storage
-      maxFlushThreads: 64 # Maximum number of threads to flush data
-    segmentCompactionPolicy:
-      maxBytes: 4000000 # Maximum size of a merged file in bytes after compact, default is 4M
+The example uses the v0.1.46 service image; v0.1.47 adds CLI and documentation updates. Select a published service image supporting your host architecture. Follow the [deployment guide](deployments/README.md) and [service quick start](https://zilliztech.github.io/woodpecker/docs.html#quickstart/service) for configuration and client connection details. Kubernetes deployment is also available through the [Woodpecker Operator](deployments/operator/README.md).
+
+### Integrate the Go library
+
+From your application's Go module:
+
+```bash
+go get github.com/zilliztech/woodpecker@v0.1.47
 ```
 
-### **3. Use Woodpecker for write**
-**3.1 open client writer**
-```
-// open client writer
-cfg, _ := config.NewConfiguration()
-client, _ := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-_ = client.CreateLog(context.Background(), "test_log_single")
-logHandle, _ := client.OpenLog(context.Background(), "test_log_single")
-logWriter, _ := logHandle.OpenLogWriter(context.Background())
-```
-**3.2 sync/async write**
+Use the Go version required by [go.mod](go.mod). The [SDK quick start](https://zilliztech.github.io/woodpecker/docs.html#quickstart/embedded) covers storage configuration, client creation, and log reads/writes. Embedded mode still requires etcd and its configured storage backend.
 
-sync write 
-```
-// Sync Write
-writeResult := logWriter.Write(context.Background(),
-    &log.WriteMessage{
-        Payload: []byte("hello world"),
-        Properties: map[string]string{
-            "key": fmt.Sprintf("value"),
-        },
-    }, 
-)
-```
-or async write
-```
-// Async Write multi messages as a batch
-resultChan := make([]<-chan *log.WriteResult, count)
-for i := 0; i < count; i++ {
-	writeResultChan := logWriter.WriteAsync(context.Background(),
-		&log.WriteMessage{
-			Payload: []byte(fmt.Sprintf("hello world %d", i)),
-			Properties: map[string]string{
-				"key": fmt.Sprintf("value%d", i),
-			},
-		},
-	)
-	resultChan[i] = writeResultChan
-}
-// wait for async result for this batch
-for _, resultChan := range resultChan {
-	r := <-resultChan
-	// biz ...
-}
-// Other biz logic ...
+### Install the operational CLI
+
+Download the binary for your OS and architecture from [Releases](https://github.com/zilliztech/woodpecker/releases/tag/v0.1.47). For example, on macOS with Apple Silicon:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+curl -fL https://github.com/zilliztech/woodpecker/releases/download/v0.1.47/wp-darwin-arm64 \
+  -o "$HOME/.local/bin/wp"
+chmod +x "$HOME/.local/bin/wp"
+export PATH="$HOME/.local/bin:$PATH"
+wp version
 ```
 
-### **4. Use Woodpecker for read**
-```
-logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
-	if openReaderErr != nil {
-		fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
-		panic(openReaderErr)
-	}
+Linux binaries are `wp-linux-amd64` and `wp-linux-arm64`; Windows uses `wp-windows-amd64.exe`. To build from a checkout instead, run `make wpcli` and use `./bin/wp`. The [CLI setup guide](https://zilliztech.github.io/woodpecker/docs.html#operations-cli-local) explains `cli.yaml`, etcd connections, and node address mappings for access from outside Kubernetes.
 
-	// iterate through all data logReader.ReadNext(context.Background())
-	for {
-		msg, err := logReader.ReadNext(context.Background())
-		if err == nil {
-			// read success, do biz logic...
-		} else {
-			// read fail, do biz logic...
-                } 
-	}
-	
-// Other biz logic...
-```
+## Operate and troubleshoot
 
+| Goal | Tools and documentation |
+|---|---|
+| Check cluster and node health | `wp cluster health`, `wp node log-health` — [cluster status](https://zilliztech.github.io/woodpecker/docs.html#operations-cli-cluster) |
+| Investigate slow or stalled work | `wp ops`, `wp metrics report`, `wp profile` — [runtime diagnostics](https://zilliztech.github.io/woodpecker/docs.html#operations-cli-ops) |
+| Compare metadata and replica data | `wp log scan`, `wp segment inspect/probe`, `wp meta check` — [segment diagnosis](https://zilliztech.github.io/woodpecker/docs.html#operations-cli-segment) |
+| Correct known metadata problems | `wp meta` preview/apply with revision checks, backup, and audit — [metadata repairs](https://zilliztech.github.io/woodpecker/docs.html#operations-cli-meta) |
+| Manage read progress and retention | `wp log readers`, `wp log skip-range`, `wp log truncate` — [log operations](https://zilliztech.github.io/woodpecker/docs.html#operations-cli-log) |
 
-## 📜 **License**
+Start from the symptom: [read stalls](https://zilliztech.github.io/woodpecker/docs.html#operations-scenarios-read), [write stalls](https://zilliztech.github.io/woodpecker/docs.html#operations-scenarios-write), or [data corruption and recovery](https://zilliztech.github.io/woodpecker/docs.html#operations-scenarios-corruption). Metadata consistency, physical data coverage, and application recovery are separate checks; each guide explains what its results establish.
 
-Woodpecker is licensed under different open source licenses depending on the component:
+Prometheus metrics and OpenTelemetry tracing support monitoring and diagnosis. See [monitoring](https://zilliztech.github.io/woodpecker/docs.html#monitoring) for configuration.
 
-- **Server components** (`server/` directory): Dual-licensed under your choice of either:
-  - [GNU Affero General Public License v3.0 (AGPLv3)](server/LICENSE)
-  - [Server Side Public License v1 (SSPLv1)](server/LICENSE)
+## Development direction
 
-- **All other components**: Licensed under [Apache License 2.0](APACHE-LICENSE-2.0.txt)
+With the service architecture in place, development focuses on:
 
-See [LICENSE.txt](LICENSE.txt) for detailed license information and [NOTICE](NOTICE) for copyright and contribution details.
+- **Reliability:** failure testing, recovery behavior, and lifecycle transitions.
+- **Performance:** throughput, tail latency, and resource efficiency.
+- **Operations:** diagnosis, controlled repairs, and maintenance workflows.
+- **Observability:** actionable metrics, tracing, and runtime visibility.
 
+See [open issues](https://github.com/zilliztech/woodpecker/issues) for ongoing work. Evaluate performance with the [benchmark tooling](tests/benchmark) using your own workload, hardware, durability policy, and deployment mode.
+
+## Contribute
+
+Bug reports, reproducible performance findings, documentation improvements, and pull requests are welcome. Check [existing issues](https://github.com/zilliztech/woodpecker/issues) before opening a new one, and see [build instructions](build/README.md) to get started.
+
+## License
+
+- **Server components** (`server/`): your choice of AGPLv3 or SSPLv1, as described in [server/LICENSE](server/LICENSE).
+- **Other components:** [Apache License 2.0](APACHE-LICENSE-2.0.txt).
+
+See [LICENSE.txt](LICENSE.txt) for details.
