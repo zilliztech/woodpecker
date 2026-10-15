@@ -1,0 +1,25 @@
+/* Complete walkthroughs stay within the native Docs shell. */
+.qs-mode-tabs { flex-wrap: wrap; }
+.qs-mode-tabs .doc-tab { white-space: normal; }
+.qs-step-nav { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 15px 0 23px; border-bottom: 1px solid var(--border); margin-bottom: 24px; font-size: 12px; }
+#page-quickstart h3[id] { scroll-margin-top: 80px; }
+.qs-source { margin-block: 20px 28px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); }
+.qs-source summary { color: var(--accent); cursor: pointer; font-size: 13px; line-height: 1.7; }
+.qs-source .code-container { margin-bottom: 0; }
+.qs-choice { display: block; overflow-x: auto; }
+#page-quickstart .code-container { max-width: 100%; }
+#page-quickstart .doc-tab-panel { min-width: 0; }
+#page-quickstart p, #page-quickstart li { overflow-wrap: anywhere; }
+#page-quickstart code:not(pre code) { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .qs-choice, .qs-choice tbody, .qs-choice tr, .qs-choice td { display: block; width: 100%; }
+  .qs-choice thead { display: none; }
+  .qs-choice tr { margin-bottom: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; }
+  .qs-choice td { padding: 5px 0; border: 0; overflow-wrap: anywhere; }
+  .qs-choice td:first-child { font-family: inherit; font-size: 15px; font-weight: 600; }
+  .qs-choice td:nth-child(2)::before { content: 'Application: '; color: var(--text-muted); }
+  .qs-choice td:nth-child(3)::before { content: 'Client: '; color: var(--text-muted); }
+  .qs-mode-tabs .doc-tab { flex: 1 1 100%; text-align: left; padding: 12px; }
+  .qs-step-nav { gap: 8px 14px; }
+  .qs-source { padding: 12px; }
+}

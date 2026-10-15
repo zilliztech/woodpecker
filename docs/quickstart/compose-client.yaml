@@ -1,0 +1,28 @@
+# Development example. Replace credentials/endpoints for your environment.
+woodpecker:
+  storage:
+    type: service
+    rootPath: /woodpecker/data
+  client:
+    quorum:
+      quorumBufferPools:
+        - name: quickstart
+          seeds:
+            - wp-0:18080
+            - wp-1:18080
+            - wp-2:18080
+etcd:
+  endpoints: ["etcd:2379"]
+  rootPath: quickstart-service
+minio:
+  address: minio
+  port: 9000
+  accessKeyID: minioadmin
+  secretAccessKey: minioadmin
+  useSSL: false
+  bucketName: quickstart-service
+  rootPath: wal
+  createBucket: true
+log:
+  level: error
+  stdout: true

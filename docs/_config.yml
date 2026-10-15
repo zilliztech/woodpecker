@@ -22,3 +22,7 @@ exclude:
   - operations/cli-examples.json
   - operations/cli-categories.json
   - operations/README.md
+
+  # Quick Start generator/maintenance notes; runnable examples remain downloadable.
+  - quickstart/generate.py
+  - quickstart/README.md

@@ -32,17 +32,19 @@ Read the [architecture guide](https://zilliztech.github.io/woodpecker/docs.html#
 
 ### Run a local service cluster
 
-Install Git and Docker with the Compose plugin, then use the deployment template from a tagged release. This starts a local development environment with LogStore nodes, etcd, MinIO, and Jaeger; it uses local ports and development credentials.
+Choose a complete walkthrough: [Kubernetes Service](https://zilliztech.github.io/woodpecker/docs.html#quickstart/kubernetes), [Docker Compose Service](https://zilliztech.github.io/woodpecker/docs.html#quickstart/service), or [Embedded library](https://zilliztech.github.io/woodpecker/docs.html#quickstart/embedded). Each path covers deployment, SDK configuration, application reads/writes, result verification, and cleanup.
+
+For the Compose path, install Git and Docker with Compose v2.20+, then run from a current source checkout containing the tutorial files:
 
 ```bash
-git clone --branch v0.1.47 --depth 1 https://github.com/zilliztech/woodpecker.git
-cd woodpecker/deployments
-export WOODPECKER_IMAGE=docker.io/milvusdb/woodpecker:v0.1.46
-docker compose up -d
-docker compose ps
+git clone --depth 1 https://github.com/zilliztech/woodpecker.git
+cd woodpecker
+docker compose -f docs/quickstart/compose.yaml --profile service up -d --wait --wait-timeout 180 etcd minio wp-0 wp-1 wp-2
+docker compose -f docs/quickstart/compose.yaml build client
+docker compose -f docs/quickstart/compose.yaml run --rm client --config /examples/compose-client.yaml
 ```
 
-The example uses the v0.1.46 service image; v0.1.47 adds CLI and documentation updates. Select a published service image supporting your host architecture. Follow the [deployment guide](deployments/README.md) and [service quick start](https://zilliztech.github.io/woodpecker/docs.html#quickstart/service) for configuration and client connection details. Kubernetes deployment is also available through the [Woodpecker Operator](deployments/operator/README.md).
+The development example pins the published v0.1.46 service image and runs the application on the same Docker network as the quorum nodes. Expect a `VERIFIED mode=service messages=1` line after the write/read check. The general [deployment guide](deployments/README.md) and [Operator guide](deployments/operator/README.md) cover other deployment/lifecycle configurations.
 
 ### Integrate the Go library
 
@@ -63,11 +65,11 @@ woodpecker:
   storage:
     type: minio
 etcd:
-  endpoints: ["localhost:2379"]
+  endpoints: ["127.0.0.1:12379"]
   rootPath: readme-example
 minio:
-  address: localhost
-  port: 9000
+  address: 127.0.0.1
+  port: 19000
   accessKeyID: minioadmin
   secretAccessKey: minioadmin
   useSSL: false

@@ -470,6 +470,7 @@
         .ops-page section > .command:first-of-type { border-top: 0; margin-top: 16px; padding-top: 0; }
     </style>
     <link rel="stylesheet" href="assets/theme.css">
+    <link rel="stylesheet" href="assets/quickstart.css">
     <script src="assets/theme.js"></script>
 </head>
 <body>
@@ -6587,215 +6588,523 @@ wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 51 --max-entries 100 \
 
         <!-- ═══════ QUICK START ═══════ -->
         <div class="doc-page" id="page-quickstart">
-            <h1>Quick Start</h1>
-            <p class="page-desc">Get Woodpecker up and running in minutes. Choose between embedded mode (library) or service mode (dedicated cluster).</p>
-
-            <h2>Install Client Library</h2>
-            <p>Add Woodpecker as a Go dependency to your project:</p>
-            <div class="code-container">
-                <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                <div class="code-body"><pre>go get github.com/zilliztech/woodpecker@latest</pre></div>
-            </div>
-
-            <h2>Choose Your Mode</h2>
-            <p>Woodpecker supports two deployment modes with different clients. Pick the one that fits your architecture.</p>
-
-            <div class="doc-tabs">
-                <button class="doc-tab active" onclick="switchQS('embedded')">Embedded Mode</button>
-                <button class="doc-tab" onclick="switchQS('service')">Service Mode</button>
-            </div>
-
-            <!-- ── EMBEDDED MODE ── -->
-            <div class="doc-tab-panel active" id="qs-embedded">
-
-                <div class="callout tip">
-                    <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
-                    <span>Embedded mode runs the LogStore <strong>in-process</strong>. No external LogStore service needed &mdash; just etcd and object storage. Best for single-instance deployments and applications needing local WAL integration.</span>
-                </div>
-
-                <h3>Prerequisites</h3>
-                <p>Only an etcd instance is required. Object storage (MinIO/S3) is configured via <code>woodpecker.yaml</code>.</p>
-                <div class="code-container">
-                    <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                    <div class="code-body"><pre><span class="hl-cm"># Start etcd (for metadata coordination)</span>
-docker run -d --name etcd -p 2379:2379 \
-  quay.io/coreos/etcd:v3.5.0 /usr/local/bin/etcd \
-  --advertise-client-urls http://0.0.0.0:2379 \
-  --listen-client-urls http://0.0.0.0:2379
-
-<span class="hl-cm"># Start MinIO (for object storage)</span>
-docker run -d --name minio -p 9000:9000 -p 9001:9001 \
-  milvusdb/minio:RELEASE.2024-12-18T13-15-44Z server /data --console-address ":9001"</pre></div>
-                </div>
-
-                <h3>Create Client</h3>
-                <p>Use <code>NewEmbedClientFromConfig</code> &mdash; it auto-creates etcd and storage connections, and starts an in-process LogStore.</p>
-                <div class="code-container">
-                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                    <div class="code-body"><pre>cfg, _ := config.<span class="hl-fn">NewConfiguration</span>()
-client, _ := woodpecker.<span class="hl-fn">NewEmbedClientFromConfig</span>(ctx, cfg)
-<span class="hl-kw">defer</span> client.<span class="hl-fn">Close</span>(ctx)</pre></div>
-                </div>
-
-                <h3>Write Data</h3>
-                <div class="code-container">
-                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                    <div class="code-body"><pre><span class="hl-cm">// Create and open a log</span>
-client.<span class="hl-fn">CreateLog</span>(ctx, <span class="hl-str">"my-wal"</span>)
-logHandle, _ := client.<span class="hl-fn">OpenLog</span>(ctx, <span class="hl-str">"my-wal"</span>)
-
-<span class="hl-cm">// Open a writer (acquires distributed lock)</span>
-writer, _ := logHandle.<span class="hl-fn">OpenLogWriter</span>(ctx)
-
-<span class="hl-cm">// Synchronous write</span>
-result := writer.<span class="hl-fn">Write</span>(ctx,
-    &amp;log.<span class="hl-type">WriteMessage</span>{
-        Payload:    []<span class="hl-kw">byte</span>(<span class="hl-str">"hello world"</span>),
-        Properties: <span class="hl-kw">map</span>[<span class="hl-kw">string</span>]<span class="hl-kw">string</span>{<span class="hl-str">"key"</span>: <span class="hl-str">"value"</span>},
-    },
-)
-<span class="hl-cm">// result.LogMessageId = {SegmentId, EntryId}</span>
-
-<span class="hl-cm">// Asynchronous write (higher throughput)</span>
-ch := writer.<span class="hl-fn">WriteAsync</span>(ctx,
-    &amp;log.<span class="hl-type">WriteMessage</span>{
-        Payload: []<span class="hl-kw">byte</span>(<span class="hl-str">"async hello"</span>),
-    },
-)
-r := &lt;-ch <span class="hl-cm">// wait for result</span></pre></div>
-                </div>
-
-                <h3>Read Data</h3>
-                <div class="code-container">
-                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                    <div class="code-body"><pre><span class="hl-cm">// Open a reader from the earliest position</span>
-start := log.<span class="hl-fn">EarliestLogMessageID</span>()
-reader, _ := logHandle.<span class="hl-fn">OpenLogReader</span>(ctx, &amp;start, <span class="hl-str">"my-reader"</span>)
-<span class="hl-kw">defer</span> reader.<span class="hl-fn">Close</span>(ctx)
-
-<span class="hl-cm">// Iterate through all messages</span>
-<span class="hl-kw">for</span> {
-    msg, err := reader.<span class="hl-fn">ReadNext</span>(ctx)
-    <span class="hl-kw">if</span> err != <span class="hl-kw">nil</span> { <span class="hl-kw">break</span> }
-    fmt.<span class="hl-fn">Printf</span>(<span class="hl-str">"ID: {%d,%d} Payload: %s\n"</span>,
-        msg.Id.SegmentId, msg.Id.EntryId,
-        <span class="hl-kw">string</span>(msg.Payload))
-}</pre></div>
-                </div>
-            </div>
-
-            <!-- ── SERVICE MODE ── -->
-            <div class="doc-tab-panel" id="qs-service">
-
-                <div class="callout info">
-                    <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
-                    <span>Service mode uses a dedicated <strong>LogStore cluster</strong> as a caching layer for higher throughput and lower latency. Requires running LogStore server(s) with gossip-based cluster membership. Uses <strong>staged storage</strong> (local disk + object storage hybrid).</span>
-                </div>
-
-                <h3>Deploy LogStore Cluster</h3>
-                <p>Service mode requires a running LogStore cluster. Choose one of the following approaches:</p>
-
-                <h3>Option A: Using Docker Compose (Recommended)</h3>
-                <p>Use the provided <code>deployments/docker-compose.yaml</code> template to pull the latest image and start a complete cluster:</p>
-                <div class="code-container">
-                    <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                    <div class="code-body"><pre><span class="hl-cm"># Clone the repository for deployment templates</span>
-git clone https://github.com/zilliztech/woodpecker.git
-cd woodpecker/deployments
-
-<span class="hl-cm"># Start the complete cluster (etcd + MinIO + Jaeger + 3 nodes)</span>
-docker compose up -d
-
-<span class="hl-cm"># Check cluster status</span>
-./deploy.sh status</pre></div>
-                </div>
-
-                <h3>Option B: Build from Source</h3>
-                <p>Build Woodpecker binary and Docker image locally, then deploy:</p>
-                <div class="code-container">
-                    <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                    <div class="code-body"><pre><span class="hl-cm"># 1. Build binary and Docker image</span>
-git clone https://github.com/zilliztech/woodpecker.git
-cd woodpecker/deployments
-./deploy.sh build
-
-<span class="hl-cm"># 2. Start the cluster using locally built image</span>
-./deploy.sh up
-
-<span class="hl-cm"># 3. Check cluster status</span>
-./deploy.sh status</pre></div>
-                </div>
-
-                <div class="callout tip">
-                    <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
-                    <span>Both options deploy 3 Woodpecker nodes (gRPC ports 18080&ndash;18082) with gossip-based discovery (ports 17946&ndash;17948), etcd, MinIO, and Jaeger tracing. See <code>deployments/README.md</code> for full configuration details.</span>
-                </div>
-
-                <h3>Create Client</h3>
-                <p>Use <code>NewClient</code> with an external etcd connection &mdash; the client connects to the LogStore cluster via gRPC.</p>
-                <div class="code-container">
-                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                    <div class="code-body"><pre>cfg, _ := config.<span class="hl-fn">NewConfiguration</span>()
-
-<span class="hl-cm">// Connect to etcd</span>
-etcdCli, _ := clientv3.<span class="hl-fn">New</span>(clientv3.<span class="hl-type">Config</span>{
-    Endpoints: []<span class="hl-kw">string</span>{<span class="hl-str">"localhost:2379"</span>},
+<!-- BEGIN GENERATED QUICK START -->
+<h1>Quick Start</h1>
+<p class="page-desc">Choose one complete path: deploy the dependencies and WAL, configure the matching client, then write and read a message.</p>
+<table class="doc-table qs-choice"><thead><tr><th>Path</th><th>Where the application runs</th><th>Client</th></tr></thead><tbody>
+<tr><td><a href="#quickstart/kubernetes">Kubernetes · Service</a></td><td>A Job in the same namespace as the LogStore cluster</td><td>NewClient</td></tr>
+<tr><td><a href="#quickstart/service">Docker Compose · Service</a></td><td>A container on the same Compose network as the LogStore nodes</td><td>NewClient</td></tr>
+<tr><td><a href="#quickstart/embedded">Embedded · Go library</a></td><td>Your workstation; etcd and MinIO run in Docker</td><td>NewEmbedClientFromConfig</td></tr>
+</tbody></table>
+<p>The two Service paths deploy the same architecture in different environments. Embedded runs its LogStore inside the application. Follow one tab from beginning to end; each includes its own configuration, commands and output interpretation.</p>
+<div class="callout info"><span>These development examples use a released <code>milvusdb/woodpecker:v0.1.46</code> server image and the v0.1.47 SDK API. Clone the current source checkout for the tutorial files added after that release. Development credentials, single-instance dependencies and small PVCs are for evaluation; use your own dependency, storage and lifecycle configuration for an operational deployment.</span></div>
+<div class="doc-tabs qs-mode-tabs" role="tablist" aria-label="Deployment walkthrough">
+<button class="doc-tab" id="qs-tab-kubernetes" role="tab" aria-selected="false" aria-controls="qs-kubernetes" data-qs-mode="kubernetes" tabindex="-1" onclick="openDocRoute('quickstart/kubernetes')">Kubernetes · Service</button>
+<button class="doc-tab active" id="qs-tab-service" role="tab" aria-selected="true" aria-controls="qs-service" data-qs-mode="service" tabindex="0" onclick="openDocRoute('quickstart/service')">Docker Compose · Service</button>
+<button class="doc-tab" id="qs-tab-embedded" role="tab" aria-selected="false" aria-controls="qs-embedded" data-qs-mode="embedded" tabindex="-1" onclick="openDocRoute('quickstart/embedded')">Embedded · Library</button>
+</div><div class="doc-tab-panel" id="qs-kubernetes" role="tabpanel" aria-labelledby="qs-tab-kubernetes"><h2>Kubernetes: deploy a WAL service and run an application</h2><nav class="qs-step-nav" aria-label="Steps in this walkthrough"><a href="#quickstart/kubernetes/prepare">1. Prepare</a><a href="#quickstart/kubernetes/deploy">2. Deploy</a><a href="#quickstart/kubernetes/configure">3. Configure</a><a href="#quickstart/kubernetes/application">4. Run the app</a><a href="#quickstart/kubernetes/verify">5. Verify</a><a href="#quickstart/kubernetes/cleanup">6. Clean up</a></nav><h3 id="qs-kubernetes-prepare">1. Prepare your cluster and checkout</h3><p>Use Kubernetes 1.28+, kubectl, Docker, and a default StorageClass with at least 6Gi available for the example PVCs. Allocate resources for three LogStore nodes plus etcd, MinIO and an application Job. Commands assume the namespace <code>wp-quickstart</code> and the usual cluster DNS suffix <code>cluster.local</code>. Start at the repository root:</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>git clone --depth 1 https://github.com/zilliztech/woodpecker.git
+cd woodpecker</code></pre></div></div><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>kubectl config current-context
+kubectl get storageclass</code></pre></div></div><h3 id="qs-kubernetes-deploy">2. Deploy etcd, MinIO and three LogStore nodes</h3><p>The <a href="quickstart/kubernetes.yaml">complete manifest</a> creates a dedicated namespace, dependency Services/Deployments/PVCs, a server ConfigMap, a headless Service and a three-replica StatefulSet. The headless Service publishes each node for direct quorum access.</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>kubectl apply -f docs/quickstart/kubernetes.yaml
+kubectl -n wp-quickstart rollout status deployment/qs-etcd --timeout=180s
+kubectl -n wp-quickstart rollout status deployment/qs-minio --timeout=180s
+kubectl -n wp-quickstart rollout status statefulset/wp --timeout=300s
+kubectl -n wp-quickstart get pods</code></pre></div></div><p>Continue when <code>qs-etcd</code>, <code>qs-minio</code> and <code>wp-0/1/2</code> are Ready. Pending PVCs mean the StorageClass/capacity needs attention; ImagePullBackOff means the registry/image is unavailable. Inspect with <code>kubectl -n wp-quickstart describe pod &lt;pod&gt;</code>.</p><h3 id="qs-kubernetes-configure">3. Use the Kubernetes client configuration</h3><p><a href="quickstart/kubernetes-client.yaml">kubernetes-client.yaml</a> uses names resolvable from the application Job in this namespace. Its metadata namespace, bucket and root path match the server ConfigMap:</p><div class="code-container"><div class="code-header"><span>kubernetes-client.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Development example. Replace credentials/endpoints for your environment.
+woodpecker:
+  storage:
+    type: service
+    rootPath: /woodpecker/data
+  client:
+    quorum:
+      quorumBufferPools:
+        - name: quickstart
+          seeds:
+            - wp-0.wp-headless:18080
+            - wp-1.wp-headless:18080
+            - wp-2.wp-headless:18080
+etcd:
+  endpoints: [&quot;qs-etcd:2379&quot;]
+  rootPath: quickstart-k8s
+minio:
+  address: qs-minio
+  port: 9000
+  accessKeyID: minioadmin
+  secretAccessKey: minioadmin
+  useSSL: false
+  bucketName: quickstart-k8s
+  rootPath: wal
+  createBucket: true
+log:
+  level: error
+  stdout: true</code></pre></div></div><div class="callout warning"><span><strong>A seed is discovery, not a proxy.</strong> The SDK must reach every selected node, etcd, and object storage. A single port-forward or LoadBalancer does not expose all quorum endpoints. This walkthrough runs the app inside Kubernetes; for an external SDK, provide DNS/routing to every advertised gRPC address and reachable dependencies. The wp CLI’s node-admin mappings apply to HTTP administration, not SDK gRPC traffic.</span></div><h3 id="qs-kubernetes-application">4. Build and run the application Job</h3><p>The runnable <a href="quickstart/client.go">client.go</a> loads the selected YAML, creates an external etcd connection and a service client:</p><div class="code-container"><div class="code-header"><span>Client initialization · excerpt</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// cfg is loaded from the path-specific client YAML below.
+etcdClient, err := clientv3.New(clientv3.Config{
+    Endpoints: cfg.Etcd.GetEndpoints(),
+    DialTimeout: 5 * time.Second,
 })
+if err != nil {
+    return err
+}
+defer etcdClient.Close()
+client, err := woodpecker.NewClient(ctx, cfg, etcdClient, false)
+if err != nil {
+    return err
+}
+defer client.Close(context.Background())</code></pre></div></div><p>It creates a fresh log, appends a message, and reads from the acknowledged position:</p><div class="code-container"><div class="code-header"><span>Write and read · excerpt</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// After CreateLog / OpenLog / OpenLogWriter (see the complete program):
+result := writer.Write(ctx, &amp;wplog.WriteMessage{Payload: []byte(&quot;hello, Woodpecker&quot;)})
+if result.Err != nil {
+    return result.Err
+}
+reader, err := handle.OpenLogReader(ctx, result.LogMessageId, &quot;quickstart&quot;)
+if err != nil {
+    return err
+}
+defer reader.Close(context.Background())
+message, err := reader.ReadNext(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(string(message.Payload))</code></pre></div></div><details class="qs-source"><summary>Complete application, including imports, configuration loading and cleanup</summary><div class="code-container"><div class="code-header"><span>docs/quickstart/client.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// Licensed to the LF AI &amp; Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// &quot;License&quot;); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-<span class="hl-cm">// Create service-mode client</span>
-client, _ := woodpecker.<span class="hl-fn">NewClient</span>(ctx, cfg, etcdCli, <span class="hl-kw">false</span>)
-<span class="hl-kw">defer</span> client.<span class="hl-fn">Close</span>(ctx)</pre></div>
-                </div>
+package main
 
-                <h3>Write & Read Data</h3>
-                <p>Once the client is created, the write and read API is <strong>identical</strong> to embedded mode:</p>
-                <div class="code-container">
-                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
-                    <div class="code-body"><pre><span class="hl-cm">// Same API as embedded mode after client creation</span>
-client.<span class="hl-fn">CreateLog</span>(ctx, <span class="hl-str">"my-wal"</span>)
-logHandle, _ := client.<span class="hl-fn">OpenLog</span>(ctx, <span class="hl-str">"my-wal"</span>)
+import (
+	&quot;bytes&quot;
+	&quot;context&quot;
+	&quot;flag&quot;
+	&quot;fmt&quot;
+	&quot;log&quot;
+	&quot;time&quot;
 
-<span class="hl-cm">// Write</span>
-writer, _ := logHandle.<span class="hl-fn">OpenLogWriter</span>(ctx)
-result := writer.<span class="hl-fn">Write</span>(ctx, &amp;log.<span class="hl-type">WriteMessage</span>{
-    Payload: []<span class="hl-kw">byte</span>(<span class="hl-str">"hello from service mode"</span>),
+	clientv3 &quot;go.etcd.io/etcd/client/v3&quot;
+
+	&quot;github.com/zilliztech/woodpecker/common/config&quot;
+	&quot;github.com/zilliztech/woodpecker/woodpecker&quot;
+	wplog &quot;github.com/zilliztech/woodpecker/woodpecker/log&quot;
+)
+
+func main() {
+	file := flag.String(&quot;config&quot;, &quot;client.yaml&quot;, &quot;SDK configuration file (not wp CLI cli.yaml)&quot;)
+	flag.Parse()
+	if err := run(*file); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(file string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cfg, err := config.NewConfiguration(file)
+	if err != nil {
+		return fmt.Errorf(&quot;load SDK configuration: %w&quot;, err)
+	}
+
+	var client woodpecker.Client
+	if cfg.Woodpecker.Storage.IsStorageService() {
+		etcdClient, err := clientv3.New(clientv3.Config{
+			Endpoints:   cfg.Etcd.GetEndpoints(),
+			DialTimeout: 5 * time.Second,
+		})
+		if err != nil {
+			return fmt.Errorf(&quot;create etcd client: %w&quot;, err)
+		}
+		defer etcdClient.Close()
+		client, err = woodpecker.NewClient(ctx, cfg, etcdClient, false)
+		if err != nil {
+			return fmt.Errorf(&quot;create service client: %w&quot;, err)
+		}
+	} else if cfg.Woodpecker.Storage.IsStorageMinio() {
+		client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf(&quot;create embedded client: %w&quot;, err)
+		}
+	} else {
+		return fmt.Errorf(&quot;this example supports storage.type service or minio&quot;)
+	}
+	defer client.Close(context.Background())
+
+	name := fmt.Sprintf(&quot;quickstart-%d&quot;, time.Now().UnixNano())
+	if err := client.CreateLog(ctx, name); err != nil {
+		return fmt.Errorf(&quot;create log: %w&quot;, err)
+	}
+	handle, err := client.OpenLog(ctx, name)
+	if err != nil {
+		return fmt.Errorf(&quot;open log: %w&quot;, err)
+	}
+	defer handle.Close(context.Background())
+	writer, err := handle.OpenLogWriter(ctx)
+	if err != nil {
+		return fmt.Errorf(&quot;open writer: %w&quot;, err)
+	}
+	defer writer.Close(context.Background())
+
+	payload := []byte(&quot;hello, Woodpecker&quot;)
+	result := writer.Write(ctx, &amp;wplog.WriteMessage{Payload: payload})
+	if result.Err != nil {
+		return fmt.Errorf(&quot;write: %w&quot;, result.Err)
+	}
+	fmt.Printf(&quot;WROTE log=%s position=%d:%d\n&quot;, name, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+
+	reader, err := handle.OpenLogReader(ctx, result.LogMessageId, &quot;quickstart&quot;)
+	if err != nil {
+		return fmt.Errorf(&quot;open reader: %w&quot;, err)
+	}
+	defer reader.Close(context.Background())
+	message, err := reader.ReadNext(ctx)
+	if err != nil {
+		return fmt.Errorf(&quot;read: %w&quot;, err)
+	}
+	if !bytes.Equal(message.Payload, payload) || *message.Id != *result.LogMessageId {
+		return fmt.Errorf(&quot;read result differs from acknowledged write&quot;)
+	}
+	fmt.Printf(&quot;READ position=%d:%d payload=%q\n&quot;, message.Id.SegmentId, message.Id.EntryId, message.Payload)
+	fmt.Printf(&quot;VERIFIED mode=%s messages=1\n&quot;, cfg.Woodpecker.Storage.Type)
+	return nil
+}</code></pre></div></div></details><p>Build the container on the same CPU architecture as the cluster nodes:</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>docker build -f docs/quickstart/Dockerfile -t woodpecker-quickstart-client:local .</code></pre></div></div><p>For minikube, load the image into the intended profile (replace <code>minikube</code> if yours has another name):</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>minikube -p minikube image load woodpecker-quickstart-client:local</code></pre></div></div><p>For a remote cluster, replace the example registry below with one your cluster can pull from, push the image, and set that exact image in <a href="quickstart/kubernetes-job.yaml">kubernetes-job.yaml</a>:</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>docker tag woodpecker-quickstart-client:local registry.example.com/team/wp-quickstart-client:demo
+docker push registry.example.com/team/wp-quickstart-client:demo</code></pre></div></div><p>Then create the client ConfigMap and Job:</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>kubectl -n wp-quickstart create configmap wp-client-config \
+  --from-file=client.yaml=docs/quickstart/kubernetes-client.yaml \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f docs/quickstart/kubernetes-job.yaml
+kubectl -n wp-quickstart wait --for=condition=complete job/quickstart-client --timeout=180s
+kubectl -n wp-quickstart logs job/quickstart-client</code></pre></div></div><h3 id="qs-kubernetes-verify">5. Verify the result</h3><p>Expected application output (log name varies; runtime messages may also appear):</p><div class="code-container"><div class="code-header"><span>Example output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>WROTE log=quickstart-... position=0:0
+READ position=0:0 payload=&quot;hello, Woodpecker&quot;
+VERIFIED mode=service messages=1</code></pre></div></div><p><code>WROTE</code> reports the acknowledged position. <code>READ</code> reports the entry read back. The program prints <code>VERIFIED</code> only after both the message ID and payload match. A nonzero exit or missing VERIFIED line requires investigation.</p><p>If the Job fails, inspect its logs and <code>kubectl -n wp-quickstart describe job quickstart-client</code>. Check Service DNS and node seeds for connection errors; compare metadata/bucket/root-path settings if the intended log or data is absent. To repeat the application, delete only its Job and reapply its manifest:</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>kubectl -n wp-quickstart delete job quickstart-client
+kubectl apply -f docs/quickstart/kubernetes-job.yaml</code></pre></div></div><h3 id="qs-kubernetes-cleanup">6. Clean up the evaluation environment</h3><p>This deletes the dedicated namespace, its example workloads, PVCs and their data:</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>kubectl delete namespace wp-quickstart</code></pre></div></div><p>The manifest is a plain StatefulSet evaluation deployment. For managed Woodpecker lifecycle operations, see the <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/operator">Operator guide</a>.</p></div><div class="doc-tab-panel active" id="qs-service" role="tabpanel" aria-labelledby="qs-tab-service"><h2>Docker Compose: deploy a WAL service and run an application</h2><nav class="qs-step-nav" aria-label="Steps in this walkthrough"><a href="#quickstart/service/prepare">1. Prepare</a><a href="#quickstart/service/deploy">2. Deploy</a><a href="#quickstart/service/configure">3. Configure</a><a href="#quickstart/service/application">4. Run the app</a><a href="#quickstart/service/verify">5. Verify</a><a href="#quickstart/service/cleanup">6. Clean up</a></nav><h3 id="qs-service-prepare">1. Prepare Docker and the checkout</h3><p>Install Git and Docker with Compose v2.20+. Docker builds the Go application, so no host Go installation is needed for this path. Run all commands from this checkout’s repository root:</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>git clone --depth 1 https://github.com/zilliztech/woodpecker.git
+cd woodpecker</code></pre></div></div><h3 id="qs-service-deploy">2. Start dependencies and three LogStore nodes</h3><p>The <a href="quickstart/compose.yaml">tutorial-specific Compose file</a> creates its own network and volumes, etcd, MinIO and three LogStore nodes. It advertises container DNS names so the application and nodes can reach one another; it is separate from the general <code>deployments/</code> template.</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>docker compose -f docs/quickstart/compose.yaml --profile service up -d --wait --wait-timeout 180 etcd minio wp-0 wp-1 wp-2
+docker compose -f docs/quickstart/compose.yaml --profile service ps</code></pre></div></div><p>All five services must be healthy. Etcd and MinIO also bind workstation-only ports <code>12379</code> and <code>19000</code>, used by the Embedded tab. Change those bindings if occupied; the Service app uses internal names.</p><h3 id="qs-service-configure">3. Use the Compose client configuration</h3><p><a href="quickstart/compose-client.yaml">compose-client.yaml</a> is mounted into the servers and the application. It sets service mode, seed addresses, metadata namespace and object-storage location:</p><div class="code-container"><div class="code-header"><span>compose-client.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Development example. Replace credentials/endpoints for your environment.
+woodpecker:
+  storage:
+    type: service
+    rootPath: /woodpecker/data
+  client:
+    quorum:
+      quorumBufferPools:
+        - name: quickstart
+          seeds:
+            - wp-0:18080
+            - wp-1:18080
+            - wp-2:18080
+etcd:
+  endpoints: [&quot;etcd:2379&quot;]
+  rootPath: quickstart-service
+minio:
+  address: minio
+  port: 9000
+  accessKeyID: minioadmin
+  secretAccessKey: minioadmin
+  useSSL: false
+  bucketName: quickstart-service
+  rootPath: wal
+  createBucket: true
+log:
+  level: error
+  stdout: true</code></pre></div></div><p>Names such as <code>wp-0:18080</code>, <code>etcd:2379</code> and <code>minio:9000</code> are Docker-network addresses. Run the application container below on that network. Setting only a localhost seed on the workstation does not rewrite the addresses returned in quorum metadata.</p><h3 id="qs-service-application">4. Create the service client, write and read</h3><p>The runnable <a href="quickstart/client.go">client.go</a> loads the selected YAML, creates an external etcd connection and a service client:</p><div class="code-container"><div class="code-header"><span>Client initialization · excerpt</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// cfg is loaded from the path-specific client YAML below.
+etcdClient, err := clientv3.New(clientv3.Config{
+    Endpoints: cfg.Etcd.GetEndpoints(),
+    DialTimeout: 5 * time.Second,
 })
+if err != nil {
+    return err
+}
+defer etcdClient.Close()
+client, err := woodpecker.NewClient(ctx, cfg, etcdClient, false)
+if err != nil {
+    return err
+}
+defer client.Close(context.Background())</code></pre></div></div><p>It creates a fresh log, appends a message, and reads from the acknowledged position:</p><div class="code-container"><div class="code-header"><span>Write and read · excerpt</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// After CreateLog / OpenLog / OpenLogWriter (see the complete program):
+result := writer.Write(ctx, &amp;wplog.WriteMessage{Payload: []byte(&quot;hello, Woodpecker&quot;)})
+if result.Err != nil {
+    return result.Err
+}
+reader, err := handle.OpenLogReader(ctx, result.LogMessageId, &quot;quickstart&quot;)
+if err != nil {
+    return err
+}
+defer reader.Close(context.Background())
+message, err := reader.ReadNext(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(string(message.Payload))</code></pre></div></div><details class="qs-source"><summary>Complete application, including imports, configuration loading and cleanup</summary><div class="code-container"><div class="code-header"><span>docs/quickstart/client.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// Licensed to the LF AI &amp; Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// &quot;License&quot;); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-<span class="hl-cm">// Read</span>
-start := log.<span class="hl-fn">EarliestLogMessageID</span>()
-reader, _ := logHandle.<span class="hl-fn">OpenLogReader</span>(ctx, &amp;start, <span class="hl-str">"reader-1"</span>)
-msg, _ := reader.<span class="hl-fn">ReadNext</span>(ctx)
-fmt.<span class="hl-fn">Println</span>(<span class="hl-kw">string</span>(msg.Payload))</pre></div>
-                </div>
-            </div>
+package main
 
-            <h2>Mode Comparison</h2>
-            <table class="doc-table">
-                <tr><th>Aspect</th><th>Embedded Mode</th><th>Service Mode</th></tr>
-                <tr><td>Client</td><td><code>NewEmbedClientFromConfig()</code></td><td><code>NewClient(ctx, cfg, etcdCli, managed)</code></td></tr>
-                <tr><td>LogStore</td><td>In-process (automatic)</td><td>Dedicated cluster (gRPC)</td></tr>
-                <tr><td>Storage</td><td>Direct to object storage</td><td>Staged: local disk + object storage</td></tr>
-                <tr><td>Dependencies</td><td>etcd + object storage</td><td>etcd + object storage + LogStore servers</td></tr>
-                <tr><td>Latency</td><td>No network overhead</td><td>Lower via caching layer</td></tr>
-                <tr><td>Throughput</td><td>Good</td><td>Higher (prefetching + batching)</td></tr>
-                <tr><td>Best for</td><td>Single instance, testing, embedded apps</td><td>Multi-instance, high-throughput production</td></tr>
-            </table>
+import (
+	&quot;bytes&quot;
+	&quot;context&quot;
+	&quot;flag&quot;
+	&quot;fmt&quot;
+	&quot;log&quot;
+	&quot;time&quot;
 
-            <div class="callout tip">
-                <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
-                <span>For high-throughput use cases, prefer <code>WriteAsync</code> with batch writes. This allows Woodpecker to optimize batching and flush operations.</span>
-            </div>
+	clientv3 &quot;go.etcd.io/etcd/client/v3&quot;
 
-            <div class="doc-pagination">
-                <a href="#" onclick="showPage('overview',document.querySelector('[onclick*=overview]'))">
-                    <div class="pg-label">&larr; Previous</div>
-                    <div class="pg-title">Overview</div>
-                </a>
-                <a href="#" onclick="showPage('configuration',document.querySelector('[onclick*=configuration]'))">
-                    <div class="pg-label pg-next">Next</div>
-                    <div class="pg-title">Configuration &rarr;</div>
-                </a>
-            </div>
+	&quot;github.com/zilliztech/woodpecker/common/config&quot;
+	&quot;github.com/zilliztech/woodpecker/woodpecker&quot;
+	wplog &quot;github.com/zilliztech/woodpecker/woodpecker/log&quot;
+)
+
+func main() {
+	file := flag.String(&quot;config&quot;, &quot;client.yaml&quot;, &quot;SDK configuration file (not wp CLI cli.yaml)&quot;)
+	flag.Parse()
+	if err := run(*file); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(file string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cfg, err := config.NewConfiguration(file)
+	if err != nil {
+		return fmt.Errorf(&quot;load SDK configuration: %w&quot;, err)
+	}
+
+	var client woodpecker.Client
+	if cfg.Woodpecker.Storage.IsStorageService() {
+		etcdClient, err := clientv3.New(clientv3.Config{
+			Endpoints:   cfg.Etcd.GetEndpoints(),
+			DialTimeout: 5 * time.Second,
+		})
+		if err != nil {
+			return fmt.Errorf(&quot;create etcd client: %w&quot;, err)
+		}
+		defer etcdClient.Close()
+		client, err = woodpecker.NewClient(ctx, cfg, etcdClient, false)
+		if err != nil {
+			return fmt.Errorf(&quot;create service client: %w&quot;, err)
+		}
+	} else if cfg.Woodpecker.Storage.IsStorageMinio() {
+		client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf(&quot;create embedded client: %w&quot;, err)
+		}
+	} else {
+		return fmt.Errorf(&quot;this example supports storage.type service or minio&quot;)
+	}
+	defer client.Close(context.Background())
+
+	name := fmt.Sprintf(&quot;quickstart-%d&quot;, time.Now().UnixNano())
+	if err := client.CreateLog(ctx, name); err != nil {
+		return fmt.Errorf(&quot;create log: %w&quot;, err)
+	}
+	handle, err := client.OpenLog(ctx, name)
+	if err != nil {
+		return fmt.Errorf(&quot;open log: %w&quot;, err)
+	}
+	defer handle.Close(context.Background())
+	writer, err := handle.OpenLogWriter(ctx)
+	if err != nil {
+		return fmt.Errorf(&quot;open writer: %w&quot;, err)
+	}
+	defer writer.Close(context.Background())
+
+	payload := []byte(&quot;hello, Woodpecker&quot;)
+	result := writer.Write(ctx, &amp;wplog.WriteMessage{Payload: payload})
+	if result.Err != nil {
+		return fmt.Errorf(&quot;write: %w&quot;, result.Err)
+	}
+	fmt.Printf(&quot;WROTE log=%s position=%d:%d\n&quot;, name, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+
+	reader, err := handle.OpenLogReader(ctx, result.LogMessageId, &quot;quickstart&quot;)
+	if err != nil {
+		return fmt.Errorf(&quot;open reader: %w&quot;, err)
+	}
+	defer reader.Close(context.Background())
+	message, err := reader.ReadNext(ctx)
+	if err != nil {
+		return fmt.Errorf(&quot;read: %w&quot;, err)
+	}
+	if !bytes.Equal(message.Payload, payload) || *message.Id != *result.LogMessageId {
+		return fmt.Errorf(&quot;read result differs from acknowledged write&quot;)
+	}
+	fmt.Printf(&quot;READ position=%d:%d payload=%q\n&quot;, message.Id.SegmentId, message.Id.EntryId, message.Payload)
+	fmt.Printf(&quot;VERIFIED mode=%s messages=1\n&quot;, cfg.Woodpecker.Storage.Type)
+	return nil
+}</code></pre></div></div></details><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>docker compose -f docs/quickstart/compose.yaml build client
+docker compose -f docs/quickstart/compose.yaml run --rm client --config /examples/compose-client.yaml</code></pre></div></div><h3 id="qs-service-verify">5. Verify the result</h3><p>Expected application output (log name varies; runtime messages may also appear):</p><div class="code-container"><div class="code-header"><span>Example output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>WROTE log=quickstart-... position=0:0
+READ position=0:0 payload=&quot;hello, Woodpecker&quot;
+VERIFIED mode=service messages=1</code></pre></div></div><p><code>WROTE</code> reports the acknowledged position. <code>READ</code> reports the entry read back. The program prints <code>VERIFIED</code> only after both the message ID and payload match. A nonzero exit or missing VERIFIED line requires investigation.</p><p>For startup or connection failures, inspect the dependency and LogStore logs, verify that all nodes joined, and rerun the client once they are healthy:</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>docker compose -f docs/quickstart/compose.yaml --profile service logs --tail=80 etcd minio wp-0 wp-1 wp-2</code></pre></div></div><h3 id="qs-service-cleanup">6. Stop the example</h3><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>docker compose -f docs/quickstart/compose.yaml --profile service down</code></pre></div></div><p>Named volumes retain the example data. To discard that data as well, add <code>--volumes</code> to the down command. Each application run creates a new log.</p></div><div class="doc-tab-panel" id="qs-embedded" role="tabpanel" aria-labelledby="qs-tab-embedded"><h2>Embedded: run the WAL engine inside a Go application</h2><nav class="qs-step-nav" aria-label="Steps in this walkthrough"><a href="#quickstart/embedded/prepare">1. Prepare</a><a href="#quickstart/embedded/deploy">2. Deploy</a><a href="#quickstart/embedded/configure">3. Configure</a><a href="#quickstart/embedded/application">4. Run the app</a><a href="#quickstart/embedded/verify">5. Verify</a><a href="#quickstart/embedded/cleanup">6. Clean up</a></nav><h3 id="qs-embedded-prepare">1. Prepare Go, Docker and the checkout</h3><p>Install Git, Go 1.25+ (see <a href="https://github.com/zilliztech/woodpecker/blob/master/go.mod">go.mod</a>), and Docker with Compose v2.20+. This application runs on your workstation; only etcd and MinIO run in containers.</p><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>git clone --depth 1 https://github.com/zilliztech/woodpecker.git
+cd woodpecker</code></pre></div></div><h3 id="qs-embedded-deploy">2. Start just etcd and MinIO</h3><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>docker compose -f docs/quickstart/compose.yaml up -d --wait --wait-timeout 180 etcd minio
+docker compose -f docs/quickstart/compose.yaml ps</code></pre></div></div><p>No standalone LogStore nodes are required. The two dependencies must be healthy and reachable at <code>127.0.0.1:12379</code> and <code>127.0.0.1:19000</code>. This reuses the tutorial Compose dependencies if the Service example is already running.</p><h3 id="qs-embedded-configure">3. Use the workstation client configuration</h3><p><a href="quickstart/embedded-host.yaml">embedded-host.yaml</a> selects <code>minio</code> storage, host-reachable dependency ports, and a separate metadata/bucket namespace. This is the SDK YAML, not wp’s cli.yaml:</p><div class="code-container"><div class="code-header"><span>embedded-host.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Development example. Replace credentials/endpoints for your environment.
+woodpecker:
+  storage:
+    type: minio
+    rootPath: ./quickstart-data
+etcd:
+  endpoints: [&quot;127.0.0.1:12379&quot;]
+  rootPath: quickstart-embedded-host
+minio:
+  address: 127.0.0.1
+  port: 19000
+  accessKeyID: minioadmin
+  secretAccessKey: minioadmin
+  useSSL: false
+  bucketName: quickstart-embedded-host
+  rootPath: wal
+  createBucket: true
+log:
+  level: error
+  stdout: true</code></pre></div></div><h3 id="qs-embedded-application">4. Start the embedded client, write and read</h3><p>The runnable <a href="quickstart/client.go">client.go</a> loads the selected YAML, starts an embedded client connected to etcd and object storage:</p><div class="code-container"><div class="code-header"><span>Client initialization · excerpt</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// storage.type is minio; the LogStore runs inside this application.
+client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+if err != nil {
+    return err
+}
+defer client.Close(context.Background())</code></pre></div></div><p>It creates a fresh log, appends a message, and reads from the acknowledged position:</p><div class="code-container"><div class="code-header"><span>Write and read · excerpt</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// After CreateLog / OpenLog / OpenLogWriter (see the complete program):
+result := writer.Write(ctx, &amp;wplog.WriteMessage{Payload: []byte(&quot;hello, Woodpecker&quot;)})
+if result.Err != nil {
+    return result.Err
+}
+reader, err := handle.OpenLogReader(ctx, result.LogMessageId, &quot;quickstart&quot;)
+if err != nil {
+    return err
+}
+defer reader.Close(context.Background())
+message, err := reader.ReadNext(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(string(message.Payload))</code></pre></div></div><details class="qs-source"><summary>Complete application, including imports, configuration loading and cleanup</summary><div class="code-container"><div class="code-header"><span>docs/quickstart/client.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>// Licensed to the LF AI &amp; Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// &quot;License&quot;); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	&quot;bytes&quot;
+	&quot;context&quot;
+	&quot;flag&quot;
+	&quot;fmt&quot;
+	&quot;log&quot;
+	&quot;time&quot;
+
+	clientv3 &quot;go.etcd.io/etcd/client/v3&quot;
+
+	&quot;github.com/zilliztech/woodpecker/common/config&quot;
+	&quot;github.com/zilliztech/woodpecker/woodpecker&quot;
+	wplog &quot;github.com/zilliztech/woodpecker/woodpecker/log&quot;
+)
+
+func main() {
+	file := flag.String(&quot;config&quot;, &quot;client.yaml&quot;, &quot;SDK configuration file (not wp CLI cli.yaml)&quot;)
+	flag.Parse()
+	if err := run(*file); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(file string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cfg, err := config.NewConfiguration(file)
+	if err != nil {
+		return fmt.Errorf(&quot;load SDK configuration: %w&quot;, err)
+	}
+
+	var client woodpecker.Client
+	if cfg.Woodpecker.Storage.IsStorageService() {
+		etcdClient, err := clientv3.New(clientv3.Config{
+			Endpoints:   cfg.Etcd.GetEndpoints(),
+			DialTimeout: 5 * time.Second,
+		})
+		if err != nil {
+			return fmt.Errorf(&quot;create etcd client: %w&quot;, err)
+		}
+		defer etcdClient.Close()
+		client, err = woodpecker.NewClient(ctx, cfg, etcdClient, false)
+		if err != nil {
+			return fmt.Errorf(&quot;create service client: %w&quot;, err)
+		}
+	} else if cfg.Woodpecker.Storage.IsStorageMinio() {
+		client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf(&quot;create embedded client: %w&quot;, err)
+		}
+	} else {
+		return fmt.Errorf(&quot;this example supports storage.type service or minio&quot;)
+	}
+	defer client.Close(context.Background())
+
+	name := fmt.Sprintf(&quot;quickstart-%d&quot;, time.Now().UnixNano())
+	if err := client.CreateLog(ctx, name); err != nil {
+		return fmt.Errorf(&quot;create log: %w&quot;, err)
+	}
+	handle, err := client.OpenLog(ctx, name)
+	if err != nil {
+		return fmt.Errorf(&quot;open log: %w&quot;, err)
+	}
+	defer handle.Close(context.Background())
+	writer, err := handle.OpenLogWriter(ctx)
+	if err != nil {
+		return fmt.Errorf(&quot;open writer: %w&quot;, err)
+	}
+	defer writer.Close(context.Background())
+
+	payload := []byte(&quot;hello, Woodpecker&quot;)
+	result := writer.Write(ctx, &amp;wplog.WriteMessage{Payload: payload})
+	if result.Err != nil {
+		return fmt.Errorf(&quot;write: %w&quot;, result.Err)
+	}
+	fmt.Printf(&quot;WROTE log=%s position=%d:%d\n&quot;, name, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+
+	reader, err := handle.OpenLogReader(ctx, result.LogMessageId, &quot;quickstart&quot;)
+	if err != nil {
+		return fmt.Errorf(&quot;open reader: %w&quot;, err)
+	}
+	defer reader.Close(context.Background())
+	message, err := reader.ReadNext(ctx)
+	if err != nil {
+		return fmt.Errorf(&quot;read: %w&quot;, err)
+	}
+	if !bytes.Equal(message.Payload, payload) || *message.Id != *result.LogMessageId {
+		return fmt.Errorf(&quot;read result differs from acknowledged write&quot;)
+	}
+	fmt.Printf(&quot;READ position=%d:%d payload=%q\n&quot;, message.Id.SegmentId, message.Id.EntryId, message.Payload)
+	fmt.Printf(&quot;VERIFIED mode=%s messages=1\n&quot;, cfg.Woodpecker.Storage.Type)
+	return nil
+}</code></pre></div></div></details><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>go run ./docs/quickstart/client.go --config docs/quickstart/embedded-host.yaml</code></pre></div></div><h3 id="qs-embedded-verify">5. Verify the result</h3><p>Expected application output (log name varies; runtime messages may also appear):</p><div class="code-container"><div class="code-header"><span>Example output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>WROTE log=quickstart-... position=0:0
+READ position=0:0 payload=&quot;hello, Woodpecker&quot;
+VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> reports the acknowledged position. <code>READ</code> reports the entry read back. The program prints <code>VERIFIED</code> only after both the message ID and payload match. A nonzero exit or missing VERIFIED line requires investigation.</p><p>Connection refused usually means a dependency is not healthy or the workstation port differs from the YAML. An authentication error requires matching MinIO credentials. Use the <code>NewEmbedClientFromConfig</code> path with <code>storage.type: minio</code>; service storage requires the other client constructor.</p><h3 id="qs-embedded-cleanup">6. Stop dependencies</h3><div class="code-container"><div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>docker compose -f docs/quickstart/compose.yaml down</code></pre></div></div><p>Stop any Service example using these dependencies first. Named volumes retain metadata and object data; add <code>--volumes</code> to discard the tutorial data. For an application in its own module, install <code>github.com/zilliztech/woodpecker@v0.1.47</code> and copy the complete Go source above.</p></div>
+<div class="doc-pagination"><a href="#overview" onclick="showPage('overview',document.querySelector('.sidebar-link[onclick*=overview]'))"><div class="pg-label">← Previous</div><div class="pg-title">Overview</div></a><a href="#configuration" onclick="showPage('configuration',document.querySelector('.sidebar-link[onclick*=configuration]'))"><div class="pg-label">Next →</div><div class="pg-title">Configuration</div></a></div>
+<!-- END GENERATED QUICK START -->
         </div>
 
         <!-- ═══════ CONFIGURATION ═══════ -->
@@ -7795,10 +8104,17 @@ function toggleSidebar() {
 }
 
 function switchQS(mode) {
+    if (mode === 'compose') mode = 'service';
+    if (!['kubernetes', 'service', 'embedded'].includes(mode)) return;
     document.querySelectorAll('#page-quickstart .doc-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('#page-quickstart .doc-tab-panel').forEach(p => p.classList.remove('active'));
     document.getElementById('qs-' + mode).classList.add('active');
-    document.querySelector('#page-quickstart .doc-tab[onclick*="' + mode + '"]').classList.add('active');
+    document.querySelectorAll('#page-quickstart .doc-tab').forEach(tab => {
+        const active = tab.dataset.qsMode === mode;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+    });
 }
 
 function copyCode(btn) {
@@ -7811,7 +8127,8 @@ function copyCode(btn) {
 
 // Operations use the same document routing as other pages, with optional section deep links.
 function openDocRoute(route) {
-    let [pageId, section] = route.split('/');
+    let [pageId, section, step] = route.split('/');
+    if (pageId === 'quickstart' && section === 'compose') section = 'service';
     if (pageId === 'operations-scenarios' && section) {
         const workflows = {read:'read', write:'write', corruption:'corruption'};
         const legacySteps = {
@@ -7854,7 +8171,12 @@ function openDocRoute(route) {
     const link = document.querySelector('.sidebar-link[data-page="' + pageId + '"]') ||
         document.querySelector('.sidebar-link[onclick*="' + pageId + '"]');
     showPage(pageId, link);
-    if (pageId === 'quickstart' && ['service', 'embedded'].includes(section)) switchQS(section);
+    if (pageId === 'quickstart' && ['kubernetes', 'service', 'embedded'].includes(section)) {
+        switchQS(section);
+        const target = step && document.getElementById('qs-' + section + '-' + step);
+        if (target) requestAnimationFrame(() => target.scrollIntoView({block: 'start'}));
+        route = 'quickstart/' + section + (step ? '/' + step : '');
+    }
     if (section && pageId.startsWith('operations-')) {
         const prefix = 'ops-' + pageId.slice('operations-'.length) + '-';
         const target = document.getElementById(prefix + section);
@@ -7912,10 +8234,25 @@ window.addEventListener('scroll', () => {
 }, {passive: true});
 window.addEventListener('hashchange', () => openDocRoute(location.hash.slice(1)));
 document.addEventListener('click', event => {
-    const link = event.target.closest('a[href^="#operations"]');
+    const link = event.target.closest('a[href^="#operations"], a[href^="#quickstart/"]');
     if (!link || link.hasAttribute('onclick') || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     openDocRoute(link.getAttribute('href').slice(1));
+});
+
+document.querySelector('.qs-mode-tabs').addEventListener('keydown', event => {
+    const tabs = [...document.querySelectorAll('.qs-mode-tabs [role="tab"]')];
+    const index = tabs.indexOf(event.target);
+    if (index < 0) return;
+    let next;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = tabs.length - 1;
+    if (next === undefined) return;
+    event.preventDefault();
+    openDocRoute('quickstart/' + tabs[next].dataset.qsMode);
+    tabs[next].focus();
 });
 
 // Handle click outside sidebar on mobile
