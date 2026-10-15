@@ -54,6 +54,113 @@ go get github.com/zilliztech/woodpecker@v0.1.47
 
 Use the Go version required by [go.mod](go.mod). The [SDK quick start](https://zilliztech.github.io/woodpecker/docs.html#quickstart/embedded) covers storage configuration, client creation, and log reads/writes. Embedded mode still requires etcd and its configured storage backend.
 
+### Write and read a log
+
+This embedded-mode example uses the etcd and MinIO endpoints exposed by the local Compose environment above; it does not use the LogStore service nodes. In a separate Go module, install the library as shown above and save the following as `woodpecker.yaml` (adjust endpoints and credentials for your environment):
+
+```yaml
+woodpecker:
+  storage:
+    type: minio
+etcd:
+  endpoints: ["localhost:2379"]
+  rootPath: readme-example
+minio:
+  address: localhost
+  port: 9000
+  accessKeyID: minioadmin
+  secretAccessKey: minioadmin
+  useSSL: false
+  bucketName: woodpecker-readme-example
+  rootPath: wal
+  createBucket: true
+```
+
+Save this as `main.go`. It creates a log, writes one message synchronously, reads that message from its returned position, and closes the resources:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/woodpecker"
+	wplog "github.com/zilliztech/woodpecker/woodpecker/log"
+)
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cfg, err := config.NewConfiguration("woodpecker.yaml")
+	if err != nil {
+		return err
+	}
+	client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close(context.Background())
+
+	// A new log name makes the example safe to run more than once.
+	name := fmt.Sprintf("hello-wal-%d", time.Now().UnixNano())
+	if err := client.CreateLog(ctx, name); err != nil {
+		return err
+	}
+	handle, err := client.OpenLog(ctx, name)
+	if err != nil {
+		return err
+	}
+	defer handle.Close(context.Background())
+
+	writer, err := handle.OpenLogWriter(ctx)
+	if err != nil {
+		return err
+	}
+	defer writer.Close(context.Background())
+	result := writer.Write(ctx, &wplog.WriteMessage{Payload: []byte("hello, Woodpecker")})
+	if result.Err != nil {
+		return result.Err
+	}
+
+	// Start at the position returned by the successful write.
+	reader, err := handle.OpenLogReader(ctx, result.LogMessageId, "readme-example")
+	if err != nil {
+		return err
+	}
+	defer reader.Close(context.Background())
+	message, err := reader.ReadNext(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(message.Payload)) // hello, Woodpecker
+	return nil
+}
+```
+
+Run `go mod tidy` and `go run .` from that module. Among the runtime logs, the program prints `hello, Woodpecker`. Each run creates a separate example log and retains its data.
+
+For asynchronous writes, replace the synchronous write with:
+
+```go
+result := <-writer.WriteAsync(ctx, &wplog.WriteMessage{Payload: []byte("hello, Woodpecker")})
+if result.Err != nil {
+    return result.Err
+}
+```
+
+Service mode uses the same log/writer/reader API after client creation. Its client additionally needs the service storage configuration, an etcd client, and reachable advertised LogStore addresses; see the [service client example](https://zilliztech.github.io/woodpecker/docs.html#quickstart/service). The SDK config above is separate from the operational CLI's `cli.yaml`.
+
 ### Install the operational CLI
 
 Download the binary for your OS and architecture from [Releases](https://github.com/zilliztech/woodpecker/releases/tag/v0.1.47). For example, on macOS with Apple Silicon:
