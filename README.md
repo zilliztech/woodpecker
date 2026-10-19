@@ -207,6 +207,8 @@ See [open issues](https://github.com/zilliztech/woodpecker/issues) for ongoing w
 
 Bug reports, reproducible performance findings, documentation improvements, and pull requests are welcome. Check [existing issues](https://github.com/zilliztech/woodpecker/issues) before opening a new one, and see [build instructions](build/README.md) to get started.
 
+Use [issue and pull request commands](.github/ISSUE_COMMANDS.md) to claim an issue with `/assign`, release your assignment with `/unassign`, or manage milestones with `/set-milestone` (repository write access required).
+
 ## License
 
 - **Server components** (`server/`): your choice of AGPLv3 or SSPLv1, as described in [server/LICENSE](server/LICENSE).
