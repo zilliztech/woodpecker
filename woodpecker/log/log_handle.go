@@ -552,9 +552,9 @@ func (l *logHandleImpl) rollWritableSegmentUnsafe(ctx context.Context, writeable
 		zap.String("logName", l.Name),
 		zap.Int64("logId", l.GetId()),
 		zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
-	// 1. close segmentHandle,
-	//  it will send complete request to logStores
-	//  and error out all pendingAppendOps with segmentCloseError
+	// 1. Reject new appends on the old segment and let its completion run in
+	// the background after pending appends drain. Completion failures notify
+	// the writer directly; rolling does not wait for fencing or finalization.
 	logger.Ctx(ctx).Debug("mark segment rolling", zap.String("logName", l.Name), zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
 	rollErr := writeableSegmentHandle.SetRollingReady(ctx)
 

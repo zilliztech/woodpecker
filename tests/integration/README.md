@@ -96,6 +96,44 @@ networks:
 
 ## Test Categories
 
+### Embedded MinIO without conditional writes: rollover regression
+
+`integration-test-embed-minio-without-conditionwrite.yaml` runs this suite on
+matching pull requests, from the nightly workflow, and via manual dispatch.
+It explicitly enables the test below and runs the disable cases plus enable
+controls. Other integration workflows exclude this suite through their test
+selection rules; the component workflow explicitly skips it. The dedicated job
+uploads test results and latency measurements on every run, and checks that the
+disable subtests actually passed rather than allowing an all-skipped result.
+
+Rerun its PR check with `/rerun-embed-minio-without-conditionwrite`.
+
+To investigate #437 using the external MinIO and etcd configured in
+`config/woodpecker.yaml`, run from the repository root:
+
+```bash
+WP_TEST_ROLLOVER_REPRO=1 go test ./tests/integration \
+  -run '^TestEmbedMinioRolloverConditionWrite$' -count=1 -v -timeout=10m
+```
+
+`TestEmbedMinioRolloverConditionWrite` compares explicit `enable` and `disable`
+with size-triggered and interval-triggered rolling. Each case keeps one writer
+alive through two rolls, checks that its own `write.lock` exists before rolling,
+records append, cross-segment read and writer-close latency, and reads back all
+six entries. Additional `enable_frequent_size` and `disable_frequent_size` cases
+perform twenty consecutive rolls and read back all 42 entries, exercising writes
+while earlier segments are still completing in the background. The auditor is
+delayed so foreground writes trigger the rolls. Test logs and object prefixes are
+unique; `WP_TEST_ETCD_ENDPOINTS` can override etcd endpoints.
+
+The test is opt-in outside its dedicated CI job because fallback fencing can
+take several minutes. It asserts that every append finishes within five seconds,
+rollover-write p95 is at most one second above ordinary-write p95 in the same case,
+all entries are readable,
+and explicit writer close waits until every segment is finalized. Background
+completion may still be running when a rollover append returns. The latency
+allowances tolerate local service jitter; they do not assert zero overhead.
+
 ### 1. End-to-End Integration Tests
 
 These tests validate complete workflows across the entire Woodpecker stack:

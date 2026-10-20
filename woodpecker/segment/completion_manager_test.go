@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
@@ -211,23 +212,46 @@ func TestCompletionManager_PartialReplicaFinalizeStillPublishesCompleted(t *test
 	assert.Equal(t, targetLAC, seg.segmentMetaCache.Load().Metadata.LastEntryId)
 }
 
-// TestSegmentHandle_SetRollingReady_PropagatesCompletionError verifies that when
-// the segment's synchronous rolling path hits a completion error (e.g. another
-// writer has taken over the segment metadata), SetRollingReady returns that
-// error so the LogHandle can abort segment creation instead of silently
-// proceeding. See also log_handle_test.go's
-// TestLogHandle_GetOrCreateWritableSegmentHandle_RollingMetaRevisionInvalid_AbortsCreation.
-func TestSegmentHandle_SetRollingReady_PropagatesCompletionError(t *testing.T) {
-	seg, mockClient := newTestSegmentForCompletion(t)
-
-	// Force all fence attempts to fail so WaitForCompletion returns an error.
-	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
-		Return(int64(-1), assert.AnError)
-
-	// The append queue is empty, so SetRollingReady must drive completion inline
-	// and surface the error to the caller.
-	err := seg.SetRollingReady(context.Background())
-	assert.Error(t, err, "SetRollingReady must propagate completion errors")
+// Async rollover must retain writer invalidation for RPC failures and metadata
+// takeover without relying on the foreground caller to wait for completion.
+func TestSegmentHandle_SetRollingReady_CompletionFailureInvalidatesWriter(t *testing.T) {
+	for _, failure := range []string{"fence", "complete", "metadata_revision"} {
+		t.Run(failure, func(t *testing.T) {
+			seg, mockClient := newTestSegmentForCompletion(t)
+			invalidated := make(chan string, 1)
+			seg.SetWriterInvalidationNotifier(context.Background(), func(_ context.Context, reason string) {
+				invalidated <- reason
+			})
+			if failure == "fence" {
+				mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+					Return(int64(-1), assert.AnError).Times(3)
+			} else {
+				mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+					Return(int64(2), nil).Once()
+				if failure == "complete" {
+					mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(2)).
+						Return(int64(-1), assert.AnError).Times(3)
+				} else {
+					mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(2)).
+						Return(int64(2), nil).Once()
+					metadata := mocks_meta.NewMetadataProvider(t)
+					metadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Active).
+						Return(werr.ErrMetadataRevisionInvalid).Once()
+					seg.metadata = metadata
+				}
+			}
+			require.NoError(t, seg.SetRollingReady(context.Background()))
+			require.Error(t, seg.completionMgr.WaitForCompletion())
+			select {
+			case reason := <-invalidated:
+				require.NotEmpty(t, reason)
+			default:
+				t.Fatal("background completion failed without invalidating the writer")
+			}
+			require.False(t, seg.canWriteState.Load())
+			require.Equal(t, proto.SegmentState_Active, seg.segmentMetaCache.Load().Metadata.State)
+		})
+	}
 }
 
 // TestCompletionManager_MultipleTriggersCoalesce tests that multiple TriggerCompletion calls

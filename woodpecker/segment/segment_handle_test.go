@@ -1888,53 +1888,55 @@ func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 	assert.False(t, writable)
 }
 
-// TestSegmentHandle_SetRollingReady_EmptyQueueCompletesSynchronously verifies
-// SetRollingReady preserves historical behavior for empty queues: when there
-// are no pending append ops, completion is finished before the method returns.
-func TestSegmentHandle_SetRollingReady_EmptyQueueCompletesSynchronously(t *testing.T) {
-	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-
-	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
-	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
-	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(0), nil).Once()
-	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(0), nil).Once()
-
-	cfg := &config.Configuration{
-		Woodpecker: config.WoodpeckerConfig{
-			Client: config.ClientConfig{
-				SegmentAppend: config.SegmentAppendConfig{
-					QueueSize:  10,
-					MaxRetries: 2,
-				},
-			},
-		},
+// An empty queue must not make rollover wait on a slow fence. While fencing
+// is blocked, old appends are rejected and Completed metadata is not published.
+func TestSegmentHandle_SetRollingReady_EmptyQueueCompletesAsynchronously(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+	fenceStarted := make(chan struct{})
+	releaseFence := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFence) }) }
+	t.Cleanup(func() {
+		release()
+		assert.NoError(t, seg.completionMgr.WaitForCompletion())
+	})
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Run(func(context.Context, string, string, int64, int64) {
+			close(fenceStarted)
+			<-releaseFence
+		}).Return(int64(0), nil).Once()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0)).
+		Return(int64(0), nil).Once()
+	returned := make(chan error, 1)
+	go func() { returned <- seg.SetRollingReady(context.Background()) }()
+	select {
+	case err := <-returned:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("SetRollingReady waited for the blocked fence")
 	}
-
-	segmentMeta := &meta.SegmentMeta{
-		Metadata: &proto.SegmentMetadata{
-			SegNo:       1,
-			State:       proto.SegmentState_Active,
-			LastEntryId: -1,
-			Quorum: &proto.QuorumInfo{
-				Id:    1,
-				Aq:    1,
-				Es:    1,
-				Wq:    1,
-				Nodes: []string{"127.0.0.1"},
-			},
-		},
-		Revision: 1,
+	select {
+	case <-fenceStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background fence did not start")
 	}
-
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
-
-	segmentHandle.SetRollingReady(context.Background())
-
-	writable, err := segmentHandle.IsWritable(context.Background())
-	assert.NoError(t, err)
-	assert.False(t, writable)
+	select {
+	case <-seg.completionMgr.doneCh:
+		t.Fatal("completion finished before the fence was released")
+	default:
+	}
+	require.Equal(t, proto.SegmentState_Active, seg.segmentMetaCache.Load().Metadata.State)
+	var appendErr error
+	seg.AppendAsync(context.Background(), []byte("rejected after rolling"), func(_, _ int64, err error) {
+		appendErr = err
+	})
+	require.True(t, werr.ErrSegmentHandleSegmentRolling.Is(appendErr), "got %v", appendErr)
+	release()
+	require.NoError(t, seg.completionMgr.WaitForCompletion())
+	require.Equal(t, proto.SegmentState_Completed, seg.segmentMetaCache.Load().Metadata.State)
+	writable, err := seg.IsWritable(context.Background())
+	require.NoError(t, err)
+	require.False(t, writable)
 }
 
 // TestSegmentHandle_QuorumWrite_Case1_AllNodesSuccess tests quorum write case 1:

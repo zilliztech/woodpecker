@@ -22,6 +22,7 @@ on:
       - Unit Test
       - E2E Local
       - E2E Object Storage
+      - Embed MinIO Without ConditionWrite
       - E2E Service
       - Component Integration Test
       - Chaos Test
@@ -81,7 +82,7 @@ jobs:
           # Recompute ci-passed from the full set of required checks. Every
           # workflow completion re-runs this, so a run that finishes while others
           # are still pending simply does nothing and the last one settles it.
-          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
+          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "Embed MinIO Without ConditionWrite" "E2E Service" "Component Integration Test" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
           CHECKS=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket 2>/dev/null || echo "[]")
 
           ALL_PASSED=true

@@ -89,10 +89,9 @@ type SegmentHandle interface {
 	FenceAndComplete(ctx context.Context) (int64, error)
 	// Compact is a recovery or compaction operation
 	Compact(ctx context.Context) error
-	// SetRollingReady set the segment as ready for rolling. If the segment's
-	// append queue is empty, this will synchronously drive completion and return
-	// any completion error (e.g. ErrMetadataRevisionInvalid when the segment
-	// metadata has been taken over by another writer).
+	// SetRollingReady rejects new appends and schedules background completion
+	// once pending appends drain. Completion failures invalidate the writer
+	// through its notifier; callers need not wait before creating the next segment.
 	SetRollingReady(ctx context.Context) error
 	// IsForceRollingReady check if the segment is ready for rolling
 	IsForceRollingReady(ctx context.Context) bool
@@ -2369,35 +2368,19 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 
 // SetRollingReady set the segment as ready for rolling
 func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) error {
-	waitForCompletion := false
-
 	s.Lock()
+	defer s.Unlock()
 	logger.Ctx(ctx).Info("setting segment to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Int("queueSize", s.appendOpsQueue.Len()))
 	s.rollingState.Store(true)
 	if s.appendOpsQueue.Len() > 0 {
 		logger.Ctx(ctx).Info("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
-		s.Unlock()
 		return nil
 	}
 	if s.completionMgr != nil {
+		// An empty append queue is already drained. Complete it in the same
+		// background lifecycle used when the last pending append finishes, so
+		// fencing (including fallback waits) does not block the next segment.
 		s.completionMgr.TriggerCompletion()
-		waitForCompletion = true
-	}
-	s.Unlock()
-
-	// Preserve historical behavior for empty queue: completion is finished
-	// before SetRollingReady returns. Propagate the completion error so callers
-	// (e.g. LogHandle.GetOrCreateWritableSegmentHandle) can abort rolling when
-	// the log has been taken over by another writer.
-	if waitForCompletion {
-		err := s.completionMgr.WaitForCompletion()
-		if err != nil {
-			logger.Ctx(ctx).Warn("segment completion failed after SetRollingReady",
-				zap.Int64("logId", s.logId),
-				zap.Int64("segmentId", s.segmentId),
-				zap.Error(err))
-			return err
-		}
 	}
 	return nil
 }

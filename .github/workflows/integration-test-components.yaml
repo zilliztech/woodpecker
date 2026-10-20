@@ -83,11 +83,12 @@ jobs:
 
       - name: Run component integration tests
         run: |
+          # Rollover latency is owned by the dedicated embedded-MinIO fallback workflow.
           set +e
           gotestsum --format pkgname-and-test-fails \
             --jsonfile test-output.json \
             -- -race -cover -failfast -timeout=20m \
-            -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestDataCorruptionService|TestServiceStability|TestServiceUpgrade|TestClientLogWriter)" \
+            -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestDataCorruptionService|TestServiceStability|TestServiceUpgrade|TestClientLogWriter|TestEmbedMinioRolloverConditionWrite)" \
             ./tests/integration/...
           exit_code=$?
           echo ""

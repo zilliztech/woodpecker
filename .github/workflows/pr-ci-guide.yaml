@@ -40,6 +40,7 @@ jobs:
           | `/rerun-unit-test` | Unit Test |
           | `/rerun-e2e-local` | E2E Local |
           | `/rerun-e2e-objectstorage` | E2E Object Storage |
+          | `/rerun-embed-minio-without-conditionwrite` | Embed MinIO Without ConditionWrite |
           | `/rerun-e2e-service` | E2E Service |
           | `/rerun-component-test` | Component Integration Test |
           | `/rerun-chaos` | Chaos Test |
