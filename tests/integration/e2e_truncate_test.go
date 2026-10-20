@@ -752,12 +752,27 @@ func TestReopenAtTruncatedButNotGCedPosition(t *testing.T) {
 			require.NotNil(t, truncatePoint, "expected a message in a later segment")
 			require.Greater(t, truncatePoint.SegmentId, specificPos.SegmentId)
 
-			// Truncate, then deterministically persist the pre-truncation segments' Truncated
-			// state to the metadata store.
+			// Rolling completes segments asynchronously. Truncation skips Active segments,
+			// so repeat the auditor's check until the target segment is durably Truncated
+			// before stopping maintenance and reopening it with a fresh handle.
 			err = logHandle.Truncate(context.Background(), truncatePoint)
-			assert.NoError(t, err)
-			err = logHandle.CheckAndSetSegmentTruncatedIfNeed(context.Background())
-			assert.NoError(t, err)
+			require.NoError(t, err)
+			require.EventuallyWithT(t, func(c *assert.CollectT) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if !assert.NoError(c, logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx)) {
+					return
+				}
+				segments, err := logHandle.GetSegments(ctx)
+				if !assert.NoError(c, err) {
+					return
+				}
+				seg, ok := segments[specificPos.SegmentId]
+				if assert.True(c, ok, "segment %d must still exist before restart", specificPos.SegmentId) {
+					assert.Equal(c, proto.SegmentState_Truncated, seg.Metadata.State,
+						"segment %d should be marked Truncated before restart", specificPos.SegmentId)
+				}
+			}, time.Minute, 100*time.Millisecond, "Truncated state was not persisted before restart")
 
 			// Restart the client so the reader gets FRESH segment handles that reflect the
 			// persisted Truncated state. (Without a restart, the in-process segment handle's
