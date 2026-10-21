@@ -19,8 +19,10 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/embed"
+	"golang.org/x/crypto/bcrypt"
 	pb "google.golang.org/protobuf/proto"
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
@@ -249,7 +251,9 @@ func TestShellEtcdAuthenticationFailureRetainsTenant(t *testing.T) {
 	cli, endpoint := startShellTestEtcd(t)
 	s, _ := newTestShell(t)
 	s.checkTenant = nil
-	s.service.Timeout = time.Second
+	// This test checks authentication and session replacement, not latency. A
+	// fresh authenticated client also performs a password check before its read.
+	s.service.Timeout = 5 * time.Second
 	require.NoError(t, shellExecute(t, s, "connect", "a", "--etcd", endpoint, "--meta-prefix", "a/woodpecker"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -259,11 +263,17 @@ func TestShellEtcdAuthenticationFailureRetainsTenant(t *testing.T) {
 	require.NoError(t, err)
 	_, err = cli.AuthEnable(ctx)
 	require.NoError(t, err)
-	require.ErrorContains(t, shellExecute(t, s, "connect", "bad", "--etcd", endpoint, "--meta-prefix", "b/woodpecker", "--etcd-username", "root", "--etcd-password", "wrong-password"), "active tenant unchanged: a")
+	originalTenant := s.tenant
+	err = shellExecute(t, s, "connect", "bad", "--etcd", endpoint, "--meta-prefix", "b/woodpecker", "--etcd-username", "root", "--etcd-password", "wrong-password")
+	require.ErrorContains(t, err, rpctypes.ErrAuthFailed.Error())
+	require.ErrorContains(t, err, "active tenant unchanged: a")
+	require.Same(t, originalTenant, s.tenant)
 	require.Equal(t, "a", s.tenantName())
 	require.Empty(t, s.tenant.etcd.Password)
 	require.NoError(t, shellExecute(t, s, "connect", "b", "--etcd", endpoint, "--meta-prefix", "b/woodpecker", "--etcd-username", "root", "--etcd-password", "test-password"))
 	require.Equal(t, "b", s.tenantName())
+	require.Equal(t, "root", s.tenant.etcd.Username)
+	require.Equal(t, "test-password", s.tenant.etcd.Password)
 }
 
 // This subprocess entry runs the actual CLI tree while isolating process-global
@@ -378,6 +388,9 @@ func startShellTestEtcd(t *testing.T) (*clientv3.Client, string) {
 	require.NoError(t, err)
 	cfg := embed.NewConfig()
 	cfg.Dir, cfg.LogLevel = t.TempDir(), "error"
+	// Exercise real password authentication without spending the CI race/coverage
+	// budget on production-strength password hashing in this isolated fixture.
+	cfg.BcryptCost = uint(bcrypt.MinCost)
 	cfg.ListenClientUrls, cfg.AdvertiseClientUrls = []url.URL{*u}, []url.URL{*u}
 	cfg.ListenPeerUrls, cfg.AdvertisePeerUrls = []url.URL{*u}, []url.URL{*u}
 	cfg.InitialCluster = cfg.Name + "=" + u.String()
