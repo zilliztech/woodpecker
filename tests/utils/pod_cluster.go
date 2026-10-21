@@ -120,7 +120,10 @@ func StartPodClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *co
 		c.GossipSeeds = append(c.GossipSeeds, fmt.Sprintf("127.0.0.1:%d", port))
 
 		// The proxy starts with no backend; startNode points it at the server.
-		p, err := faultproxy.New("127.0.0.1:0", "")
+		// Use the shared allocator so the proxy cannot take a reserved gossip port.
+		proxyPort, err := c.allocateUniquePort()
+		require.NoError(t, err)
+		p, err := faultproxy.New(fmt.Sprintf("127.0.0.1:%d", proxyPort), "")
 		require.NoError(t, err)
 		c.Proxies[i] = p
 		c.NodeConfigs[i] = NodeConfig{Index: i, ResourceGroup: "default", AZ: "default"}
