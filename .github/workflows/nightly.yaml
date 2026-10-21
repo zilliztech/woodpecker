@@ -26,6 +26,11 @@ jobs:
     uses: ./.github/workflows/integration-test-e2e-objectstorage.yaml
     secrets: inherit
 
+  embed-minio-without-conditionwrite:
+    name: Embed MinIO Without ConditionWrite
+    uses: ./.github/workflows/integration-test-embed-minio-without-conditionwrite.yaml
+    secrets: inherit
+
   e2e-service:
     name: E2E Service
     uses: ./.github/workflows/integration-test-e2e-service.yaml
