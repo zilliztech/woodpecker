@@ -1,5 +1,8 @@
 # Woodpecker Cluster Deployment
 
+For Milvus with independent Woodpecker services, Prometheus, and Grafana on Kubernetes,
+see the [Milvus full-stack Helm example](milvus-full-stack-helm/README.md).
+
 This directory contains the **official Docker Compose deployment** for running a complete Woodpecker cluster with all dependencies. This is the recommended way to deploy and test Woodpecker in development and production environments.
 
 ## Directory Structure

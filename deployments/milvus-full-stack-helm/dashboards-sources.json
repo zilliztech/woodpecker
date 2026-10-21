@@ -1,0 +1,18 @@
+{
+  "milvus": {
+    "source": "User-supplied production export: milvus_grafana_dashboard.json",
+    "sha256": "4a46a106f56dabeec4363e8291e9f15b60aae10ec2afde8ec33a570c8aa356b6",
+    "original_uid": "uLf5cJ3Gz"
+  },
+  "woodpecker": "tests/k8s/monitor/grafana/templates/dashboard_{client,server}_k8s.json",
+  "changes": [
+    "Local datasource and dashboard navigation",
+    "Clear production variable selections",
+    "Provide stable dashboard UIDs",
+    "Select namespaces with Woodpecker metrics",
+    "Scope Milvus namespace/pod discovery to the deployed application",
+    "Correct restart, slow-query, and IOPS queries for standard Prometheus",
+    "Open service quality and server overview sections by default",
+    "Replace the production Loki events panel with local evidence collection guidance"
+  ]
+}

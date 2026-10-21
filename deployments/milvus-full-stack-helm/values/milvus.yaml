@@ -1,0 +1,120 @@
+# Small development cluster. Use a separate values file for production sizing.
+cluster:
+  enabled: true
+image:
+  all:
+    repository: milvusdb/milvus
+    tag: v3.0.3
+    pullPolicy: IfNotPresent
+streaming:
+  enabled: true
+  woodpecker:
+    embedded: false
+woodpecker:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: milvusdb/woodpecker
+    tag: v0.1.46
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  extraEnv:
+    - {name: GOMAXPROCS, value: "2"}
+etcd:
+  enabled: false
+externalEtcd:
+  enabled: true
+  endpoints: [full-stack-etcd:2379]
+minio:
+  enabled: false
+externalS3:
+  enabled: true
+  host: full-stack-minio
+  port: 9000
+  accessKey: minioadmin
+  secretKey: minioadmin
+  bucketName: milvus-bucket
+  rootPath: milvus
+  useSSL: false
+  cloudProvider: aws
+pulsar:
+  enabled: false
+pulsarv3:
+  enabled: false
+kafka:
+  enabled: false
+# Our PodMonitor covers Milvus and the SDK inside Milvus exactly once per pod.
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+service:
+  type: ClusterIP
+extraConfigFiles:
+  user.yaml: |
+    etcd:
+      rootPath: full-stack
+    rootCoord:
+      dmlChannelNum: 2
+    woodpecker:
+      meta:
+        prefix: woodpecker
+      client:
+        segmentRollingPolicy:
+          maxSize: 16M
+          maxInterval: 60s
+        auditor:
+          maxInterval: 10s
+    log:
+      level: info
+log:
+  persistence:
+    enabled: false
+livenessProbe:
+  initialDelaySeconds: 60
+  timeoutSeconds: 10
+  failureThreshold: 12
+readinessProbe:
+  initialDelaySeconds: 15
+  timeoutSeconds: 10
+  failureThreshold: 30
+proxy:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 768Mi}
+  extraEnv:
+    - {name: GOMAXPROCS, value: "2"}
+mixCoordinator:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+  extraEnv:
+    - {name: GOMAXPROCS, value: "2"}
+streamingNode:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+  extraEnv:
+    - {name: GOMAXPROCS, value: "2"}
+queryNode:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1536Mi}
+  extraEnv:
+    - {name: GOMAXPROCS, value: "2"}
+dataNode:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 768Mi}
+  extraEnv:
+    - {name: GOMAXPROCS, value: "2"}

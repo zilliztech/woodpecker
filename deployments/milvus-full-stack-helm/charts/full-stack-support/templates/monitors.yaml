@@ -1,0 +1,41 @@
+# The Woodpecker client runs inside Milvus, not in a separate load-generator pod.
+# Scrape all Milvus components once to include client metrics in every host process.
+{{- range $component := list "milvus" "woodpecker" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: full-stack-{{ $component }}
+  labels: {full-stack: milvus}
+spec:
+  namespaceSelector:
+    matchNames: [{{ $.Release.Namespace | quote }}]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      app.kubernetes.io/instance: {{ $.Values.milvusRelease }}
+    matchExpressions:
+      - key: component
+        operator: {{ if eq $component "woodpecker" }}In{{ else }}NotIn{{ end }}
+        values: [woodpecker]
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      honorLabels: true
+      relabelings:
+        - {targetLabel: cluster, replacement: {{ $.Values.clusterLabel | quote }}}
+        - {targetLabel: woodpecker_id, replacement: {{ $.Values.milvusRelease | quote }}}
+        - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+          targetLabel: app_kubernetes_io_name
+        - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+          targetLabel: app_kubernetes_io_instance
+        - sourceLabels: [__meta_kubernetes_pod_label_component]
+          targetLabel: component
+        {{- if eq $component "woodpecker" }}
+        # Also identify up/process/gRPC series, which do not export node_id.
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: node_id
+        {{- end }}
+{{- end }}
