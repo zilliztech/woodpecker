@@ -34,10 +34,12 @@ def cli_link(section=''):
     section = {'environment': 'cluster', 'runtime': 'ops', 'data': 'log', 'metadata': 'meta'}.get(section, section)
     if section in ['start', 'cli-yaml', 'external-access', 'shell-functions', 'etcd-connection', 'first-run']:
         return '#operations-cli-local/' + section
-    if section in COMMAND_ROUTES:
-        return '#operations-cli-' + COMMAND_ROUTES[section] + '/' + section
+    if section.startswith('shell-'):
+        return '#operations-cli-shell/' + section
     if section in CATEGORIES:
         return '#operations-cli-' + section
+    if section in COMMAND_ROUTES:
+        return '#operations-cli-' + COMMAND_ROUTES[section] + '/' + section
     return '#operations-cli' + ('/' + section if section else '')
 
 def fragment(kind):

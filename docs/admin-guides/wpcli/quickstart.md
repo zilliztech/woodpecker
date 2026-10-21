@@ -54,6 +54,13 @@ running quorum diagnostics. Metadata commands also need independently reachable 
 
 ## 3. First commands
 
+For a source build containing `wp shell`, use the separate
+[Interactive shell handbook](../../docs.html#operations-cli-shell) to select a
+service context once, attach a tenant's etcd metadata and storage location, and
+run commands without repeating connection flags. That page explains which
+operations need metadata or bucket/root-path. The shell addition is not included
+in v0.1.47; the commands below are ordinary one-shot invocations.
+
 ```bash
 # Check cluster status
 wp cluster info

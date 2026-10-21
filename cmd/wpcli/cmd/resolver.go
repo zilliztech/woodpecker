@@ -62,8 +62,8 @@ func resolveAndDiscover() (*resolved, error) {
 	if Globals.Concurrency != 0 {
 		ctx.Concurrency = Globals.Concurrency
 	}
-	if Globals.Strict {
-		ctx.Strict = true
+	if Globals.Strict || os.Getenv(shellChildEnv) == "1" {
+		ctx.Strict = Globals.Strict
 	}
 
 	// Merge per-invocation overrides without mutating the context's stored map.

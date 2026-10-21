@@ -74,6 +74,12 @@ defaults:
 
 ## Context fields
 
+`wp shell` lists configured contexts when `--context` is omitted, even when
+`current-context` is set. The current context is the Enter default; choosing a
+context affects only the shell session. Tenant metadata is explicitly attached
+with `connect`, independently of stored service context etcd settings. See the
+[shell guide](shell.md) for its session-specific connection behavior.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `endpoint` | string | (required for admin commands) | Admin HTTP seed endpoint; raw etcd commands do not need it |

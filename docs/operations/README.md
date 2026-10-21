@@ -3,7 +3,7 @@
 Both documents are native content pages in the existing Docs shell:
 
 - `docs.html#operations-cli`: overview and searchable operation lookup.
-- Sixteen topic pages, defined in `cli-categories.json`, each with one clear
+- Seventeen topic pages, defined in `cli-categories.json`, each with one clear
   operational purpose. Most correspond to exactly one command group; only
   local CLI setup (ctx/completion/version) and cluster/node status combine groups.
 - `docs.html#operations-scenarios`: choose a troubleshooting path.
@@ -14,6 +14,8 @@ Both documents are native content pages in the existing Docs shell:
 Their sidebar, navigation, typography, code blocks and light/dark palette come
 from `docs.html`. There is no iframe, dynamic fetch or separate site layout.
 Each reference page includes a right-hand command navigation rail.
+The interactive entry point has its own page at `docs.html#operations-cli-shell`,
+with service/tenant setup, connection parameters and command prerequisites.
 Deep links use `#operations-cli-log/log-scan` or `#operations-scenarios-corruption/metadata`.
 Legacy operations.html and operations/cli.html / scenarios.html redirect into
 the corresponding Docs content and preserve section links.
@@ -32,6 +34,10 @@ _scenario-corruption.html, the chooser in _scenarios.html, shared example
 variables in _workflow-connection.html, CLI setup in _setup.html, raw etcd workflow in _etcd.html,
 metadata repair in _meta.html, or the overview in _overview.html. Then run
 the same generator.
+Author the interactive shell walkthrough in `_shell.html`; `_cli-shell.html`
+combines it with the generated `wp shell` help reference. Shell-session commands
+such as `connect` and `status` are described there, not counted as additional
+top-level `wp` commands.
 The _cli.html overview and _cli-*.html category fragments are generated. embed_operations.py namespaces fragment
 IDs and links, adds standard Docs code/table markup, and updates the marked
 Operations content region of docs.html without touching other content pages.
@@ -46,9 +52,10 @@ Verify switching between Overview, CLI Handbook and Troubleshooting stays
 within docs.html. Check light/dark mode, search, section links, mobile layout
 and legacy redirects.
 
-The current handbook covers the operations registered on master, including typed
-metadata inspection/repair and log truncation. It lists 19 top-level commands/groups
-and 71 executable operations across 16 topics; an operation such as `meta log show`
+The current handbook covers the established operations, including typed metadata
+inspection/repair and log truncation, and the source-build interactive shell.
+It lists 20 top-level commands/groups
+and 72 executable operations across 17 topics; an operation such as `meta log show`
 is not a separate top-level command. Update examples and category configuration
 together when adding CLI capabilities. The generator fails if an operation lacks
 an authored example or topic.

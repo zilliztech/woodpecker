@@ -8,6 +8,13 @@
     ],
     "purpose": "Select the local CLI context, load shell completion and identify the CLI build."
   },
+  "shell": {
+    "title": "Interactive shell",
+    "groups": [
+      "shell"
+    ],
+    "purpose": "Select a service context, explicitly connect tenant metadata and storage, and run operations in one interactive session."
+  },
   "env": {
     "title": "Process environment",
     "groups": [

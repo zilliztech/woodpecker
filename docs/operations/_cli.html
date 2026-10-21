@@ -2,17 +2,21 @@
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">19 top-level commands/groups · 71 executable operations</span>
+<span class="badge">20 top-level commands/groups · 72 executable operations</span>
 </p>
 <p>
 <a href="cli.html#start">New to wp? Start with installation, connection setup and your first commands →</a>
 </p>
-<div class="note">The operations in this handbook are available in v0.1.47. This reference is generated from source; when using another version, compare its command help. Check <code>wp version</code> and <code>wp --help</code> before following an example.</div>
+<div class="note">The established operations are available in v0.1.47; <a href="cli.html#shell">Interactive shell</a> is a source-build addition and is not included in v0.1.47. This reference is generated from source. Check <code>wp version</code> and <code>wp --help</code> against your binary before following an example.</div>
 <p>Each topic has command syntax, parameter explanations, a demo, illustrative output and result interpretation. The overview lists executable operations: <code>node</code> is a command group, while <code>node list</code> is an operation within it.</p>
 <nav class="ops-topic-grid" aria-label="CLI topics">
 <a href="#local">
 <strong>CLI setup</strong>
 <span>ctx / completion / version</span>
+</a>
+<a href="#shell">
+<strong>Interactive shell</strong>
+<span>shell</span>
 </a>
 <a href="#env">
 <strong>Process environment</strong>
@@ -177,6 +181,34 @@
 </td>
 <td>Show wp CLI version and build info</td>
 <td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-shell">
+<h2>Interactive shell · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command: <code>wp shell</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#shell">
+<code>wp shell</code>
+</a>
+</td>
+<td>Open an interactive operational shell</td>
+<td>
+<code>--context</code>: service context, or use current-context / selection; <code>connect</code> attaches tenant etcd and optional storage inside the session</td>
 </tr>
 </tbody>
 </table>
@@ -1105,6 +1137,7 @@
 <section id="setup">
 <h2>Connection and naming</h2>
 <p>Follow <a href="cli.html#start">CLI setup</a> for a Helm-installed Milvus/Woodpecker deployment, including access from outside Kubernetes.</p>
+<p>To retain connection settings while running several operations, use <a href="cli.html#shell">Interactive shell</a>. Select the service context first, then explicitly attach the tenant's etcd metadata and optional storage location. The shell page explains which commands are available at each stage.</p>
 <table>
 <tr>
 <th>Name</th>

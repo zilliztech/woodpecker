@@ -566,6 +566,7 @@
         <a class="sidebar-link" data-page="operations-cli" href="#operations-cli" onclick="showPage('operations-cli',this)">CLI Handbook</a>
         <div class="sidebar-subitems" aria-label="CLI Handbook categories">
 <a class="sidebar-link" data-page="operations-cli-local" href="#operations-cli-local" onclick="showPage('operations-cli-local',this)">CLI setup</a>
+<a class="sidebar-link" data-page="operations-cli-shell" href="#operations-cli-shell" onclick="showPage('operations-cli-shell',this)">Interactive shell</a>
 <a class="sidebar-link" data-page="operations-cli-env" href="#operations-cli-env" onclick="showPage('operations-cli-env',this)">Process environment</a>
 <a class="sidebar-link" data-page="operations-cli-cluster" href="#operations-cli-cluster" onclick="showPage('operations-cli-cluster',this)">Cluster &amp; node status</a>
 <a class="sidebar-link" data-page="operations-cli-k8s" href="#operations-cli-k8s" onclick="showPage('operations-cli-k8s',this)">Kubernetes helpers</a>
@@ -611,22 +612,26 @@
 
 <!-- BEGIN OPERATIONS CONTENT -->
 <div class="doc-page ops-page" id="page-operations-cli">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & retention</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-meta">Metadata inspection & repair</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/repair-format">Patch format</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-shell">Interactive shell</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & retention</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-meta">Metadata inspection & repair</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/repair-format">Patch format</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
 <section id="ops-cli-overview">
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">19 top-level commands/groups · 71 executable operations</span>
+<span class="badge">20 top-level commands/groups · 72 executable operations</span>
 </p>
 <p>
 <a href="#operations-cli-local/start">New to wp? Start with installation, connection setup and your first commands →</a>
 </p>
-<div class="note">The operations in this handbook are available in v0.1.47. This reference is generated from source; when using another version, compare its command help. Check <code>wp version</code> and <code>wp --help</code> before following an example.</div>
+<div class="note">The established operations are available in v0.1.47; <a href="#operations-cli-shell">Interactive shell</a> is a source-build addition and is not included in v0.1.47. This reference is generated from source. Check <code>wp version</code> and <code>wp --help</code> against your binary before following an example.</div>
 <p>Each topic has command syntax, parameter explanations, a demo, illustrative output and result interpretation. The overview lists executable operations: <code>node</code> is a command group, while <code>node list</code> is an operation within it.</p>
 <nav class="ops-topic-grid" aria-label="CLI topics">
 <a href="#operations-cli-local">
 <strong>CLI setup</strong>
 <span>ctx / completion / version</span>
+</a>
+<a href="#operations-cli-shell">
+<strong>Interactive shell</strong>
+<span>shell</span>
 </a>
 <a href="#operations-cli-env">
 <strong>Process environment</strong>
@@ -648,7 +653,7 @@
 <strong>Runtime log levels</strong>
 <span>logging</span>
 </a>
-<a href="#operations-cli-profile/profile">
+<a href="#operations-cli-profile">
 <strong>Profiles &amp; trace</strong>
 <span>profile</span>
 </a>
@@ -791,6 +796,34 @@
 </td>
 <td>Show wp CLI version and build info</td>
 <td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+</tbody>
+</table></div>
+</section>
+<section class="ops-quick-section" id="ops-cli-quick-shell">
+<h2>Interactive shell · quick lookup</h2>
+<div class="ops-table-wrap"><table class="doc-table ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command: <code>wp shell</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-shell">
+<code>wp shell</code>
+</a>
+</td>
+<td>Open an interactive operational shell</td>
+<td>
+<code>--context</code>: service context, or use current-context / selection; <code>connect</code> attaches tenant etcd and optional storage inside the session</td>
 </tr>
 </tbody>
 </table></div>
@@ -1106,7 +1139,7 @@
 </tr>
 <tr class="ops-quick-row">
 <td>
-<a href="#operations-cli-profile/profile">
+<a href="#operations-cli-profile">
 <code>wp profile</code>
 </a>
 </td>
@@ -1719,6 +1752,7 @@
 <section id="ops-cli-setup">
 <h2>Connection and naming</h2>
 <p>Follow <a href="#operations-cli-local/start">CLI setup</a> for a Helm-installed Milvus/Woodpecker deployment, including access from outside Kubernetes.</p>
+<p>To retain connection settings while running several operations, use <a href="#operations-cli-shell">Interactive shell</a>. Select the service context first, then explicitly attach the tenant's etcd metadata and optional storage location. The shell page explains which commands are available at each stage.</p>
 <div class="ops-table-wrap"><table class="doc-table ">
 <tr>
 <th>Name</th>
@@ -1884,7 +1918,7 @@
 
 </div>
 <div class="doc-page ops-page" id="page-operations-cli-local">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-local/start">0. Install wp</a><a href="#operations-cli-local/external-access">1. Connect to the Helm deployment</a><a href="#operations-cli-local/cli-yaml">2. Save the connection in cli.yaml</a><a href="#operations-cli-local/shell-functions">3. Run without cli.yaml, or add shortcuts</a><a href="#operations-cli-local/etcd-connection">4. Configure etcd for metadata queries</a><a href="#operations-cli-local/first-run">5. Check the connection and interpret the result</a><a href="#operations-cli-local/completion-bash">wp completion bash</a><a href="#operations-cli-local/completion-fish">wp completion fish</a><a href="#operations-cli-local/completion-powershell">wp completion powershell</a><a href="#operations-cli-local/completion-zsh">wp completion zsh</a><a href="#operations-cli-local/ctx-list">wp ctx list</a><a href="#operations-cli-local/ctx-use">wp ctx use</a><a href="#operations-cli-local/ctx-view">wp ctx view</a><a href="#operations-cli-local/version">wp version</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-local/start">0. Install wp</a><a href="#operations-cli-local/external-access">1. Connect to the Helm deployment</a><a href="#operations-cli-local/cli-yaml">2. Save the connection in cli.yaml</a><a href="#operations-cli-local/shell-functions">3. Run without cli.yaml, or add shortcuts</a><a href="#operations-cli-local/etcd-connection">4. Configure etcd for metadata queries</a><a href="#operations-cli-local/first-run">5. Check the connection and interpret the result</a><a href="#operations-cli-local/interactive-session">Interactive shell</a><a href="#operations-cli-local/completion-bash">wp completion bash</a><a href="#operations-cli-local/completion-fish">wp completion fish</a><a href="#operations-cli-local/completion-powershell">wp completion powershell</a><a href="#operations-cli-local/completion-zsh">wp completion zsh</a><a href="#operations-cli-local/ctx-list">wp ctx list</a><a href="#operations-cli-local/ctx-use">wp ctx use</a><a href="#operations-cli-local/ctx-view">wp ctx view</a><a href="#operations-cli-local/version">wp version</a></nav></details></aside>
 <p class="small"><a href="#operations-cli">CLI Handbook overview</a> / CLI setup</p><h1>CLI setup</h1><p class="page-desc">Configure wp and run your first commands from outside Kubernetes.</p><section id="ops-cli-local-topic-local">
 
 <h2 id="ops-cli-local-start">0. Install wp</h2>
@@ -1957,6 +1991,7 @@ wp --context milvus-prod ctx view</code></pre></div></div>
 <p>The k8s block supplies defaults to wp k8s helpers, not to your shell's kubectl. Operator-specific helpers target a WoodpeckerCluster CR; for a Helm deployment without that CR, use kubectl directly. Do not use the Helm release name as k8s.cluster unless it is also the actual CR name.</p>
 </details>
 <h2 id="ops-cli-local-shell-functions">3. Run without cli.yaml, or add shortcuts</h2>
+<p>For a built-in interactive entry point, see <a href="#operations-cli-shell">Interactive shell</a>: it requires a service context and retains an explicitly connected tenant for subsequent commands. The examples below describe ordinary bash/zsh shortcuts and one-shot CLI invocations.</p>
 <p>A config file is optional. Supply the admin endpoint and node mappings directly:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp node list --endpoint http://127.0.0.1:19091 \
   --node-admin-url milvus-woodpecker-0=http://127.0.0.1:19091 \
@@ -2079,6 +2114,8 @@ Cluster Health: YELLOW
   - zero redundancy (active == N)</code></pre></div></div>
 <p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on v0.1.47 and later, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
+<h2 id="ops-cli-local-interactive-session">Interactive shell</h2>
+<p>For context selection, tenant connection parameters and command availability, open the dedicated <a href="#operations-cli-shell">Interactive shell handbook</a>.</p>
 <article class="command" data-command-anchor="completion-bash" id="ops-cli-local-completion-bash">
 <h2>wp completion bash</h2>
 <p>Generate the autocompletion script for the bash shell.</p>
@@ -2413,6 +2450,330 @@ Usage:
 
 Flags:
   -h, --help   help for version</code></pre></div></div>
+</details>
+</article>
+</section>
+
+</div>
+<div class="doc-page ops-page" id="page-operations-cli-shell">
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-shell/shell-context">1. Configure and select the service context</a><a href="#operations-cli-shell/shell-connect">2. Connect the tenant: etcd, metadata prefix and storage</a><a href="#operations-cli-shell/shell-prerequisites">3. Which commands can run now?</a><a href="#operations-cli-shell/shell-status">4. Inspect the session with status</a><a href="#operations-cli-shell/shell-switch">5. Disconnect or switch a service/tenant</a><a href="#operations-cli-shell/shell-errors">6. Interpret missing configuration and connection failures</a><a href="#operations-cli-shell/shell-controls">7. Help, completion and exit</a><a href="#operations-cli-shell/shell">wp shell</a></nav></details></aside>
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Interactive shell</p><h1>Interactive shell</h1><p class="page-desc">Select a service context, explicitly connect tenant metadata and storage, and run operations in one interactive session.</p><section id="ops-cli-shell-topic-shell">
+
+<div class="note">Source-build feature: <code>wp shell</code> is not included in v0.1.47. Build a checkout containing the command with <code>make wpcli</code> and run <code>./bin/wp shell --help</code> to check availability. Examples below use <code>wp</code> from that build. Output is illustrative; replace names, prefixes and storage locations with those of your deployment.</div>
+<p>Keep one terminal open while operating a multi-tenant Woodpecker service. Select the service once, then explicitly connect the tenant whose metadata you want to inspect. Inside the session, omit the leading <code>wp</code>; existing operation arguments, previews and confirmations still apply.</p>
+<h2 id="ops-cli-shell-shell-context">1. Configure and select the service context</h2>
+<p>A service context is required. For a Helm installation accessed from outside Kubernetes, first establish the Admin port forwards described in <a href="#operations-cli-local/external-access">CLI setup</a>. Save this example as <code>~/.woodpecker/cli.yaml</code>:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>current-context: milvus-prod
+contexts:
+  milvus-prod:
+    endpoint: http://127.0.0.1:19091
+    timeout: 10s
+    node_admin_urls:
+      milvus-woodpecker-0: http://127.0.0.1:19091
+      milvus-woodpecker-1: http://127.0.0.1:29091
+      milvus-woodpecker-2: http://127.0.0.1:39091
+  milvus-staging:
+    endpoint: https://wp-staging.example.com:9091</code></pre></div></div>
+<p>
+<code>endpoint</code> is the Admin seed. <code>node_admin_urls</code> maps the node IDs or advertised addresses returned by your cluster to workstation-accessible Admin origins. A reachable seed alone does not make the other replicas reachable. The staging origin above is a placeholder; configure its actual mappings when required.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp shell --context milvus-prod</code></pre></div></div>
+<p>For a configuration file in another location, set the environment variable in the same terminal before starting:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>export WOODPECKER_CLI_CONFIG=/path/to/cli.yaml
+wp shell --context milvus-prod</code></pre></div></div>
+<p>Without <code>--context</code>, an interactive <code>wp shell</code> always displays a context selector, even when a current context exists. Enter a displayed number or exact name; Enter accepts a valid <code>current-context</code>. Piped input requires an explicit <code>--context</code>. Missing or invalid configuration reports the relevant configuration path and setup instructions. See <a href="#operations-cli-local/cli-yaml">CLI setup</a> for the full configuration search order.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Service context: milvus-prod
+Config file:     /Users/example/.woodpecker/cli.yaml
+Admin endpoint:  http://127.0.0.1:19091
+Node mappings:   3
+Tenant metadata: not configured
+
+wp[context=milvus-prod | meta=disconnected]&gt;</code></pre></div></div>
+<p>The prompt identifies two independent targets: <code>context</code> is the Woodpecker service cluster; <code>meta</code> is the selected tenant connection, or <code>disconnected</code>. The latter means no tenant is configured, not a network health verdict. Entering the shell does not contact the services or automatically attach the context's etcd settings. The shell pins its chosen service endpoint rather than inheriting <code>WOODPECKER_ENDPOINT</code>.</p>
+<h2 id="ops-cli-shell-shell-connect">2. Connect the tenant: etcd, metadata prefix and storage</h2>
+<p>From the interactive prompt, connect using the tenant's workstation-accessible etcd endpoint and <strong>complete Woodpecker metadata prefix</strong>. Keep this example on one line when entering it:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>connect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker --bucket tenant-a-bucket --root-path milvus/wp</code></pre></div></div>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning and requirement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>tenant-a</code>
+</td>
+<td>Required operator-selected connection name, displayed as <code>meta=tenant-a</code>. It is an alias; it does not derive or change the actual metadata prefix.</td>
+</tr>
+<tr>
+<td>
+<code>--etcd</code>
+</td>
+<td>Required reachable etcd endpoint; comma-separate multiple endpoints. Outside Kubernetes, use the forwarded or otherwise reachable address.</td>
+</tr>
+<tr>
+<td>
+<code>--meta-prefix</code>
+</td>
+<td>Required complete metadata namespace configured by the client, for example <code>tenant-a/woodpecker</code>. Do not supply a particular log key or confuse it with the physical storage root.</td>
+</tr>
+<tr>
+<td>
+<code>--bucket</code>
+</td>
+<td>Physical storage bucket for this tenant. Optional for metadata-only operations; provide together with <code>--root-path</code>.</td>
+</tr>
+<tr>
+<td>
+<code>--root-path</code>
+</td>
+<td>Physical storage instance root, for example <code>milvus/wp</code>. Provide together with <code>--bucket</code>; it need not equal the metadata prefix.</td>
+</tr>
+<tr>
+<td>
+<code>--etcd-username / --etcd-password</code>
+</td>
+<td>Credentials when etcd authentication is enabled. Each new connection starts with fresh settings; omitted credentials are not inherited from the previous tenant.</td>
+</tr>
+<tr>
+<td>TLS endpoint</td>
+<td>Use an <code>https://</code> etcd endpoint or supply certificate flags to enable TLS. There is no separate <code>--etcd-tls</code> switch in this interface.</td>
+</tr>
+<tr>
+<td>
+<code>--etcd-cacert</code>
+</td>
+<td>Local CA certificate file when needed. Certificate flags enable TLS.</td>
+</tr>
+<tr>
+<td>
+<code>--etcd-cert / --etcd-key</code>
+</td>
+<td>Local client certificate and private key for mutual TLS; provide both.</td>
+</tr>
+<tr>
+<td>
+<code>--etcd-tls-min-version</code>
+</td>
+<td>Minimum TLS version when TLS is enabled: 1.0, 1.1, 1.2 or 1.3; default 1.2.</td>
+</tr>
+</tbody>
+</table></div>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Service context: milvus-prod
+Tenant:          tenant-a
+Etcd endpoints:  127.0.0.1:32379
+Meta prefix:     tenant-a/woodpecker
+Bucket:          tenant-a-bucket
+Root path:       milvus/wp
+
+wp[context=milvus-prod | meta=tenant-a]&gt;</code></pre></div></div>
+<p>Success verifies an etcd read under the supplied prefix, even if it is empty. It does not establish that you selected the intended tenant, that its quorum belongs to this service context, or that its data is healthy. Check <code>status</code> and the returned metadata before operating. <code>connect --help</code> lists the complete connection flags.</p>
+<details class="ops-help">
+<summary>Metadata-only and TLS connection examples</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Metadata-only connection; no bucket/root-path is needed.
+connect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker
+
+# Custom CA and client certificates; use files on this workstation.
+connect tenant-a --etcd etcd.example.com:2379 --meta-prefix tenant-a/woodpecker --etcd-cacert /path/to/ca.pem --etcd-cert /path/to/client.pem --etcd-key /path/to/client-key.pem</code></pre></div></div>
+<p>Each successful <code>connect</code> replaces the whole tenant connection. A metadata-only reconnect also clears a previous bucket/root-path. A failed connection retains the previous selected tenant and reports that the selection is unchanged.</p>
+</details>
+<h2 id="ops-cli-shell-shell-prerequisites">3. Which commands can run now?</h2>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Session state</th>
+<th>Available operations</th>
+<th>Examples inside the shell</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Service context only<br>
+<code>meta=disconnected</code>
+</td>
+<td>Service runtime and node diagnostics: cluster/node, environment, configuration, logging, profiles, in-flight operations, metrics, local instance inventory and node-local logstore operations. Kubernetes helpers use the service context's Kubernetes settings. Required services/tools must still be reachable.</td>
+<td>
+<code>node list</code>
+<br>
+<code>cluster health</code>
+<br>
+<code>config show node-0</code>
+<br>
+<code>logstore segments node-0</code>
+<br>
+<code>instance data node-0</code>
+</td>
+</tr>
+<tr>
+<td>Service context + tenant etcd and metadata prefix</td>
+<td>All <code>meta</code>, <code>etcd</code>, and <code>marking</code> operations; <code>log readers</code>, <code>log skip-range</code>, <code>log truncate</code>; quorum-aware <code>logstore lac</code> and <code>logstore fence-quorum</code>. Mutations retain their existing validation, acceptance and backup requirements.</td>
+<td>
+<code>meta log list</code>
+<br>
+<code>meta check application-log</code>
+<br>
+<code>log readers application-log</code>
+<br>
+<code>log skip-range list application-log</code>
+<br>
+<code>etcd list tenant-a/woodpecker/</code>
+</td>
+</tr>
+<tr>
+<td>Tenant connection + bucket and root-path</td>
+<td>
+<code>log scan</code>, <code>segment inspect</code>, and <code>segment probe</code> inherit the selected data location. In interactive mode these three require both location values, either from <code>connect</code> or explicit command flags.</td>
+<td>
+<code>log scan application-log --mode raw</code>
+<br>
+<code>segment inspect application-log 0</code>
+<br>
+<code>segment probe application-log 0</code>
+</td>
+</tr>
+<tr>
+<td>Any session state</td>
+<td>Local session inspection, switching, help and exit. Operation help is available before a tenant is attached.</td>
+<td>
+<code>status</code>
+<br>
+<code>ctx list</code>
+<br>
+<code>help meta log</code>
+<br>
+<code>connect --help</code>
+<br>
+<code>exit</code>
+</td>
+</tr>
+</tbody>
+</table></div>
+<p>Connecting makes the required parameters available; it does not make every operation succeed. Physical reads also require reachable quorum node Admin endpoints, and mutation commands still require their operation-specific evidence and safeguards. Raw <code>etcd</code> commands use the literal key/prefix you supply; <code>--meta-prefix</code> does not automatically scope or prepend raw etcd paths.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>meta log list
+log readers application-log
+log scan application-log --mode raw
+segment inspect application-log 0
+
+# Override data location for this one operation only.
+segment probe application-log 0 --bucket another-bucket --root-path another/root</code></pre></div></div>
+<p>Use actual log names from <code>meta log list</code> and segment IDs from <code>meta segment list application-log</code>. A per-command override does not modify the next command's defaults. When a tenant storage location is attached, <code>instance data</code> and <code>node log-health</code> also inherit it as a filter (their root flag is <code>--root</code>). They remain usable without a tenant connection. This shell's explicit storage-location rule does not change the existing non-interactive CLI's discovery behavior.</p>
+<h2 id="ops-cli-shell-shell-status">4. Inspect the session with status</h2>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>status</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Service context: milvus-prod
+Config file:     /Users/example/.woodpecker/cli.yaml
+Admin endpoint:  http://127.0.0.1:19091
+Node mappings:   3
+Tenant:          tenant-a
+Etcd endpoints:  127.0.0.1:32379
+Meta prefix:     tenant-a/woodpecker
+Bucket:          tenant-a-bucket
+Root path:       milvus/wp</code></pre></div></div>
+<p>
+<code>status</code> reads local session settings without making network requests, so it works while services are down or no tenant is attached. When credentials are configured, it reports that authentication is configured without printing them. An empty bucket/root-path means physical inspection needs explicit values.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>status --check</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Admin check: OK
+Etcd check: OK</code></pre></div></div>
+<p>The check form also prints the session configuration, then performs bounded Admin and etcd checks. Read the two results separately. When disconnected it prints <code>Etcd check: skipped (no tenant configured)</code>; a failed Admin check does not hide the separate etcd result. Neither check verifies application progress or physical data integrity.</p>
+<h2 id="ops-cli-shell-shell-switch">5. Disconnect or switch a service/tenant</h2>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>disconnect
+status
+use milvus-staging
+connect tenant-b --etcd 127.0.0.1:42379 --meta-prefix tenant-b/woodpecker
+status</code></pre></div></div>
+<p>
+<code>disconnect</code> clears the entire tenant connection, including credentials, TLS, metadata prefix and storage location. It retains the service context. A successful <code>use &lt;context&gt;</code> switches the service and clears any tenant attachment; connect the intended tenant again. A failed context selection leaves the current service and tenant unchanged.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp[context=milvus-prod | meta=tenant-a]&gt; disconnect
+Tenant metadata: not configured
+wp[context=milvus-prod | meta=disconnected]&gt; use milvus-staging
+Service context: milvus-staging
+Config file:     /Users/example/.woodpecker/cli.yaml
+Admin endpoint:  https://wp-staging.example.com:9091
+Node mappings:   0
+Tenant metadata: not configured
+wp[context=milvus-staging | meta=disconnected]&gt;</code></pre></div></div>
+<p>Session-local switching does not write <code>current-context</code> or affect another terminal. Inside the session, <code>ctx list</code> and <code>ctx view</code> inspect saved CLI configuration; use <code>status</code> to inspect the active tenant attachment. Use <code>use</code> for session-local switching. The existing <code>ctx use</code> command is a persistent change to the original configuration file and does not retarget this running session; invoke it only when you intend to change the default on disk. Exit and start a new shell to reload an edited configuration file.</p>
+<h2 id="ops-cli-shell-shell-errors">6. Interpret missing configuration and connection failures</h2>
+<p>If a metadata-dependent command runs while disconnected, it fails before contacting Admin or etcd, even if the service context contains etcd settings or you pass connection flags on that operation:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp[context=milvus-prod | meta=disconnected]&gt; meta log list
+wp shell: Prerequisite: no tenant metadata connection configured.
+Connect with: connect &lt;tenant&gt; --etcd &lt;host:port&gt; --meta-prefix &lt;prefix&gt;.
+Physical inspection also needs --bucket &lt;bucket&gt; --root-path &lt;root-path&gt;.
+Run status to view the session</code></pre></div></div>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Result</th>
+<th>Meaning / next step</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>no tenant metadata connection configured</code>
+</td>
+<td>Run <code>connect</code>, then retry. Service-only commands and help remain available.</td>
+</tr>
+<tr>
+<td>
+<code>physical inspection requires --bucket ... and --root-path ...</code>
+</td>
+<td>Supply the paired location flags on scan/inspect/probe, or reconnect the tenant with both. No physical inspection has started.</td>
+</tr>
+<tr>
+<td>
+<code>tenant connection failed ...; active tenant unchanged: ...</code>
+</td>
+<td>Check endpoint forwarding, authentication and local TLS files. The previous tenant remains selected, or the session stays disconnected. Run <code>status</code> before continuing.</td>
+</tr>
+<tr>
+<td>
+<code>Admin check: failed ...</code> / <code>Etcd check: failed ...</code>
+</td>
+<td>Configuration exists but that check could not succeed. A timeout or authentication failure is different from a missing connection configuration; the selected context/tenant remains intact.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="ops-cli-shell-shell-controls">7. Help, completion and exit</h2>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>help
+connect --help
+help segment inspect
+ctx list
+exit</code></pre></div></div>
+<p>Tab completes command/flag names and context names after <code>use</code>. Arrow keys recall in-memory history; <code>connect</code> and credential-bearing commands are excluded from history. Ctrl+C cancels the current operation and returns to the prompt. Use <code>exit</code>, <code>quit</code> or Ctrl+D to leave.</p>
+<p>This is a command session, not bash/zsh: quoted arguments work, but environment-variable expansion, pipes and redirection are not evaluated. Run exports and port forwards in your ordinary terminal. Enter each example operation as a separate command. Existing command findings can return errors while the shell remains open for further diagnosis.</p>
+<article class="command" data-command-anchor="shell" id="ops-cli-shell-shell">
+<h2>wp shell</h2>
+<p>Open an interactive operational shell. Without --context, choose a context from cli.yaml.</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp shell [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp shell --context milvus-prod
+# Inside the interactive session:
+status
+connect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker --bucket tenant-a-bucket --root-path milvus/wp
+meta log list</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp[context=milvus-prod | meta=disconnected]&gt;
+# After connect succeeds:
+wp[context=milvus-prod | meta=tenant-a]&gt;</code></pre></div></div>
+<p>The service context is required; attaching a tenant is explicit and optional. Service commands work while disconnected. Metadata operations require connect, and interactive scan/inspect/probe also require bucket/root-path. status shows local selection; status --check checks reachability. Switching service contexts clears the tenant connection. This source-build feature is not included in v0.1.47.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp shell: Prerequisite: no tenant metadata connection configured. Connect with: connect &lt;tenant&gt; --etcd &lt;host:port&gt; --meta-prefix &lt;prefix&gt;. Run status to view the session</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Open an interactive operational shell. Without --context, choose a context from cli.yaml.
+Start with no tenant metadata attached; use connect to attach a tenant.
+For piped input, specify --context explicitly. Type help for commands or exit to leave.
+
+Usage:
+  wp shell [flags]
+
+Flags:
+  -h, --help   help for shell</code></pre></div></div>
 </details>
 </article>
 </section>

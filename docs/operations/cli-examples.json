@@ -1,4 +1,10 @@
 {
+  "shell": [
+    "wp shell --context milvus-prod\n# Inside the interactive session:\nstatus\nconnect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker --bucket tenant-a-bucket --root-path milvus/wp\nmeta log list",
+    "wp[context=milvus-prod | meta=disconnected]>\n# After connect succeeds:\nwp[context=milvus-prod | meta=tenant-a]>",
+    "wp shell: Prerequisite: no tenant metadata connection configured. Connect with: connect <tenant> --etcd <host:port> --meta-prefix <prefix>. Run status to view the session",
+    "The service context is required; attaching a tenant is explicit and optional. Service commands work while disconnected. Metadata operations require connect, and interactive scan/inspect/probe also require bucket/root-path. status shows local selection; status --check checks reachability. Switching service contexts clears the tenant connection. This source-build feature is not included in v0.1.47."
+  ],
   "cluster info": [
     "wp cluster info",
     "members: [node-0, node-1, node-2]",

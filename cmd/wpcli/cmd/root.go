@@ -1,11 +1,7 @@
 // Package cmd holds the cobra commands for the wp CLI.
 package cmd
 
-import (
-	"time"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 // NewRootCommand creates the root cobra command for wp with all global flags.
 func NewRootCommand() *cobra.Command {
@@ -27,16 +23,17 @@ func NewRootCommand() *cobra.Command {
 		},
 	}
 
+	d := shellRootDefaults()
 	pf := root.PersistentFlags()
 	pf.StringArrayVar(&Globals.NodeAdminURLs, "node-admin-url", nil, "Map a node ID, advertised address, or host to an admin URL (KEY=URL; repeatable; overrides context mappings)")
 	pf.StringVar(&Globals.Context, "context", "", "CLI context name (overrides current-context in cli.yaml)")
 	pf.StringVar(&Globals.Endpoint, "endpoint", "", "Admin HTTP seed endpoint (e.g. http://node:9091)")
-	pf.IntVar(&Globals.AdminPort, "admin-port", 9091, "Admin port for fan-out peer discovery")
-	pf.DurationVar(&Globals.Timeout, "timeout", 30*time.Second, "Per-request timeout")
-	pf.IntVar(&Globals.Concurrency, "concurrency", 8, "Fan-out concurrency")
-	pf.BoolVar(&Globals.Strict, "strict", false, "Treat partial fan-out failures as errors")
-	pf.StringVarP(&Globals.Output, "output", "o", "table", "Output format: table|wide|json|yaml")
-	pf.BoolVar(&Globals.NoColor, "no-color", false, "Disable color in output")
+	pf.IntVar(&Globals.AdminPort, "admin-port", d.AdminPort, "Admin port for fan-out peer discovery")
+	pf.DurationVar(&Globals.Timeout, "timeout", d.Timeout, "Per-request timeout")
+	pf.IntVar(&Globals.Concurrency, "concurrency", d.Concurrency, "Fan-out concurrency")
+	pf.BoolVar(&Globals.Strict, "strict", d.Strict, "Treat partial fan-out failures as errors")
+	pf.StringVarP(&Globals.Output, "output", "o", d.Output, "Output format: table|wide|json|yaml")
+	pf.BoolVar(&Globals.NoColor, "no-color", d.NoColor, "Disable color in output")
 	pf.CountVarP(&Globals.Verbose, "verbose", "v", "Increase verbosity (-v, -vv, -vvv)")
 
 	root.AddCommand(newVersionCommand())
@@ -57,6 +54,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newOpsCommand())
 	root.AddCommand(newMetricsCommand())
 	root.AddCommand(newK8sCommand())
+	root.AddCommand(newShellCommand())
 
 	return root
 }
