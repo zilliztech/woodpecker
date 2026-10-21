@@ -1,5 +1,9 @@
 # Interactive wp shell
 
+See also the native [Interactive shell handbook](../../docs.html#operations-cli-shell)
+for the connect parameter table, command availability by connection state, and
+copyable examples in the Docs layout with section navigation.
+
 The shell keeps two independent targets visible: a Woodpecker **service context**
 and an optional **tenant metadata connection**. Multiple tenants can share one
 service while using different etcd clusters, metadata prefixes, and storage

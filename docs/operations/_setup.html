@@ -64,6 +64,7 @@ wp --context milvus-prod ctx view</code></pre>
 <details class="ops-help"><summary>Config locations and precedence</summary><p>Search order: WOODPECKER_CLI_CONFIG → cli.yaml beside the resolved wp binary → $XDG_CONFIG_HOME/woodpecker/cli.yaml → ~/.woodpecker/cli.yaml. The working directory and /etc/woodpecker are not default locations. Explicit command flags override matching context fields. WOODPECKER_ENDPOINT overrides the context's endpoint unless --endpoint is given.</p><p>The k8s block supplies defaults to wp k8s helpers, not to your shell's kubectl. Operator-specific helpers target a WoodpeckerCluster CR; for a Helm deployment without that CR, use kubectl directly. Do not use the Helm release name as k8s.cluster unless it is also the actual CR name.</p></details>
 
 <h2 id="shell-functions">3. Run without cli.yaml, or add shortcuts</h2>
+<p>For a built-in interactive entry point, see <a href="cli.html#shell">Interactive shell</a>: it requires a service context and retains an explicitly connected tenant for subsequent commands. The examples below describe ordinary bash/zsh shortcuts and one-shot CLI invocations.</p>
 <p>A config file is optional. Supply the admin endpoint and node mappings directly:</p>
 <pre><code>wp node list --endpoint http://127.0.0.1:19091 \
   --node-admin-url milvus-woodpecker-0=http://127.0.0.1:19091 \
@@ -142,25 +143,6 @@ Cluster Health: YELLOW
   - zero redundancy (active == N)</code></pre>
 <p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on v0.1.47 and later, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
-<h2 id="interactive-session">Interactive service and tenant sessions</h2>
-<p>Source builds that include <code>wp shell</code> can retain a service context and an independent tenant metadata connection. Without <code>--context</code>, the shell always lists configured contexts in alphabetical order, marks a valid saved current context as the Enter default, and accepts a number or exact name. An explicit <code>wp shell --context milvus-prod</code> skips selection. The choice is session-local and does not rewrite cli.yaml.</p>
-<pre><code>wp shell
-# Choose a context by number or name, then omit the leading wp:
-node list
-cluster health
-connect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker --bucket tenant-a-bucket --root-path milvus/wp
-meta log list
-log readers application-log
-log scan application-log --mode raw
-segment inspect application-log 0
-status
-status --check
-connect tenant-b --etcd 127.0.0.1:42379 --meta-prefix tenant-b/woodpecker
-disconnect
-use wp-staging
-exit</code></pre>
-<p>The prompt identifies both configured targets: <code>wp[context=milvus-prod | meta=tenant-a]&gt;</code>. Entry always starts with <code>meta=disconnected</code>, even if the service context stores etcd settings. Metadata commands require an explicit attachment. <code>connect</code> validates a bounded etcd read, accepts the existing etcd authentication/TLS options, and replaces all tenant settings only after validation succeeds. Failed connections retain the previous target. The full metadata prefix and the storage root are distinct settings.</p>
-<p>A metadata-only attachment can omit both storage options. Physical inspection (<code>log scan</code>, <code>segment inspect</code>, <code>segment probe</code>) requires an explicit bucket/root pair from the attachment or command flags before making requests. Command overrides do not change session defaults. <code>disconnect</code> clears all tenant settings; a successful <code>use</code> also detaches the tenant. Session-local <code>use</code> is distinct from persistent <code>ctx use</code>.</p>
-<p><code>status</code> shows effective settings and the original configuration source without requests, and redacts credentials. <code>status --check</code> explicitly checks Admin and etcd separately. The prompt is a target indicator, not a live health check. The shell uses the selected service context rather than a baked-in WOODPECKER_ENDPOINT; standalone CLI endpoint precedence is unchanged.</p>
-<p>Tab completes commands and flags; arrow keys recall in-memory session history. Connection and credential-bearing lines are excluded, and no history file is written. Ctrl+C cancels an operation while retaining the session; existing mutation confirmations, previews and backup/revision requirements remain mandatory. Each operation runs in an isolated wp process with a private temporary configuration, removed afterward, so options such as --apply and --yes cannot leak to later commands. Use <code>status</code> to identify the original source when a child diagnostic names a temporary configuration.</p>
-<p>Piped input requires an explicit context and exits nonzero if any command fails: <code>printf 'status\nnode list\nexit\n' | wp shell --context milvus-prod</code>. Ordinary CLI calls remain available for scripts. For a complete configuration example and multi-tenant walkthrough, see the <a href="https://github.com/zilliztech/woodpecker/blob/master/docs/admin-guides/wpcli/shell.md">interactive shell guide</a>.</p>
+
+<h2 id="interactive-session">Interactive shell</h2>
+<p>For context selection, tenant connection parameters and command availability, open the dedicated <a href="cli.html#shell">Interactive shell handbook</a>.</p>

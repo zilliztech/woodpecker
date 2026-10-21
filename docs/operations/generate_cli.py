@@ -93,6 +93,8 @@ def main():
                 required.append('<code>--scenario</code>: analysis scenario, or <code>--list</code> to enumerate scenarios')
             if name in ['segment inspect', 'segment probe', 'log scan']:
                 required.append('For explicit storage: paired <code>--bucket / --root-path</code>')
+            if name == 'shell':
+                required.append('<code>--context</code>: service context, or use current-context / selection; <code>connect</code> attaches tenant etcd and optional storage inside the session')
             if name in ['meta log patch', 'meta segment patch']:
                 required.append('Apply only: <code>--apply --offline --expected-revision --reason --backup</code>')
             if name == 'log truncate':
@@ -122,7 +124,7 @@ def main():
     for category in GROUPS:
         match = re.search('<section id="topic-' + category + '">.*?</section>', sections, re.S)
         category_content = match.group(0)
-        intro_files = {'local': '_setup.html', 'etcd': '_etcd.html', 'meta': '_meta.html'}
+        intro_files = {'local': '_setup.html', 'shell': '_shell.html', 'etcd': '_etcd.html', 'meta': '_meta.html'}
         if category in intro_files:
             intro_file = intro_files[category]
             category_content = category_content.replace('</h2>', '</h2>' + (HERE / intro_file).read_text(), 1)

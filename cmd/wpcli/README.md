@@ -17,6 +17,8 @@ For an interactive session, run `wp shell` to choose a configured service contex
 or `wp shell --context <name>` to enter directly. Attach tenant metadata explicitly
 with `connect`; `status`, `disconnect`, and session-local `use` keep the selected
 targets visible. See the [interactive shell walkthrough](../../docs/admin-guides/wpcli/shell.md).
+The native [Interactive shell handbook](../../docs/docs.html#operations-cli-shell)
+provides connection parameters, command prerequisites and output interpretation.
 
 ## In-pod usage (zero-config)
 

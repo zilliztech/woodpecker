@@ -3,13 +3,14 @@
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p><span class="badge">{{SUMMARY}}</span></p>
 <p><a href="cli.html#start">New to wp? Start with installation, connection setup and your first commands →</a></p>
-<div class="note">The existing operational commands are available in v0.1.47; the interactive shell requires a source build including <code>wp shell</code> until its release. This reference is generated from source; when using another version, compare its command help. Check <code>wp version</code> and <code>wp --help</code> before following an example.</div>
+<div class="note">The established operations are available in v0.1.47; <a href="cli.html#shell">Interactive shell</a> is a source-build addition and is not included in v0.1.47. This reference is generated from source. Check <code>wp version</code> and <code>wp --help</code> against your binary before following an example.</div>
 <p>Each topic has command syntax, parameter explanations, a demo, illustrative output and result interpretation. The overview lists executable operations: <code>node</code> is a command group, while <code>node list</code> is an operation within it.</p>
 {{TOPICS}}
 </section>
 <section id="setup">
 <h2>Connection and naming</h2>
 <p>Follow <a href="cli.html#start">CLI setup</a> for a Helm-installed Milvus/Woodpecker deployment, including access from outside Kubernetes.</p>
+<p>To retain connection settings while running several operations, use <a href="cli.html#shell">Interactive shell</a>. Select the service context first, then explicitly attach the tenant's etcd metadata and optional storage location. The shell page explains which commands are available at each stage.</p>
 <table><tr><th>Name</th><th>Meaning</th></tr>
 <tr><td>logName / logId</td><td>Logical metadata name / numeric log identity. Node-local logstore operations use the numeric ID.</td></tr>
 <tr><td>meta-prefix</td><td>Complete etcd namespace configured by the client, for example milvus-prod/woodpecker.</td></tr>

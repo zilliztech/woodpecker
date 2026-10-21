@@ -4,10 +4,16 @@
     "groups": [
       "ctx",
       "completion",
-      "version",
+      "version"
+    ],
+    "purpose": "Select the local CLI context, load shell completion and identify the CLI build."
+  },
+  "shell": {
+    "title": "Interactive shell",
+    "groups": [
       "shell"
     ],
-    "purpose": "Select CLI contexts, open an interactive service/tenant session, load completion and identify the CLI build."
+    "purpose": "Select a service context, explicitly connect tenant metadata and storage, and run operations in one interactive session."
   },
   "env": {
     "title": "Process environment",

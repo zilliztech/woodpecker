@@ -1,4 +1,10 @@
 {
+  "shell": [
+    "wp shell --context milvus-prod\n# Inside the interactive session:\nstatus\nconnect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker --bucket tenant-a-bucket --root-path milvus/wp\nmeta log list",
+    "wp[context=milvus-prod | meta=disconnected]>\n# After connect succeeds:\nwp[context=milvus-prod | meta=tenant-a]>",
+    "wp shell: Prerequisite: no tenant metadata connection configured. Connect with: connect <tenant> --etcd <host:port> --meta-prefix <prefix>. Run status to view the session",
+    "The service context is required; attaching a tenant is explicit and optional. Service commands work while disconnected. Metadata operations require connect, and interactive scan/inspect/probe also require bucket/root-path. status shows local selection; status --check checks reachability. Switching service contexts clears the tenant connection. This source-build feature is not included in v0.1.47."
+  ],
   "cluster info": [
     "wp cluster info",
     "members: [node-0, node-1, node-2]",
@@ -424,11 +430,5 @@
     "{\n  \"applied\": false,\n  \"unchanged\": false,\n  \"before\": {\n    \"revision\": 17099,\n    \"metadata\": {\n      \"truncated_segment_id\": \"6\",\n      \"truncated_entry_id\": \"99\"\n    }\n  },\n  \"after\": {\n    \"revision\": 17099,\n    \"metadata\": {\n      \"truncated_segment_id\": \"8\",\n      \"truncated_entry_id\": \"0\"\n    }\n  },\n  \"target_segment_revision\": 175,\n  \"snapshot_revision\": 18000\n}",
     "Error: StateConflict: truncation cannot move backward or restore deleted data\n# Active/empty targets, identity mismatches, stale revisions and concurrent updates are also rejected.",
     "Preview requires a non-empty Completed/Sealed target and entry within 0..lastEntryId. Apply requires --apply --expected-revision (the log before.revision), --reason and a new --backup; no offline flag is required. The log and target revisions are compared and an audit record is written atomically. The frontier segment stays retained; earlier finalized segments become eligible for auditor/retention/reader-protected cleanup. Unchanged frontier means applied=false, unchanged=true with no artifacts. Verify application checkpoints first: metadata backup cannot restore reclaimed data."
-  ],
-  "shell": [
-    "wp shell",
-    "Contexts from /Users/example/.woodpecker/cli.yaml:\n  1) wp-prod  [current]\nSelect context by number or name [1]:\nService context: wp-prod\nTenant metadata: not configured\nwp[context=wp-prod | meta=disconnected]>",
-    "Prerequisite: no tenant metadata connection configured. Connect with: connect <tenant> --etcd <host:port> --meta-prefix <prefix>.",
-    "Without --context, choose a named service context by number or name. Selection and use are session-local. Attach tenant metadata explicitly with connect; status is offline, status --check checks reachability. Existing previews and mutation guards still apply."
   ]
 }
