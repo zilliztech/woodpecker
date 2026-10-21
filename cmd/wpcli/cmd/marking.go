@@ -248,11 +248,14 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 // metaEtcdClient uses host-local TLS/auth material, including server-auth TLS
 // without a client certificate and mutual TLS when a cert/key pair is supplied.
 func metaEtcdClient(conn *metaEtcdConn) (*clientv3.Client, error) {
-	timeout := Globals.Timeout
+	return metaEtcdClientForContext(context.Background(), conn, Globals.Timeout)
+}
+
+func metaEtcdClientForContext(ctx context.Context, conn *metaEtcdConn, timeout time.Duration) (*clientv3.Client, error) {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	cfg := clientv3.Config{Endpoints: conn.endpoints, DialTimeout: timeout}
+	cfg := clientv3.Config{Context: ctx, Endpoints: conn.endpoints, DialTimeout: timeout}
 	if conn.username != "" {
 		cfg.Username, cfg.Password = conn.username, conn.password
 	}

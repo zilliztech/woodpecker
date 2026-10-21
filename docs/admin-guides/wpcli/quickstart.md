@@ -79,6 +79,11 @@ wp cluster info          # now targeting staging cluster
 
 ## 5. Common workflows
 
+For repeated operations, use `wp shell` to select a service context interactively.
+The shell starts with no tenant metadata attached; use `connect` when running
+metadata commands. See the [multi-tenant shell walkthrough](shell.md) for setup,
+context selection, tenant connections, completion and session switching.
+
 ### Decommission a node
 ```bash
 wp node decommission node-3             # blocks until safe to terminate (default)

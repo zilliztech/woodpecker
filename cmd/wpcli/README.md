@@ -13,6 +13,11 @@ See [`docs/wip/wpcli/wpcli-design.md`](../../docs/wip/wpcli/wpcli-design.md) for
 
 See [`docs/admin-guides/wpcli/quickstart.md`](../../docs/admin-guides/wpcli/quickstart.md) for a 15-minute onboarding guide.
 
+For an interactive session, run `wp shell` to choose a configured service context,
+or `wp shell --context <name>` to enter directly. Attach tenant metadata explicitly
+with `connect`; `status`, `disconnect`, and session-local `use` keep the selected
+targets visible. See the [interactive shell walkthrough](../../docs/admin-guides/wpcli/shell.md).
+
 ## In-pod usage (zero-config)
 
 `wp` is bundled in all server images and is on `PATH`, so you can operate a
@@ -331,3 +336,12 @@ write progress/quorum fencing, log audits, reader diagnosis, skip-range recovery
 The [CLI cookbook](../../docs/admin-guides/wpcli/cookbook.md) supplies command sequences and
 verification steps. The [v0.1.46 coverage review](../../docs/admin-guides/wpcli/release-0.1.46.md)
 distinguishes merged capabilities from closed proposals and still-open metadata/timeout work.
+
+## Shell development checks
+
+```bash
+go test -race ./cmd/wpcli/...
+make wpcli
+# Linux/macOS terminal behavior, using isolated local HTTP fixtures:
+python3 cmd/wpcli/tests/shell_terminal_test.py --binary ./bin/wp
+```

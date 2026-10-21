@@ -47,8 +47,8 @@ within docs.html. Check light/dark mode, search, section links, mobile layout
 and legacy redirects.
 
 The current handbook covers the operations registered on master, including typed
-metadata inspection/repair and log truncation. It lists 19 top-level commands/groups
-and 71 executable operations across 16 topics; an operation such as `meta log show`
+metadata inspection/repair and log truncation. It lists 20 top-level commands/groups
+and 72 executable operations across 16 topics; an operation such as `meta log show`
 is not a separate top-level command. Update examples and category configuration
 together when adding CLI capabilities. The generator fails if an operation lacks
 an authored example or topic.

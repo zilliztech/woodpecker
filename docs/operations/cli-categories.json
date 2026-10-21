@@ -4,9 +4,10 @@
     "groups": [
       "ctx",
       "completion",
-      "version"
+      "version",
+      "shell"
     ],
-    "purpose": "Select the local CLI context, load shell completion and identify the CLI build."
+    "purpose": "Select CLI contexts, open an interactive service/tenant session, load completion and identify the CLI build."
   },
   "env": {
     "title": "Process environment",
