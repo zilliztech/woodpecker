@@ -1,0 +1,26 @@
+/* Stack examples share the native Docs palette, typography and code blocks. */
+.stack-examples-page { min-width: 0; }
+.stack-examples-page h1 { overflow-wrap: anywhere; }
+.stack-examples-page [id] { scroll-margin-top: 80px; }
+.stack-examples-page p, .stack-examples-page td { overflow-wrap: anywhere; }
+.stack-onpage { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: -12px 0 32px; }
+.stack-onpage a { font-size: 13px; line-height: 1.6; }
+.stack-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 24px 0; }
+.stack-cards a { display: block; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
+.stack-cards a:hover { border-color: var(--accent); text-decoration: none; }
+.stack-cards strong { display: block; margin-bottom: 10px; font-size: 15px; }
+.stack-cards span { display: block; color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
+.stack-flow { display: grid; gap: 12px; margin: 24px 0; }
+.stack-flow > div { border-left: 3px solid var(--accent); padding: 16px 20px; background: var(--bg-card); border-radius: 0 8px 8px 0; }
+.stack-flow strong { display: block; color: var(--text-primary); font-size: 14px; margin-bottom: 8px; }
+.stack-flow span { color: var(--text-secondary); font-size: 14px; line-height: 1.8; }
+.stack-table { width: 100%; overflow-x: auto; margin: 20px 0 24px; }
+.stack-table .doc-table { margin: 0; }
+.stack-table th { min-width: 110px; }
+.stack-table td { min-width: 130px; }
+.stack-table td:first-child { font-family: inherit; }
+@media (max-width: 600px) {
+    .stack-cards { grid-template-columns: minmax(0, 1fr); }
+    .stack-examples-page h1 { font-size: 30px; }
+    .stack-examples-page .doc-pagination { flex-direction: column; }
+}

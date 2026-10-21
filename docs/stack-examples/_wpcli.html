@@ -1,0 +1,49 @@
+<h1>wpcli Operations in the Stack</h1>
+<p class="page-desc">Connect to the WP service cluster, attach the selected Milvus instance’s WP client metadata, and use both views during an investigation.</p>
+
+<h2 id="prepare">Prepare wpcli and local access</h2>
+<p>Install wp using the <a href="#operations-cli-local/start">CLI setup guide</a>, and check <code>wp version</code> and <code>wp --help</code>. The noninteractive examples work with the established operations; interactive <code>wp shell</code> requires a source build containing the shell addition and is not part of v0.1.47.</p>
+<p>Run the following from <code>deployments/milvus-full-stack-helm/</code>, with the stack deployed and the connection-discovery Python dependency installed:</p>
+<pre><code># Keep this running in a separate terminal.
+./stack.sh forward --wpcli</code></pre>
+<pre><code>./stack.sh connections
+./stack.sh connections --wpcli-config &gt; .local/wpcli.yaml
+export WOODPECKER_CLI_CONFIG="$PWD/.local/wpcli.yaml"
+wp ctx view</code></pre>
+<p>This creates a separate stack-local file. Your personal <code>~/.woodpecker/cli.yaml</code> is unchanged. Export requires working WP Admin forwards; metadata readiness is reported separately. Re-run discovery after changing the deployment or restarting forwards.</p>
+
+<h2 id="scopes">Understand the two connection scopes</h2>
+<table>
+  <thead><tr><th>Scope</th><th>Configuration</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>WP service cluster</td><td><code>cli.yaml</code>: Admin endpoint, per-node Admin URL mappings and Kubernetes context/namespace.</td><td>Inspect WP nodes and their runtime state. Select this connection with <code>--context</code>.</td></tr>
+    <tr><td>Milvus instance WP client metadata</td><td>Separate etcd endpoint and full metadata prefix; bucket/root path when an operation needs the storage identity.</td><td>Inspect metadata managed by this Milvus instance’s WP client. Supply explicit flags or attach it inside the shell.</td></tr>
+  </tbody>
+</table>
+<p><code>--wpcli-config</code> puts the second scope in an independent comment section, with a copyable <code>connect</code> command. It does not put etcd, metadata-prefix or storage settings into the generated ctx.</p>
+<p>In the default example, etcd is reachable at <code>127.0.0.1:32379</code> and the complete metadata prefix is <code>full-stack/woodpecker</code>, derived from Milvus’s <code>etcd.rootPath</code> and <code>woodpecker.meta.prefix</code>. The bucket is <code>milvus-bucket</code>; the WP WAL root is <code>milvus/wp</code>, including the <code>/wp</code> suffix added by the Milvus WAL adapter.</p>
+<p>Use the discovered values for your instance. A shared WP service cluster can serve different clients; selecting its ctx alone does not identify which client metadata you intend to inspect.</p>
+
+<h2 id="commands">Inspect nodes and metadata</h2>
+<pre><code># Service-level inspection uses only the WP context.
+wp --context wp-ops-v0146/milvus-stack node list
+
+# Select this Milvus instance's metadata explicitly.
+wp --context wp-ops-v0146/milvus-stack \
+  --etcd 127.0.0.1:32379 --meta-prefix full-stack/woodpecker \
+  meta log list</code></pre>
+<p>The first result describes service nodes. The second lists logical logs in the chosen client metadata namespace. Keep actual log/node/segment identities from these results when following a diagnosis workflow; sample IDs from another environment will refer to different data.</p>
+
+<h2 id="shell">Keep an interactive operational session</h2>
+<p>With a binary whose help lists <code>shell</code>, start a session using the generated context. Without <code>--context</code>, an interactive terminal offers the configured contexts for selection.</p>
+<pre><code>wp shell --context wp-ops-v0146/milvus-stack</code></pre>
+<p>Inside the shell, attach the Milvus instance’s WP client metadata explicitly:</p>
+<pre><code>connect milvus-stack --etcd 127.0.0.1:32379 --meta-prefix full-stack/woodpecker --bucket milvus-bucket --root-path milvus/wp
+status --check
+node list
+meta log list</code></pre>
+<p><code>status --check</code> verifies Admin and etcd access for the current session. These connection checks establish reachability; use a workload and the relevant log/data checks to establish application progress and readability.</p>
+
+<h2 id="investigate">Use wpcli with the dashboards</h2>
+<p>Start from the symptom and the test’s time window. Use <a href="#operations-cli-ops">in-flight operations</a> and <a href="#operations-cli-logstore">writer runtime</a> for slow writes, <a href="#operations-cli-log">log progress</a> and <a href="#operations-cli-segment">segment diagnosis</a> for stalled progress, and <a href="#operations-cli-meta">metadata inspection</a> when coordinator state needs examination.</p>
+<p>The <a href="#operations-scenarios-write">write-stall</a>, <a href="#operations-scenarios-read">read-stall</a> and <a href="#operations-scenarios-corruption">data-corruption</a> guides explain the evidence and verification needed for each investigation. Begin with their read-only inspection steps and choose any repair from the observed cause and consequences.</p>

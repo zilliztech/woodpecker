@@ -1,0 +1,37 @@
+<h1>Milvus–Woodpecker Stack Examples</h1>
+<p class="page-desc">Deploy, observe and operate Milvus with Woodpecker through a complete, open-source example stack.</p>
+
+<h2 id="purpose">Why this stack exists</h2>
+<p>A running Milvus + Woodpecker deployment is easier to operate when application behavior, WAL health, resource pressure and alerts can be examined together. Users who have not yet deployed monitoring or operational tools can start here with a working example, then adapt its configuration and investigation methods to their own instances.</p>
+<p>The stack brings together <strong>Milvus, independent Woodpecker services, Prometheus, Grafana, Alertmanager and wpcli operations</strong>. A real Milvus workload exercises its WP client and the WP servers, so the example explains what to observe along the write path and how to investigate it.</p>
+<div class="stack-flow" role="figure" aria-label="Milvus writes flow through its Woodpecker client to independent Woodpecker services and object storage; Prometheus collects metrics, Grafana shows dashboards, Alertmanager groups alerts, and wpcli inspects services and metadata.">
+  <div><strong>Exercise the write path</strong><span>Milvus workload → Milvus + WP client → WP services → object storage</span></div>
+  <div><strong>Observe and investigate</strong><span>Prometheus → Grafana + Alertmanager · wpcli → WP services and client metadata</span></div>
+</div>
+
+<h2 id="included">What you can do today</h2>
+<div class="stack-cards">
+  <a href="#stack-examples-helm"><strong>Deploy with Helm</strong><span>Install Milvus, three WP service replicas, persistent dependencies and monitoring. Follow the CLI or Jupyter walkthrough.</span></a>
+  <a href="#stack-examples-observability"><strong>Inspect monitoring and alerts</strong><span>Use the Milvus, WP client and WP server dashboards; verify scraping, rule evaluation and alert delivery to Alertmanager.</span></a>
+  <a href="#stack-examples-wpcli"><strong>Operate with wpcli</strong><span>Discover reachable endpoints, select a WP service context and explicitly connect to a Milvus instance’s WP client metadata.</span></a>
+  <a href="#stack-examples-e2e"><strong>Run a repeatable experiment</strong><span>Insert and read data, measure writes, inspect correlated metrics and logs, collect evidence and repeat after a change.</span></a>
+</div>
+<p>The runnable example lives in <a href="{{STACK_REPO}}/README.md"><code>deployments/milvus-full-stack-helm/</code></a>. It uses the official Milvus Helm chart, a small support chart and pinned monitoring components. <a href="{{STACK_REPO}}/values">Values files</a>, dashboard JSON, alert rules, workload scripts and the notebook are included in the repository.</p>
+
+<h2 id="workflow">One operational feedback loop</h2>
+<ol>
+  <li><strong>Deploy a known environment.</strong> Record chart/image versions, namespace, resource settings and connection targets.</li>
+  <li><strong>Run a real workload.</strong> Verify Milvus inserts, primary-key queries and vector search, then establish a small write-performance baseline.</li>
+  <li><strong>Check the whole chain.</strong> Compare application results with Milvus/WP metrics, dashboards, alerts, wpcli state and logs for the same time window.</li>
+  <li><strong>Improve and repeat.</strong> Investigate failures or missing signals, change one setting or instrument, and rerun the same scenario.</li>
+</ol>
+<p>Commands return exit status and save structured artifacts so humans and local AI agents can follow the same loop. The current stack provides these building blocks; autonomous investigation and optimization are future extensions.</p>
+
+<h2 id="own-instances">Apply the examples to your own instances</h2>
+<p>Start with a local stack to learn the expected signals and command output. For an existing Milvus + WP instance, adapt scrape selectors, dashboard variables, alert thresholds and notification routes to its topology and workload. Use that instance’s reachable WP Admin URLs and its own etcd namespace and storage paths when configuring wpcli.</p>
+<p>Distinguish the shared WP service cluster from the metadata managed by a particular Milvus instance’s WP client. <a href="#stack-examples-wpcli/scopes">The two connection scopes</a> are explicit in the generated configuration and operations examples.</p>
+<div class="callout info"><span>The supplied resource sizes, single-node dependencies and example credentials are for a development environment. Use your deployment’s availability, access and storage requirements when adopting the configurations. Performance results from this local setup describe that setup.</span></div>
+
+<h2 id="evolution">A growing examples collection</h2>
+<p>The Helm stack, monitoring/alert checks, wpcli connection workflow and bounded write experiment are available now. Future chapters can add controlled failure and recovery drills, E2E operational diagnosis, capacity and configuration comparisons, and measured optimization examples. Each chapter should include its trigger, workload, expected signals, investigation, recovery, verification and evidence.</p>
+<p>An Operator installation path is also planned separately. This collection will grow around concrete scenarios that help users improve the operability and observability of their own Milvus + WP instances.</p>

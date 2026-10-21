@@ -1,0 +1,40 @@
+<h1>Monitoring &amp; Alerts</h1>
+<p class="page-desc">Follow the same workload from Milvus through the WP client and servers, then check that the operational signals reach your dashboards and Alertmanager.</p>
+
+<h2 id="dashboards">Open the three dashboards</h2>
+<p>Keep <code>./stack.sh forward --wpcli</code> running. These are the default local addresses; use <code>./stack.sh connections</code> for discovered addresses when ports differ.</p>
+<table>
+  <thead><tr><th>View</th><th>Local address</th><th>What to examine</th></tr></thead>
+  <tbody>
+    <tr><td>Milvus</td><td><code>http://127.0.0.1:3000/d/milvus-full-stack</code></td><td>Application throughput, latency and component/resource health.</td></tr>
+    <tr><td>WP client</td><td><code>http://127.0.0.1:3000/d/woodpecker-client-k8s</code></td><td>Client append/read behavior, latency and queues.</td></tr>
+    <tr><td>WP server</td><td><code>http://127.0.0.1:3000/d/woodpecker-server-k8s</code></td><td>Node operations, flush/storage behavior and resource pressure.</td></tr>
+    <tr><td>Prometheus</td><td><code>http://127.0.0.1:9099</code></td><td>Scrape target health, raw series, queries and pending/firing alerts.</td></tr>
+    <tr><td>Alertmanager</td><td><code>http://127.0.0.1:9093</code></td><td>Received alerts, grouping, inhibition and silences.</td></tr>
+  </tbody>
+</table>
+<p>Grafana’s local example login is <code>admin / admin</code>. Dashboards and the Prometheus data source are provisioned from repository files. Select namespace <code>milvus-stack</code> and a time range containing the test; allow scrapes to collect the new workload.</p>
+
+<h2 id="coverage">Check the monitoring chain</h2>
+<pre><code>./stack.sh smoke
+# Wait at least 30 seconds for scrapes.
+./stack.sh verify</code></pre>
+<p>The verification report is saved to <code>.local/verification.json</code>. It checks target health, positive application/WP workload metrics, dashboard provisioning and query compatibility. Some panels need a particular operation or enough rate-window history before showing finite samples. An empty panel is an investigation prompt, not proof that the corresponding operation is healthy or broken.</p>
+<p>If application writes succeed but WP activity is missing, check the deployed Milvus configuration, metric families and label selection before drawing a conclusion about the write path. The <a href="{{STACK_REPO}}/dashboards-sources.json">dashboard source record</a> documents the Milvus production export and adaptations of the WP Kubernetes templates.</p>
+
+<h2 id="alerts">Inspect and test alerting</h2>
+<p>Prometheus evaluates the 31 reference WP rules covering resource pressure, failures, scaling signals and client behavior. Firing alerts are sent to Alertmanager for grouping and inhibition. The default <code>local-only</code> receiver lets you inspect alerts in the Prometheus and Alertmanager UIs without sending email or other external notifications.</p>
+<pre><code>./stack.sh alerts-test   # Offline rule behavior checks; uses Docker.
+./stack.sh alerts        # Live rule/receiver/AM discovery checks.
+./stack.sh alerts-smoke  # Temporary synthetic firing/recovery/inhibition checks.</code></pre>
+<p>The synthetic check verifies the alerting path and removes its temporary resources. It does not create each underlying disk, object-store or quorum failure, and it does not prove that every production threshold is suitable for your workload. See the <a href="{{STACK_REPO}}/ALERTING.md">rule catalog, investigation guidance and validation details</a>.</p>
+<p>When external notification is needed, use the optional SMTP configuration example with your relay and credentials. Optional Mailpit testing captures email locally. Neither profile is enabled by default.</p>
+
+<h2 id="adopt">Adopt the signals in an existing deployment</h2>
+<ol>
+  <li>Match Prometheus discovery selectors and labels to your Milvus and WP Pods. Confirm the exporters expose the metric families used by each query.</li>
+  <li>Adapt Grafana data-source references, namespace/instance variables and dashboard time windows.</li>
+  <li>Set alert thresholds and hold periods from your workload, capacity and recovery expectations; configure your Alertmanager receiver.</li>
+  <li>Exercise a known workload and a controlled alert-path test, then preserve evidence showing which checks passed and which signals remain untested.</li>
+</ol>
+<p>Use <a href="#stack-examples-wpcli">wpcli</a> to inspect the specific node, log or metadata behind a symptom, and <a href="#stack-examples-e2e">the experiment workflow</a> to compare behavior before and after an improvement.</p>

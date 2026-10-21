@@ -6,6 +6,10 @@ Prometheus, and Grafana. Milvus is installed using the unmodified official
 deployment, a real Milvus workload, metrics collection, dashboards, and diagnostic
 evidence so developers and local agents can repeat the same feedback loop.
 
+The website's [Milvus–Woodpecker Stack Examples](https://zilliztech.github.io/woodpecker/docs.html#stack-examples)
+explains the goals and connects deployment, monitoring/alerts, wpcli operations and
+E2E experiments, including how to adapt these examples to your own instances.
+
 **Current scope:** deployment, dashboards, and the reference document's 31 Woodpecker
 alerts. Alertmanager defaults to a `local-only` receiver. An optional Mailpit
 profile tests real SMTP delivery locally, with firing and recovery emails addressed
