@@ -996,8 +996,9 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	updatedSegmentId := int64(4)
 	updatedEntryId := int64(10)
 
-	// Update reader temp info
-	err = provider.UpdateReaderTempInfo(context.Background(), readerSession, time.Now().UnixMilli(), updatedSegmentId, updatedEntryId)
+	// Use an explicit timestamp so the test does not depend on the clock advancing.
+	reportedAtMs := int64(initialReader.RecentReadTimestamp) + 1
+	err = provider.UpdateReaderTempInfo(context.Background(), readerSession, reportedAtMs, updatedSegmentId, updatedEntryId)
 	assert.NoError(t, err)
 
 	// Get the updated reader temp info
@@ -1008,7 +1009,7 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	// Verify updated fields
 	assert.Equal(t, updatedSegmentId, updatedReader.RecentReadSegmentId)
 	assert.Equal(t, updatedEntryId, updatedReader.RecentReadEntryId)
-	assert.Greater(t, updatedReader.RecentReadTimestamp, initialReader.RecentReadTimestamp)
+	assert.Equal(t, uint64(reportedAtMs), updatedReader.RecentReadTimestamp)
 
 	// Original initial positions should remain unchanged
 	assert.Equal(t, initialSegmentId, updatedReader.OpenSegmentId)
