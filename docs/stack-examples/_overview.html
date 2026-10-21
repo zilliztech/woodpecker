@@ -12,11 +12,12 @@
 <h2 id="included">What you can do today</h2>
 <div class="stack-cards">
   <a href="#stack-examples-helm"><strong>Deploy with Helm</strong><span>Install Milvus, three WP service replicas, persistent dependencies and monitoring. Follow the CLI or Jupyter walkthrough.</span></a>
-  <a href="#stack-examples-observability"><strong>Inspect monitoring and alerts</strong><span>Use the Milvus, WP client and WP server dashboards; verify scraping, rule evaluation and alert delivery to Alertmanager.</span></a>
+  <a href="#stack-examples-dashboards"><strong>Follow an E2E symptom</strong><span>Use four ordered dashboards for writes, WAL consumption, persistence and search/query; follow each step’s metrics and investigation guidance.</span></a>
   <a href="#stack-examples-wpcli"><strong>Operate with wpcli</strong><span>Discover reachable endpoints, select a WP service context and explicitly connect to a Milvus instance’s WP client metadata.</span></a>
   <a href="#stack-examples-e2e"><strong>Run a repeatable experiment</strong><span>Insert and read data, measure writes, inspect correlated metrics and logs, collect evidence and repeat after a change.</span></a>
 </div>
 <p>The runnable example lives in <a href="{{STACK_REPO}}/README.md"><code>deployments/milvus-full-stack-helm/</code></a>. It uses the official Milvus Helm chart, a small support chart and pinned monitoring components. <a href="{{STACK_REPO}}/values">Values files</a>, dashboard JSON, alert rules, workload scripts and the notebook are included in the repository.</p>
+<p>The <a href="#stack-examples-observability">monitoring and alerting guide</a> connects these E2E views with the Milvus/WP reference dashboards, scrape verification and Alertmanager.</p>
 
 <h2 id="workflow">One operational feedback loop</h2>
 <ol>

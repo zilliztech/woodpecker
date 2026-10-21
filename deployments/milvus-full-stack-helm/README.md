@@ -201,6 +201,10 @@ Keep this command running in a terminal:
 | Service | Local URL |
 | --- | --- |
 | Grafana | http://127.0.0.1:3000 — `admin` / `admin` |
+| E2E Write / Append | http://127.0.0.1:3000/d/milvus-e2e-write |
+| E2E WAL Read / Consume | http://127.0.0.1:3000/d/milvus-e2e-consume |
+| E2E Flush / Checkpoint | http://127.0.0.1:3000/d/milvus-e2e-flush |
+| E2E Search / Query | http://127.0.0.1:3000/d/milvus-e2e-query |
 | Milvus dashboard | http://127.0.0.1:3000/d/milvus-full-stack |
 | Woodpecker client dashboard | http://127.0.0.1:3000/d/woodpecker-client-k8s |
 | Woodpecker server dashboard | http://127.0.0.1:3000/d/woodpecker-server-k8s |
@@ -214,6 +218,11 @@ overrides for the verification commands, or set `GRAFANA_URL`, `PROMETHEUS_URL`,
 and `MILVUS_URL` explicitly. Grafana uses login authentication; anonymous admin
 access is disabled. Provisioned dashboards survive pod recreation; exploratory
 UI edits should be exported and reconciled with the JSON files.
+
+Start with the symptom-oriented [E2E dashboards](E2E-DASHBOARDS.md), whose numbered
+groups follow each processing step with investigation guidance. Use the three
+component reference dashboards for deeper inspection. All seven are provisioned
+by Helm; notebook and performance reports also link to them.
 
 ## Inspect connections and configure wpcli
 
@@ -319,7 +328,7 @@ The default acceptance loop needs no SMTP service or Mailpit:
 ./stack.sh acceptance
 ```
 
-It runs the offline rule tests, a Milvus workload, checks all three dashboards and
+It runs the offline rule tests, a Milvus workload, checks all seven dashboards and
 scrape targets, and exercises alert firing/resolution and inhibition. View the
 alerts in Prometheus and Alertmanager using the URLs above. Email testing is
 skipped by default.
@@ -380,8 +389,10 @@ for actual Milvus traffic.
 
 `verify` checks the default topology's five Milvus and three Woodpecker targets,
 positive workload/client/server metrics, Kubernetes metrics, server-side Grafana
-dashboard provisioning, and every visible PromQL target in all three dashboards.
-It writes `.local/verification.json` with per-query errors and data coverage.
+dashboard provisioning, and every visible PromQL target in all seven dashboards.
+It also checks required metric families in each E2E processing stage, so an UP
+panel cannot hide a missing WAL-stage metric. It writes `.local/verification.json`
+with per-query errors, stage coverage and optional missing families.
 Queries without samples are recorded separately from rejected queries: a short
 write/search workload does not exercise every error, compaction, import, sparse
 index, or other optional feature. The default topology checks must be adjusted if
@@ -400,10 +411,13 @@ even when observability verification fails.
   SHA256 and transformations are recorded in `dashboards-sources.json`.
 - **Woodpecker:** `tests/k8s/monitor/grafana/templates/dashboard_client_k8s.json`
   and `dashboard_server_k8s.json`.
-- All three JSON files are included in `charts/full-stack-support/dashboards/`;
+- **E2E:** four ordered dashboards authored in `scripts/e2e_dashboards.py`, with
+  reference versions and stage coverage in `e2e-dashboard-catalog.json`. See
+  [E2E-DASHBOARDS.md](E2E-DASHBOARDS.md) for metric semantics and interpretation.
+- All seven JSON files are included in `charts/full-stack-support/dashboards/`;
   installation does not require files outside this directory.
 - Dashboard ConfigMaps are imported by Grafana's dashboard sidecar, with a stable
-  `prometheus` datasource UID and links between the three dashboards.
+  `prometheus` datasource UID and links between the seven dashboards.
 - Application scrape labels include `cluster=local`, `namespace`,
   `app_kubernetes_io_name=milvus`, `app_kubernetes_io_instance=milvus`, `component`,
   `pod`, and `woodpecker_id=milvus`. Kube-state-metrics and kubelet/cAdvisor also
@@ -425,6 +439,10 @@ To refresh from the original sources, from the repository root:
 python3 deployments/milvus-full-stack-helm/scripts/sync-dashboards.py \
   --milvus-source ../milvus_grafana_dashboard.json
 ```
+
+To regenerate only the E2E dashboards and shared navigation (no external source
+export needed), run `python3 scripts/e2e_dashboards.py` from this example's directory.
+Use `python3 tests/dashboards.test.py` to check scoping, units and coverage behavior.
 
 Review changes, redeploy, and rerun the workload/verification. Dashboard sections
 named “Alerts” in the WP templates are charts of threshold-related metrics.

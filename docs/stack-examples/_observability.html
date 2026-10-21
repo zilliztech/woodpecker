@@ -1,7 +1,10 @@
 <h1>Monitoring &amp; Alerts</h1>
 <p class="page-desc">Follow the same workload from Milvus through the WP client and servers, then check that the operational signals reach your dashboards and Alertmanager.</p>
 
-<h2 id="dashboards">Open the three dashboards</h2>
+<h2 id="chains">Start with an E2E operational dashboard</h2>
+<p>For a specific symptom, use the <a href="#stack-examples-dashboards">E2E dashboards</a>: Write / Append, WAL Read / Consume, Flush / Checkpoint, or Search / Query. They group the metrics by processing step and include investigation guidance. Use the three component reference dashboards below for deeper inspection.</p>
+
+<h2 id="dashboards">Open the three reference dashboards</h2>
 <p>Keep <code>./stack.sh forward --wpcli</code> running. These are the default local addresses; use <code>./stack.sh connections</code> for discovered addresses when ports differ.</p>
 <table>
   <thead><tr><th>View</th><th>Local address</th><th>What to examine</th></tr></thead>

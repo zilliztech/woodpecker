@@ -566,6 +566,7 @@
 <a class="sidebar-link" data-page="stack-examples" href="#stack-examples" onclick="showPage('stack-examples',this)">Overview &amp; goals</a>
 <a class="sidebar-link" data-page="stack-examples-helm" href="#stack-examples-helm" onclick="showPage('stack-examples-helm',this)">Helm walkthrough</a>
 <a class="sidebar-link" data-page="stack-examples-observability" href="#stack-examples-observability" onclick="showPage('stack-examples-observability',this)">Monitoring &amp; alerts</a>
+<a class="sidebar-link" data-page="stack-examples-dashboards" href="#stack-examples-dashboards" onclick="showPage('stack-examples-dashboards',this)">E2E dashboards</a>
 <a class="sidebar-link" data-page="stack-examples-wpcli" href="#stack-examples-wpcli" onclick="showPage('stack-examples-wpcli',this)">wpcli operations</a>
 <a class="sidebar-link" data-page="stack-examples-e2e" href="#stack-examples-e2e" onclick="showPage('stack-examples-e2e',this)">E2E testing &amp; optimization</a>
 </div>
@@ -6560,11 +6561,12 @@ wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 51 --max-entries 100 \
 <h2 id="stack-examples-included">What you can do today</h2>
 <div class="stack-cards">
   <a href="#stack-examples-helm"><strong>Deploy with Helm</strong><span>Install Milvus, three WP service replicas, persistent dependencies and monitoring. Follow the CLI or Jupyter walkthrough.</span></a>
-  <a href="#stack-examples-observability"><strong>Inspect monitoring and alerts</strong><span>Use the Milvus, WP client and WP server dashboards; verify scraping, rule evaluation and alert delivery to Alertmanager.</span></a>
+  <a href="#stack-examples-dashboards"><strong>Follow an E2E symptom</strong><span>Use four ordered dashboards for writes, WAL consumption, persistence and search/query; follow each step’s metrics and investigation guidance.</span></a>
   <a href="#stack-examples-wpcli"><strong>Operate with wpcli</strong><span>Discover reachable endpoints, select a WP service context and explicitly connect to a Milvus instance’s WP client metadata.</span></a>
   <a href="#stack-examples-e2e"><strong>Run a repeatable experiment</strong><span>Insert and read data, measure writes, inspect correlated metrics and logs, collect evidence and repeat after a change.</span></a>
 </div>
 <p>The runnable example lives in <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/README.md"><code>deployments/milvus-full-stack-helm/</code></a>. It uses the official Milvus Helm chart, a small support chart and pinned monitoring components. <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/values">Values files</a>, dashboard JSON, alert rules, workload scripts and the notebook are included in the repository.</p>
+<p>The <a href="#stack-examples-observability">monitoring and alerting guide</a> connects these E2E views with the Milvus/WP reference dashboards, scrape verification and Alertmanager.</p>
 
 <h2 id="stack-examples-workflow">One operational feedback loop</h2>
 <ol>
@@ -6641,9 +6643,12 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre></div
 <div class="doc-page stack-examples-page" id="page-stack-examples-observability">
 <h1>Monitoring &amp; Alerts</h1>
 <p class="page-desc">Follow the same workload from Milvus through the WP client and servers, then check that the operational signals reach your dashboards and Alertmanager.</p>
-<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-observability/dashboards">Open the three dashboards</a><a href="#stack-examples-observability/coverage">Check the monitoring chain</a><a href="#stack-examples-observability/alerts">Inspect and test alerting</a><a href="#stack-examples-observability/adopt">Adopt the signals in an existing deployment</a></nav>
+<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-observability/chains">Start with an E2E operational dashboard</a><a href="#stack-examples-observability/dashboards">Open the three reference dashboards</a><a href="#stack-examples-observability/coverage">Check the monitoring chain</a><a href="#stack-examples-observability/alerts">Inspect and test alerting</a><a href="#stack-examples-observability/adopt">Adopt the signals in an existing deployment</a></nav>
 
-<h2 id="stack-examples-observability-dashboards">Open the three dashboards</h2>
+<h2 id="stack-examples-observability-chains">Start with an E2E operational dashboard</h2>
+<p>For a specific symptom, use the <a href="#stack-examples-dashboards">E2E dashboards</a>: Write / Append, WAL Read / Consume, Flush / Checkpoint, or Search / Query. They group the metrics by processing step and include investigation guidance. Use the three component reference dashboards below for deeper inspection.</p>
+
+<h2 id="stack-examples-observability-dashboards">Open the three reference dashboards</h2>
 <p>Keep <code>./stack.sh forward --wpcli</code> running. These are the default local addresses; use <code>./stack.sh connections</code> for discovered addresses when ports differ.</p>
 <div class="stack-table"><table class="doc-table">
   <thead><tr><th>View</th><th>Local address</th><th>What to examine</th></tr></thead>
@@ -6681,7 +6686,45 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre></div
 </ol>
 <p>Use <a href="#stack-examples-wpcli">wpcli</a> to inspect the specific node, log or metadata behind a symptom, and <a href="#stack-examples-e2e">the experiment workflow</a> to compare behavior before and after an improvement.</p>
 
-<div class="doc-pagination"><a href="#stack-examples-helm"><div class="pg-label">Previous</div><div class="pg-title">Helm walkthrough</div></a><a href="#stack-examples-wpcli"><div class="pg-label">Next</div><div class="pg-title">wpcli operations</div></a></div>
+<div class="doc-pagination"><a href="#stack-examples-helm"><div class="pg-label">Previous</div><div class="pg-title">Helm walkthrough</div></a><a href="#stack-examples-dashboards"><div class="pg-label">Next</div><div class="pg-title">E2E dashboards</div></a></div>
+</div>
+<div class="doc-page stack-examples-page" id="page-stack-examples-dashboards">
+<h1>E2E Operational Dashboards</h1>
+<p class="page-desc">Choose the symptom, then follow numbered processing steps from top to bottom. Each step explains what to inspect and where to continue.</p>
+<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-dashboards/choose">Choose a chain</a><a href="#stack-examples-dashboards/write">Follow a slow write</a><a href="#stack-examples-dashboards/consume">Follow delayed consumption</a><a href="#stack-examples-dashboards/persist-query">Separate persistence and query symptoms</a><a href="#stack-examples-dashboards/validate">Validate coverage and compare a run</a></nav>
+
+<h2 id="stack-examples-dashboards-choose">Choose a chain</h2>
+<p>The Helm stack provisions four focused E2E dashboards alongside the three Milvus/WP reference dashboards. Keep the stack’s forwards running; Grafana defaults to <code>http://127.0.0.1:3000</code>. Use <code>./stack.sh connections</code> for actual ports.</p>
+<div class="stack-table"><table class="doc-table"><thead><tr><th>Symptom</th><th>Dashboard / Grafana path</th><th>Ordered steps</th></tr></thead><tbody>
+<tr><td>Slow or failed writes</td><td>Write / Append<br><code>/d/milvus-e2e-write</code></td><td>Proxy → Streaming Client → SN WAL → WP Client → WP services/disk → admission pressure</td></tr>
+<tr><td>Consumption lag or delayed visibility</td><td>WAL Read / Consume<br><code>/d/milvus-e2e-consume</code></td><td>Read source/mode → historical WP reader → SN scanner → subscription → processing/visibility</td></tr>
+<tr><td>Persistence/checkpoints lag</td><td>Flush / Checkpoint<br><code>/d/milvus-e2e-flush</code></td><td>Growing data → sync scheduling → persistence → progress; separate WP background maintenance</td></tr>
+<tr><td>Slow search/query requests</td><td>Search / Query<br><code>/d/milvus-e2e-query</code></td><td>Proxy → Delegator/TSafe → scheduling → segment execution → result return</td></tr>
+</tbody></table></div>
+<p>Every group includes visible investigation guidance, followed by throughput/status, latency or progress metrics for that step. P50/P95/P99 curves preserve actual Pod/component or node/log identities. The <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/E2E-DASHBOARDS.md">full guide</a> describes each group, its metric scope, operational limits and maintenance.</p>
+
+<h2 id="stack-examples-dashboards-write">Follow a slow write</h2>
+<p>Begin with Proxy completion status, mutation latency, DML queue and timestamp/primary-key preparation. Continue to producer availability and produce latency, then compare full SN WAL append with backend append and individual interceptor timers.</p>
+<p>At the WP stages, compare pending appends, writer/replica outcomes and individual server append, buffer-wait and local-flush latency. The final group shows disk admission, usage, scheduler waiting and confirmation progress. Use <a href="#stack-examples-wpcli">wpcli</a> and the component reference dashboards to investigate the identified node/log.</p>
+
+<h2 id="stack-examples-dashboards-consume">Follow delayed consumption</h2>
+<p>First distinguish real-time memory tailing from historical WAL catchup. A tailing scanner can read the SN write-ahead buffer without WP read RPCs, so zero backend read traffic alone is expected. Historical reads can use WP services or compacted segments in object storage.</p>
+<p>Continue through reader outcomes, scanned/passed messages, ordering/transaction buffers, subscription availability and downstream processing. In the supplied Milvus build, querynode-named consumption metrics can be emitted by the SN delegator, and local subscribers bypass the remote handler. Legends retain the actual emitting process.</p>
+<p>Normal tail EOF is displayed as an outcome. A blocking <code>read_next</code> can wait for new data, so its duration is not pure storage latency. The WP v0.1.46 example does not export per-reader read-frontier metrics; use wpcli for positions instead of assuming an exact backlog count.</p>
+
+<h2 id="stack-examples-dashboards-persist-query">Separate persistence and query symptoms</h2>
+<p>Use Flush / Checkpoint when consuming works but growing buffers or persistent progress lag. It separates dispatcher waiting, upload/callback execution and progress boundaries. A flusher’s “seen” TimeTick is not a durable checkpoint; idle snapshot/checkpoint age is not automatically a fault. WP compaction/offload is shown as a parallel background path.</p>
+<p>Use Search / Query for request latency. TSafe waiting points back to consumption/visibility; scheduler waiting, segcore/segment execution, loading and result reduction describe other stages. Proxy result wait includes downstream work and transport, rather than only network latency.</p>
+
+<h2 id="stack-examples-dashboards-validate">Validate coverage and compare a run</h2>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh smoke
+# Allow two 15-second scrapes.
+./stack.sh verify
+./stack.sh perf</code></pre></div></div>
+<p>Verification checks seven provisioned dashboards, their queries and the required metric families in each E2E stage. The report lists optional idle/version-specific coverage gaps separately; an UP panel cannot hide a missing WAL-stage metric. Performance reports and the Jupyter guide include E2E links for the run’s time window.</p>
+<p>Channel and WP log filters are separate identities, resolved with metadata before isolating a log. No data is not a healthy zero, histogram overflow limits quantile resolution, and overlapping timers cannot be added or subtracted. These dashboards correlate operational evidence; live read verification and controlled fault/recovery tests establish different aspects of correctness.</p>
+
+<div class="doc-pagination"><a href="#stack-examples-observability"><div class="pg-label">Previous</div><div class="pg-title">Monitoring &amp; alerts</div></a><a href="#stack-examples-wpcli"><div class="pg-label">Next</div><div class="pg-title">wpcli operations</div></a></div>
 </div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-wpcli">
 <h1>wpcli Operations in the Stack</h1>
@@ -6735,7 +6778,7 @@ meta log list</code></pre></div></div>
 <p>Start from the symptom and the test’s time window. Use <a href="#operations-cli-ops">in-flight operations</a> and <a href="#operations-cli-logstore">writer runtime</a> for slow writes, <a href="#operations-cli-log">log progress</a> and <a href="#operations-cli-segment">segment diagnosis</a> for stalled progress, and <a href="#operations-cli-meta">metadata inspection</a> when coordinator state needs examination.</p>
 <p>The <a href="#operations-scenarios-write">write-stall</a>, <a href="#operations-scenarios-read">read-stall</a> and <a href="#operations-scenarios-corruption">data-corruption</a> guides explain the evidence and verification needed for each investigation. Begin with their read-only inspection steps and choose any repair from the observed cause and consequences.</p>
 
-<div class="doc-pagination"><a href="#stack-examples-observability"><div class="pg-label">Previous</div><div class="pg-title">Monitoring &amp; alerts</div></a><a href="#stack-examples-e2e"><div class="pg-label">Next</div><div class="pg-title">E2E testing &amp; optimization</div></a></div>
+<div class="doc-pagination"><a href="#stack-examples-dashboards"><div class="pg-label">Previous</div><div class="pg-title">E2E dashboards</div></a><a href="#stack-examples-e2e"><div class="pg-label">Next</div><div class="pg-title">E2E testing &amp; optimization</div></a></div>
 </div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-e2e">
 <h1>E2E Testing &amp; Optimization</h1>

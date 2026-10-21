@@ -43,6 +43,7 @@ def expand(expression, defaults):
                  "pod": "milvus-(datanode|mixcoord|proxy|querynode|streamingnode).*",
                  "woodpecker_id": "milvus", "log_ns": ".*", "log_id": ".*",
                  "node_id": ".*", "__rate_interval": "1m", "__interval": "1m",
+                 "channel": ".*",
                  "__interval_ms": "15000", "__from": str((now - 1800) * 1000),
                  "__to": str(now * 1000), "__fromTime": str(now - 1800),
                  "__toTime": str(now), "show_p99": "or", "show_avg": "or",
@@ -63,6 +64,28 @@ def check_target(target):
     return {"panel": title, "expression": expression,
             "status": result.get("status"), "series": len(data), "finite_series": finite,
             **({"error": result.get("error")} if result.get("status") != "success" else {})}
+
+
+def stage_coverage(stages):
+    """Check each chain step independently; UP panels alone cannot prove coverage."""
+    report, failures = [], []
+    for stage in stages:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(check_target, [(p["metric"], p["expression"], {}) for p in stage["probes"]]))
+        for probe, result in zip(stage["probes"], results):
+            result["required"] = probe["required"]
+        missing = [r["panel"] for r in results if not r["finite_series"]]
+        required_missing = [r["panel"] for r in results if r["required"] and not r["finite_series"]]
+        if required_missing:
+            failures.append(stage["title"] + ": missing required metric families: " + ", ".join(required_missing))
+        errors = [r["panel"] for r in results if r["status"] != "success"]
+        if errors:
+            failures.append(stage["title"] + ": rejected coverage queries: " + ", ".join(errors))
+        report.append({"key": stage["key"], "title": stage["title"], "probes": results,
+                       "missing_metrics": missing, "required_missing": required_missing,
+                       "status": "missing-required" if required_missing else "partial" if missing else "observed",
+                       "interpretation": "Presence of a metric family is not proof of active traffic or application correctness; optional missing families may be lazy, idle, local/remote-specific or version-specific."})
+    return report, failures
 
 
 def main():
@@ -97,6 +120,7 @@ def main():
         if result.get("status") != "success" or not values or not any(float(v["value"][1]) > 0 for v in values):
             failures.append(f"Missing/non-positive core metric: {name}")
     report["dashboards"] = {}
+    catalog = json.loads((ROOT / "e2e-dashboard-catalog.json").read_text())["dashboards"]
     # The default local credentials are also used to verify server-side provisioning.
     import base64
     token = base64.b64encode((os.getenv("GRAFANA_USER", "admin") + ":" +
@@ -130,6 +154,10 @@ def main():
             failures.append(f"{dashboard['uid']}: {len(errors)} rejected queries")
         if populated == 0:
             failures.append(f"{dashboard['uid']}: no queries have finite samples")
+        if dashboard["uid"] in catalog:
+            coverage, missing = stage_coverage(catalog[dashboard["uid"]]["stages"])
+            report["dashboards"][dashboard["uid"]]["stage_coverage"] = coverage
+            failures.extend(dashboard["uid"] + ": " + failure for failure in missing)
         print(f"{dashboard['title']}: {populated}/{len(results)} queries have data, {len(errors)} query errors")
     report["failures"] = failures
     if args.output:
@@ -138,7 +166,7 @@ def main():
         print(f"Detailed query coverage: {args.output}")
     if failures:
         raise SystemExit("Verification failed:\n" + "\n".join(failures))
-    print("PASS: scrape targets, workload metrics, and all three dashboards verified")
+    print(f"PASS: scrape targets, workload metrics, {len(report['dashboards'])} dashboards and required E2E stage metrics verified")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 import re
 
+from e2e_dashboards import generate as generate_e2e
+
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
 DEST = ROOT / "charts/full-stack-support/dashboards"
@@ -158,6 +160,7 @@ def main():
                     "Replace the production Loki events panel with local evidence collection guidance"]
     }
     (ROOT / "dashboards-sources.json").write_text(json.dumps(provenance, indent=2) + "\n")
+    generate_e2e()
     print(f"Updated {len(dashboards)} dashboards in {DEST}")
 
 

@@ -404,7 +404,8 @@ class Benchmark:
             self.report["dashboards"] = {uid: grafana + "/d/" + uid + "?" + urllib.parse.urlencode({
                 "from": int((started - 60) * 1000), "to": int(time.time() * 1000), "var-namespace": self.args.namespace,
                 "var-collection": self.collection, "var-woodpecker_id": "milvus"})
-                for uid in ("milvus-full-stack", "woodpecker-client-k8s", "woodpecker-server-k8s")}
+                for uid in ("milvus-e2e-write", "milvus-e2e-consume", "milvus-e2e-flush", "milvus-e2e-query",
+                            "milvus-full-stack", "woodpecker-client-k8s", "woodpecker-server-k8s")}
             self.triage()
             save(self.out / "report.json", self.report)
             self.trace.close()

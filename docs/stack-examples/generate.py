@@ -11,6 +11,7 @@ PAGES = (
     ("stack-examples", "Overview & goals", "_overview.html"),
     ("stack-examples-helm", "Helm walkthrough", "_helm.html"),
     ("stack-examples-observability", "Monitoring & alerts", "_observability.html"),
+    ("stack-examples-dashboards", "E2E dashboards", "_dashboards.html"),
     ("stack-examples-wpcli", "wpcli operations", "_wpcli.html"),
     ("stack-examples-e2e", "E2E testing & optimization", "_e2e.html"),
 )
@@ -70,7 +71,7 @@ def build():
     page = region(page, "CONTENT", "\n".join(fragment(i) for i in range(len(PAGES))),
                   '        <!-- ═══════ OVERVIEW ═══════ -->')
     DOCS.write_text(page)
-    print("Embedded five Milvus–Woodpecker Stack Examples pages in " + str(DOCS))
+    print(f"Embedded {len(PAGES)} Milvus–Woodpecker Stack Examples pages in {DOCS}")
 
 
 if __name__ == "__main__":

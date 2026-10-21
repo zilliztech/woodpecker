@@ -4730,24 +4730,59 @@
   "id": null,
   "links": [
     {
-      "title": "Milvus",
+      "title": "Write / Append",
+      "type": "link",
+      "url": "/d/milvus-e2e-write",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "WAL Read / Consume",
+      "type": "link",
+      "url": "/d/milvus-e2e-consume",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Flush / Checkpoint",
+      "type": "link",
+      "url": "/d/milvus-e2e-flush",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Search / Query",
+      "type": "link",
+      "url": "/d/milvus-e2e-query",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Milvus reference",
       "type": "link",
       "url": "/d/milvus-full-stack",
       "keepTime": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
-      "title": "Woodpecker client",
+      "title": "WP client reference",
       "type": "link",
       "url": "/d/woodpecker-client-k8s",
       "keepTime": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
-      "title": "Woodpecker server",
+      "title": "WP server reference",
       "type": "link",
       "url": "/d/woodpecker-server-k8s",
       "keepTime": true,
+      "includeVars": false,
       "targetBlank": false
     }
   ]

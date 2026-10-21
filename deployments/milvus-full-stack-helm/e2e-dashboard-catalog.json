@@ -1,0 +1,413 @@
+{
+  "schema_version": 1,
+  "milvus_reference_commit": "27bd28d20688ab00cdd74232a20e988fb2162aed",
+  "woodpecker_reference_image": "milvusdb/woodpecker:v0.1.46",
+  "dashboards": {
+    "milvus-e2e-write": {
+      "title": "E2E Write / Append",
+      "flow": "Proxy → Streaming Client → SN WAL → WP Client → WP services / disk",
+      "stages": [
+        {
+          "key": "proxy",
+          "title": "1. Proxy — admission, preparation and request completion",
+          "guidance": "Start here for slow/failed inserts. Compare successful mutation latency with completed request status and queue depth. If the queue grows while downstream latency stays stable, inspect Proxy resources and admission. If produce latency rises too, continue to stage 2. REST/network/client time is outside this successful-mutation timer.",
+          "probes": [
+            {
+              "metric": "milvus_proxy_mutation_latency_count",
+              "expression": "milvus_proxy_mutation_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\",msg_type=~\"insert|upsert|delete\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_proxy_req_count",
+              "expression": "milvus_proxy_req_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\",function_name=~\"Insert|Upsert|Delete\"}",
+              "required": true
+            }
+          ]
+        },
+        {
+          "key": "streaming-client",
+          "title": "2. Proxy Streaming Client — route and send to StreamingNode",
+          "guidance": "Compare produce latency/status by channel. Unavailable producers suggest routing, ownership or reconnect problems. When producers are available but produce latency grows, inspect SN in-flight work and WAL append in stage 3.",
+          "probes": [
+            {
+              "metric": "milvus_streaming_produce_total",
+              "expression": "milvus_streaming_produce_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_streaming_resuming_producer_total",
+              "expression": "milvus_streaming_resuming_producer_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\",channel_name=~\"${channel:regex}\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "wal",
+          "title": "3. StreamingNode WAL — interceptors and backend append",
+          "guidance": "Compare full WAL append, backend append and each interceptor. Overlapping timer scopes are not an additive latency breakdown. Inspect retries and per-channel confirmation progress. Backend latency rising points to stage 4; growing interceptor time points to the named interceptor.",
+          "probes": [
+            {
+              "metric": "milvus_wal_append_message_duration_seconds_count",
+              "expression": "milvus_wal_append_message_duration_seconds_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_wal_impls_append_message_duration_seconds_count",
+              "expression": "milvus_wal_impls_append_message_duration_seconds_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            }
+          ]
+        },
+        {
+          "key": "wp-client",
+          "title": "4. WP Client inside Milvus — pending appends and replica results",
+          "guidance": "The WP client runs inside SN; it is not a separate Pod. Compare pending appends and writer outcomes with per-log append latency. Replica counters are attempts, not acknowledged Milvus rows. For failing/slow replicas continue to stage 5; use wp meta log list and wp node list to resolve identities.",
+          "probes": [
+            {
+              "metric": "woodpecker_client_append_requests_total",
+              "expression": "woodpecker_client_append_requests_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "woodpecker_client_segment_handle_pending_append_ops",
+              "expression": "woodpecker_client_segment_handle_pending_append_ops{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
+              "required": true
+            }
+          ]
+        },
+        {
+          "key": "wp-server",
+          "title": "5. WP services — append, buffer wait and local disk flush",
+          "guidance": "Compare individual nodes rather than only a cluster-wide quantile. High buffer wait plus flush time suggests local disk/sync pressure. Check scheduler queues and node resources before changing concurrency. wp ops, wp node log-health and component logs provide the next evidence.",
+          "probes": [
+            {
+              "metric": "woodpecker_server_logstore_operations_total",
+              "expression": "woodpecker_server_logstore_operations_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\",operation=~\"add_entry|add_entry_batch\"}",
+              "required": true
+            },
+            {
+              "metric": "woodpecker_server_file_flush_latency_count",
+              "expression": "woodpecker_server_file_flush_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "pressure",
+          "title": "6. Admission and resource pressure — explain sustained slowdown",
+          "guidance": "Disk admission state is 0=normal, 1=warn, 2=blocked. Compare actual disk use with exported watermarks in the WP reference dashboard. Check the Flush/Checkpoint dashboard for Milvus buffer pressure; WP object-store compaction is a separate background path, not every append's synchronous storage step.",
+          "probes": [
+            {
+              "metric": "woodpecker_server_logstore_write_backpressure_state",
+              "expression": "woodpecker_server_logstore_write_backpressure_state{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_wal_last_confirmed_time_tick",
+              "expression": "milvus_wal_last_confirmed_time_tick{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": false
+            }
+          ]
+        }
+      ]
+    },
+    "milvus-e2e-consume": {
+      "title": "E2E WAL Read / Consume",
+      "flow": "Memory or historical WAL → SN Scanner → subscription → processing / visibility",
+      "stages": [
+        {
+          "key": "source",
+          "title": "1. Establish the read mode — memory tailing or WAL catchup",
+          "guidance": "A tailing scanner can read the SN write-ahead memory buffer without WP RPCs. A cold/catchup reader may read an active segment from WP services or a compacted segment directly from object storage. Zero WP read traffic alone is not a fault. EOF/end_of_file is normal at the tail. Compare scanner modes and WP read sources before interpreting an idle backend. For a true durability test, use a separate controlled restart/recovery scenario.",
+          "probes": [
+            {
+              "metric": "milvus_wal_scanner_total",
+              "expression": "milvus_wal_scanner_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "woodpecker_client_quorum_read_bytes_total",
+              "expression": "woodpecker_client_quorum_read_bytes_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
+              "required": false
+            },
+            {
+              "metric": "woodpecker_client_direct_read_requests_total",
+              "expression": "woodpecker_client_direct_read_requests_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "reader",
+          "title": "2. Historical WAL read — WP Reader, services or object storage",
+          "guidance": "Follow this group when catchup reads are active. Compare read_next success/error and backend read latency. A blocking read_next includes waiting for new data; a large duration alone does not prove a slow disk. EOF/end_of_file at the tail is an expected outcome. Per-reader read-frontier metrics are not exported by the example's WP v0.1.46; inspect wp log readers when needed.",
+          "probes": [
+            {
+              "metric": "woodpecker_client_reader_operation_latency_count",
+              "expression": "woodpecker_client_reader_operation_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\",operation=\"read_next\"}",
+              "required": false
+            },
+            {
+              "metric": "woodpecker_server_read_batch_latency_count",
+              "expression": "woodpecker_server_read_batch_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
+              "required": false
+            },
+            {
+              "metric": "woodpecker_client_direct_read_latency_count",
+              "expression": "woodpecker_client_direct_read_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "scanner",
+          "title": "3. SN Scanner — scan, filter, ordering and transaction buffers",
+          "guidance": "Compare scanned and passed messages by message type and mode. Filtering TimeTicks/control messages is expected, so those rates are not a loss ratio. Growing pending/transaction buffers or a paused scanner warrant inspection of downstream processing and transaction completion. Continue to stages 4–5.",
+          "probes": [
+            {
+              "metric": "milvus_wal_scan_message_total",
+              "expression": "milvus_wal_scan_message_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_wal_scanner_pending_queue_bytes",
+              "expression": "milvus_wal_scanner_pending_queue_bytes{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            }
+          ]
+        },
+        {
+          "key": "subscription",
+          "title": "4. Subscription and dispatch — local and remote access",
+          "guidance": "Consumer client metrics belong to the process that subscribes, which can be SN itself. A local consumer bypasses the remote gRPC handler. Missing remote-only server series is expected for a local subscription; unavailable consumers indicate a reconnect/routing problem.",
+          "probes": [
+            {
+              "metric": "milvus_streaming_consumer_total",
+              "expression": "milvus_streaming_consumer_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_streaming_consume_bytes_count",
+              "expression": "milvus_streaming_consume_bytes_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_streamingnode_consume_inflight_total",
+              "expression": "milvus_streamingnode_consume_inflight_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "visibility",
+          "title": "5. Consumer processing and visibility — include the SN delegator",
+          "guidance": "The querynode-named metrics can be emitted by StreamingNode's co-located delegator; legends preserve the actual component/Pod. Compare consumption lag, pending processing and insert/delete latency. Rising TSafe wait links this dashboard to Search/Query. Use a Strong-consistency workload to verify application visibility; these metrics do not measure per-row insert-to-visible latency.",
+          "probes": [
+            {
+              "metric": "milvus_querynode_consume_tt_lag_ms",
+              "expression": "milvus_querynode_consume_tt_lag_ms{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_querynode_process_insert_or_delete_latency_count",
+              "expression": "milvus_querynode_process_insert_or_delete_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}",
+              "required": false
+            }
+          ]
+        }
+      ]
+    },
+    "milvus-e2e-flush": {
+      "title": "E2E Flush / Checkpoint",
+      "flow": "Growing data → flush scheduling → persistence → checkpoint; separate WP offload path",
+      "stages": [
+        {
+          "key": "buffer",
+          "title": "1. Growing data — buffering and flush pressure",
+          "guidance": "Start here when writes/consumption succeed but persistence lags. Growing bytes are a gauge, even when a metric ends in _total. Compare pressure with configured watermarks before attributing admission slowdown to WP disk.",
+          "probes": [
+            {
+              "metric": "milvus_wal_growing_segment_flush_pressure_bytes",
+              "expression": "milvus_wal_growing_segment_flush_pressure_bytes{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}",
+              "required": false
+            },
+            {
+              "metric": "milvus_wal_growing_segment_bytes",
+              "expression": "milvus_wal_growing_segment_bytes{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "schedule",
+          "title": "2. Flusher — state and queued sync work",
+          "guidance": "Check state before queue latency: an in_recovery flusher may be replaying. Pending tasks include queued AND in-flight work, not just queue length. Dispatcher metrics are version-specific; missing series on another image require a coverage check, not a zero substitution.",
+          "probes": [
+            {
+              "metric": "milvus_wal_flusher_info",
+              "expression": "milvus_wal_flusher_info{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_wal_flusher_sync_dispatcher_pending_tasks",
+              "expression": "milvus_wal_flusher_sync_dispatcher_pending_tasks{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "persist",
+          "title": "3. Milvus persistence — execute, upload and complete flush",
+          "guidance": "Compare sync execution, save latency and storage operations. Datanode-named flush metrics may be emitted by SN; keep component labels. Storage operations are per Milvus process; they are not identical to WP's background object-store compaction.",
+          "probes": [
+            {
+              "metric": "milvus_storage_op_count",
+              "expression": "milvus_storage_op_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_datanode_save_latency_count",
+              "expression": "milvus_datanode_save_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|datanode\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "checkpoint",
+          "title": "4. Checkpoint and recovery — compare the right progress markers",
+          "guidance": "Flusher 'seen' TimeTick is not a durable checkpoint. Compare confirmation/consumption progress with the persisted recovery snapshot and DataCoord checkpoint. Snapshot/checkpoint age can grow while idle: investigate alongside fresh writes, flush activity and advance over time; no automatic red/green threshold is applied. DataCoord checkpoint labels may name virtual channels; that panel intentionally shows all channels in the selected deployment.",
+          "probes": [
+            {
+              "metric": "milvus_wal_flusher_time_tick",
+              "expression": "milvus_wal_flusher_time_tick{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_wal_recovery_persisted_time_tick",
+              "expression": "milvus_wal_recovery_persisted_time_tick{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}",
+              "required": false
+            },
+            {
+              "metric": "milvus_datacoord_channel_checkpoint_unix_seconds",
+              "expression": "milvus_datacoord_channel_checkpoint_unix_seconds{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "wp-background",
+          "title": "5. Separate WP background path — offload and local disk pressure",
+          "guidance": "This is a parallel WP maintenance path, not the next serial Milvus flush step. Slow compaction/offload can retain local WAL files and eventually create disk admission pressure. Compare object-store operation status, compaction latency and local disk use; expected stat_object not_found is shown as a status, not automatically counted as an error.",
+          "probes": [
+            {
+              "metric": "woodpecker_server_logstore_disk_usage_ratio",
+              "expression": "woodpecker_server_logstore_disk_usage_ratio{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\"}",
+              "required": true
+            },
+            {
+              "metric": "woodpecker_server_file_compaction_latency_count",
+              "expression": "woodpecker_server_file_compaction_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
+              "required": false
+            }
+          ]
+        }
+      ]
+    },
+    "milvus-e2e-query": {
+      "title": "E2E Search / Query",
+      "flow": "Proxy → Delegator / TSafe → scheduling → segment execution → result return",
+      "stages": [
+        {
+          "key": "proxy-query",
+          "title": "1. Proxy — Search/Query request completion",
+          "guidance": "Start from request status, observation count and successful latency. Strong consistency can wait for ingestion visibility; use stage 2 and the WAL Read/Consume dashboard when TSafe dominates. These server timers do not include the SDK/network round trip.",
+          "probes": [
+            {
+              "metric": "milvus_proxy_sq_latency_count",
+              "expression": "milvus_proxy_sq_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_proxy_req_count",
+              "expression": "milvus_proxy_req_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\",function_name=~\"Search|Query|HybridSearch\"}",
+              "required": true
+            }
+          ]
+        },
+        {
+          "key": "tsafe",
+          "title": "2. Delegator — wait for visibility and route work",
+          "guidance": "TSafe wait means the required consistency timestamp is not yet serviceable; compare consumption lag instead of immediately blaming vector execution. Querynode-prefixed metrics can originate on SN. The actual Pod/component remains in each legend.",
+          "probes": [
+            {
+              "metric": "milvus_querynode_sq_wait_tsafe_latency_count",
+              "expression": "milvus_querynode_sq_wait_tsafe_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_querynode_sq_req_latency_count",
+              "expression": "milvus_querynode_sq_req_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}",
+              "required": true
+            }
+          ]
+        },
+        {
+          "key": "query-queue",
+          "title": "3. Execution scheduling — queue versus available concurrency",
+          "guidance": "Rising queue delay with a growing ready queue suggests scheduling/resource pressure. Compare execution time in stage 4. Scheduler families depend on the Milvus image and which node executes the work; missing series are reported as coverage gaps.",
+          "probes": [
+            {
+              "metric": "milvus_querynode_sq_queue_latency_count",
+              "expression": "milvus_querynode_sq_queue_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}",
+              "required": false
+            },
+            {
+              "metric": "milvus_querynode_read_task_ready_len",
+              "expression": "milvus_querynode_read_task_ready_len{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "query-execution",
+          "title": "4. Segment execution — core work and loading",
+          "guidance": "Compare core/segment execution and segment loading. Growing and sealed work can run in different processes; preserve component and segment-state labels. Loading a segment is a different timer population from an individual search, so do not add their quantiles.",
+          "probes": [
+            {
+              "metric": "milvus_querynode_sq_core_latency_count",
+              "expression": "milvus_querynode_sq_core_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}",
+              "required": false
+            },
+            {
+              "metric": "milvus_querynode_sq_segment_latency_count",
+              "expression": "milvus_querynode_sq_segment_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}",
+              "required": false
+            }
+          ]
+        },
+        {
+          "key": "query-return",
+          "title": "5. Result return — downstream reduction and Proxy merge/decode",
+          "guidance": "If execution is stable but result waiting grows, inspect fan-out, routing and the slowest responding node. Proxy wait includes downstream work and transport; it is not a pure network latency. Large reductions/decode can reflect result size or fan-out.",
+          "probes": [
+            {
+              "metric": "milvus_proxy_sq_wait_result_latency_count",
+              "expression": "milvus_proxy_sq_wait_result_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\"}",
+              "required": true
+            },
+            {
+              "metric": "milvus_proxy_sq_reduce_result_latency_count",
+              "expression": "milvus_proxy_sq_reduce_result_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\"}",
+              "required": false
+            },
+            {
+              "metric": "milvus_proxy_sq_decode_result_latency_count",
+              "expression": "milvus_proxy_sq_decode_result_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\"}",
+              "required": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

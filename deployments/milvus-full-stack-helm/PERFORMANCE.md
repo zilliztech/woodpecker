@@ -118,7 +118,10 @@ Each run has a unique directory under `.local/perf/<UTC-run-id>/`:
 | `*.log` | Milvus/WP/etcd/MinIO logs since the run began, with timestamps; up to 2000 lines / 2 MiB per container |
 | `*-previous.log` | Previous container logs where a restart was observed |
 
-Dashboard links include the run's time window and namespace/collection selection.
+Dashboard links include all four [E2E views](E2E-DASHBOARDS.md) and three reference
+dashboards, with the run's time window and namespace/collection selection where
+the dashboard supports that filter. E2E channel/log scopes are independent; a
+collection selection does not automatically isolate its WP log.
 Local request IDs help join test records; the runner does not claim they are
 propagated as server trace IDs. Use the collection ID from `collection_info`, log
 and node identities in metrics, and timestamps when narrowing server-side evidence.

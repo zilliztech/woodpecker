@@ -14,5 +14,17 @@
     "Correct restart, slow-query, and IOPS queries for standard Prometheus",
     "Open service quality and server overview sections by default",
     "Replace the production Loki events panel with local evidence collection guidance"
-  ]
+  ],
+  "e2e": {
+    "generator": "scripts/e2e_dashboards.py",
+    "guide": "E2E-DASHBOARDS.md",
+    "milvus_reference_commit": "27bd28d20688ab00cdd74232a20e988fb2162aed",
+    "woodpecker_reference_image": "milvusdb/woodpecker:v0.1.46",
+    "dashboards": [
+      "milvus-e2e-write",
+      "milvus-e2e-consume",
+      "milvus-e2e-flush",
+      "milvus-e2e-query"
+    ]
+  }
 }
