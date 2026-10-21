@@ -96,9 +96,10 @@ jobs:
           jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-service.json
           exit $exit_code
 
-      - name: Run e2e service failover tests
+      - name: Run e2e service failover and concurrent auditor tests
         run: |
           set +e
+          # Includes TestStagedStorageService_ConcurrentAuditorsCompaction.
           gotestsum --format pkgname-and-test-fails \
             --jsonfile test-output-failover.json \
             -- -race -cover -failfast -timeout=25m \
