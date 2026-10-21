@@ -2251,6 +2251,10 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		zap.Int64("currentLastEntryId", currentSegmentMeta.Metadata.LastEntryId),
 		zap.Int64("currentSize", currentSegmentMeta.Metadata.Size))
 
+	// A repeated request after another handle completed compaction is already done.
+	if currentSegmentMeta.Metadata.State == proto.SegmentState_Sealed {
+		return nil
+	}
 	if currentSegmentMeta.Metadata.State != proto.SegmentState_Completed {
 		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return werr.ErrSegmentHandleSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
@@ -2343,6 +2347,22 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(refreshErr))
+	}
+
+	// Concurrent handles can both publish the same deterministic result. A lost
+	// metadata CAS is success only if the winner sealed the same confirmed range.
+	// Truncation/deletion, different LACs and unrelated failures must stay visible.
+	if werr.ErrMetadataRevisionInvalid.Is(updateMetaErr) && refreshErr == nil {
+		latest := s.GetMetadata(ctx)
+		if latest.Metadata.State == proto.SegmentState_Sealed &&
+			latest.Metadata.LastEntryId == currentSegmentMeta.Metadata.LastEntryId {
+			updateMetaErr = nil
+		}
+	}
+	if updateMetaErr != nil {
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "error").Observe(float64(time.Since(start).Milliseconds()))
+		return updateMetaErr
 	}
 
 	compactionDuration := time.Since(start)

@@ -18,8 +18,7 @@ package storage
 
 import "sort"
 
-// CompactionPeakBytes is the peak memory a planned compaction holds, shared by the backends
-// because they plan and run compaction the same way: group the segment's blocks into merge tasks,
+// CompactionPeakBytes is the peak memory a block-planned compaction holds: group blocks into merge tasks,
 // run parallel of them at a time, and hold two copies of each running task's bytes -- the source
 // blocks it read and the merged block it assembles for upload.
 //

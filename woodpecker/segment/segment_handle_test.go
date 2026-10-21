@@ -4299,7 +4299,7 @@ func TestCompact_NotCompletedState(t *testing.T) {
 		state proto.SegmentState
 	}{
 		{"active_state", proto.SegmentState_Active},
-		{"sealed_state", proto.SegmentState_Sealed},
+		{"truncated_state", proto.SegmentState_Truncated},
 	}
 
 	for _, tt := range tests {
