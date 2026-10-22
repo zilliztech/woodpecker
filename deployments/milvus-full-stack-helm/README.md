@@ -62,7 +62,7 @@ flowchart LR
 | Optional Jaeger | `jaegertracing/all-in-one:1.53.0`, bounded in-memory trace history |
 | Optional Loki / Alloy | `grafana/loki:3.5.7` / `grafana/alloy:v1.10.2`, PVC-backed logs and namespaced collection |
 | Optional Mailpit | `axllent/mailpit:v1.31.6`, local SMTP capture |
-| Local Kubernetes | minikube `v1.33.1`, Docker driver |
+| Previously validated Kubernetes | `v1.33.1` on minikube, prepared externally |
 
 The monitoring layout follows `tests/k8s/monitor/`. That test suite does not pin
 the chart/Grafana version, so this example pins its own reproducible versions in
@@ -70,151 +70,129 @@ the chart/Grafana version, so this example pins its own reproducible versions in
 
 ## Prerequisites
 
-- Docker running, with at least 8 GiB available to its Linux VM and 8 host CPUs.
-- minikube, Helm 3, kubectl, curl, and Python 3.9+ with PyYAML (`python3 -m pip install PyYAML==6.0.3`). Workload scripts use the standard library.
-- Enough free disk space for images and approximately 20 GiB of provisioned storage.
-- Registry access to download monitoring images. The ARM64 override requires the
-  supplied Milvus image to exist in the host Docker daemon or registry access to it.
+Use an **existing Kubernetes cluster**, configured kubectl, Helm 3 and Python 3.9+.
+The stack uses `kubectl config current-context` by default; select another with
+`--context NAME` or `CONTEXT`. `NAMESPACE` / `--namespace` defaults to `milvus-stack`.
+Configure credentials, connectivity, a suitable dynamic StorageClass and image
+registry access before deployment. The stack never creates, starts, stops or
+removes Kubernetes nodes, VMs, containers or profiles.
 
-This is a small, single-node development cluster: one proxy, mix coordinator,
-streaming node, query node, data node, etcd and MinIO instance, and three Woodpecker
-replicas. It does not provide independent node/AZ failure domains or production HA.
-Resources and short segment rolling intervals favor local development rather than
-performance benchmarking. Increase resources and review workload settings before
-using it to compare throughput.
+```bash
+kubectl config current-context
+kubectl version
+python3 -m pip install -r scripts/requirements-connections.txt
+```
 
-## Quick start: supplied local ARM64 build
+Docker is optional for the offline Promtool suite. The notebook launcher needs
+Python 3.11+ and installs a pinned isolated runtime on first launch. Private ARM64
+Milvus images require registry access or node caches prepared externally.
 
-For an executable guide through deployment, dashboard access, smoke/performance
-tests, alerting, evidence and lifecycle operations, use the
-[Jupyter walkthrough](notebooks/full-stack-walkthrough.ipynb):
+## Preview, then execute
+
+Commands that change resources, open forwards or run workloads **only print their
+operations by default**. Add `-x` / `--execute` to execute them. Read-only status,
+connection/metric inspection and local charts/render/images preparation run
+without `-x`. Planning can read the selected cluster and write local plan files;
+it does not change Kubernetes resources. Printed Helm/kubectl commands use explicit
+context/namespace and can be copied directly. Local values/manifest files are
+retained for inspection under `.local/plans/` and may contain credentials.
+
+```bash
+./stack.sh deploy --local-arm64  # Preview native commands
+./stack.sh deploy --local-arm64 -x           # Install core on existing Kubernetes
+./stack.sh addons-deploy --with all  # Preview optional observability
+./stack.sh addons-deploy --with all -x
+./stack.sh forward --wpcli -x                # Separate terminal
+./stack.sh smoke -x
+./stack.sh verify                           # Read-only checks
+```
+
+Omit `--local-arm64` for the public default Milvus image. Repeat core override
+files on core upgrades. Addon operations preserve the live core overrides and
+previously selected components. See [COMPONENTS.md](COMPONENTS.md) for independent
+component installation and dependencies.
+
+`render` generates local manifests; `images` lists images from that selected
+profile. It does not pull images, load node caches or manage a container runtime.
+Prepare image access using your cluster's normal tools.
+
+## Command guide and lifecycle boundaries
+
+| Command | Default behavior | Effect with `-x` |
+| --- | --- | --- |
+| `deploy` | Print native Helm/kubectl plan | Install/upgrade releases and run the selected stack; retain PVCs and existing addons |
+| `stop` | Print pause plan | Save replica state in a namespace ConfigMap; pause this stack's workloads; retain releases/PVCs |
+| `start` | Print resume plan | Restore the saved replica counts and scheduling; retain PVCs; does not install a missing stack |
+| `clear` | Print uninstall/data-deletion plan | Uninstall all stack releases and delete their PVC data |
+| `addons-deploy` / `addons-clear` | Print selected addon changes | Add components / remove selected components and their data |
+| `forward` | Print native port-forward commands | Open/reuse only this stack's forwards |
+| `smoke`, `perf`, `*-smoke`, `acceptance` | Print workload/probe entry points | Write test data and run the selected probes |
+| `status`, `connections`, `addons-status`, `verify`, `logs`, `traces`, `alerts`, `collect` | Inspect/read and optionally save local evidence | Same read-only resource behavior |
+| `charts`, `render`, `images`, `alerts-test`, `notebook` | Local preparation, offline checks or local notebook process | No Kubernetes lifecycle management |
+
+`start/stop` apply to the **deployed stack**, not Kubernetes. Stop scales ordinary
+Deployments/StatefulSets to zero, sets Prometheus/Alertmanager CR replicas to zero
+while their Operator is available, and pauses Alloy's DaemonSet with a reversible
+node selector. Start restores exact saved counts (including an original zero),
+removes only the managed pause selector, and waits for rollouts. The saved state
+is `milvus-full-stack-lifecycle` in this namespace; the printed operations are
+standard kubectl commands, and recovery does not depend on a machine-local file.
+Repeated stop preserves the original snapshot. Partial operations can be retried.
+
+Pause/resume uses Helm manifest identities and live ownership checks. It refuses
+workloads whose scale-down retention policy would delete PVCs, active HPAs,
+paused Operator reconciliation or changed resource identities. Coordinate any
+external GitOps reconciliation through its normal configuration. Helm changes
+through this wrapper are refused while its saved stop state exists; resume first.
+
+```bash
+./stack.sh stop  # Inspect; does not stop anything
+./stack.sh stop -x          # Pause only this stack's workloads
+./stack.sh start -x         # Resume those workloads on the same running cluster
+./stack.sh forward --wpcli -x
+./stack.sh clear  # Inspect the destructive cleanup plan
+./stack.sh clear -x         # Delete stack releases AND their PVC data
+```
+
+`stop` preserves **persistent volume data**, not in-memory/ephemeral state. Jaeger
+memory history disappears when its Pod exits. Clear retains Kubernetes, the
+namespace, shared CRDs and local evidence; it does not remove other clusters.
+
+## Jupyter walkthrough
 
 ```bash
 ./stack.sh notebook
 ```
 
-This starts JupyterLab on loopback port `8891` with token authentication. Open the
-authenticated URL printed in the terminal and select `notebooks/full-stack-walkthrough.ipynb`
-(the launcher's default page). Use Shift+Enter to run the cells in order.
-The first launch creates `.local/notebook-venv/` and installs the pinned notebook
-requirements; it requires Python 3.11+ and package-registry access. CLI deployment
-and test scripts still use Python 3.9+. Set `JUPYTER_BOOTSTRAP_PYTHON=python3.11`
-if needed, `NOTEBOOK_PORT` to choose another port, or `JUPYTER_PYTHON` to reuse an
-existing Jupyter environment without installing packages into it.
+Open the authenticated loopback URL and select
+`notebooks/full-stack-walkthrough.ipynb`. Review its context, images, ports and
+load. `EXECUTE=False` previews operations by default. Set `EXECUTE=True` explicitly
+for the full run, which selects `--with all`; stop/clear cells stay disabled by
+default. The notebook reuses matching forwards and owns only those it starts.
+Its source is unexecuted; local runs/evidence remain under `.local/`.
 
-The notebook defaults to the supplied ARM64 build and preloads the required images.
-Review its configuration cell: set `RUN_IMAGES=False` only if all images are already
-loaded in the current node, or `USE_LOCAL_ARM64=False` for the public default image. It reuses healthy existing
-endpoints or starts its own background forwards. Stop/clear cells are explicitly
-disabled by default, so Run All leaves the deployed stack and its data available.
-Edited notebooks should have their outputs cleared before committing/sharing.
+## Optional local Kubernetes preparation (outside stack.sh)
 
-The walkthrough was executed locally against the real ARM64 stack, including
-deployment, a 300-vector smoke workload, all three dashboards, 16 rule behavior
-tests, live alert firing/recovery/inhibition, performance output with an inline
-latency plot, and log/evidence inspection. Validation reused loaded node images
-and shortened performance measurement to 10 seconds; source defaults remain a
-60-second performance window. Stop/clear remained disabled and notebook-owned
-test forwards were closed afterward. The unexecuted source stays clean; local
-execution evidence is under `.local/notebook-validation/`.
-
-For the equivalent CLI workflow, run from this directory:
+Users who choose minikube manage it directly, just as shared-cluster users manage
+their existing infrastructure. For example:
 
 ```bash
-./stack.sh start
-./stack.sh images --local-arm64                 # Core only
-./stack.sh deploy --local-arm64                 # Core only on first install
-./stack.sh images --local-arm64 --with all     # Optional: preload addon images
-./stack.sh addons-deploy --with all             # Optional full observability
-./stack.sh status
+minikube start -p wp-ops-v0146 --driver=docker --cpus=6 --memory=6656
+kubectl config use-context wp-ops-v0146
+# If a private development image is already in the host Docker daemon:
+minikube -p wp-ops-v0146 image load YOUR_IMAGE --daemon
 ```
 
-Defaults are profile/context `wp-ops-v0146` and namespace `milvus-stack`. Every
-kubectl/Helm operation explicitly names the context. To isolate another cluster:
-
-```bash
-PROFILE=milvus-full-stack ./stack.sh start
-PROFILE=milvus-full-stack ./stack.sh images --local-arm64
-PROFILE=milvus-full-stack ./stack.sh deploy --local-arm64
-```
-
-`images` renders the selected offline profile, pulls only missing host images,
-and loads them into minikube with `--daemon`. Add `--with all` to preload every
-optional component, or choose a comma-separated list. Prometheus profiles include
-the dynamically created configuration reloader. Docker Desktop can fail to export some
-distroless images; in that case the command attempts a direct minikube image pull.
-Interrupted host downloads are retried up to three times, with a 300-second limit
-per attempt; set `IMAGE_PULL_TIMEOUT` higher when downloading large images over a
-slow connection.
-
-The `--local-arm64` flag must be supplied to `render`, `images`, and `deploy` when
-using the supplied build. Without the flag, the example uses the public default
-Milvus image. The private image reference is kept in a separate override file.
-
-For an existing Kubernetes cluster, set `CONTEXT` and `NAMESPACE`, skip `start`
-and `images`, and run `deploy`. Configure a dynamic StorageClass and registry
-credentials appropriate to that cluster. The defaults use local example
-credentials and should be reviewed before exposing services externally.
-
-## Command guide
-
-Run `./stack.sh help`, `./stack.sh --help`, or `./stack.sh deploy --help` for the
-grouped command list, current targets, options and examples.
-
-| Category | Commands | Purpose |
-| --- | --- | --- |
-| Guided walkthrough | `notebook` | Open the executable Jupyter guide with an isolated local runtime |
-| Cluster lifecycle | `start` / `stop` | Create or resume / stop the local minikube profile; preserve deployments and data |
-| Stack lifecycle | `deploy` / `clear` | Install or upgrade core and selected addons / uninstall all releases and delete their PVC data |
-| Optional components | `addons-deploy`, `addons-clear`, `addons-status` | Add components later, remove selected components and their data, inspect selection |
-| Preparation | `charts`, `render`, `images` | Download charts, inspect manifests, preload local images |
-| Access and status | `connections`, `forward`, `status` | Show connection/configuration hints, open local ports and inspect deployed resources |
-| Validation | `acceptance`, `smoke`, `verify`, `traces`, `traces-smoke`, `logs`, `logs-smoke`, `alerts`, `alerts-test`, `alerts-smoke` | Exercise workloads, trace coverage, monitoring, rules and alert delivery |
-| Write performance | `perf` | Measure concurrent inserts and retain correctness, metrics, alert and log evidence |
-| Diagnostics | `collect` | Save bounded logs, resource status and verification reports |
-| Optional email | `email-smoke` | Check local SMTP capture when Mailpit is explicitly enabled |
-
-`start` / `stop` operate on `PROFILE`. `deploy` / `clear` operate on `CONTEXT`
-and `NAMESPACE`, which may also point to an existing external cluster. `start`
-resumes existing workloads; it does not reinstall Helm releases. `deploy` installs
-or upgrades workloads in a running cluster; it does not start minikube.
-
-To pause the local environment and later resume it:
-
-```bash
-./stack.sh stop
-./stack.sh start
-./stack.sh forward  # Reopen forwards after the cluster has resumed
-```
-
-To remove the stack and its data, then deploy a fresh environment:
-
-```bash
-./stack.sh clear
-./stack.sh deploy --local-arm64
-```
-
-`clear` uninstalls all stack releases before deleting their PVCs: Milvus/Woodpecker,
-etcd/MinIO, Loki, Prometheus/Alertmanager and optional Grafana persistence. It selects
-PVCs by this stack's release/component labels within the selected namespace;
-unrelated PVCs are left alone. Missing releases/PVCs are allowed, so cleanup can
-be repeated after a partial deployment or cleanup. The namespace, shared CRDs,
-local evidence and minikube profile are preserved. Use `stop` / `start` when you
-want to retain deployments and data.
-
-Lifecycle CLI tests run with simulated backends, so they never stop a real cluster
-or uninstall a real release:
-
-```bash
-python3 tests/cli.test.py
-```
+Stopping that entire local cluster is a separate explicit `minikube stop -p ...`
+operation. It is not what `stack.sh stop` does. Resource sizes are examples; use
+your own cluster capacity and availability requirements.
 
 ## Open Grafana, Prometheus, and Milvus
 
 Keep this command running in a terminal:
 
 ```bash
-./stack.sh forward
+./stack.sh forward -x
 ```
 
 | Service | Local URL |
@@ -272,7 +250,7 @@ python3 -m pip install -r scripts/requirements-connections.txt
 For wpcli access, keep this command running in a terminal:
 
 ```bash
-./stack.sh forward --wpcli
+./stack.sh forward --wpcli -x
 ```
 
 It opens the four normal endpoints plus **one Admin forward per Woodpecker Pod**
@@ -336,18 +314,18 @@ In the notebook, `lab.run("connections")` shows the same report.
 In another terminal, while the forwards are active:
 
 ```bash
-./stack.sh smoke
+./stack.sh smoke -x
 # Allow at least two 15-second scrapes after the first workload.
 ./stack.sh verify
 ./stack.sh alerts
-./stack.sh alerts-smoke  # Temporary synthetic events; no external notifications
+./stack.sh alerts-smoke  -x # Temporary synthetic events; no external notifications
 ./stack.sh collect
 ```
 
 The acceptance loop needs no SMTP service or Mailpit and checks only selected components:
 
 ```bash
-./stack.sh acceptance
+./stack.sh acceptance -x
 ```
 
 It runs the offline rule tests, a Milvus workload, checks all seven dashboards and
@@ -360,10 +338,10 @@ port forwarding and acceptance:
 
 ```bash
 ./stack.sh images --local-arm64 --mail-capture
-./stack.sh deploy --local-arm64 --mail-capture
-./stack.sh forward --mail-capture  # Keep running in a separate terminal
+./stack.sh deploy --local-arm64 --mail-capture -x
+./stack.sh forward --mail-capture  -x # Keep running in a separate terminal
 # In another terminal:
-./stack.sh acceptance --mail-capture
+./stack.sh acceptance --mail-capture -x
 ```
 
 With `--mail-capture`, `acceptance` also verifies both FIRING and
@@ -383,15 +361,15 @@ and the workload has a finite batch count. Results are saved in `.local/workload
 To generate a longer observation window:
 
 ```bash
-BATCHES=120 BATCH_SIZE=100 INTERVAL=2 ./stack.sh smoke
+BATCHES=120 BATCH_SIZE=100 INTERVAL=2 ./stack.sh smoke -x
 ```
 
 For a measured concurrent write experiment with automatic diagnostic collection:
 
 ```bash
-./stack.sh perf
+./stack.sh perf -x
 # Or configure a longer window and larger offered load:
-PERF_DURATION=300 PERF_CONCURRENCY=4 PERF_BATCH_SIZE=200 PERF_RPS=10 ./stack.sh perf
+PERF_DURATION=300 PERF_CONCURRENCY=4 PERF_BATCH_SIZE=200 PERF_RPS=10 ./stack.sh perf -x
 ```
 
 The default is a bounded 60-second measurement with two workers, 100-row batches,
@@ -487,12 +465,12 @@ resolution, inhibition, and synthetic-event cleanup against the local stack.
   etcd/MinIO and selected Jaeger/Loki/Alloy, PodMonitors, dashboard ConfigMaps, and PrometheusRule resources. The upstream etcd dependency
   expects a different image layout; the supplied official etcd image is deployed
   directly here instead. Milvus consumes these through external dependency settings.
-- `stack.sh`: chart download, rendering, preload, installation, access and evidence.
+- `stack.sh`: chart download, rendering, image inventory, installation, access and evidence.
 
 Use `./stack.sh render --local-arm64` to inspect manifests before deployment.
 Chart archives, rendered manifests, and results are ignored under `.local/`.
 Additional Milvus overrides can be supplied with `-f path/to/values.yaml`; use the
-same flags for rendering, image loading, and deployment. Keep changes to S3 access
+same flags for rendering, image inventory, and deployment. Keep changes to S3 access
 credentials consistent between the support chart and Milvus values.
 Use `--monitoring-values file` and `--support-values file` for their corresponding
 releases. Component selection is stored in the supporting Helm release. Repeating `deploy`
@@ -508,9 +486,9 @@ its version. The scripts do not delete shared CRDs.
 
 ```bash
 # Remove the stack AND its persistent data; keep the cluster for a fresh deploy.
-./stack.sh clear
-# Or pause the whole local cluster while retaining the deployed stack:
-./stack.sh stop
+./stack.sh clear -x
+# Or pause only this stack’s workloads while retaining releases/PVCs:
+./stack.sh stop -x
 ```
 
 `clear` resets etcd, MinIO and Woodpecker storage together, preventing log-ID reuse
@@ -540,10 +518,10 @@ kubectl --context wp-ops-v0146 -n milvus-stack logs deploy/milvus-streamingnode 
 kubectl --context wp-ops-v0146 -n milvus-stack logs milvus-woodpecker-0 --tail=100
 ```
 
-- `ImagePullBackOff`: run `images` with the same override used for `deploy`, check
-  host registry credentials, and confirm the image supports the node architecture.
-- Pending PVCs: confirm the default StorageClass and minikube storage provisioner.
-- OOM/restarts: inspect events and raise Docker/minikube memory and component limits.
+- `ImagePullBackOff`: use `images` to inspect required references, configure node registry
+  credentials/network access externally, and check the node architecture.
+- Pending PVCs: confirm the StorageClass and your cluster’s storage provisioner.
+- OOM/restarts: inspect events and check node capacity and component memory limits.
 - Empty charts: run the workload, select the local datasource/namespace/instance,
   allow scrapes to complete, then inspect `.local/verification.json`. Check whether
   the selected image exports that metric and whether the feature was exercised.
@@ -554,3 +532,17 @@ The intended development loop is: deploy → run workload → verify/collect →
 gaps → update metrics/configuration/dashboards → rerun. Future work can extend this
 with authorized email notifications, automated failure/performance scenarios,
 agent orchestration, and a separate `milvus-full-stack-operator/` installation path.
+
+## Kubernetes lifecycle validation
+
+87 offline Python tests cover selection, native command previews/execution,
+context/preflight failures, resource ownership, replica restoration, repeated
+stop, Operator resources, DaemonSet scheduling and PVC-retention/HPA guards,
+alongside the existing workload/observability checks. ShellCheck and local Helm
+rendering pass. Website checks cover six pages and 66 internal links.
+
+Pause/resume behavior in this revision was verified with simulated backends;
+no live Kubernetes workload was stopped, resumed or cleared. An absent current
+context was checked locally and produced configuration guidance without starting
+a cluster. Earlier live metric/log/trace validation above describes the deployed
+ARM64 configuration before this lifecycle change.

@@ -5,7 +5,7 @@
 <p>Install wp using the <a href="#operations-cli-local/start">CLI setup guide</a>, and check <code>wp version</code> and <code>wp --help</code>. The noninteractive examples work with the established operations; interactive <code>wp shell</code> requires a source build containing the shell addition and is not part of v0.1.47.</p>
 <p>Run the following from <code>deployments/milvus-full-stack-helm/</code>, with the stack deployed and the connection-discovery Python dependency installed:</p>
 <pre><code># Keep this running in a separate terminal.
-./stack.sh forward --wpcli</code></pre>
+./stack.sh forward --wpcli -x</code></pre>
 <pre><code>./stack.sh connections
 ./stack.sh connections --wpcli-config &gt; .local/wpcli.yaml
 export WOODPECKER_CLI_CONFIG="$PWD/.local/wpcli.yaml"

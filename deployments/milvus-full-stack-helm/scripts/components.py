@@ -112,7 +112,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("validate", "render", "deploy", "addons-deploy", "addons-clear", "status", "flags"))
     parser.add_argument("--with", dest="components", default="")
-    parser.add_argument("--context", default="wp-ops-v0146")
+    parser.add_argument("--context", default="")
     parser.add_argument("--namespace", default="milvus-stack")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--milvus-values", action="append", default=[])
@@ -154,7 +154,7 @@ def main():
     (output / "flags.env").write_text("".join(k + "=" + str(v).lower() + "\n" for k, v in flags.items()))
     (output / "plan.json").write_text(json.dumps({"context": args.context, "namespace": args.namespace,
                 "previous": sorted(previous), "selected": sorted(selected), "trace_changed": trace_changed}, indent=2) + "\n")
-    print("Core: Milvus + WP + etcd/MinIO; addons: " + (", ".join(sorted(selected)) or "none"))
+    print("# Core: Milvus + WP + etcd/MinIO; addons: " + (", ".join(sorted(selected)) or "none"))
     return 0
 
 

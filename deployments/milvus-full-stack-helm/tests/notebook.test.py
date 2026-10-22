@@ -20,8 +20,8 @@ SPEC.loader.exec_module(helpers)
 class NotebookTests(unittest.TestCase):
     def lab(self, root):
         with patch.dict(os.environ, {"STATE": str(Path(root) / ".local")}):
-            return helpers.StackLab(root, "test-profile", "test-context", "test-namespace",
-                                    {"GRAFANA": 13000, "PROMETHEUS": 19099, "MILVUS": 29530, "ALERTMANAGER": 19093})
+            return helpers.StackLab(root, "test-context", "test-namespace",
+                                    {"GRAFANA": 13000, "PROMETHEUS": 19099, "MILVUS": 29530, "ALERTMANAGER": 19093}, execute=True)
 
     def test_source_is_unexecuted_and_lifecycle_cells_are_inert_by_default(self):
         notebook = json.loads((ROOT / "notebooks/full-stack-walkthrough.ipynb").read_text())
@@ -81,6 +81,26 @@ class NotebookTests(unittest.TestCase):
                     lab.open_forwards()
                 spawn.assert_called_once()
                 kill.assert_not_called()
+
+    def test_preview_mode_does_not_start_forwards(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lab = helpers.StackLab(folder, "test-context", "test-namespace", {}, execute=False)
+            with patch.object(lab, "run") as run, patch.object(helpers.subprocess, "Popen") as spawn:
+                lab.open_forwards()
+                run.assert_called_once_with("forward")
+                spawn.assert_not_called()
+
+    def test_notebook_execution_flag_is_explicit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "stack.sh").write_text('printf "%s\\n" "$@"\n')
+            for execute in (False, True):
+                lab = helpers.StackLab(root, "test-context", "test-namespace", {}, execute=execute)
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    lab.run("deploy")
+                argv = output.getvalue().splitlines()[0]
+                self.assertEqual(" -x" in argv, execute)
+                self.assertIn("--with all", argv)
 
     def test_monitoring_waits_for_transient_errors_but_times_out_on_persistent_errors(self):
         with tempfile.TemporaryDirectory() as folder:

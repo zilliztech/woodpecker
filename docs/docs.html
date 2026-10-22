@@ -6560,7 +6560,7 @@ wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 51 --max-entries 100 \
 
 <h2 id="stack-examples-included">What you can do today</h2>
 <div class="stack-cards">
-  <a href="#stack-examples-helm"><strong>Deploy with Helm</strong><span>Install Milvus, three WP service replicas, persistent dependencies and monitoring. Follow the CLI or Jupyter walkthrough.</span></a>
+  <a href="#stack-examples-helm"><strong>Deploy with Helm</strong><span>Install Milvus, three WP service replicas and persistent dependencies on existing Kubernetes; add observability independently. Preview native commands before executing.</span></a>
   <a href="#stack-examples-dashboards"><strong>Follow an E2E symptom</strong><span>Use four ordered dashboards for writes, WAL consumption, persistence and search/query; follow each step’s metrics and investigation guidance.</span></a>
   <a href="#stack-examples-wpcli"><strong>Operate with wpcli</strong><span>Discover reachable endpoints, select a WP service context and explicitly connect to a Milvus instance’s WP client metadata.</span></a>
   <a href="#stack-examples-e2e"><strong>Run a repeatable experiment</strong><span>Insert and read data, measure writes, inspect correlated metrics and logs, collect evidence and repeat after a change.</span></a>
@@ -6590,80 +6590,91 @@ wm segment probe "$WP_LOG" "$WP_SEG" --from-entry 51 --max-entries 100 \
 </div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-helm">
 <h1>Helm Stack Walkthrough</h1>
-<p class="page-desc">Create a local Milvus + Woodpecker environment with its dashboards, alert evaluation and executable tests.</p>
-<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-helm/prepare">Prepare your environment</a><a href="#stack-examples-helm/deploy">Deploy the stack</a><a href="#stack-examples-helm/addons">Add optional components later</a><a href="#stack-examples-helm/verify">Run the first verification</a><a href="#stack-examples-helm/notebook">Follow the Jupyter guide</a><a href="#stack-examples-helm/lifecycle">Pause, resume or reset</a></nav>
+<p class="page-desc">Deploy and operate Milvus + Woodpecker on your existing Kubernetes cluster using reviewable Helm and kubectl commands.</p>
+<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-helm/prepare">Prepare an existing Kubernetes context</a><a href="#stack-examples-helm/deploy">Review, then deploy</a><a href="#stack-examples-helm/addons">Add optional components later</a><a href="#stack-examples-helm/access">Discover and open endpoints</a><a href="#stack-examples-helm/verify">Run the first verification</a><a href="#stack-examples-helm/notebook">Follow the Jupyter guide</a><a href="#stack-examples-helm/lifecycle">Pause/resume workloads or remove the deployment</a></nav>
 
-<h2 id="stack-examples-helm-prepare">Prepare your environment</h2>
-<p>Use Docker, minikube, Helm 3, kubectl and Python 3.9+. The example expects at least 8 GiB available to the Docker VM, 8 host CPUs and about 20 GiB of provisioned storage. The Jupyter launcher requires Python 3.11+; connection discovery additionally uses the pinned PyYAML dependency. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/README.md#prerequisites">full prerequisites and pinned versions</a>.</p>
+<h2 id="stack-examples-helm-prepare">Prepare an existing Kubernetes context</h2>
+<p>Use configured kubectl, Helm 3 and Python 3.9+. Kubernetes, its nodes, credentials, StorageClass and registry access are managed outside this tool. This applies equally to a shared cluster, kind or local minikube. Docker is optional for offline rule tests; Jupyter needs Python 3.11+.</p>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>git clone https://github.com/zilliztech/woodpecker.git
 cd woodpecker/deployments/milvus-full-stack-helm
-./stack.sh help
-python3 -m pip install -r scripts/requirements-connections.txt</code></pre></div></div>
-<p>The default profile/context is <code>wp-ops-v0146</code>, with namespace <code>milvus-stack</code>. <code>start</code>, <code>stop</code> and <code>images</code> target the minikube profile. Helm and kubectl operations explicitly target the selected Kubernetes context and namespace.</p>
+python3 -m pip install -r scripts/requirements-connections.txt
+kubectl config current-context
+kubectl version
+./stack.sh help</code></pre></div></div>
+<p>The default context is kubectl’s current context; override it with <code>--context NAME</code> or <code>CONTEXT</code>. The default namespace is <code>milvus-stack</code>, configurable with <code>--namespace</code> / <code>NAMESPACE</code>. An unavailable context produces configuration guidance; stack.sh never creates, starts, stops or deletes Kubernetes.</p>
 
-<h2 id="stack-examples-helm-deploy">Deploy the stack</h2>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh start
-./stack.sh render
-./stack.sh images
-./stack.sh deploy
+<h2 id="stack-examples-helm-deploy">Review, then deploy</h2>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh render
+./stack.sh images                       # Image inventory only
+./stack.sh deploy                       # Preview native commands
+./stack.sh deploy -x                    # Execute the reviewed resource operations
 ./stack.sh status</code></pre></div></div>
-<p>The public default uses Milvus <code>v3.0.3</code> and Woodpecker <code>v0.1.46</code>. For the supplied private ARM64 Milvus development image, add <code>--local-arm64</code> consistently to <code>render</code>, <code>images</code> and <code>deploy</code>; registry access or a preloaded image is required. The <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/README.md#troubleshooting">documented live validation</a> used that ARM64 build; the public default image was not exercised in that run.</p>
-<p>A first deployment installs only Milvus, three independent WP services and persistent etcd/MinIO, using the official <code>milvus-helm</code> chart and the support chart. It needs no monitoring CRDs and exports no traces by default. Repeated deploys retain already selected optional components.</p>
+<p>Resource changes, workload writes and port forwards are previewed by default; <code>-x</code> executes them. Planning may read the cluster and save local values/manifests; it does not change resources. Read-only status and local rendering remain available without <code>-x</code>. Printed Helm/kubectl commands include the explicit target and can be copied directly.</p>
+<p>A first deployment contains only Milvus, three independent WP services and persistent etcd/MinIO. It wraps the official Milvus Helm chart and needs no monitoring CRDs. Public defaults use Milvus <code>v3.0.3</code> and WP <code>v0.1.46</code>. Add <code>--local-arm64</code> to render/images/deploy for the supplied private ARM64 build; prepare its image access outside the stack.</p>
+
 <h2 id="stack-examples-helm-addons">Add optional components later</h2>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Choose independently, or use --with all.
-./stack.sh addons-deploy --with prometheus,grafana
-./stack.sh addons-deploy --with alertmanager
-./stack.sh addons-deploy --with jaeger
-./stack.sh addons-deploy --with loki
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh addons-deploy --with prometheus,grafana   # Preview
+./stack.sh addons-deploy --with prometheus,grafana -x
+./stack.sh addons-deploy --with alertmanager -x
+./stack.sh addons-deploy --with jaeger,loki -x
 ./stack.sh addons-status</code></pre></div></div>
-<p>For local image preloading, run <code>./stack.sh images --with all</code> first (add <code>--local-arm64</code> for the supplied build). Loki includes Alloy for Pod-log collection. Addon changes preserve live core overrides; selecting Jaeger updates the shared trace configuration and rolls Milvus/WP. See <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/COMPONENTS.md">component dependencies and lifecycle</a>.</p>
-<p>Keep ports open in a separate terminal:</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh forward --wpcli</code></pre></div></div>
-<p>This includes the normal Milvus/monitoring forwards, one Admin endpoint per WP node and the example’s etcd endpoint. Matching existing forwards are reused, and Ctrl+C closes only the forwards started by this invocation. In another terminal, inspect the actual host addresses:</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh connections
+<p>Use <code>--with all</code> for the complete observability example. Loki includes Alloy for log collection. Addon changes preserve live core overrides and previously selected components; changing Jaeger selection updates trace configuration and rolls Milvus/WP. See <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/COMPONENTS.md">component dependencies and lifecycle</a>.</p>
+
+<h2 id="stack-examples-helm-access">Discover and open endpoints</h2>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh forward --wpcli               # Preview native port-forward commands
+./stack.sh forward --wpcli -x            # Keep running in a separate terminal
+./stack.sh connections
 ./stack.sh connections --json</code></pre></div></div>
-<p>Only addresses marked <code>forwarded</code> have a matching local kubectl process and listening socket; proposed ports are not verified connections. WP Admin URL mappings support HTTP administration. The SDK’s advertised gRPC addresses have separate reachability requirements.</p>
+<p>Only installed services are forwarded. <code>--wpcli</code> also includes per-node WP Admin and tenant etcd. Matching existing forwards are reused, and Ctrl+C closes only those started by this invocation. Only addresses marked <code>forwarded</code> are verified local connections; Admin HTTP forwarding does not establish SDK advertised-gRPC reachability.</p>
 
 <h2 id="stack-examples-helm-verify">Run the first verification</h2>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh smoke
-# Allow two 15-second scrapes after the workload.
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh smoke -x
+# Allow two 15-second scrapes when Prometheus is installed.
 ./stack.sh verify
 ./stack.sh alerts</code></pre></div></div>
-<p>Install Prometheus for <code>verify</code>, Grafana for provisioned dashboards, and Prometheus + Alertmanager for <code>alerts</code>. Core-only workloads also work. <code>smoke</code> exercises inserts, queries and search through Milvus. <code>verify</code> checks the five Milvus and three WP scrape targets, core workload counters and provisioned dashboard queries. <code>alerts</code> checks rule health and the Alertmanager path. A nonzero exit needs investigation; a running Pod alone does not establish that this chain works.</p>
+<p>Smoke writes real data and checks query/search. Verify requires Prometheus, with Grafana provisioning checks when selected. The alert flow uses Prometheus + Alertmanager. Core-only perf still checks writes/reads and explicitly marks absent metrics/alerts as skipped. A running Pod alone does not establish a healthy chain.</p>
 
 <h2 id="stack-examples-helm-notebook">Follow the Jupyter guide</h2>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh notebook</code></pre></div></div>
-<p>Open the authenticated loopback URL printed by Jupyter and select <code>notebooks/full-stack-walkthrough.ipynb</code>. The full guide explicitly uses <code>--with all</code> for render/images/deploy and covers dashboards, logs, traces, workloads, write performance, alerts and evidence. Review its configuration cell: it defaults to the supplied ARM64 build, so set <code>USE_LOCAL_ARM64=False</code> for the public image. Stop/clear cells are disabled by default.</p>
+<p>Open the authenticated loopback URL and select <code>notebooks/full-stack-walkthrough.ipynb</code>. It selects the complete observability profile. <code>EXECUTE=False</code> previews by default; set <code>EXECUTE=True</code> after reviewing the target, images, ports and load. The guide never manages Kubernetes and keeps stop/clear cells disabled by default.</p>
 
-<h2 id="stack-examples-helm-lifecycle">Pause, resume or reset</h2>
+<h2 id="stack-examples-helm-lifecycle">Pause/resume workloads or remove the deployment</h2>
 <div class="stack-table"><table class="doc-table">
-  <thead><tr><th>Pair</th><th>Behavior</th></tr></thead>
+  <thead><tr><th>Command</th><th>Effect with -x</th><th>Data boundary</th></tr></thead>
   <tbody>
-    <tr><td><code>stop</code> / <code>start</code></td><td>Pause/resume the local minikube cluster, preserving the deployments and data. Reopen forwards after restarting.</td></tr>
-    <tr><td><code>addons-deploy --with LIST</code> / <code>addons-clear --with LIST</code></td><td>Add or remove selected components and their PVC data; retain the core stack.</td></tr>
-    <tr><td><code>deploy</code> / <code>clear</code></td><td>Install/upgrade the Helm releases, or uninstall them and delete their PVC data. The namespace, shared CRDs, minikube profile and local evidence remain.</td></tr>
+    <tr><td><code>deploy</code></td><td>Install/upgrade Helm releases on the existing cluster and run the selected stack.</td><td>Retain PVCs and existing addons.</td></tr>
+    <tr><td><code>stop</code></td><td>Record replica state and pause this stack’s workloads using native scale/patch/wait commands.</td><td>Retain Helm releases/PVCs; memory/ephemeral history may disappear.</td></tr>
+    <tr><td><code>start</code></td><td>Restore the replica counts saved by stop and wait for rollouts.</td><td>Does not install a missing stack or start Kubernetes.</td></tr>
+    <tr><td><code>clear</code></td><td>Uninstall stack releases and delete their PVC data.</td><td>Retain Kubernetes, namespace, shared CRDs and local evidence.</td></tr>
+    <tr><td><code>addons-deploy</code> / <code>addons-clear</code></td><td>Add components / remove selected components and their data.</td><td>Retain the core deployment.</td></tr>
   </tbody>
 </table></div>
-<div class="callout warning"><span><code>./stack.sh clear</code> deletes this stack’s Milvus/WP, etcd/MinIO and monitoring/Loki PVC data. Use <code>stop</code> when you want to retain the deployed data for another session.</span></div>
-<p>For existing clusters, additional Helm values and upgrade/storage details, use the <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/README.md#configuration-and-lifecycle">deployment reference</a>. Continue with <a href="#stack-examples-observability">monitoring and alerts</a> or <a href="#stack-examples-wpcli">wpcli operations</a>.</p>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh stop                  # Review only
+./stack.sh stop -x               # Pause workloads; leave Kubernetes running
+./stack.sh start -x              # Restore saved workload replicas
+./stack.sh forward --wpcli -x
+./stack.sh clear                 # Review the deletion plan
+# ./stack.sh clear -x            # Executes deletion of releases AND PVC data</code></pre></div></div>
+<p>Stop state is stored in the namespace ConfigMap <code>milvus-full-stack-lifecycle</code>, so resume does not depend on one machine. Prometheus/Alertmanager are scaled through their Operator resources, and Alloy’s DaemonSet uses a reversible scheduling selector. Resume before changing Helm releases. Unsafe scale-down PVC retention policies and active autoscalers are reported before any write.</p>
+<p>Continue with <a href="#stack-examples-observability">metrics, logs, traces and alerts</a> or <a href="#stack-examples-wpcli">wpcli operations</a>. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/README.md#optional-local-kubernetes-preparation-outside-stacksh">separate local Kubernetes preparation example</a> if you choose minikube.</p>
 
 <div class="doc-pagination"><a href="#stack-examples"><div class="pg-label">Previous</div><div class="pg-title">Overview &amp; goals</div></a><a href="#stack-examples-observability"><div class="pg-label">Next</div><div class="pg-title">Monitoring &amp; alerts</div></a></div>
 </div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-observability">
-<h1>Monitoring &amp; Alerts</h1>
+<h1>Metrics, Logs, Traces &amp; Alerts</h1>
 <p class="page-desc">Follow the same workload from Milvus through the WP client and servers, then check that the operational signals reach your dashboards and Alertmanager.</p>
 <nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-observability/install">Select the signals you need</a><a href="#stack-examples-observability/chains">Start with an E2E operational dashboard</a><a href="#stack-examples-observability/dashboards">Open the three reference dashboards</a><a href="#stack-examples-observability/coverage">Check the monitoring chain</a><a href="#stack-examples-observability/tracing">Inspect individual request traces</a><a href="#stack-examples-observability/logs">Search real Pod logs</a><a href="#stack-examples-observability/alerts">Inspect and test alerting</a><a href="#stack-examples-observability/adopt">Adopt the signals in an existing deployment</a></nav>
 
 <h2 id="stack-examples-observability-install">Select the signals you need</h2>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh addons-deploy --with prometheus,grafana,alertmanager
-./stack.sh addons-deploy --with jaeger,loki
-./stack.sh forward --wpcli</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh addons-deploy --with prometheus,grafana,alertmanager -x
+./stack.sh addons-deploy --with jaeger,loki -x
+./stack.sh forward --wpcli -x</code></pre></div></div>
 <p>Each component is optional and can be added after the core deployment. Grafana displays data from the selected backends; it does not store their metrics, logs or spans. Existing forwards need a new invocation to include newly installed services. See <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/COMPONENTS.md">independent selection and removal</a>.</p>
 <h2 id="stack-examples-observability-chains">Start with an E2E operational dashboard</h2>
 <p>For a specific symptom, use the <a href="#stack-examples-dashboards">E2E dashboards</a>: Write / Append, WAL Read / Consume, Flush / Checkpoint, or Search / Query. They group the metrics by processing step and include investigation guidance. Use the three component reference dashboards below for deeper inspection.</p>
 
 <h2 id="stack-examples-observability-dashboards">Open the three reference dashboards</h2>
-<p>Keep <code>./stack.sh forward --wpcli</code> running. These are the default local addresses; use <code>./stack.sh connections</code> for discovered addresses when ports differ.</p>
+<p>Keep <code>./stack.sh forward --wpcli -x</code> running. These are the default local addresses; use <code>./stack.sh connections</code> for discovered addresses when ports differ.</p>
 <div class="stack-table"><table class="doc-table">
   <thead><tr><th>View</th><th>Local address</th><th>What to examine</th></tr></thead>
   <tbody>
@@ -6679,7 +6690,7 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre></div
 <p>Grafana’s local example login is <code>admin / admin</code>. Dashboards and the Prometheus data source are provisioned from repository files. Select namespace <code>milvus-stack</code> and a time range containing the test; allow scrapes to collect the new workload.</p>
 
 <h2 id="stack-examples-observability-coverage">Check the monitoring chain</h2>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh smoke
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh smoke -x
 # Wait at least 30 seconds for scrapes.
 ./stack.sh verify</code></pre></div></div>
 <p>The verification report is saved to <code>.local/verification.json</code>. It checks target health, positive application/WP workload metrics, dashboard provisioning and query compatibility. Some panels need a particular operation or enough rate-window history before showing finite samples. An empty panel is an investigation prompt, not proof that the corresponding operation is healthy or broken.</p>
@@ -6688,22 +6699,22 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre></div
 <h2 id="stack-examples-observability-tracing">Inspect individual request traces</h2>
 <p>When selected, the stack deploys <code>jaegertracing/all-in-one:1.53.0</code> and exports Milvus and WP spans over OTLP. Open Jaeger directly, or select the provisioned <strong>Jaeger</strong> datasource in Grafana Explore.</p>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh traces
-./stack.sh traces-smoke
+./stack.sh traces-smoke -x
 # Strict E2E coverage: fails on disconnected request paths.
-TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke</code></pre></div></div>
+TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke -x</code></pre></div></div>
 <p>The smoke probe writes 100 vectors and verifies Strong query/search, then saves exact request trace IDs, client latency and raw spans. Normal perf records also contain sampled trace links. The supplied image currently connects query/search through SN and segcore, while its user Insert trace does not continue into SN/WP. Separate WP exporter activity is not proof of an E2E write trace; the report explicitly records this gap as <code>partial</code>.</p>
 <p>Full sampling favors small diagnostic runs and changes system overhead. Lower both server and workload sampling for sustained tests. Jaeger history is bounded and in memory, so save evidence before eviction or restart. See <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/TRACING.md">tracing setup, interpretation and known gaps</a>.</p>
 
 <h2 id="stack-examples-observability-logs">Search real Pod logs</h2>
 <p>Loki stores compressed log chunks and label indexes on a 4 GiB PVC, with a 24-hour retention policy. Alloy tails this namespace’s container logs through the Kubernetes API. In Grafana Explore, select <strong>Loki</strong> and query <code>{namespace="milvus-stack"}</code>, then filter by Pod or text. When Jaeger is also selected, recognized trace IDs link to its trace view.</p>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh logs
-./stack.sh logs-smoke</code></pre></div></div>
+./stack.sh logs-smoke -x</code></pre></div></div>
 <p>The smoke test runs a small Milvus write/query/search workload, finds its unique collection marker in the actual Proxy log and requires that marker to arrive through Alloy into Loki. It saves <code>.local/logging-smoke.json</code>. Collection is bounded by source-log retention and collector availability; see <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/LOGGING.md">storage, queries and limitations</a>.</p>
 <h2 id="stack-examples-observability-alerts">Inspect and test alerting</h2>
 <p>Prometheus evaluates the 31 reference WP rules covering resource pressure, failures, scaling signals and client behavior. Firing alerts are sent to Alertmanager for grouping and inhibition. The default <code>local-only</code> receiver lets you inspect alerts in the Prometheus and Alertmanager UIs without sending email or other external notifications.</p>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh alerts-test   # Offline rule behavior checks; uses Docker.
 ./stack.sh alerts        # Live rule/receiver/AM discovery checks.
-./stack.sh alerts-smoke  # Temporary synthetic firing/recovery/inhibition checks.</code></pre></div></div>
+./stack.sh alerts-smoke  -x # Temporary synthetic firing/recovery/inhibition checks.</code></pre></div></div>
 <p>The synthetic check verifies the alerting path and removes its temporary resources. It does not create each underlying disk, object-store or quorum failure, and it does not prove that every production threshold is suitable for your workload. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/ALERTING.md">rule catalog, investigation guidance and validation details</a>.</p>
 <p>When external notification is needed, use the optional SMTP configuration example with your relay and credentials. Optional Mailpit testing captures email locally. Neither profile is enabled by default.</p>
 
@@ -6722,7 +6733,7 @@ TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke</code></pre></div></div>
 <h1>E2E Operational Dashboards</h1>
 <p class="page-desc">Choose the symptom, then follow numbered processing steps from top to bottom. Each step explains what to inspect and where to continue.</p>
 <nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-dashboards/choose">Choose a chain</a><a href="#stack-examples-dashboards/write">Follow a slow write</a><a href="#stack-examples-dashboards/consume">Follow delayed consumption</a><a href="#stack-examples-dashboards/persist-query">Separate persistence and query symptoms</a><a href="#stack-examples-dashboards/validate">Validate coverage and compare a run</a></nav>
-<p>Install the optional backends first: <code>./stack.sh addons-deploy --with prometheus,grafana</code>, then keep <code>./stack.sh forward</code> running.</p>
+<p>Install the optional backends first: <code>./stack.sh addons-deploy --with prometheus,grafana -x</code>, then keep <code>./stack.sh forward -x</code> running.</p>
 
 <h2 id="stack-examples-dashboards-choose">Choose a chain</h2>
 <p>The Helm stack provisions four focused E2E dashboards alongside the three Milvus/WP reference dashboards. Keep the stack’s forwards running; Grafana defaults to <code>http://127.0.0.1:3000</code>. Use <code>./stack.sh connections</code> for actual ports.</p>
@@ -6748,10 +6759,10 @@ TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke</code></pre></div></div>
 <p>Use Search / Query for request latency. TSafe waiting points back to consumption/visibility; scheduler waiting, segcore/segment execution, loading and result reduction describe other stages. Proxy result wait includes downstream work and transport, rather than only network latency.</p>
 
 <h2 id="stack-examples-dashboards-validate">Validate coverage and compare a run</h2>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh smoke
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh smoke -x
 # Allow two 15-second scrapes.
 ./stack.sh verify
-./stack.sh perf</code></pre></div></div>
+./stack.sh perf -x</code></pre></div></div>
 <p>Verification checks seven provisioned dashboards, their queries and the required metric families in each E2E stage. The report lists optional idle/version-specific coverage gaps separately; an UP panel cannot hide a missing WAL-stage metric. Performance reports and the Jupyter guide include E2E links for the run’s time window.</p>
 <p>Channel and WP log filters are separate identities, resolved with metadata before isolating a log. No data is not a healthy zero, histogram overflow limits quantile resolution, and overlapping timers cannot be added or subtracted. These dashboards correlate operational evidence; live read verification and controlled fault/recovery tests establish different aspects of correctness.</p>
 
@@ -6766,7 +6777,7 @@ TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke</code></pre></div></div>
 <p>Install wp using the <a href="#operations-cli-local/start">CLI setup guide</a>, and check <code>wp version</code> and <code>wp --help</code>. The noninteractive examples work with the established operations; interactive <code>wp shell</code> requires a source build containing the shell addition and is not part of v0.1.47.</p>
 <p>Run the following from <code>deployments/milvus-full-stack-helm/</code>, with the stack deployed and the connection-discovery Python dependency installed:</p>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Keep this running in a separate terminal.
-./stack.sh forward --wpcli</code></pre></div></div>
+./stack.sh forward --wpcli -x</code></pre></div></div>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh connections
 ./stack.sh connections --wpcli-config &gt; .local/wpcli.yaml
 export WOODPECKER_CLI_CONFIG="$PWD/.local/wpcli.yaml"
@@ -6818,13 +6829,13 @@ meta log list</code></pre></div></div>
 
 <h2 id="stack-examples-e2e-baseline">Establish a working baseline</h2>
 <p>With the stack and forwards running, start with the integrated acceptance path:</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh acceptance</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh acceptance -x</code></pre></div></div>
 <p>This always runs a Milvus insert/query/search workload and collects evidence. It also tests the selected backends: Prometheus rules and metrics, Grafana dashboards, Jaeger trace coverage, Loki log delivery and the Prometheus + Alertmanager firing/recovery/inhibition path. External email is not enabled. Each stage must succeed; keep the resulting reports if one fails so you can inspect that stage. Default trace verification reports known gaps separately; use strict E2E mode when a complete connected path is required.</p>
 
 <h2 id="stack-examples-e2e-writes">Run a bounded write experiment</h2>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh perf</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh perf -x</code></pre></div></div>
 <p>The default run uses a 5-second warm-up, a 60-second measurement window, two workers and a total target of five 100-vector insert requests per second. It then waits 35 seconds for observation. It creates and retains its own collection, checks live read/query/search results and records acknowledged throughput, errors and insert latency.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>PERF_DURATION=300 PERF_CONCURRENCY=4 PERF_BATCH_SIZE=200 PERF_RPS=10 ./stack.sh perf</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>PERF_DURATION=300 PERF_CONCURRENCY=4 PERF_BATCH_SIZE=200 PERF_RPS=10 ./stack.sh perf -x</code></pre></div></div>
 <p>This example raises the requested load; achieved throughput depends on the workload generator and stack. Compare one change at a time with the same images, resources and parameters. REST transport and port-forward overhead are part of the measured latency, and successful live reads do not prove durability through a crash.</p>
 
 <h2 id="stack-examples-e2e-evidence">Follow the evidence</h2>

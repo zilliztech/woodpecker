@@ -1,56 +1,67 @@
 <h1>Helm Stack Walkthrough</h1>
-<p class="page-desc">Create a local Milvus + Woodpecker environment with its dashboards, alert evaluation and executable tests.</p>
+<p class="page-desc">Deploy and operate Milvus + Woodpecker on your existing Kubernetes cluster using reviewable Helm and kubectl commands.</p>
 
-<h2 id="prepare">Prepare your environment</h2>
-<p>Use Docker, minikube, Helm 3, kubectl and Python 3.9+. The example expects at least 8 GiB available to the Docker VM, 8 host CPUs and about 20 GiB of provisioned storage. The Jupyter launcher requires Python 3.11+; connection discovery additionally uses the pinned PyYAML dependency. See the <a href="{{STACK_REPO}}/README.md#prerequisites">full prerequisites and pinned versions</a>.</p>
+<h2 id="prepare">Prepare an existing Kubernetes context</h2>
+<p>Use configured kubectl, Helm 3 and Python 3.9+. Kubernetes, its nodes, credentials, StorageClass and registry access are managed outside this tool. This applies equally to a shared cluster, kind or local minikube. Docker is optional for offline rule tests; Jupyter needs Python 3.11+.</p>
 <pre><code>git clone https://github.com/zilliztech/woodpecker.git
 cd woodpecker/deployments/milvus-full-stack-helm
-./stack.sh help
-python3 -m pip install -r scripts/requirements-connections.txt</code></pre>
-<p>The default profile/context is <code>wp-ops-v0146</code>, with namespace <code>milvus-stack</code>. <code>start</code>, <code>stop</code> and <code>images</code> target the minikube profile. Helm and kubectl operations explicitly target the selected Kubernetes context and namespace.</p>
+python3 -m pip install -r scripts/requirements-connections.txt
+kubectl config current-context
+kubectl version
+./stack.sh help</code></pre>
+<p>The default context is kubectl’s current context; override it with <code>--context NAME</code> or <code>CONTEXT</code>. The default namespace is <code>milvus-stack</code>, configurable with <code>--namespace</code> / <code>NAMESPACE</code>. An unavailable context produces configuration guidance; stack.sh never creates, starts, stops or deletes Kubernetes.</p>
 
-<h2 id="deploy">Deploy the stack</h2>
-<pre><code>./stack.sh start
-./stack.sh render
-./stack.sh images
-./stack.sh deploy
+<h2 id="deploy">Review, then deploy</h2>
+<pre><code>./stack.sh render
+./stack.sh images                       # Image inventory only
+./stack.sh deploy                       # Preview native commands
+./stack.sh deploy -x                    # Execute the reviewed resource operations
 ./stack.sh status</code></pre>
-<p>The public default uses Milvus <code>v3.0.3</code> and Woodpecker <code>v0.1.46</code>. For the supplied private ARM64 Milvus development image, add <code>--local-arm64</code> consistently to <code>render</code>, <code>images</code> and <code>deploy</code>; registry access or a preloaded image is required. The <a href="{{STACK_REPO}}/README.md#troubleshooting">documented live validation</a> used that ARM64 build; the public default image was not exercised in that run.</p>
-<p>A first deployment installs only Milvus, three independent WP services and persistent etcd/MinIO, using the official <code>milvus-helm</code> chart and the support chart. It needs no monitoring CRDs and exports no traces by default. Repeated deploys retain already selected optional components.</p>
+<p>Resource changes, workload writes and port forwards are previewed by default; <code>-x</code> executes them. Planning may read the cluster and save local values/manifests; it does not change resources. Read-only status and local rendering remain available without <code>-x</code>. Printed Helm/kubectl commands include the explicit target and can be copied directly.</p>
+<p>A first deployment contains only Milvus, three independent WP services and persistent etcd/MinIO. It wraps the official Milvus Helm chart and needs no monitoring CRDs. Public defaults use Milvus <code>v3.0.3</code> and WP <code>v0.1.46</code>. Add <code>--local-arm64</code> to render/images/deploy for the supplied private ARM64 build; prepare its image access outside the stack.</p>
+
 <h2 id="addons">Add optional components later</h2>
-<pre><code># Choose independently, or use --with all.
-./stack.sh addons-deploy --with prometheus,grafana
-./stack.sh addons-deploy --with alertmanager
-./stack.sh addons-deploy --with jaeger
-./stack.sh addons-deploy --with loki
+<pre><code>./stack.sh addons-deploy --with prometheus,grafana   # Preview
+./stack.sh addons-deploy --with prometheus,grafana -x
+./stack.sh addons-deploy --with alertmanager -x
+./stack.sh addons-deploy --with jaeger,loki -x
 ./stack.sh addons-status</code></pre>
-<p>For local image preloading, run <code>./stack.sh images --with all</code> first (add <code>--local-arm64</code> for the supplied build). Loki includes Alloy for Pod-log collection. Addon changes preserve live core overrides; selecting Jaeger updates the shared trace configuration and rolls Milvus/WP. See <a href="{{STACK_REPO}}/COMPONENTS.md">component dependencies and lifecycle</a>.</p>
-<p>Keep ports open in a separate terminal:</p>
-<pre><code>./stack.sh forward --wpcli</code></pre>
-<p>This includes the normal Milvus/monitoring forwards, one Admin endpoint per WP node and the example’s etcd endpoint. Matching existing forwards are reused, and Ctrl+C closes only the forwards started by this invocation. In another terminal, inspect the actual host addresses:</p>
-<pre><code>./stack.sh connections
+<p>Use <code>--with all</code> for the complete observability example. Loki includes Alloy for log collection. Addon changes preserve live core overrides and previously selected components; changing Jaeger selection updates trace configuration and rolls Milvus/WP. See <a href="{{STACK_REPO}}/COMPONENTS.md">component dependencies and lifecycle</a>.</p>
+
+<h2 id="access">Discover and open endpoints</h2>
+<pre><code>./stack.sh forward --wpcli               # Preview native port-forward commands
+./stack.sh forward --wpcli -x            # Keep running in a separate terminal
+./stack.sh connections
 ./stack.sh connections --json</code></pre>
-<p>Only addresses marked <code>forwarded</code> have a matching local kubectl process and listening socket; proposed ports are not verified connections. WP Admin URL mappings support HTTP administration. The SDK’s advertised gRPC addresses have separate reachability requirements.</p>
+<p>Only installed services are forwarded. <code>--wpcli</code> also includes per-node WP Admin and tenant etcd. Matching existing forwards are reused, and Ctrl+C closes only those started by this invocation. Only addresses marked <code>forwarded</code> are verified local connections; Admin HTTP forwarding does not establish SDK advertised-gRPC reachability.</p>
 
 <h2 id="verify">Run the first verification</h2>
-<pre><code>./stack.sh smoke
-# Allow two 15-second scrapes after the workload.
+<pre><code>./stack.sh smoke -x
+# Allow two 15-second scrapes when Prometheus is installed.
 ./stack.sh verify
 ./stack.sh alerts</code></pre>
-<p>Install Prometheus for <code>verify</code>, Grafana for provisioned dashboards, and Prometheus + Alertmanager for <code>alerts</code>. Core-only workloads also work. <code>smoke</code> exercises inserts, queries and search through Milvus. <code>verify</code> checks the five Milvus and three WP scrape targets, core workload counters and provisioned dashboard queries. <code>alerts</code> checks rule health and the Alertmanager path. A nonzero exit needs investigation; a running Pod alone does not establish that this chain works.</p>
+<p>Smoke writes real data and checks query/search. Verify requires Prometheus, with Grafana provisioning checks when selected. The alert flow uses Prometheus + Alertmanager. Core-only perf still checks writes/reads and explicitly marks absent metrics/alerts as skipped. A running Pod alone does not establish a healthy chain.</p>
 
 <h2 id="notebook">Follow the Jupyter guide</h2>
 <pre><code>./stack.sh notebook</code></pre>
-<p>Open the authenticated loopback URL printed by Jupyter and select <code>notebooks/full-stack-walkthrough.ipynb</code>. The full guide explicitly uses <code>--with all</code> for render/images/deploy and covers dashboards, logs, traces, workloads, write performance, alerts and evidence. Review its configuration cell: it defaults to the supplied ARM64 build, so set <code>USE_LOCAL_ARM64=False</code> for the public image. Stop/clear cells are disabled by default.</p>
+<p>Open the authenticated loopback URL and select <code>notebooks/full-stack-walkthrough.ipynb</code>. It selects the complete observability profile. <code>EXECUTE=False</code> previews by default; set <code>EXECUTE=True</code> after reviewing the target, images, ports and load. The guide never manages Kubernetes and keeps stop/clear cells disabled by default.</p>
 
-<h2 id="lifecycle">Pause, resume or reset</h2>
+<h2 id="lifecycle">Pause/resume workloads or remove the deployment</h2>
 <table>
-  <thead><tr><th>Pair</th><th>Behavior</th></tr></thead>
+  <thead><tr><th>Command</th><th>Effect with -x</th><th>Data boundary</th></tr></thead>
   <tbody>
-    <tr><td><code>stop</code> / <code>start</code></td><td>Pause/resume the local minikube cluster, preserving the deployments and data. Reopen forwards after restarting.</td></tr>
-    <tr><td><code>addons-deploy --with LIST</code> / <code>addons-clear --with LIST</code></td><td>Add or remove selected components and their PVC data; retain the core stack.</td></tr>
-    <tr><td><code>deploy</code> / <code>clear</code></td><td>Install/upgrade the Helm releases, or uninstall them and delete their PVC data. The namespace, shared CRDs, minikube profile and local evidence remain.</td></tr>
+    <tr><td><code>deploy</code></td><td>Install/upgrade Helm releases on the existing cluster and run the selected stack.</td><td>Retain PVCs and existing addons.</td></tr>
+    <tr><td><code>stop</code></td><td>Record replica state and pause this stack’s workloads using native scale/patch/wait commands.</td><td>Retain Helm releases/PVCs; memory/ephemeral history may disappear.</td></tr>
+    <tr><td><code>start</code></td><td>Restore the replica counts saved by stop and wait for rollouts.</td><td>Does not install a missing stack or start Kubernetes.</td></tr>
+    <tr><td><code>clear</code></td><td>Uninstall stack releases and delete their PVC data.</td><td>Retain Kubernetes, namespace, shared CRDs and local evidence.</td></tr>
+    <tr><td><code>addons-deploy</code> / <code>addons-clear</code></td><td>Add components / remove selected components and their data.</td><td>Retain the core deployment.</td></tr>
   </tbody>
 </table>
-<div class="callout warning"><span><code>./stack.sh clear</code> deletes this stack’s Milvus/WP, etcd/MinIO and monitoring/Loki PVC data. Use <code>stop</code> when you want to retain the deployed data for another session.</span></div>
-<p>For existing clusters, additional Helm values and upgrade/storage details, use the <a href="{{STACK_REPO}}/README.md#configuration-and-lifecycle">deployment reference</a>. Continue with <a href="#stack-examples-observability">monitoring and alerts</a> or <a href="#stack-examples-wpcli">wpcli operations</a>.</p>
+<pre><code>./stack.sh stop                  # Review only
+./stack.sh stop -x               # Pause workloads; leave Kubernetes running
+./stack.sh start -x              # Restore saved workload replicas
+./stack.sh forward --wpcli -x
+./stack.sh clear                 # Review the deletion plan
+# ./stack.sh clear -x            # Executes deletion of releases AND PVC data</code></pre>
+<p>Stop state is stored in the namespace ConfigMap <code>milvus-full-stack-lifecycle</code>, so resume does not depend on one machine. Prometheus/Alertmanager are scaled through their Operator resources, and Alloy’s DaemonSet uses a reversible scheduling selector. Resume before changing Helm releases. Unsafe scale-down PVC retention policies and active autoscalers are reported before any write.</p>
+<p>Continue with <a href="#stack-examples-observability">metrics, logs, traces and alerts</a> or <a href="#stack-examples-wpcli">wpcli operations</a>. See the <a href="{{STACK_REPO}}/README.md#optional-local-kubernetes-preparation-outside-stacksh">separate local Kubernetes preparation example</a> if you choose minikube.</p>

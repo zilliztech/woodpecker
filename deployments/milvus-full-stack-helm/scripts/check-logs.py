@@ -57,7 +57,7 @@ def smoke(context, namespace):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--namespace", default=os.getenv("NAMESPACE", "milvus-stack"))
-    parser.add_argument("--context", default=os.getenv("CONTEXT", "wp-ops-v0146"))
+    parser.add_argument("--context", default=os.getenv("CONTEXT", ""))
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

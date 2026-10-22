@@ -1,16 +1,16 @@
-<h1>Monitoring &amp; Alerts</h1>
+<h1>Metrics, Logs, Traces &amp; Alerts</h1>
 <p class="page-desc">Follow the same workload from Milvus through the WP client and servers, then check that the operational signals reach your dashboards and Alertmanager.</p>
 
 <h2 id="install">Select the signals you need</h2>
-<pre><code>./stack.sh addons-deploy --with prometheus,grafana,alertmanager
-./stack.sh addons-deploy --with jaeger,loki
-./stack.sh forward --wpcli</code></pre>
+<pre><code>./stack.sh addons-deploy --with prometheus,grafana,alertmanager -x
+./stack.sh addons-deploy --with jaeger,loki -x
+./stack.sh forward --wpcli -x</code></pre>
 <p>Each component is optional and can be added after the core deployment. Grafana displays data from the selected backends; it does not store their metrics, logs or spans. Existing forwards need a new invocation to include newly installed services. See <a href="{{STACK_REPO}}/COMPONENTS.md">independent selection and removal</a>.</p>
 <h2 id="chains">Start with an E2E operational dashboard</h2>
 <p>For a specific symptom, use the <a href="#stack-examples-dashboards">E2E dashboards</a>: Write / Append, WAL Read / Consume, Flush / Checkpoint, or Search / Query. They group the metrics by processing step and include investigation guidance. Use the three component reference dashboards below for deeper inspection.</p>
 
 <h2 id="dashboards">Open the three reference dashboards</h2>
-<p>Keep <code>./stack.sh forward --wpcli</code> running. These are the default local addresses; use <code>./stack.sh connections</code> for discovered addresses when ports differ.</p>
+<p>Keep <code>./stack.sh forward --wpcli -x</code> running. These are the default local addresses; use <code>./stack.sh connections</code> for discovered addresses when ports differ.</p>
 <table>
   <thead><tr><th>View</th><th>Local address</th><th>What to examine</th></tr></thead>
   <tbody>
@@ -26,7 +26,7 @@
 <p>Grafana’s local example login is <code>admin / admin</code>. Dashboards and the Prometheus data source are provisioned from repository files. Select namespace <code>milvus-stack</code> and a time range containing the test; allow scrapes to collect the new workload.</p>
 
 <h2 id="coverage">Check the monitoring chain</h2>
-<pre><code>./stack.sh smoke
+<pre><code>./stack.sh smoke -x
 # Wait at least 30 seconds for scrapes.
 ./stack.sh verify</code></pre>
 <p>The verification report is saved to <code>.local/verification.json</code>. It checks target health, positive application/WP workload metrics, dashboard provisioning and query compatibility. Some panels need a particular operation or enough rate-window history before showing finite samples. An empty panel is an investigation prompt, not proof that the corresponding operation is healthy or broken.</p>
@@ -35,22 +35,22 @@
 <h2 id="tracing">Inspect individual request traces</h2>
 <p>When selected, the stack deploys <code>jaegertracing/all-in-one:1.53.0</code> and exports Milvus and WP spans over OTLP. Open Jaeger directly, or select the provisioned <strong>Jaeger</strong> datasource in Grafana Explore.</p>
 <pre><code>./stack.sh traces
-./stack.sh traces-smoke
+./stack.sh traces-smoke -x
 # Strict E2E coverage: fails on disconnected request paths.
-TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke</code></pre>
+TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke -x</code></pre>
 <p>The smoke probe writes 100 vectors and verifies Strong query/search, then saves exact request trace IDs, client latency and raw spans. Normal perf records also contain sampled trace links. The supplied image currently connects query/search through SN and segcore, while its user Insert trace does not continue into SN/WP. Separate WP exporter activity is not proof of an E2E write trace; the report explicitly records this gap as <code>partial</code>.</p>
 <p>Full sampling favors small diagnostic runs and changes system overhead. Lower both server and workload sampling for sustained tests. Jaeger history is bounded and in memory, so save evidence before eviction or restart. See <a href="{{STACK_REPO}}/TRACING.md">tracing setup, interpretation and known gaps</a>.</p>
 
 <h2 id="logs">Search real Pod logs</h2>
 <p>Loki stores compressed log chunks and label indexes on a 4 GiB PVC, with a 24-hour retention policy. Alloy tails this namespace’s container logs through the Kubernetes API. In Grafana Explore, select <strong>Loki</strong> and query <code>{namespace="milvus-stack"}</code>, then filter by Pod or text. When Jaeger is also selected, recognized trace IDs link to its trace view.</p>
 <pre><code>./stack.sh logs
-./stack.sh logs-smoke</code></pre>
+./stack.sh logs-smoke -x</code></pre>
 <p>The smoke test runs a small Milvus write/query/search workload, finds its unique collection marker in the actual Proxy log and requires that marker to arrive through Alloy into Loki. It saves <code>.local/logging-smoke.json</code>. Collection is bounded by source-log retention and collector availability; see <a href="{{STACK_REPO}}/LOGGING.md">storage, queries and limitations</a>.</p>
 <h2 id="alerts">Inspect and test alerting</h2>
 <p>Prometheus evaluates the 31 reference WP rules covering resource pressure, failures, scaling signals and client behavior. Firing alerts are sent to Alertmanager for grouping and inhibition. The default <code>local-only</code> receiver lets you inspect alerts in the Prometheus and Alertmanager UIs without sending email or other external notifications.</p>
 <pre><code>./stack.sh alerts-test   # Offline rule behavior checks; uses Docker.
 ./stack.sh alerts        # Live rule/receiver/AM discovery checks.
-./stack.sh alerts-smoke  # Temporary synthetic firing/recovery/inhibition checks.</code></pre>
+./stack.sh alerts-smoke  -x # Temporary synthetic firing/recovery/inhibition checks.</code></pre>
 <p>The synthetic check verifies the alerting path and removes its temporary resources. It does not create each underlying disk, object-store or quorum failure, and it does not prove that every production threshold is suitable for your workload. See the <a href="{{STACK_REPO}}/ALERTING.md">rule catalog, investigation guidance and validation details</a>.</p>
 <p>When external notification is needed, use the optional SMTP configuration example with your relay and credentials. Optional Mailpit testing captures email locally. Neither profile is enabled by default.</p>
 

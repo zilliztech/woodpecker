@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest.mock import Mock, patch
 
@@ -289,6 +290,17 @@ class ConnectionTests(unittest.TestCase):
             report = inventory().report()
         report["tenant"]["connect_command"] = "connect 'tenant\ninjected: true'"
         self.assertEqual(yaml.safe_load(connections.wpcli_export(report)), report["wpcli"]["config"])
+
+    def test_forward_cli_defaults_to_copyable_plan_without_starting_processes(self):
+        with patch.object(connections, "listening", return_value=False): report = inventory().report()
+        with patch.object(sys, "argv", ["connections.py", "--context", "test-context", "--namespace", "test-ns", "--forward", "--services-only"]), \
+                patch.object(connections, "Connections") as factory, patch.object(connections, "listening", return_value=False), \
+                patch.object(connections.subprocess, "Popen") as spawn, contextlib.redirect_stdout(io.StringIO()) as output:
+            factory.return_value.discover.return_value.report.return_value = report
+            self.assertEqual(connections.main(), 0)
+            spawn.assert_not_called()
+        self.assertIn("kubectl --context test-context -n test-ns port-forward", output.getvalue())
+        self.assertNotIn("19091", output.getvalue())
 
     def test_port_conflict_preflight_has_no_process_side_effects(self):
         with patch.object(connections, "listening", return_value=False):

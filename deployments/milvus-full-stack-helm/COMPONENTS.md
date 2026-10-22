@@ -5,17 +5,21 @@ Prometheus, Alertmanager, Jaeger and Loki are all optional. Core-only rendering
 does not emit monitoring CRDs or download the monitoring chart. Trace export is
 `noop` until Jaeger is selected.
 
+The default is a command preview; add `-x` to execute resource/workload changes.
+The current kubeconfig context is used unless `--context` / `CONTEXT` is supplied.
+Kubernetes itself is always managed externally.
+
 ## Install the core first
 
 ```bash
 python3 -m pip install -r scripts/requirements-connections.txt
-./stack.sh start
-./stack.sh images --local-arm64
-./stack.sh deploy --local-arm64
-./stack.sh forward --wpcli
+kubectl config current-context  # Configure and run Kubernetes separately.
+./stack.sh images --local-arm64  # Image inventory; prepare node image access externally.
+./stack.sh deploy --local-arm64 -x
+./stack.sh forward --wpcli -x
 # Another terminal:
-./stack.sh smoke
-./stack.sh perf
+./stack.sh smoke -x
+./stack.sh perf -x
 ```
 
 For a fresh public-image installation, omit `--local-arm64`. Core-only perf checks
@@ -34,7 +38,7 @@ are preserved. Adding Loki or Grafana does not rebuild or restart the core.
 Changing whether Jaeger is selected changes the shared trace configuration and
 rolls Milvus/WP Pods while retaining application PVC data.
 
-| Component | Install/start command | Automatically included |
+| Component | Preview command (add `-x` to execute) | Automatically included |
 | --- | --- | --- |
 | Grafana | `./stack.sh addons-deploy --with grafana` | Seven reference/E2E dashboards; datasources for selected services |
 | Prometheus | `./stack.sh addons-deploy --with prometheus` | Prometheus Operator, infrastructure collectors, PodMonitors and reference WP rules |
@@ -49,16 +53,16 @@ Prometheus, but needs a producer to send alerts; the example's WP alert flow use
 both. Jaeger and Loki can be queried directly without Grafana. Loki includes its
 collector because a storage backend alone does not collect Pod logs.
 
-On minikube, preload any new images with the same component selection before
-installing them. For example:
+`images --with ...` lists the required images. Prepare registry access or node
+caches outside this tool, then install the selected components. For example:
 
 ```bash
 ./stack.sh images --local-arm64 --with loki
-./stack.sh addons-deploy --with loki
+./stack.sh addons-deploy --with loki -x
 # Add a UI, then metrics and alerts, at any later point:
-./stack.sh addons-deploy --with grafana
-./stack.sh addons-deploy --with prometheus,alertmanager
-./stack.sh addons-deploy --with jaeger
+./stack.sh addons-deploy --with grafana -x
+./stack.sh addons-deploy --with prometheus,alertmanager -x
+./stack.sh addons-deploy --with jaeger -x
 ./stack.sh addons-status
 ```
 
@@ -66,7 +70,7 @@ Or install the complete example initially:
 
 ```bash
 ./stack.sh images --local-arm64 --with all
-./stack.sh deploy --local-arm64 --with all
+./stack.sh deploy --local-arm64 --with all -x
 ```
 
 `render`, `images` and `charts` use an **offline** selection: omitting `--with`
@@ -111,21 +115,26 @@ and [E2E-DASHBOARDS.md](E2E-DASHBOARDS.md) for interpretation and focused steps.
 ## Pause, remove addons, or clear everything
 
 ```bash
-# Pause/resume the entire local cluster; preserve persistent application/log data.
-./stack.sh stop
-./stack.sh start
+# Pause/resume this stack’s workloads; preserve releases and PVC data.
+./stack.sh stop -x
+./stack.sh start -x
 # Remove only Loki/Alloy AND their collected log data; leave Milvus/WP alone.
-./stack.sh addons-clear --with loki
+./stack.sh addons-clear --with loki -x
 # Add them again later (starts a new log history after clear).
-./stack.sh addons-deploy --with loki
+./stack.sh addons-deploy --with loki -x
 # Remove all optional components and their data, retaining the core.
-./stack.sh addons-clear --with all
+./stack.sh addons-clear --with all -x
 # Remove all stack releases AND all their PVC data, including Loki.
-./stack.sh clear
+./stack.sh clear -x
 ```
 
 `addons-clear` is destructive for the named addons' data. It removes their Pods,
 updates Grafana's managed datasources, and deletes only their selected PVCs.
 Removing Jaeger turns off the managed OTLP exporter before removing the collector.
-Jaeger uses memory rather than a PVC, so restart/stop never guarantees retained
-trace history. Shared monitoring CRDs and the namespace are not deleted.
+Jaeger uses memory rather than a PVC, so workload restart/stop does not retain
+trace history. Shared monitoring CRDs, Kubernetes and the namespace are not deleted.
+
+`stop` saves replica counts in the namespace ConfigMap `milvus-full-stack-lifecycle`
+and uses native scale/patch/wait operations. `start` restores those exact counts,
+including any previous zero, and removes the pause state after successful rollouts.
+It never starts Kubernetes. Deploy/addon changes require resuming a paused stack first.

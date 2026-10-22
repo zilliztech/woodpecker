@@ -7,13 +7,13 @@ provisions a `Jaeger` datasource with UID `jaeger`.
 
 ```bash
 ./stack.sh images --local-arm64 --with jaeger,grafana
-./stack.sh deploy --local-arm64
-./stack.sh addons-deploy --with jaeger,grafana
-./stack.sh forward --wpcli
+./stack.sh deploy --local-arm64 -x
+./stack.sh addons-deploy --with jaeger,grafana -x
+./stack.sh forward --wpcli -x
 # In another terminal:
 ./stack.sh connections
 ./stack.sh traces
-./stack.sh traces-smoke
+./stack.sh traces-smoke -x
 ```
 
 Jaeger UI: http://127.0.0.1:16686. Use `JAEGER_PORT` for a different host port;
@@ -51,7 +51,7 @@ functional correctness; strict E2E mode also fails on a coverage gap:
 
 ```bash
 # Expected to fail for the observed write gap in the supplied image.
-TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke
+TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke -x
 # Standalone equivalent:
 python3 scripts/check-traces.py --smoke --require-e2e --output .local/tracing-strict.json
 ```
@@ -106,7 +106,7 @@ upstream decision, so change both settings when reducing trace volume. The small
 `traces-smoke` probe explicitly requests sampling to verify propagation.
 
 ```bash
-PERF_TRACE_SAMPLE_FRACTION=0.1 ./stack.sh perf
+PERF_TRACE_SAMPLE_FRACTION=0.1 ./stack.sh perf -x
 ```
 
 For a tracing-off baseline, run `./stack.sh addons-clear --with jaeger` to disable

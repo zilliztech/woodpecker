@@ -438,7 +438,7 @@ class Benchmark:
 
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--context", default=os.getenv("CONTEXT", os.getenv("PROFILE", "wp-ops-v0146")))
+    parser.add_argument("--context", default=os.getenv("CONTEXT", ""))
     parser.add_argument("--namespace", default=os.getenv("NAMESPACE", "milvus-stack"))
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / ".local/perf")
     parser.add_argument("--skip-metrics", action="store_true", help="Core-only workload; record metrics as skipped")

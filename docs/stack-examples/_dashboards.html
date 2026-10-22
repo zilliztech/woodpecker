@@ -1,6 +1,6 @@
 <h1>E2E Operational Dashboards</h1>
 <p class="page-desc">Choose the symptom, then follow numbered processing steps from top to bottom. Each step explains what to inspect and where to continue.</p>
-<p>Install the optional backends first: <code>./stack.sh addons-deploy --with prometheus,grafana</code>, then keep <code>./stack.sh forward</code> running.</p>
+<p>Install the optional backends first: <code>./stack.sh addons-deploy --with prometheus,grafana -x</code>, then keep <code>./stack.sh forward -x</code> running.</p>
 
 <h2 id="choose">Choose a chain</h2>
 <p>The Helm stack provisions four focused E2E dashboards alongside the three Milvus/WP reference dashboards. Keep the stack’s forwards running; Grafana defaults to <code>http://127.0.0.1:3000</code>. Use <code>./stack.sh connections</code> for actual ports.</p>
@@ -26,9 +26,9 @@
 <p>Use Search / Query for request latency. TSafe waiting points back to consumption/visibility; scheduler waiting, segcore/segment execution, loading and result reduction describe other stages. Proxy result wait includes downstream work and transport, rather than only network latency.</p>
 
 <h2 id="validate">Validate coverage and compare a run</h2>
-<pre><code>./stack.sh smoke
+<pre><code>./stack.sh smoke -x
 # Allow two 15-second scrapes.
 ./stack.sh verify
-./stack.sh perf</code></pre>
+./stack.sh perf -x</code></pre>
 <p>Verification checks seven provisioned dashboards, their queries and the required metric families in each E2E stage. The report lists optional idle/version-specific coverage gaps separately; an UP panel cannot hide a missing WAL-stage metric. Performance reports and the Jupyter guide include E2E links for the run’s time window.</p>
 <p>Channel and WP log filters are separate identities, resolved with metadata before isolating a log. No data is not a healthy zero, histogram overflow limits quantile resolution, and overlapping timers cannot be added or subtracted. These dashboards correlate operational evidence; live read verification and controlled fault/recovery tests establish different aspects of correctness.</p>

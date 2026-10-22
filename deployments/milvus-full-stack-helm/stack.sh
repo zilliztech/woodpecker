@@ -3,13 +3,14 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT/versions.env"
-PROFILE="${PROFILE:-wp-ops-v0146}"
-CONTEXT="${CONTEXT:-$PROFILE}"
+CONTEXT="${CONTEXT:-}"
 NAMESPACE="${NAMESPACE:-milvus-stack}"
 STATE="${STATE:-$ROOT/.local}"
 TIMEOUT="${TIMEOUT:-12m}"
 MILVUS_CHART="$STATE/charts/milvus-$MILVUS_CHART_VERSION.tgz"
 MONITORING_CHART="$STATE/charts/kube-prometheus-stack-$MONITORING_CHART_VERSION.tgz"
+EXECUTE=false
+if [ "${1:-}" = -x ] || [ "${1:-}" = --execute ]; then EXECUTE=true; shift; fi
 ACTION="${1:-help}"
 if [ "$#" -gt 0 ]; then shift; fi
 MV_VALUES=("$ROOT/values/milvus.yaml")
@@ -27,11 +28,9 @@ Usage: ./stack.sh <command> [options]
 Guided walkthrough
   notebook        Open the executable Jupyter walkthrough (local port 8891)
 
-Cluster lifecycle (local minikube profile)
-  start           Create or resume the cluster; keep existing deployments/data
-  stop            Stop the cluster; keep deployments/data for the next start
-
-Stack lifecycle (Helm releases in the selected context/namespace)
+Stack lifecycle (existing Kubernetes context/namespace)
+  start           Resume this stack using replica counts saved by stop
+  stop            Pause this stack’s workloads; preserve Helm releases and PVCs
   deploy          Install/upgrade core Milvus + WP; preserve existing optional components
   clear           Uninstall all stack releases AND delete their persistent data
 
@@ -43,10 +42,10 @@ Optional component lifecycle
 Preparation
   charts          Download the pinned Helm charts
   render          Render manifests locally for inspection
-  images          Pull required images and load them into local minikube
+  images          List images for the selected profile; registry/node setup is external
 
 Access and status
-  status          Show Helm releases, Pods, PVCs, monitors and alert resources
+  status          Show Helm releases, Pods, PVCs and selected optional components
   connections     Show host ports, WP service context and separate Milvus metadata connection
   forward         Open local service ports; Ctrl-C closes these forwards
                   Add --wpcli for all Woodpecker Admin ports and tenant etcd
@@ -75,6 +74,9 @@ Optional email testing (disabled by default)
                   acceptance --mail-capture also includes this check
 
 Options
+  -x, --execute            Execute the printed plan; default is preview only
+  --context NAME           Use this kubeconfig context (default: kubectl current-context)
+  --namespace NAME         Stack namespace (default: milvus-stack)
   --with LIST              grafana,prometheus,alertmanager,jaeger,loki or all
                            deploy: add these; addons-clear: remove only these
                            render/images/charts: choose an offline profile
@@ -91,13 +93,10 @@ Options
   -h, --help                Show this help (also supported after a command)
 
 Targets and environment
-  PROFILE=$PROFILE
-    start/stop/images target this local minikube profile
-  CONTEXT=$CONTEXT  NAMESPACE=$NAMESPACE
-    deploy/clear/status and live checks target this Kubernetes context/namespace
+  CONTEXT=${CONTEXT:-<kubectl current-context>}  NAMESPACE=$NAMESPACE
+    Uses existing Kubernetes; never creates, starts or stops the cluster
   STATE=$STATE
     Local chart cache, rendered manifests and reports; preserved by clear
-  CPUS=${CPUS:-6}  MEMORY=${MEMORY:-6656}     Resources for start (memory in MiB)
   TIMEOUT=$TIMEOUT        Helm/rollout timeout
   Optional ports: GRAFANA_PORT=3000 PROMETHEUS_PORT=9099 MILVUS_PORT=19530
                ALERTMANAGER_PORT=9093 JAEGER_PORT=16686 LOKI_PORT=3100 MAILPIT_PORT=8025 (optional)
@@ -110,27 +109,33 @@ Targets and environment
   Strict trace gate: TRACES_REQUIRE_E2E=1 (traces-smoke/acceptance)
   NOTEBOOK_PORT=8891     JupyterLab port; first launch installs an isolated runtime
 
-Typical workflow
-  ./stack.sh start
-  ./stack.sh images --local-arm64       # Core only
-  ./stack.sh deploy --local-arm64       # Core only on a new install
-  ./stack.sh images --local-arm64 --with all  # Optional: preload addon images
-  ./stack.sh addons-deploy --with all   # Optional; can also choose components
-  ./stack.sh forward                 # Keep running in a separate terminal
-  ./stack.sh connections             # See endpoints and wpcli setup instructions
-  ./stack.sh acceptance                # Checks the installed components
-  ./stack.sh perf                    # Separate write-performance run
+Typical workflow (configure Kubernetes and node image access separately)
+  kubectl config current-context
+  ./stack.sh deploy --local-arm64       # Print native Helm/kubectl operations
+  ./stack.sh deploy --local-arm64 -x    # Install/upgrade core on existing Kubernetes
+  ./stack.sh addons-deploy --with all -x
+  ./stack.sh forward --wpcli -x         # Keep running in a separate terminal
+  ./stack.sh connections               # Read-only connection discovery
+  ./stack.sh acceptance -x             # Runs writes and temporary alert probes
+  ./stack.sh perf -x
 
-Pause/resume:  ./stack.sh stop   -> ./stack.sh start
-Fresh deploy: ./stack.sh clear  -> ./stack.sh deploy --local-arm64
+Pause/resume workloads: ./stack.sh stop -x -> ./stack.sh start -x
+Delete stack and PVCs: ./stack.sh clear -x
 
-clear deletes this stack's PVCs: Milvus/Woodpecker, etcd/MinIO, monitoring and Loki.
-It preserves the namespace, shared CRDs, minikube and local evidence.
-Use stop/start when you want to keep the deployed stack and its data.
+Without -x, resource changes, forwards and workloads are printed rather than run.
+Read-only discovery/status and local charts/render/images/notebook remain available.
+Planning may read cluster state and write local plan files; it does not change resources.
+stop retains PVC data; in-memory/ephemeral history is not retained when Pods exit.
+clear preserves Kubernetes, the namespace, shared CRDs and local evidence.
 EOF
 }
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    -x|--execute) EXECUTE=true; shift ;;
+    --context|--namespace)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then echo "$1 needs a value" >&2; exit 2; fi
+      if [ "$1" = --context ]; then CONTEXT="$2"; else NAMESPACE="$2"; fi
+      shift 2 ;;
     --with)
       if [ "$#" -lt 2 ] || [ -z "$2" ]; then echo "--with needs a component list" >&2; exit 2; fi
       WITH="${WITH:+$WITH,}$2"; shift 2 ;;
@@ -165,6 +170,22 @@ if "$WPCLI" && [ "$ACTION" != forward ]; then echo "--wpcli applies only to forw
 if [ "$CONNECTION_FORMAT" != text ] && [ "$ACTION" != connections ]; then echo "Connection output options apply only to connections" >&2; exit 2; fi
 python3 "$ROOT/scripts/components.py" validate --with "$WITH"
 if [[ "$ACTION" == addons-* && "$ACTION" != addons-status && -z "$WITH" ]]; then echo "--with is required for addon changes" >&2; exit 2; fi
+# Offline preparation needs no kubeconfig. Every live operation uses an existing context.
+case "$ACTION" in
+  charts|render|images|notebook|alerts-test) : ;;
+  *)
+    for tool in kubectl helm; do
+      if ! command -v "$tool" >/dev/null 2>&1; then echo "Install $tool and configure your existing Kubernetes environment first." >&2; exit 2; fi
+    done
+    if [ -z "$CONTEXT" ]; then
+      CONTEXT=$(kubectl config current-context 2>/dev/null) || { echo "No Kubernetes context. Configure KUBECONFIG and kubectl config use-context first." >&2; exit 2; }
+    fi
+    if [ -z "$CONTEXT" ] || ! kubectl --context "$CONTEXT" version --request-timeout=10s -o json >/dev/null 2>&1; then
+      echo "Kubernetes context '$CONTEXT' is unavailable. Configure credentials/connectivity and verify kubectl --context '$CONTEXT' get pods -n '$NAMESPACE'. Manage the cluster outside stack.sh." >&2
+      exit 2
+    fi ;;
+esac
+export CONTEXT NAMESPACE
 mkdir -p "$STATE/charts" "$STATE/rendered"
 # Keep Helm's caches/configuration local to this example.
 export HELM_CACHE_HOME="$STATE/helm/cache"
@@ -172,20 +193,27 @@ export HELM_CONFIG_HOME="$STATE/helm/config"
 export HELM_DATA_HOME="$STATE/helm/data"
 k() { kubectl --context "$CONTEXT" -n "$NAMESPACE" "$@"; }
 h() { helm --kube-context "$CONTEXT" -n "$NAMESPACE" "$@"; }
+run() {
+  printf '%q ' "$@"; printf '\n'
+  if "$EXECUTE"; then "$@"; fi
+}
+km() { run kubectl --context "$CONTEXT" -n "$NAMESPACE" "$@"; }
+hm() { run helm --kube-context "$CONTEXT" -n "$NAMESPACE" "$@"; }
 connection_info() { "${CONNECTIONS_PYTHON:-python3}" "$ROOT/scripts/connections.py" --context "$CONTEXT" --namespace "$NAMESPACE" "$@"; }
 clear_stack() {
   # Uninstall consumers before their dependencies. Missing releases are fine,
   # allowing cleanup to be repeated after a partial installation or uninstall.
-  h uninstall milvus --ignore-not-found --wait --timeout "$TIMEOUT"
-  h uninstall full-stack --ignore-not-found --wait --timeout "$TIMEOUT"
-  h uninstall monitoring --ignore-not-found --wait --timeout "$TIMEOUT"
+  hm uninstall milvus --ignore-not-found --wait --timeout "$TIMEOUT"
+  hm uninstall full-stack --ignore-not-found --wait --timeout "$TIMEOUT"
+  hm uninstall monitoring --ignore-not-found --wait --timeout "$TIMEOUT"
   # StatefulSet/operator PVCs outlive Helm releases. Select only this stack's
   # release identities, including all replica ordinals and optional Grafana PVCs.
-  k delete pvc --selector 'app.kubernetes.io/instance in (milvus,monitoring,monitoring-kube-prometheus-prometheus,monitoring-kube-prometheus-alertmanager)' \
+  km delete pvc --selector 'app.kubernetes.io/instance in (milvus,monitoring,monitoring-kube-prometheus-prometheus,monitoring-kube-prometheus-alertmanager)' \
     --ignore-not-found --wait --timeout="$TIMEOUT"
-  k delete pvc --selector 'app in (full-stack-etcd,full-stack-minio,full-stack-loki)' \
+  km delete pvc --selector 'app in (full-stack-etcd,full-stack-minio,full-stack-loki)' \
     --ignore-not-found --wait --timeout="$TIMEOUT"
-  echo "Stack releases and PVCs deleted from $CONTEXT/$NAMESPACE; cluster and local evidence retained."
+  km delete configmap milvus-full-stack-lifecycle --ignore-not-found
+  if "$EXECUTE"; then echo "Stack releases and PVCs deleted from $CONTEXT/$NAMESPACE; cluster and local evidence retained."; fi
 }
 prepare() {
   local mode="$1" file
@@ -237,7 +265,7 @@ render() {
   cp "$PLAN/rendered/"*.yaml "$STATE/rendered/"
   echo "Rendered manifests: $STATE/rendered (isolated plan: $PLAN)"
 }
-preload() {
+image_inventory() {
   render
   sed -nE 's/^[[:space:]]*image:[[:space:]]*"?([^"[:space:]]+).*/\1/p' \
     "$PLAN"/rendered/*.yaml | sort -u > "$PLAN/images.txt"
@@ -246,50 +274,54 @@ preload() {
       "$PLAN/rendered/monitoring.yaml" >> "$PLAN/images.txt"
   fi
   cp "$PLAN/images.txt" "$STATE/images.txt"
-  while IFS= read -r image; do
-    echo "Loading $image"
-    if ! docker image inspect "$image" >/dev/null 2>&1; then python3 "$ROOT/scripts/pull-image.py" "$image"; fi
-    if ! minikube -p "$PROFILE" image load "$image" --daemon; then minikube -p "$PROFILE" image pull "$image"; fi
-  done < "$PLAN/images.txt"
+  cat "$PLAN/images.txt"
 }
+
 deploy() {
-  k get namespace "$NAMESPACE" >/dev/null 2>&1 || k create namespace "$NAMESPACE"
-  k label namespace "$NAMESPACE" full-stack=milvus --overwrite
+  if k get namespace "$NAMESPACE" >/dev/null 2>&1; then
+    paused=$(k get configmap milvus-full-stack-lifecycle --ignore-not-found -o name)
+    if [ -n "$paused" ]; then echo "Stack is paused. Resume with ./stack.sh start -x before changing Helm releases." >&2; return 2; fi
+  else
+    km create namespace "$NAMESPACE"
+  fi
+  km label namespace "$NAMESPACE" full-stack=milvus --overwrite
   prepare "$ACTION"
   charts
   # Stop exporting before removing Jaeger. Addon changes preserve all live core overrides.
   if [ "$ACTION" = addons-clear ] && "$TRACE_CHANGED"; then
-    h upgrade milvus "$MILVUS_CHART" -f "$PLAN/milvus.yaml" --wait --timeout "$TIMEOUT"
+    hm upgrade milvus "$MILVUS_CHART" -f "$PLAN/milvus.yaml" --wait --timeout "$TIMEOUT"
   fi
   if "$NEED_MONITORING"; then
     # Helm installs CRDs only on first install. Grafana may have been installed
     # alone first, so ensure the pinned CRDs before enabling operator-backed addons.
     if "$HAS_PROMETHEUS" || "$HAS_ALERTMANAGER"; then
-      helm show crds "$MONITORING_CHART" | k apply --server-side --field-manager=milvus-full-stack -f -
+      helm show crds "$MONITORING_CHART" > "$PLAN/crds.yaml"
+      km apply --server-side --field-manager=milvus-full-stack -f "$PLAN/crds.yaml"
     fi
-    h upgrade --install monitoring "$MONITORING_CHART" -f "$PLAN/monitoring.yaml" --wait --timeout "$TIMEOUT"
+    hm upgrade --install monitoring "$MONITORING_CHART" --skip-crds -f "$PLAN/monitoring.yaml" --wait --timeout "$TIMEOUT"
   fi
-  h upgrade --install full-stack "$ROOT/charts/full-stack-support" -f "$PLAN/support.yaml" --wait --timeout "$TIMEOUT"
+  hm upgrade --install full-stack "$ROOT/charts/full-stack-support" -f "$PLAN/support.yaml" --wait --timeout "$TIMEOUT"
   if "$NEED_MILVUS" && [ "$ACTION" != addons-clear ]; then
-    h upgrade --install milvus "$MILVUS_CHART" -f "$PLAN/milvus.yaml" --wait --timeout "$TIMEOUT"
+    hm upgrade --install milvus "$MILVUS_CHART" -f "$PLAN/milvus.yaml" --wait --timeout "$TIMEOUT"
   fi
-  if ! "$NEED_MONITORING" && "$HAD_MONITORING"; then h uninstall monitoring --wait --timeout "$TIMEOUT"; fi
+  if ! "$NEED_MONITORING" && "$HAD_MONITORING"; then hm uninstall monitoring --wait --timeout "$TIMEOUT"; fi
   if [ "$ACTION" = addons-clear ]; then
-    if "$REMOVE_LOKI"; then k delete pvc --selector 'app in (full-stack-loki)' --ignore-not-found --wait; fi
-    if "$REMOVE_PROMETHEUS"; then k delete pvc --selector 'app.kubernetes.io/instance in (monitoring-kube-prometheus-prometheus)' --ignore-not-found --wait; fi
-    if "$REMOVE_ALERTMANAGER"; then k delete pvc --selector 'app.kubernetes.io/instance in (monitoring-kube-prometheus-alertmanager)' --ignore-not-found --wait; fi
-    if "$REMOVE_GRAFANA"; then k delete pvc --selector 'app.kubernetes.io/name=grafana,app.kubernetes.io/instance=monitoring' --ignore-not-found --wait; fi
+    if "$REMOVE_LOKI"; then km delete pvc --selector 'app in (full-stack-loki)' --ignore-not-found --wait; fi
+    if "$REMOVE_PROMETHEUS"; then km delete pvc --selector 'app.kubernetes.io/instance in (monitoring-kube-prometheus-prometheus)' --ignore-not-found --wait; fi
+    if "$REMOVE_ALERTMANAGER"; then km delete pvc --selector 'app.kubernetes.io/instance in (monitoring-kube-prometheus-alertmanager)' --ignore-not-found --wait; fi
+    if "$REMOVE_GRAFANA"; then km delete pvc --selector 'app.kubernetes.io/name=grafana,app.kubernetes.io/instance=monitoring' --ignore-not-found --wait; fi
   fi
-  k get pods,pvc
+  if "$EXECUTE"; then k get pods,pvc; fi
 }
 forward() {
   forward_args=(--forward)
+  if "$EXECUTE"; then forward_args+=(--execute); fi
   if ! "$WPCLI"; then forward_args+=(--services-only); fi
   if "$MAIL_CAPTURE"; then forward_args+=(--mail-capture); fi
   connection_info "${forward_args[@]}"
 }
 verify() {
-  if ! "$HAS_PROMETHEUS"; then echo "Install Prometheus first: ./stack.sh addons-deploy --with prometheus" >&2; return 2; fi
+  if ! "$HAS_PROMETHEUS"; then echo "Install Prometheus first: ./stack.sh addons-deploy --with prometheus -x" >&2; return 2; fi
   if "$HAS_GRAFANA"; then
     python3 "$ROOT/scripts/check.py" --output "$STATE/verification.json"
   else
@@ -334,16 +366,38 @@ alerts_test() {
   docker run --rm --network none --entrypoint /bin/promtool -v "$STATE/alert-tests:/work:ro" \
     quay.io/prometheus/prometheus:v3.0.1 test rules /work/alerts.test.yaml
 }
+if ! "$EXECUTE"; then
+  case "$ACTION" in
+    smoke|perf|logs-smoke|traces-smoke|alerts-smoke|email-smoke|acceptance)
+      case "$ACTION" in
+        smoke) run env "CONTEXT=$CONTEXT" "NAMESPACE=$NAMESPACE" python3 "$ROOT/scripts/workload.py" ;;
+        perf) features; perf_args=(--context "$CONTEXT" --namespace "$NAMESPACE" --output "$STATE/perf")
+              if ! "$HAS_PROMETHEUS"; then perf_args+=(--skip-metrics); fi
+              if ! "$HAS_ALERTMANAGER"; then perf_args+=(--skip-alerts); fi
+              run env "CONTEXT=$CONTEXT" "NAMESPACE=$NAMESPACE" python3 "$ROOT/scripts/perf.py" "${perf_args[@]}" ;;
+        logs-smoke) run env "CONTEXT=$CONTEXT" "NAMESPACE=$NAMESPACE" python3 "$ROOT/scripts/check-logs.py" --smoke --context "$CONTEXT" --namespace "$NAMESPACE" --output "$STATE/logging-smoke.json" ;;
+        traces-smoke) run env "CONTEXT=$CONTEXT" "NAMESPACE=$NAMESPACE" python3 "$ROOT/scripts/check-traces.py" --smoke --output "$STATE/tracing-smoke.json" ;;
+        alerts-smoke) run env "CONTEXT=$CONTEXT" "NAMESPACE=$NAMESPACE" python3 "$ROOT/scripts/check-alerts.py" --smoke --context "$CONTEXT" --output "$STATE/alerting-smoke.json" ;;
+        email-smoke) run env "CONTEXT=$CONTEXT" "NAMESPACE=$NAMESPACE" python3 "$ROOT/scripts/check-email.py" --context "$CONTEXT" --output "$STATE/email-smoke.json" ;;
+        acceptance)
+          echo "# Acceptance writes test data and temporary alert resources. Execute explicitly:"
+          run "$ROOT/stack.sh" acceptance -x --context "$CONTEXT" --namespace "$NAMESPACE" ;;
+      esac
+      exit 0 ;;
+  esac
+fi
 case "$ACTION" in
   notebook) STATE="$STATE" bash "$ROOT/scripts/notebook.sh" ;;
-  start)
-    minikube start -p "$PROFILE" --driver=docker --cpus="${CPUS:-6}" \
-      --memory="${MEMORY:-6656}" --kubernetes-version="$KUBERNETES_VERSION" ;;
-  stop) minikube stop -p "$PROFILE" ;;
+  start|stop)
+    mkdir -p "$STATE/plans"
+    PLAN=$(mktemp -d "$STATE/plans/lifecycle-XXXXXXXX")
+    lifecycle_args=("$ACTION" --context "$CONTEXT" --namespace "$NAMESPACE" --output "$PLAN" --timeout "$TIMEOUT")
+    if "$EXECUTE"; then lifecycle_args+=(--execute); fi
+    python3 "$ROOT/scripts/lifecycle.py" "${lifecycle_args[@]}" ;;
   clear) clear_stack ;;
   charts) prepare render; charts ;;
   render) render ;;
-  images) preload ;;
+  images) image_inventory ;;
   deploy|addons-deploy|addons-clear) deploy ;;
   addons-status) python3 "$ROOT/scripts/components.py" status --context "$CONTEXT" --namespace "$NAMESPACE" ;;
   status) h list; k get pods,pvc; python3 "$ROOT/scripts/components.py" status --context "$CONTEXT" --namespace "$NAMESPACE" ;;

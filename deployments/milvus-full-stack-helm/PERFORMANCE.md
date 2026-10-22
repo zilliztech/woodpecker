@@ -20,10 +20,10 @@ Metrics and alert snapshots are explicitly recorded as skipped when their backen
 not selected. Install `prometheus,grafana,alertmanager` for the full metric/alert
 workflow, and `jaeger` for trace lookup; selected but unreachable backends remain failures.
 
-With the stack deployed, keep `./stack.sh forward` running in another terminal:
+With the stack deployed, keep `./stack.sh forward -x` running in another terminal:
 
 ```bash
-./stack.sh perf
+./stack.sh perf -x
 ```
 
 Defaults: 5 seconds of warm-up, 60 seconds of measurement, two workers, batches of
@@ -38,7 +38,7 @@ the collection with the stack's stored data, while local reports survive.
 To change the load or run a longer observation window:
 
 ```bash
-PERF_DURATION=300 PERF_CONCURRENCY=4 PERF_BATCH_SIZE=200 PERF_RPS=10 ./stack.sh perf
+PERF_DURATION=300 PERF_CONCURRENCY=4 PERF_BATCH_SIZE=200 PERF_RPS=10 ./stack.sh perf -x
 ```
 
 The rate is a **total batch request rate**, not a per-worker rate. At most the
@@ -72,7 +72,7 @@ image. For example, the following are explicit test inputs rather than recommend
 production thresholds:
 
 ```bash
-PERF_MIN_ROWS_PER_SECOND=400 PERF_MAX_P99_MS=500 ./stack.sh perf
+PERF_MIN_ROWS_PER_SECOND=400 PERF_MAX_P99_MS=500 ./stack.sh perf -x
 ```
 
 `MILVUS_URL`, `PROMETHEUS_URL`, `ALERTMANAGER_URL`, and their existing port overrides
@@ -160,7 +160,7 @@ For additional alert-path validation and wider diagnostics:
 
 ```bash
 ./stack.sh alerts
-./stack.sh alerts-smoke
+./stack.sh alerts-smoke -x
 ./stack.sh collect
 ```
 

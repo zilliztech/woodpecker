@@ -14,14 +14,19 @@ import urllib.request
 
 
 class StackLab:
-    def __init__(self, root, profile, context, namespace, ports, local_arm64=True):
+    def __init__(self, root, context, namespace, ports, local_arm64=True, execute=False):
         self.root = Path(root).resolve()
         self.state = Path(os.getenv("STATE", str(self.root / ".local"))).expanduser().resolve()
-        self.profile, self.context, self.namespace = profile, context, namespace
+        if not context:
+            result = subprocess.run(["kubectl", "config", "current-context"], capture_output=True, text=True)
+            context = result.stdout.strip()
+            if result.returncode or not context:
+                raise RuntimeError("Configure KUBECONFIG / kubectl config use-context before opening this walkthrough")
+        self.context, self.namespace, self.execute = context, namespace, execute
         self.ports = ports.copy()
         # This is the full walkthrough; the core-only CLI remains the default.
         self.flags = (["--local-arm64"] if local_arm64 else []) + ["--with", "all"]
-        self.env = dict(os.environ, PROFILE=profile, CONTEXT=context, NAMESPACE=namespace,
+        self.env = dict(os.environ, CONTEXT=context, NAMESPACE=namespace,
                         STATE=str(self.state), **{key + "_PORT": str(value) for key, value in ports.items()})
         # Port settings are authoritative even if the launching shell had URLs.
         self.env.update({key + "_URL": "http://127.0.0.1:" + str(value) for key, value in ports.items()})
@@ -62,6 +67,8 @@ class StackLab:
         args = ["bash", str(self.snapshot()), action]
         if action in ("render", "images", "deploy"):
             args += self.flags
+        if self.execute:
+            args += ["-x"]
         print("./stack.sh " + " ".join(args[2:]), flush=True)
         log_dir = self.state / "notebook"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +117,9 @@ class StackLab:
             return False
 
     def open_forwards(self, timeout=180):
+        if not self.execute:
+            self.run("forward")
+            return
         if self.forward_process and self.forward_process.poll() is None:
             if self.ready():
                 print("Reusing this notebook's healthy forwards.")
@@ -125,7 +135,7 @@ class StackLab:
         folder = self.state / "notebook"
         folder.mkdir(parents=True, exist_ok=True)
         self.forward_log = (folder / "forward.log").open("a")
-        self.forward_process = subprocess.Popen(["bash", str(self.snapshot()), "forward"], cwd=self.root,
+        self.forward_process = subprocess.Popen(["bash", str(self.snapshot()), "forward", "-x"], cwd=self.root,
                                                 env=self.env, stdout=self.forward_log, stderr=subprocess.STDOUT,
                                                 start_new_session=True)
         try:
@@ -156,6 +166,9 @@ class StackLab:
 
     def wait_monitoring(self, timeout=180):
         """Wait through rollout/scrape transitions; persistent errors still fail."""
+        if not self.execute:
+            print("Preview mode: monitoring readiness barrier skipped.")
+            return
         deadline = time.monotonic() + timeout
         consecutive = 0
         last = None

@@ -78,7 +78,7 @@ def run(context, recipient, report):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--context", default=os.getenv("CONTEXT", os.getenv("PROFILE", "wp-ops-v0146")))
+    parser.add_argument("--context", default=os.getenv("CONTEXT", ""))
     parser.add_argument("--recipient", default=os.getenv("EMAIL_TO", "zhenyuan.wei@zilliz.com"))
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

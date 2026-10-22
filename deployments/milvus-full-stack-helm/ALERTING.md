@@ -11,15 +11,15 @@ The default receiver is `local-only`. The optional `--mail-capture` profile adds
 - Grafana also provisions an Alertmanager datasource.
 
 Install the optional backends first: `./stack.sh addons-deploy --with prometheus,alertmanager`
-(and `--with grafana` for dashboards). Run `./stack.sh forward` to expose the selected services; set `ALERTMANAGER_PORT` or `ALERTMANAGER_URL` when overriding the local endpoint.
+(and `--with grafana` for dashboards). Run `./stack.sh forward -x` to expose the selected services; set `ALERTMANAGER_PORT` or `ALERTMANAGER_URL` when overriding the local endpoint.
 Alertmanager runs in its own StatefulSet Pod, separate from Prometheus and Grafana.
 No SMTP service or Mailpit is needed for the default monitoring and alerting loop.
 
 ```bash
 ./stack.sh alerts        # Read-only rule health, coverage, receiver and discovery checks
 ./stack.sh alerts-test   # 16 offline behavioral tests, default namespace and capacity profile
-./stack.sh alerts-smoke  # Temporary synthetic alert: firing -> AM receipt -> resolution
-./stack.sh acceptance    # Full workload/monitoring/alerting acceptance; no email
+./stack.sh alerts-smoke  -x # Temporary synthetic alert: firing -> AM receipt -> resolution
+./stack.sh acceptance    -x # Full workload/monitoring/alerting acceptance; no email
 ```
 
 The smoke command also injects isolated synthetic alerts into Alertmanager to verify inhibition and the absence of cross-node suppression. It cleans up its temporary PrometheusRule and synthetic events in a `finally` block. It neither stops services nor changes business data. It accepts the default receiver or bundled SMTP capture profile and refuses to run with external integrations. Its events do not carry the email-test label and stay on the local-only route. Results are saved in `.local/alerting*.json` and included by `collect`.
@@ -112,11 +112,11 @@ Use the rule's node/log/reader labels to narrow the investigation; do not reset 
 
 ```bash
 ./stack.sh images --local-arm64 --mail-capture
-./stack.sh deploy --local-arm64 --mail-capture
-./stack.sh forward --mail-capture
+./stack.sh deploy --local-arm64 --mail-capture -x
+./stack.sh forward --mail-capture -x
 # Another terminal:
-./stack.sh email-smoke   # Email lifecycle only
-./stack.sh acceptance --mail-capture # Also check SMTP and retain email evidence
+./stack.sh email-smoke   -x # Email lifecycle only
+./stack.sh acceptance --mail-capture -x # Also check SMTP and retain email evidence
 ```
 
 Mailpit is pinned to `v1.31.6` and exposes SMTP port 1025 inside the cluster.
@@ -151,7 +151,7 @@ Secret using the file path:
 kubectl --context wp-ops-v0146 -n milvus-stack create secret generic alertmanager-smtp \
   --from-file=password=/absolute/path/to/smtp-password
 ./stack.sh render --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml
-./stack.sh deploy --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml
+./stack.sh deploy --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml -x
 ```
 
 The operator mounts the password file at

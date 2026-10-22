@@ -5,11 +5,11 @@ The core deployment contains none of these components unless selected.
 
 ```bash
 ./stack.sh images --local-arm64 --with loki,grafana
-./stack.sh addons-deploy --with loki,grafana
-./stack.sh forward --wpcli
+./stack.sh addons-deploy --with loki,grafana -x
+./stack.sh forward --wpcli -x
 # Another terminal:
 ./stack.sh logs
-./stack.sh logs-smoke
+./stack.sh logs-smoke -x
 ```
 
 `grafana/loki:3.5.7` runs in single-binary mode with a 4 GiB PVC. Its TSDB index,

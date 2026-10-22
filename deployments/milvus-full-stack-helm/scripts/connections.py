@@ -338,7 +338,7 @@ def print_report(report):
     for warning in report["warnings"]:
         print("Note: " + warning)
     if not report["wpcli"]["ready"] or not report["tenant"]["ready"]:
-        print("\nOpen local forwards if needed: ./stack.sh forward --wpcli")
+        print("\nOpen local forwards if needed: ./stack.sh forward --wpcli -x")
 
 
 def metadata_lines(tenant):
@@ -375,30 +375,43 @@ def wpcli_export(report):
             + "\n".join("# " + line for note in notes for line in note.splitlines()))
 
 
-def forward(report, services_only=False):
-    # Preflight all ports before starting anything. Reuse only a verified forward
-    # to this exact context/namespace/resource/remote port; never kill external owners.
-    if not services_only and not report["woodpecker_nodes"]:
-        raise RuntimeError("No Woodpecker Pods found; deploy the stack before opening wpcli forwards")
+def forward_endpoints(report, services_only=False):
     endpoints = [e for e in report["endpoints"]
                  if not services_only or (e["name"] != "etcd" and not e["name"].startswith("WP Admin "))]
     endpoints = [e for e in endpoints
                  if (e["name"] != "etcd" or report["tenant"]["etcd_endpoints"] == [e["url"]])
                  and (e["name"] != "Mailpit" or report["mail_capture_requested"])]
+    return endpoints
+
+
+def forward_plan(report, services_only=False):
+    # Preflight all ports before starting anything. Reuse only a verified forward
+    # to this exact context/namespace/resource/remote port; never kill external owners.
+    if not services_only and not report["woodpecker_nodes"]:
+        raise RuntimeError("No Woodpecker Pods found; deploy the stack before opening wpcli forwards")
+    endpoints = forward_endpoints(report, services_only)
     ports = [e["suggested_port"] for e in endpoints]
     if len(ports) != len(set(ports)):
         raise RuntimeError("Local forward ports overlap; change the *_PORT or WP_ADMIN_PORT_BASE settings")
-    start = []
+    start, reused = [], []
     for endpoint in endpoints:
         if endpoint["state"] == "resource-missing":
             raise RuntimeError("Missing Kubernetes target " + endpoint["resource"] + ":" + str(endpoint["remote_port"]))
         exact = any(f["local_port"] == endpoint["suggested_port"] for f in endpoint["active_forwards"])
         if exact:
-            print("Reusing " + endpoint["name"] + " at " + str(endpoint["suggested_port"]), flush=True)
+            reused.append(endpoint)
         elif listening(endpoint["suggested_port"]):
             raise RuntimeError("Port " + str(endpoint["suggested_port"]) + " is occupied without a matching stack forward; existing processes were not touched")
         else:
             start.append(endpoint)
+    return start, reused
+
+
+def forward(report, services_only=False):
+    start, reused = forward_plan(report, services_only)
+    ports = [e["suggested_port"] for e in start + reused]
+    for endpoint in reused:
+        print("Reusing " + endpoint["name"] + " at " + str(endpoint["suggested_port"]), flush=True)
     children = []
     stopping = {"signal": None}
     previous = {sig: signal.signal(sig, lambda value, _: stopping.update(signal=value)) for sig in (signal.SIGINT, signal.SIGTERM)}
@@ -443,18 +456,24 @@ def main():
     parser.add_argument("--context-name", default=os.getenv("WP_CONTEXT_NAME"))
     parser.add_argument("--format", choices=("text", "json", "wpcli"), default="text")
     parser.add_argument("--forward", action="store_true")
+    parser.add_argument("--execute", action="store_true", help="Start forwards; otherwise print native commands")
     parser.add_argument("--services-only", action="store_true")
     parser.add_argument("--mail-capture", action="store_true")
     args = parser.parse_args()
     try:
         report = Connections(args.context, args.namespace, args.context_name).discover().report(args.mail_capture)
         if args.forward:
+            if not args.execute:
+                start, reused = forward_plan(report, args.services_only)
+                for endpoint in reused: print("# Reusing " + endpoint["resource"])
+                for endpoint in start: print(endpoint["forward_command"])
+                return 0
             return forward(report, args.services_only)
         if args.format == "json":
             print(json.dumps(report, indent=2))
         elif args.format == "wpcli":
             if not report["wpcli"]["ready"]:
-                raise RuntimeError("wpcli connections are not ready. Run ./stack.sh connections for details and ./stack.sh forward --wpcli to open the missing forwards")
+                raise RuntimeError("wpcli connections are not ready. Run ./stack.sh connections for details and ./stack.sh forward --wpcli -x to open the missing forwards")
             print(wpcli_export(report))
         else:
             print_report(report)

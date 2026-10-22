@@ -16,7 +16,7 @@ Insert trace. A component's unexported span is not zero latency.
 | Consumption works but persistence/checkpoints lag | E2E Flush / Checkpoint | http://127.0.0.1:3000/d/milvus-e2e-flush |
 | Search/query requests are slow | E2E Search / Query | http://127.0.0.1:3000/d/milvus-e2e-query |
 
-Keep `./stack.sh forward` or `./stack.sh forward --wpcli` running. Use
+Keep `./stack.sh forward -x` or `./stack.sh forward --wpcli` running. Use
 `./stack.sh connections` for actual ports when the defaults differ. Grafana's local
 example credentials are `admin / admin`.
 
@@ -148,10 +148,10 @@ individual searches are different timer populations.
 ## Verification and repeatable evidence
 
 ```bash
-./stack.sh smoke
+./stack.sh smoke -x
 # Allow at least two 15-second scrapes after writing.
 ./stack.sh verify
-./stack.sh perf
+./stack.sh perf -x
 ```
 
 `verify` checks all seven provisioned dashboards and their visible PromQL. It also
