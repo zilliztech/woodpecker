@@ -26,7 +26,7 @@ import (
 )
 
 // newEstimateWriter builds the smallest writer CompactionMemoryEstimate reads: the block layout
-// and the compaction policy. Nothing is opened, because planning touches neither the file nor
+// and the compaction policy. Nothing is opened, because the estimate touches neither the file nor
 // object storage.
 func newEstimateWriter(blockSizes []uint32, targetBlockSize int64, parallelUploads int) *StagedFileWriter {
 	w := &StagedFileWriter{
@@ -61,14 +61,13 @@ func TestCompactionMemoryEstimate_TracksTheSegmentNotTheConfig(t *testing.T) {
 	const mb = int64(1 << 20)
 
 	t.Run("a small segment is charged for itself", func(t *testing.T) {
-		// One 200KB block: a single merge task, so only that task can ever be resident.
+		// The source block and its output cost O(segment size), even with a wide upload pool.
 		w := newEstimateWriter([]uint32{200 << 10}, 2*mb, 4)
-		assert.Equal(t, int64(400<<10), w.CompactionMemoryEstimate(0))
+		assert.InDelta(t, int64(800<<10), w.CompactionMemoryEstimate(0), 1024)
 	})
 
 	t.Run("a segment large enough to fill the pool is charged the pool's width", func(t *testing.T) {
-		// Twelve blocks of ~1MB against a 2MB target: the planner closes a task before it
-		// would reach the target, so tasks come out around 1MB and four run at a time.
+		// Charge four uploads, one builder, and one source block, with slice-growth headroom.
 		sizes := make([]uint32, 12)
 		for i := range sizes {
 			sizes[i] = uint32(mb)
@@ -76,7 +75,7 @@ func TestCompactionMemoryEstimate_TracksTheSegmentNotTheConfig(t *testing.T) {
 		w := newEstimateWriter(sizes, 2*mb, 4)
 
 		estimate := w.CompactionMemoryEstimate(int64(len(sizes) - 1))
-		assert.Equal(t, 8*mb, estimate, "4 concurrent tasks x 1MB x 2 copies")
+		assert.InDelta(t, 22*mb, estimate, 1024)
 	})
 
 	t.Run("the estimate grows with the segment until the pool caps it", func(t *testing.T) {
@@ -90,10 +89,10 @@ func TestCompactionMemoryEstimate_TracksTheSegmentNotTheConfig(t *testing.T) {
 			estimate := w.CompactionMemoryEstimate(int64(blocks - 1))
 
 			assert.GreaterOrEqual(t, estimate, previous, "a bigger segment never costs less")
-			assert.LessOrEqual(t, estimate, 8*mb, "and never more than the pool can hold")
+			assert.LessOrEqual(t, estimate, 22*mb+1024, "and never more than the bounded scanner and uploads can hold")
 			previous = estimate
 		}
-		assert.Equal(t, 8*mb, previous, "the largest segments reach the cap")
+		assert.InDelta(t, 22*mb, previous, 1024, "the largest segments reach the cap")
 	})
 
 	t.Run("cropping to the completion boundary is reflected", func(t *testing.T) {
