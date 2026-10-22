@@ -1,0 +1,75 @@
+{{- if .Values.loki.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-alloy
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-alloy
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-alloy
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-alloy
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-alloy
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-alloy
+data:
+  config.alloy: |
+{{ include "full-stack.alloyConfig" . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-alloy
+spec:
+  selector:
+    matchLabels: {app: {{ .Release.Name }}-alloy}
+  template:
+    metadata:
+      labels: {app: {{ .Release.Name }}-alloy}
+      annotations:
+        checksum/alloy-config: {{ include "full-stack.alloyConfig" . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-alloy
+      containers:
+        - name: alloy
+          image: {{ .Values.alloy.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args: [run, /etc/alloy/config.alloy, --storage.path=/var/lib/alloy, --server.http.listen-addr=0.0.0.0:12345]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef: {fieldPath: spec.nodeName}
+          ports:
+            - {name: http, containerPort: 12345}
+          readinessProbe:
+            httpGet: {path: /-/ready, port: http}
+          resources:
+            {{- toYaml .Values.alloy.resources | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/alloy}
+            - {name: state, mountPath: /var/lib/alloy}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-alloy
+        - name: state
+          emptyDir: {}
+{{- end }}

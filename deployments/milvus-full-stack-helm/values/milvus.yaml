@@ -72,15 +72,10 @@ extraConfigFiles:
           maxInterval: 10s
     log:
       level: info
-    # Shared user.yaml is mounted into Milvus AND the independent WP servers.
-    # Full sampling is for this small local lab; lower it for throughput comparisons.
+    # Core-only default. The component planner enables OTLP when Jaeger is selected.
     trace:
-      exporter: otlp
-      sampleFraction: 1.0
-      otlp:
-        endpoint: full-stack-jaeger:4317
-        method: grpc
-        secure: false
+      exporter: noop
+      sampleFraction: 0
 log:
   persistence:
     enabled: false

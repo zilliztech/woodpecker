@@ -1,7 +1,7 @@
 # Milvus + Woodpecker full stack with Helm
 
 A reproducible local Kubernetes environment for Milvus, **Woodpecker service mode**,
-Prometheus, Grafana, and Jaeger. Milvus is installed using the unmodified official
+with optional Prometheus, Grafana, Alertmanager, Jaeger and Loki/Alloy. Milvus is installed using the unmodified official
 [milvus-helm chart](https://github.com/zilliztech/milvus-helm). The example connects
 deployment, a real Milvus workload, metrics collection, dashboards, and diagnostic
 evidence so developers and local agents can repeat the same feedback loop.
@@ -15,7 +15,10 @@ alerts. Alertmanager defaults to a `local-only` receiver. An optional Mailpit
 profile tests real SMTP delivery locally, with firing and recovery emails addressed
 to `zhenyuan.wei@zilliz.com`; a separate sample supports a real SMTP relay.
 See [alerting rules, runbooks, and verification](ALERTING.md).
-Tracing exports to Jaeger by default for local diagnosis. See [trace verification
+A new deployment installs only Milvus + WP and their etcd/MinIO dependencies.
+Choose optional components with `--with`, or add them later without rebuilding
+the core configuration. See [component installation and lifecycle](COMPONENTS.md).
+Tracing exports to Jaeger when selected. See [trace verification
 and known E2E coverage gaps](TRACING.md); exporter availability alone does not
 establish a complete user-to-storage trace.
 
@@ -31,6 +34,10 @@ flowchart LR
   wp -. server metrics .-> prom
   milvus -. OTLP traces .-> jaeger[Jaeger: local trace history]
   wp -. OTLP traces .-> jaeger
+  milvus -. container logs .-> alloy[Alloy]
+  wp -. container logs .-> alloy
+  alloy --> loki[Loki: persistent logs]
+  loki --> grafana
   jaeger --> grafana
   k8s[Kubelet and kube-state-metrics] -. resource metrics .-> prom
   prom --> grafana[Grafana: Milvus + WP client + WP server]
@@ -52,7 +59,8 @@ flowchart LR
 | Grafana | `11.4.0` (retains the exported Milvus dashboard's Graph panels) |
 | Prometheus / Prometheus operator | `3.0.1` / `0.79.2` |
 | Alertmanager | `0.27.0`, persistent local-only receiver |
-| Jaeger | `jaegertracing/all-in-one:1.53.0`, bounded in-memory trace history |
+| Optional Jaeger | `jaegertracing/all-in-one:1.53.0`, bounded in-memory trace history |
+| Optional Loki / Alloy | `grafana/loki:3.5.7` / `grafana/alloy:v1.10.2`, PVC-backed logs and namespaced collection |
 | Optional Mailpit | `axllent/mailpit:v1.31.6`, local SMTP capture |
 | Local Kubernetes | minikube `v1.33.1`, Docker driver |
 
@@ -63,7 +71,7 @@ the chart/Grafana version, so this example pins its own reproducible versions in
 ## Prerequisites
 
 - Docker running, with at least 8 GiB available to its Linux VM and 8 host CPUs.
-- minikube, Helm 3, kubectl, curl, and Python 3.9+ (standard library only).
+- minikube, Helm 3, kubectl, curl, and Python 3.9+ with PyYAML (`python3 -m pip install PyYAML==6.0.3`). Workload scripts use the standard library.
 - Enough free disk space for images and approximately 20 GiB of provisioned storage.
 - Registry access to download monitoring images. The ARM64 override requires the
   supplied Milvus image to exist in the host Docker daemon or registry access to it.
@@ -114,8 +122,10 @@ For the equivalent CLI workflow, run from this directory:
 
 ```bash
 ./stack.sh start
-./stack.sh images --local-arm64
-./stack.sh deploy --local-arm64
+./stack.sh images --local-arm64                 # Core only
+./stack.sh deploy --local-arm64                 # Core only on first install
+./stack.sh images --local-arm64 --with all     # Optional: preload addon images
+./stack.sh addons-deploy --with all             # Optional full observability
 ./stack.sh status
 ```
 
@@ -128,9 +138,10 @@ PROFILE=milvus-full-stack ./stack.sh images --local-arm64
 PROFILE=milvus-full-stack ./stack.sh deploy --local-arm64
 ```
 
-`images` renders all charts, pulls only missing host images, and loads them into
-minikube with `--daemon`. It includes monitoring components and the dynamically
-created Prometheus configuration reloader. Docker Desktop can fail to export some
+`images` renders the selected offline profile, pulls only missing host images,
+and loads them into minikube with `--daemon`. Add `--with all` to preload every
+optional component, or choose a comma-separated list. Prometheus profiles include
+the dynamically created configuration reloader. Docker Desktop can fail to export some
 distroless images; in that case the command attempts a direct minikube image pull.
 Interrupted host downloads are retried up to three times, with a 300-second limit
 per attempt; set `IMAGE_PULL_TIMEOUT` higher when downloading large images over a
@@ -154,10 +165,11 @@ grouped command list, current targets, options and examples.
 | --- | --- | --- |
 | Guided walkthrough | `notebook` | Open the executable Jupyter guide with an isolated local runtime |
 | Cluster lifecycle | `start` / `stop` | Create or resume / stop the local minikube profile; preserve deployments and data |
-| Stack lifecycle | `deploy` / `clear` | Install or upgrade / uninstall the three Helm releases and delete their PVC data |
+| Stack lifecycle | `deploy` / `clear` | Install or upgrade core and selected addons / uninstall all releases and delete their PVC data |
+| Optional components | `addons-deploy`, `addons-clear`, `addons-status` | Add components later, remove selected components and their data, inspect selection |
 | Preparation | `charts`, `render`, `images` | Download charts, inspect manifests, preload local images |
 | Access and status | `connections`, `forward`, `status` | Show connection/configuration hints, open local ports and inspect deployed resources |
-| Validation | `acceptance`, `smoke`, `verify`, `traces`, `traces-smoke`, `alerts`, `alerts-test`, `alerts-smoke` | Exercise workloads, trace coverage, monitoring, rules and alert delivery |
+| Validation | `acceptance`, `smoke`, `verify`, `traces`, `traces-smoke`, `logs`, `logs-smoke`, `alerts`, `alerts-test`, `alerts-smoke` | Exercise workloads, trace coverage, monitoring, rules and alert delivery |
 | Write performance | `perf` | Measure concurrent inserts and retain correctness, metrics, alert and log evidence |
 | Diagnostics | `collect` | Save bounded logs, resource status and verification reports |
 | Optional email | `email-smoke` | Check local SMTP capture when Mailpit is explicitly enabled |
@@ -182,8 +194,8 @@ To remove the stack and its data, then deploy a fresh environment:
 ./stack.sh deploy --local-arm64
 ```
 
-`clear` uninstalls all three releases before deleting their PVCs: Milvus/Woodpecker,
-etcd/MinIO, Prometheus/Alertmanager and optional Grafana persistence. It selects
+`clear` uninstalls all stack releases before deleting their PVCs: Milvus/Woodpecker,
+etcd/MinIO, Loki, Prometheus/Alertmanager and optional Grafana persistence. It selects
 PVCs by this stack's release/component labels within the selected namespace;
 unrelated PVCs are left alone. Missing releases/PVCs are allowed, so cleanup can
 be repeated after a partial deployment or cleanup. The namespace, shared CRDs,
@@ -217,11 +229,13 @@ Keep this command running in a terminal:
 | Woodpecker server dashboard | http://127.0.0.1:3000/d/woodpecker-server-k8s |
 | Prometheus | http://127.0.0.1:9099 |
 | Alertmanager | http://127.0.0.1:9093 |
-| Jaeger | http://127.0.0.1:16686 |
+| Jaeger (when selected) | http://127.0.0.1:16686 |
+| Loki API (when selected) | http://127.0.0.1:3100 |
 | Milvus REST / SDK endpoint | http://127.0.0.1:19530 |
 
-All forwards bind to loopback; Ctrl-C closes the four forwards. Override local
-ports using `GRAFANA_PORT`, `PROMETHEUS_PORT`, `MILVUS_PORT`, and `ALERTMANAGER_PORT`. Use the same
+Only installed services are forwarded. All forwards bind to loopback; Ctrl-C
+closes only forwards created by that invocation. Override local
+ports using `GRAFANA_PORT`, `PROMETHEUS_PORT`, `MILVUS_PORT`, `ALERTMANAGER_PORT`, `JAEGER_PORT` and `LOKI_PORT`. Use the same
 overrides for the verification commands, or set `GRAFANA_URL`, `PROMETHEUS_URL`,
 and `MILVUS_URL` explicitly. Grafana uses login authentication; anonymous admin
 access is disabled. Provisioned dashboards survive pod recreation; exploratory
@@ -229,7 +243,7 @@ UI edits should be exported and reconciled with the JSON files.
 
 Start with the symptom-oriented [E2E dashboards](E2E-DASHBOARDS.md), whose numbered
 groups follow each processing step with investigation guidance. Use the three
-component reference dashboards for deeper inspection. All seven are provisioned
+component reference dashboards for deeper inspection. When Grafana is selected, all seven are provisioned
 by Helm; notebook and performance reports also link to them.
 
 ## Inspect connections and configure wpcli
@@ -330,7 +344,7 @@ In another terminal, while the forwards are active:
 ./stack.sh collect
 ```
 
-The default acceptance loop needs no SMTP service or Mailpit:
+The acceptance loop needs no SMTP service or Mailpit and checks only selected components:
 
 ```bash
 ./stack.sh acceptance
@@ -433,7 +447,8 @@ even when observability verification fails.
   these infrastructure collectors, which are enabled here.
 - Production datasource UIDs, selected namespaces/instances, and private Grafana
   navigation are removed. The production Loki events panel becomes an explanation
-  of local event evidence collection; no logging stack is installed.
+  of local Kubernetes event evidence collection. Optional [Loki/Alloy](LOGGING.md)
+  collects container logs; it does not collect Kubernetes Events.
 - Namespace/pod discovery is scoped to Milvus. The exported restart, slow-query,
   and disk-IOPS expressions are corrected for standard Prometheus. Service Quality
   and the Woodpecker server overview open by default.
@@ -469,7 +484,7 @@ resolution, inhibition, and synthetic-event cleanup against the local stack.
 - `values/mail-capture.yaml`: optional Mailpit and SMTP receiver with the example recipient.
 - `values/email-smtp.example.yaml`: external SMTP template with Secret-mounted credentials.
 - `charts/full-stack-support/`: small supporting chart for persistent single-node
-  etcd/MinIO, Jaeger, PodMonitors, dashboard ConfigMaps, and PrometheusRule resources. The upstream etcd dependency
+  etcd/MinIO and selected Jaeger/Loki/Alloy, PodMonitors, dashboard ConfigMaps, and PrometheusRule resources. The upstream etcd dependency
   expects a different image layout; the supplied official etcd image is deployed
   directly here instead. Milvus consumes these through external dependency settings.
 - `stack.sh`: chart download, rendering, preload, installation, access and evidence.
@@ -480,8 +495,11 @@ Additional Milvus overrides can be supplied with `-f path/to/values.yaml`; use t
 same flags for rendering, image loading, and deployment. Keep changes to S3 access
 credentials consistent between the support chart and Milvus values.
 Use `--monitoring-values file` and `--support-values file` for their corresponding
-releases. Repeat the profile flags on subsequent deployments; Helm values are
-reconstructed from the supplied files, so omitting `--mail-capture` disables it.
+releases. Component selection is stored in the supporting Helm release. Repeating `deploy`
+preserves already selected addons; `addons-deploy --with ...` adds components.
+Use `addons-clear --with ...` to remove selected addons and their data. Core
+override files still need to be repeated for a core `deploy`; addon changes
+preserve the live core image, resources and user configuration. See COMPONENTS.md.
 
 Re-running `deploy` performs a Helm upgrade. Pin and review chart/image changes,
 then verify them with the same workload and dashboards. Monitor CRDs are installed

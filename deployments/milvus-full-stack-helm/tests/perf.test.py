@@ -168,6 +168,14 @@ else:
         self.assertTrue(report["diagnostic_errors"])
         self.assertTrue((benchmark.out / "milvus-proxy-test-proxy.log").exists())
 
+    def test_core_only_workload_skips_optional_metrics_without_reporting_them_healthy(self):
+        self.metrics_down = True
+        code, _, report = self.run_benchmark("--skip-metrics", "--skip-alerts")
+        self.assertEqual(code, 0, report["failures"])
+        self.assertTrue(report["correctness"]["search_passed"])
+        self.assertEqual(report["observability"], {"metrics": "skipped", "alertmanager": "skipped"})
+        self.assertEqual(report["metrics"], {})
+
     def test_configured_latency_gate_fails_without_hiding_successful_writes(self):
         code, _, report = self.run_benchmark("--max-p99-ms", "0.000001")
         self.assertEqual(code, 1)

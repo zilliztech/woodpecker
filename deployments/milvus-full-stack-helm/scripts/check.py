@@ -91,6 +91,7 @@ def stage_coverage(stages):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--skip-grafana", action="store_true", help="Verify metrics/queries without Grafana provisioning")
     args = parser.parse_args()
     failures = []
     report = {"namespace": NAMESPACE, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -129,13 +130,14 @@ def main():
     opener.addheaders = [("Authorization", "Basic " + token)]
     for path in sorted((ROOT / "charts/full-stack-support/dashboards").glob("*.json")):
         dashboard = json.loads(path.read_text())
-        try:
-            with opener.open(GRAFANA + "/api/dashboards/uid/" + dashboard["uid"], timeout=15) as response:
-                provisioned = json.load(response)
-            if not provisioned.get("meta", {}).get("provisioned"):
-                failures.append(f"Dashboard is not provisioned: {dashboard['uid']}")
-        except Exception as error:
-            failures.append(f"Dashboard unavailable: {dashboard['uid']}: {error}")
+        if not args.skip_grafana:
+            try:
+                with opener.open(GRAFANA + "/api/dashboards/uid/" + dashboard["uid"], timeout=15) as response:
+                    provisioned = json.load(response)
+                if not provisioned.get("meta", {}).get("provisioned"):
+                    failures.append(f"Dashboard is not provisioned: {dashboard['uid']}")
+            except Exception as error:
+                failures.append(f"Dashboard unavailable: {dashboard['uid']}: {error}")
         defaults = {v["name"]: str(v.get("current", {}).get("value", v.get("query", "")))
                     for v in dashboard.get("templating", {}).get("list", [])
                     if v.get("type") in ("textbox", "constant")}
@@ -159,6 +161,7 @@ def main():
             report["dashboards"][dashboard["uid"]]["stage_coverage"] = coverage
             failures.extend(dashboard["uid"] + ": " + failure for failure in missing)
         print(f"{dashboard['title']}: {populated}/{len(results)} queries have data, {len(errors)} query errors")
+    report["grafana_provisioning"] = "skipped: optional Grafana is not selected" if args.skip_grafana else "checked"
     report["failures"] = failures
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

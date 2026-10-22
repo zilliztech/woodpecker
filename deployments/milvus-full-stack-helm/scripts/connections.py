@@ -197,10 +197,14 @@ class Connections:
 
     def report(self, mail_capture=False):
         endpoints = [self.endpoint(name, "svc/" + service, remote, port_value(env, default))
-                     for name, service, remote, env, default in SERVICE_PORTS]
+                     for name, service, remote, env, default in SERVICE_PORTS
+                     if name == "Milvus" or service in self.services]
         if "full-stack-jaeger" in self.services:
             endpoints.append(self.endpoint("Jaeger", "svc/full-stack-jaeger", 16686,
                                            port_value("JAEGER_PORT", 16686)))
+        if "full-stack-loki" in self.services:
+            endpoints.append(self.endpoint("Loki", "svc/full-stack-loki", 3100,
+                                           port_value("LOKI_PORT", 3100)))
         etcd_port = port_value("ETCD_PORT", 32379)
         etcd = self.endpoint("etcd", "svc/full-stack-etcd", 2379, etcd_port, scheme="")
         endpoints.append(etcd)
@@ -371,12 +375,14 @@ def wpcli_export(report):
             + "\n".join("# " + line for note in notes for line in note.splitlines()))
 
 
-def forward(report):
+def forward(report, services_only=False):
     # Preflight all ports before starting anything. Reuse only a verified forward
     # to this exact context/namespace/resource/remote port; never kill external owners.
-    if not report["woodpecker_nodes"]:
+    if not services_only and not report["woodpecker_nodes"]:
         raise RuntimeError("No Woodpecker Pods found; deploy the stack before opening wpcli forwards")
     endpoints = [e for e in report["endpoints"]
+                 if not services_only or (e["name"] != "etcd" and not e["name"].startswith("WP Admin "))]
+    endpoints = [e for e in endpoints
                  if (e["name"] != "etcd" or report["tenant"]["etcd_endpoints"] == [e["url"]])
                  and (e["name"] != "Mailpit" or report["mail_capture_requested"])]
     ports = [e["suggested_port"] for e in endpoints]
@@ -399,7 +405,8 @@ def forward(report):
     try:
         for endpoint in start:
             children.append(subprocess.Popen(shlex.split(endpoint["forward_command"])))
-        print("Forwarding this stack, including per-node WP Admin and tenant etcd. Ctrl+C closes only newly started forwards.", flush=True)
+        print("Forwarding installed stack services" + ("." if services_only else ", including WP Admin and tenant etcd.")
+              + " Ctrl+C closes only newly started forwards.", flush=True)
         deadline = time.monotonic() + 30
         while not stopping["signal"]:
             if any(child.poll() is not None for child in children):
@@ -436,12 +443,13 @@ def main():
     parser.add_argument("--context-name", default=os.getenv("WP_CONTEXT_NAME"))
     parser.add_argument("--format", choices=("text", "json", "wpcli"), default="text")
     parser.add_argument("--forward", action="store_true")
+    parser.add_argument("--services-only", action="store_true")
     parser.add_argument("--mail-capture", action="store_true")
     args = parser.parse_args()
     try:
         report = Connections(args.context, args.namespace, args.context_name).discover().report(args.mail_capture)
         if args.forward:
-            return forward(report)
+            return forward(report, args.services_only)
         if args.format == "json":
             print(json.dumps(report, indent=2))
         elif args.format == "wpcli":

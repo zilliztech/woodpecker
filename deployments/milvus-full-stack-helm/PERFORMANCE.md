@@ -15,6 +15,11 @@ gates, or diagnostic collection errors.
 
 ## Run locally
 
+Core-only `perf` still verifies writes, queries/search and retains request/Pod-log evidence.
+Metrics and alert snapshots are explicitly recorded as skipped when their backend is
+not selected. Install `prometheus,grafana,alertmanager` for the full metric/alert
+workflow, and `jaeger` for trace lookup; selected but unreachable backends remain failures.
+
 With the stack deployed, keep `./stack.sh forward` running in another terminal:
 
 ```bash

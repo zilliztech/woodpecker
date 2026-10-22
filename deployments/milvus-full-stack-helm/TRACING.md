@@ -1,13 +1,14 @@
 # Local tracing with Jaeger
 
-The stack deploys `jaegertracing/all-in-one:1.53.0` and exports Milvus and WP
+When Jaeger is selected, the stack deploys `jaegertracing/all-in-one:1.53.0` and exports Milvus and WP
 spans over OTLP/gRPC to `full-stack-jaeger:4317`. The official Milvus chart mounts
 the shared `user.yaml` into both Milvus and the three WP servers. Grafana also
 provisions a `Jaeger` datasource with UID `jaeger`.
 
 ```bash
-./stack.sh images --local-arm64
+./stack.sh images --local-arm64 --with jaeger,grafana
 ./stack.sh deploy --local-arm64
+./stack.sh addons-deploy --with jaeger,grafana
 ./stack.sh forward --wpcli
 # In another terminal:
 ./stack.sh connections
@@ -82,7 +83,8 @@ file Write and file Sync. Metrics, logs and traces remain complementary evidence
 
 ## Sampling, retention and performance comparisons
 
-Local defaults in `values/milvus.yaml` are:
+Core-only defaults use exporter `noop`. Selecting Jaeger generates the following
+shared Milvus/WP configuration (full sampling for the local lab):
 
 ```yaml
 trace:
@@ -96,7 +98,8 @@ trace:
 
 Full sampling is deliberate for small diagnostic runs. It consumes CPU, memory
 and network and changes the observed system. For sustained load, reduce
-`sampleFraction` in the shared user configuration and redeploy. The perf client
+`sampleFraction` in an additional Milvus values file containing the shared user
+configuration, and repeat it on core deployments. The perf client
 also makes a sampling decision through `PERF_TRACE_SAMPLE_FRACTION` (0..1,
 default 1), carried in the W3C sampled flag. Parent-based samplers may honor this
 upstream decision, so change both settings when reducing trace volume. The small
@@ -106,12 +109,14 @@ upstream decision, so change both settings when reducing trace volume. The small
 PERF_TRACE_SAMPLE_FRACTION=0.1 ./stack.sh perf
 ```
 
-For a tracing-off baseline, set the shared exporter to `noop`, redeploy Milvus/WP,
+For a tracing-off baseline, run `./stack.sh addons-clear --with jaeger` to disable
+the managed exporter and remove the ephemeral collector,
 and run perf with `PERF_TRACE_SAMPLE_FRACTION=0`. Hold the other parameters constant.
 Disabling client sampling alone does not disable all independently rooted
 background spans. This stack does not claim a measured tracing-overhead budget.
 
 Jaeger uses bounded in-memory storage (`jaeger.maxTraces: 10000`), not a PVC.
+This is a trace-count limit, not a span-count limit or a fixed memory-byte budget.
 Restarts and trace eviction remove history; export JSON evidence while it exists.
 `stop` preserves application PVC data but does not guarantee Jaeger memory survives
 resume. `clear` removes the Jaeger Deployment with the supporting Helm release.
@@ -136,3 +141,56 @@ LoadBalancer or Ingress.
 References: [Jaeger v1.53.0](https://github.com/jaegertracing/jaeger/tree/v1.53.0),
 [Milvus trace configuration](https://milvus.io/docs/configure_trace.md), and
 this repository's `common/tracer/tracer.go` and gRPC tracing interceptors.
+
+## What Jaeger stores and when spans can be lost
+
+A span stores an operation name, trace/span/parent IDs, start time and duration,
+service/resource attributes, status and recorded events. Related spans form a
+trace. Jaeger does not store the application's vector dataset or replace Loki's
+raw container logs. An event on a span is also not the entire application log.
+
+The current path is application OpenTelemetry batch exporter → OTLP → Jaeger
+collector queue/workers → in-memory trace storage → Jaeger query/UI. There is
+no durable queue or external trace database in this local example. External
+Jaeger storage backends are a separate deployment choice.
+
+| Situation | Consequence | How to distinguish it |
+| --- | --- | --- |
+| Sampling excludes a request | Its spans are intentionally not exported | Check server/client sampling and the W3C sampled flag |
+| Application exporter queue fills, export fails or the process exits before flushing | Some completed spans may never reach Jaeger | Inspect SDK/export errors and process termination; collector metrics cannot see spans it never received |
+| Collector queue fills or storage cannot keep up | Spans can be refused/dropped or exports can ultimately fail | Inspect collector queue length, queue latency, dropped spans, save latency/errors and Pod resources |
+| In-memory history reaches its trace limit | Older retained traces are evicted | Different from ingestion loss; export evidence while it remains available |
+| Jaeger Pod restarts | In-memory history disappears | Check Pod restart/rollout history; no PVC is configured |
+| Context propagation or instrumentation is missing | Child work may be a separate trace or have no span | Inspect parent IDs and known coverage gaps; absence does not prove queue loss |
+
+**Full sampling does not guarantee complete traces.** The SDK's batch queue is
+bounded and normally nonblocking; sustained export/storage overload cannot be
+solved by increasing queues indefinitely. Lower sampling or improve collector/
+storage capacity before relying on trace coverage during heavy load. A durable
+intermediate queue/external storage can improve resilience but is not installed
+by this local profile.
+
+With optional Prometheus, the Jaeger admin metrics endpoint is scraped through
+a PodMonitor. Inspect the actual exported `jaeger_collector_*` queue, dropped-span
+and storage metrics; compare them over the workload window, not just their current
+values. Collector zero-drop counters alone do not prove the SDK exported every
+span. No span-loss fault injection or no-loss guarantee is claimed here.
+
+The pinned 1.53 image exposes these useful series (scope queries to your namespace):
+
+```promql
+jaeger_collector_queue_length{namespace="milvus-stack"}
+  / jaeger_collector_queue_capacity{namespace="milvus-stack"}
+increase(jaeger_collector_spans_dropped_total{namespace="milvus-stack"}[5m])
+histogram_quantile(0.99, sum by (le) (
+  rate(jaeger_collector_save_latency_bucket{namespace="milvus-stack"}[5m])
+))
+```
+
+The local post-install snapshot showed queue length 0, capacity 2000 and collector
+dropped spans 0. This is an observation at that time, not a stress-test result or
+proof that application-side export lost no spans.
+
+Sources: [Jaeger architecture](https://www.jaegertracing.io/docs/1.76/architecture/),
+[collector queues and slow storage](https://www.jaegertracing.io/docs/1.53/performance-tuning/),
+[OpenTelemetry Go batch queue behavior](https://pkg.go.dev/go.opentelemetry.io/otel/sdk/trace#WithMaxQueueSize).

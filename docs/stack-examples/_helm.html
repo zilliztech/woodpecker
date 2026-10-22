@@ -16,7 +16,15 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre>
 ./stack.sh deploy
 ./stack.sh status</code></pre>
 <p>The public default uses Milvus <code>v3.0.3</code> and Woodpecker <code>v0.1.46</code>. For the supplied private ARM64 Milvus development image, add <code>--local-arm64</code> consistently to <code>render</code>, <code>images</code> and <code>deploy</code>; registry access or a preloaded image is required. The <a href="{{STACK_REPO}}/README.md#troubleshooting">documented live validation</a> used that ARM64 build; the public default image was not exercised in that run.</p>
-<p>Milvus uses the official <code>milvus-helm</code> chart with three independent WP services. The support chart provides persistent etcd/MinIO, dashboards, PodMonitors and alert rules; kube-prometheus-stack provides the monitoring services.</p>
+<p>A first deployment installs only Milvus, three independent WP services and persistent etcd/MinIO, using the official <code>milvus-helm</code> chart and the support chart. It needs no monitoring CRDs and exports no traces by default. Repeated deploys retain already selected optional components.</p>
+<h2 id="addons">Add optional components later</h2>
+<pre><code># Choose independently, or use --with all.
+./stack.sh addons-deploy --with prometheus,grafana
+./stack.sh addons-deploy --with alertmanager
+./stack.sh addons-deploy --with jaeger
+./stack.sh addons-deploy --with loki
+./stack.sh addons-status</code></pre>
+<p>For local image preloading, run <code>./stack.sh images --with all</code> first (add <code>--local-arm64</code> for the supplied build). Loki includes Alloy for Pod-log collection. Addon changes preserve live core overrides; selecting Jaeger updates the shared trace configuration and rolls Milvus/WP. See <a href="{{STACK_REPO}}/COMPONENTS.md">component dependencies and lifecycle</a>.</p>
 <p>Keep ports open in a separate terminal:</p>
 <pre><code>./stack.sh forward --wpcli</code></pre>
 <p>This includes the normal Milvus/monitoring forwards, one Admin endpoint per WP node and the example’s etcd endpoint. Matching existing forwards are reused, and Ctrl+C closes only the forwards started by this invocation. In another terminal, inspect the actual host addresses:</p>
@@ -29,19 +37,20 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre>
 # Allow two 15-second scrapes after the workload.
 ./stack.sh verify
 ./stack.sh alerts</code></pre>
-<p><code>smoke</code> exercises inserts, queries and search through Milvus. <code>verify</code> checks the five Milvus and three WP scrape targets, core workload counters and provisioned dashboard queries. <code>alerts</code> checks rule health and the Alertmanager path. A nonzero exit needs investigation; a running Pod alone does not establish that this chain works.</p>
+<p>Install Prometheus for <code>verify</code>, Grafana for provisioned dashboards, and Prometheus + Alertmanager for <code>alerts</code>. Core-only workloads also work. <code>smoke</code> exercises inserts, queries and search through Milvus. <code>verify</code> checks the five Milvus and three WP scrape targets, core workload counters and provisioned dashboard queries. <code>alerts</code> checks rule health and the Alertmanager path. A nonzero exit needs investigation; a running Pod alone does not establish that this chain works.</p>
 
 <h2 id="notebook">Follow the Jupyter guide</h2>
 <pre><code>./stack.sh notebook</code></pre>
-<p>Open the authenticated loopback URL printed by Jupyter and select <code>notebooks/full-stack-walkthrough.ipynb</code>. The guide covers deployment, dashboards, workloads, write performance, alerts and evidence. Review its configuration cell: it defaults to the supplied ARM64 build, so set <code>USE_LOCAL_ARM64=False</code> for the public image. Stop/clear cells are disabled by default.</p>
+<p>Open the authenticated loopback URL printed by Jupyter and select <code>notebooks/full-stack-walkthrough.ipynb</code>. The full guide explicitly uses <code>--with all</code> for render/images/deploy and covers dashboards, logs, traces, workloads, write performance, alerts and evidence. Review its configuration cell: it defaults to the supplied ARM64 build, so set <code>USE_LOCAL_ARM64=False</code> for the public image. Stop/clear cells are disabled by default.</p>
 
 <h2 id="lifecycle">Pause, resume or reset</h2>
 <table>
   <thead><tr><th>Pair</th><th>Behavior</th></tr></thead>
   <tbody>
     <tr><td><code>stop</code> / <code>start</code></td><td>Pause/resume the local minikube cluster, preserving the deployments and data. Reopen forwards after restarting.</td></tr>
+    <tr><td><code>addons-deploy --with LIST</code> / <code>addons-clear --with LIST</code></td><td>Add or remove selected components and their PVC data; retain the core stack.</td></tr>
     <tr><td><code>deploy</code> / <code>clear</code></td><td>Install/upgrade the Helm releases, or uninstall them and delete their PVC data. The namespace, shared CRDs, minikube profile and local evidence remain.</td></tr>
   </tbody>
 </table>
-<div class="callout warning"><span><code>./stack.sh clear</code> deletes this stack’s Milvus/WP, etcd/MinIO and monitoring PVC data. Use <code>stop</code> when you want to retain the deployed data for another session.</span></div>
+<div class="callout warning"><span><code>./stack.sh clear</code> deletes this stack’s Milvus/WP, etcd/MinIO and monitoring/Loki PVC data. Use <code>stop</code> when you want to retain the deployed data for another session.</span></div>
 <p>For existing clusters, additional Helm values and upgrade/storage details, use the <a href="{{STACK_REPO}}/README.md#configuration-and-lifecycle">deployment reference</a>. Continue with <a href="#stack-examples-observability">monitoring and alerts</a> or <a href="#stack-examples-wpcli">wpcli operations</a>.</p>

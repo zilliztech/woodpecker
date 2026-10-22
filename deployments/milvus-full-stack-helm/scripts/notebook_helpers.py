@@ -19,7 +19,8 @@ class StackLab:
         self.state = Path(os.getenv("STATE", str(self.root / ".local"))).expanduser().resolve()
         self.profile, self.context, self.namespace = profile, context, namespace
         self.ports = ports.copy()
-        self.flags = ["--local-arm64"] if local_arm64 else []
+        # This is the full walkthrough; the core-only CLI remains the default.
+        self.flags = (["--local-arm64"] if local_arm64 else []) + ["--with", "all"]
         self.env = dict(os.environ, PROFILE=profile, CONTEXT=context, NAMESPACE=namespace,
                         STATE=str(self.state), **{key + "_PORT": str(value) for key, value in ports.items()})
         # Port settings are authoritative even if the launching shell had URLs.
@@ -95,6 +96,7 @@ class StackLab:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         checks = (("GRAFANA", "/api/health", None), ("PROMETHEUS", "/-/ready", None),
                   ("ALERTMANAGER", "/-/ready", None), ("MILVUS", "/v2/vectordb/collections/list", b"{}"))
+        checks += tuple((name, path, None) for name, path in (("JAEGER", "/api/services"), ("LOKI", "/ready")) if name in self.ports)
         try:
             for service, path, data in checks:
                 req = urllib.request.Request(self.env[service + "_URL"] + path, data=data,
@@ -118,7 +120,8 @@ class StackLab:
             if len(used) == len(self.ports) and self.ready():
                 print("Reusing existing healthy endpoints. Their forward processes remain externally owned.")
                 return
-            raise RuntimeError(f"Ports already occupied: {used}. Use four free ports or restore your existing forward process.")
+            # The connection manager verifies ownership, reuses matching existing
+            # forwards and opens missing addon ports. It refuses unrelated listeners.
         folder = self.state / "notebook"
         folder.mkdir(parents=True, exist_ok=True)
         self.forward_log = (folder / "forward.log").open("a")
@@ -131,7 +134,7 @@ class StackLab:
                 if self.forward_process.poll() is not None:
                     raise RuntimeError("Forward process exited; inspect .local/notebook/forward.log")
                 if self.ready():
-                    print("All four endpoints ready; this notebook owns these forwards.")
+                    print("All selected endpoints ready; this notebook owns these forwards.")
                     return
                 time.sleep(1)
             raise TimeoutError("Endpoint readiness timed out; inspect .local/notebook/forward.log")

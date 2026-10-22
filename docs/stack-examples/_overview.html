@@ -3,7 +3,7 @@
 
 <h2 id="purpose">Why this stack exists</h2>
 <p>A running Milvus + Woodpecker deployment is easier to operate when application behavior, WAL health, resource pressure and alerts can be examined together. Users who have not yet deployed monitoring or operational tools can start here with a working example, then adapt its configuration and investigation methods to their own instances.</p>
-<p>The stack brings together <strong>Milvus, independent Woodpecker services, Prometheus, Grafana, Alertmanager and wpcli operations</strong>. A real Milvus workload exercises its WP client and the WP servers, so the example explains what to observe along the write path and how to investigate it.</p>
+<p>The default deployment contains <strong>Milvus and independent Woodpecker services</strong> with persistent dependencies. Add <strong>Prometheus, Grafana, Alertmanager, Jaeger and Loki/Alloy</strong> independently, and use wpcli for operations. A real Milvus workload exercises its WP client and the WP servers, so the example explains what to observe along the write path and how to investigate it.</p>
 <div class="stack-flow" role="figure" aria-label="Milvus writes flow through its Woodpecker client to independent Woodpecker services and object storage; Prometheus collects metrics, Grafana shows dashboards, Alertmanager groups alerts, and wpcli inspects services and metadata.">
   <div><strong>Exercise the write path</strong><span>Milvus workload → Milvus + WP client → WP services → object storage</span></div>
   <div><strong>Observe and investigate</strong><span>Prometheus → Grafana + Alertmanager · wpcli → WP services and client metadata</span></div>

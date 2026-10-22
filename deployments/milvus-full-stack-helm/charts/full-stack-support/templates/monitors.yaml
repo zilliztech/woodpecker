@@ -1,5 +1,6 @@
 # The Woodpecker client runs inside Milvus, not in a separate load-generator pod.
 # Scrape all Milvus components once to include client metrics in every host process.
+{{- if .Values.components.prometheus }}
 {{- range $component := list "milvus" "woodpecker" }}
 ---
 apiVersion: monitoring.coreos.com/v1
@@ -38,4 +39,5 @@ spec:
         - sourceLabels: [__meta_kubernetes_pod_name]
           targetLabel: node_id
         {{- end }}
+{{- end }}
 {{- end }}

@@ -107,6 +107,8 @@ class Benchmark:
                        "started_at": utc(), "config": vars(args).copy(), "failures": [],
                        "diagnostic_errors": [], "metrics": {}, "phases": {}}
         self.report["config"]["output"] = str(args.output)
+        self.report["observability"] = {"metrics": "skipped" if args.skip_metrics else "required",
+                                       "alertmanager": "skipped" if args.skip_alerts else "required"}
         self.report["scope"] = "Milvus REST via configured endpoint; WP/resource metrics aggregate this deployment"
         self.trace = (self.out / "requests.jsonl").open("w")
         self.signals = (self.out / "signals.jsonl").open("w")
@@ -123,16 +125,19 @@ class Benchmark:
     def snapshot(self):
         result = {"at": utc(), "metrics": {}}
         for name, query in self.queries.items():
+            if self.args.skip_metrics:
+                break
             try:
                 reply = http(self.args.prometheus, "/api/v1/query?" + urllib.parse.urlencode({"query": query}))
                 result["metrics"][name] = reply["data"]["result"]
             except Exception as error:
                 self.diagnostic_error("metric:" + name, error)
-        try:
-            result["alerts"] = [a for a in http(self.args.alertmanager, "/api/v2/alerts")
-                                if a["labels"].get("namespace") == self.args.namespace]
-        except Exception as error:
-            self.diagnostic_error("alertmanager", error)
+        if not self.args.skip_alerts:
+            try:
+                result["alerts"] = [a for a in http(self.args.alertmanager, "/api/v2/alerts")
+                                    if a["labels"].get("namespace") == self.args.namespace]
+            except Exception as error:
+                self.diagnostic_error("alertmanager", error)
         with self.lock:
             self.signals.write(json.dumps(result) + "\n")
             self.signals.flush()
@@ -295,6 +300,8 @@ class Benchmark:
             self.diagnostic_error("kubernetes", error)
 
     def collect_ranges(self, start, end):
+        if self.args.skip_metrics:
+            return
         for name, query in self.queries.items():
             try:
                 params = urllib.parse.urlencode({"query": query, "start": start, "end": end, "step": 15})
@@ -393,6 +400,8 @@ class Benchmark:
             final = self.snapshot()
             self.collect_ranges(started - 60, time.time())
             for name in ("milvus_rows", "client_appends", "server_appends"):
+                if self.args.skip_metrics:
+                    break
                 def series(snapshot):
                     return {json.dumps(row["metric"], sort_keys=True): float(row["value"][1])
                             for row in snapshot.get("metrics", {}).get(name, []) if math.isfinite(float(row["value"][1]))}
@@ -432,6 +441,8 @@ def arguments(argv=None):
     parser.add_argument("--context", default=os.getenv("CONTEXT", os.getenv("PROFILE", "wp-ops-v0146")))
     parser.add_argument("--namespace", default=os.getenv("NAMESPACE", "milvus-stack"))
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / ".local/perf")
+    parser.add_argument("--skip-metrics", action="store_true", help="Core-only workload; record metrics as skipped")
+    parser.add_argument("--skip-alerts", action="store_true", help="Alertmanager is not installed; record as skipped")
     for flag, default in (("milvus", "19530"), ("prometheus", "9099"), ("alertmanager", "9093")):
         parser.add_argument("--" + flag, default=os.getenv(flag.upper() + "_URL", "http://127.0.0.1:" + os.getenv(flag.upper() + "_PORT", default)))
     for name, default, kind in (("duration", 60, float), ("warmup", 5, float), ("cooldown", 35, float),

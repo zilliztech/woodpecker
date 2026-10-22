@@ -12,10 +12,11 @@ MILVUS_CHART="$STATE/charts/milvus-$MILVUS_CHART_VERSION.tgz"
 MONITORING_CHART="$STATE/charts/kube-prometheus-stack-$MONITORING_CHART_VERSION.tgz"
 ACTION="${1:-help}"
 if [ "$#" -gt 0 ]; then shift; fi
-MV_VALUES=(-f "$ROOT/values/milvus.yaml")
-MON_VALUES=(-f "$ROOT/values/monitoring.yaml")
+MV_VALUES=("$ROOT/values/milvus.yaml")
+MON_VALUES=("$ROOT/values/monitoring.yaml")
 # Keep this array nonempty for macOS Bash 3.2 with nounset enabled.
-SUPPORT_VALUES=(-f "$ROOT/charts/full-stack-support/values.yaml")
+SUPPORT_VALUES=("$ROOT/charts/full-stack-support/values.yaml")
+WITH=""
 MAIL_CAPTURE=false
 WPCLI=false
 CONNECTION_FORMAT=text
@@ -31,8 +32,13 @@ Cluster lifecycle (local minikube profile)
   stop            Stop the cluster; keep deployments/data for the next start
 
 Stack lifecycle (Helm releases in the selected context/namespace)
-  deploy          Install or upgrade Milvus, Woodpecker and monitoring
-  clear           Uninstall the three releases AND delete their persistent data
+  deploy          Install/upgrade core Milvus + WP; preserve existing optional components
+  clear           Uninstall all stack releases AND delete their persistent data
+
+Optional component lifecycle
+  addons-deploy    Add/upgrade selected components after core deployment (--with required)
+  addons-clear     Remove selected components AND their data (--with required)
+  addons-status    Show the enabled optional components
 
 Preparation
   charts          Download the pinned Helm charts
@@ -46,9 +52,11 @@ Access and status
                   Add --wpcli for all Woodpecker Admin ports and tenant etcd
 
 Validation (keep forward running for live checks)
-  acceptance      Rules + workload + traces + dashboards + alert lifecycle/inhibition
+  acceptance      Workload + evidence; validate each installed observability backend
   smoke           Run a Milvus insert/query/search workload
   verify          Check scrape targets, workload metrics and dashboard queries
+  logs            Check Loki readiness and collected namespace logs
+  logs-smoke      Match a real Milvus/WP log line through Alloy into Loki
   traces          Check Jaeger services and trace evidence
   traces-smoke    Run a small read/write workload and check cross-service traces
   alerts          Inspect rule health, coverage, receiver and AM discovery
@@ -57,7 +65,7 @@ Validation (keep forward running for live checks)
 
 Write performance and diagnosis
   perf            Bounded concurrent writes, latency/throughput and read checks
-                  Always save request records, metrics, alerts and Pod logs
+                  Save requests + Pod logs; metrics/alerts when selected
 
 Diagnostics
   collect         Save status, bounded logs and verification reports locally
@@ -67,6 +75,9 @@ Optional email testing (disabled by default)
                   acceptance --mail-capture also includes this check
 
 Options
+  --with LIST              grafana,prometheus,alertmanager,jaeger,loki or all
+                           deploy: add these; addons-clear: remove only these
+                           render/images/charts: choose an offline profile
   --local-arm64             Use the supplied ARM64 Milvus build
   -f, --values FILE          Additional Milvus Helm values (repeatable)
   --monitoring-values FILE  Additional monitoring Helm values (repeatable)
@@ -88,8 +99,8 @@ Targets and environment
     Local chart cache, rendered manifests and reports; preserved by clear
   CPUS=${CPUS:-6}  MEMORY=${MEMORY:-6656}     Resources for start (memory in MiB)
   TIMEOUT=$TIMEOUT        Helm/rollout timeout
-  Local ports: GRAFANA_PORT=3000 PROMETHEUS_PORT=9099 MILVUS_PORT=19530
-               ALERTMANAGER_PORT=9093 JAEGER_PORT=16686 MAILPIT_PORT=8025 (optional)
+  Optional ports: GRAFANA_PORT=3000 PROMETHEUS_PORT=9099 MILVUS_PORT=19530
+               ALERTMANAGER_PORT=9093 JAEGER_PORT=16686 LOKI_PORT=3100 MAILPIT_PORT=8025 (optional)
   wpcli ports: WP_ADMIN_PORT_BASE=19091 (plus Pod ordinal), ETCD_PORT=32379
   CONNECTIONS_PYTHON=python3  Python with PyYAML for connections/forward --wpcli
   Perf defaults: PERF_DURATION=60 PERF_CONCURRENCY=2 PERF_BATCH_SIZE=100
@@ -101,25 +112,30 @@ Targets and environment
 
 Typical workflow
   ./stack.sh start
-  ./stack.sh images --local-arm64
-  ./stack.sh deploy --local-arm64
+  ./stack.sh images --local-arm64       # Core only
+  ./stack.sh deploy --local-arm64       # Core only on a new install
+  ./stack.sh images --local-arm64 --with all  # Optional: preload addon images
+  ./stack.sh addons-deploy --with all   # Optional; can also choose components
   ./stack.sh forward                 # Keep running in a separate terminal
   ./stack.sh connections             # See endpoints and wpcli setup instructions
-  ./stack.sh acceptance
+  ./stack.sh acceptance                # Checks the installed components
   ./stack.sh perf                    # Separate write-performance run
 
 Pause/resume:  ./stack.sh stop   -> ./stack.sh start
 Fresh deploy: ./stack.sh clear  -> ./stack.sh deploy --local-arm64
 
-clear deletes this stack's PVCs: Milvus/Woodpecker, etcd/MinIO and monitoring.
+clear deletes this stack's PVCs: Milvus/Woodpecker, etcd/MinIO, monitoring and Loki.
 It preserves the namespace, shared CRDs, minikube and local evidence.
 Use stop/start when you want to keep the deployed stack and its data.
 EOF
 }
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --with)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then echo "--with needs a component list" >&2; exit 2; fi
+      WITH="${WITH:+$WITH,}$2"; shift 2 ;;
     -h|--help) ACTION=help; shift ;;
-    --local-arm64) MV_VALUES+=(-f "$ROOT/values/local-arm64.yaml"); shift ;;
+    --local-arm64) MV_VALUES+=("$ROOT/values/local-arm64.yaml"); shift ;;
     --wpcli) WPCLI=true; shift ;;
     --json|--wpcli-config)
       if [ "$CONNECTION_FORMAT" != text ]; then echo "Choose one connection output format" >&2; exit 2; fi
@@ -127,25 +143,28 @@ while [ "$#" -gt 0 ]; do
       shift ;;
     --mail-capture)
       MAIL_CAPTURE=true
-      MON_VALUES+=(-f "$ROOT/values/mail-capture.yaml")
-      SUPPORT_VALUES+=(-f "$ROOT/values/mail-capture.yaml"); shift ;;
+      WITH="${WITH:+$WITH,}prometheus,alertmanager"
+      MON_VALUES+=("$ROOT/values/mail-capture.yaml")
+      SUPPORT_VALUES+=("$ROOT/values/mail-capture.yaml"); shift ;;
     --monitoring-values|--support-values)
       if [ "$#" -lt 2 ]; then echo "Missing values file" >&2; exit 2; fi
-      if [ "$1" = --monitoring-values ]; then MON_VALUES+=(-f "$2"); else SUPPORT_VALUES+=(-f "$2"); fi
+      if [ "$1" = --monitoring-values ]; then MON_VALUES+=("$2"); else SUPPORT_VALUES+=("$2"); fi
       shift 2 ;;
     -f|--values)
       if [ "$#" -lt 2 ]; then echo "Missing values file" >&2; exit 2; fi
-      MV_VALUES+=(-f "$2"); shift 2 ;;
+      MV_VALUES+=("$2"); shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 case "$ACTION" in
   help|-h|--help) usage; exit 0 ;;
-  notebook|start|stop|deploy|clear|charts|render|images|status|connections|forward|smoke|perf|verify|traces|traces-smoke|alerts|alerts-smoke|email-smoke|acceptance|alerts-test|collect) ;;
+  notebook|start|stop|deploy|addons-deploy|addons-clear|addons-status|clear|charts|render|images|status|connections|forward|smoke|perf|verify|logs|logs-smoke|traces|traces-smoke|alerts|alerts-smoke|email-smoke|acceptance|alerts-test|collect) ;;
   *) echo "Unknown command: $ACTION (see ./stack.sh help)" >&2; exit 2 ;;
 esac
 if "$WPCLI" && [ "$ACTION" != forward ]; then echo "--wpcli applies only to forward" >&2; exit 2; fi
 if [ "$CONNECTION_FORMAT" != text ] && [ "$ACTION" != connections ]; then echo "Connection output options apply only to connections" >&2; exit 2; fi
+python3 "$ROOT/scripts/components.py" validate --with "$WITH"
+if [[ "$ACTION" == addons-* && "$ACTION" != addons-status && -z "$WITH" ]]; then echo "--with is required for addon changes" >&2; exit 2; fi
 mkdir -p "$STATE/charts" "$STATE/rendered"
 # Keep Helm's caches/configuration local to this example.
 export HELM_CACHE_HOME="$STATE/helm/cache"
@@ -164,107 +183,130 @@ clear_stack() {
   # release identities, including all replica ordinals and optional Grafana PVCs.
   k delete pvc --selector 'app.kubernetes.io/instance in (milvus,monitoring,monitoring-kube-prometheus-prometheus,monitoring-kube-prometheus-alertmanager)' \
     --ignore-not-found --wait --timeout="$TIMEOUT"
-  k delete pvc --selector 'app in (full-stack-etcd,full-stack-minio)' \
+  k delete pvc --selector 'app in (full-stack-etcd,full-stack-minio,full-stack-loki)' \
     --ignore-not-found --wait --timeout="$TIMEOUT"
   echo "Stack releases and PVCs deleted from $CONTEXT/$NAMESPACE; cluster and local evidence retained."
 }
+prepare() {
+  local mode="$1" file
+  mkdir -p "$STATE/plans"
+  PLAN=$(mktemp -d "$STATE/plans/plan-XXXXXXXX")
+  plan_args=("$mode" --context "$CONTEXT" --namespace "$NAMESPACE" --with "$WITH" --output "$PLAN")
+  for file in "${MV_VALUES[@]}"; do
+    if [ "$file" != "$ROOT/values/milvus.yaml" ]; then plan_args+=(--milvus-values "$file"); fi
+  done
+  for file in "${MON_VALUES[@]}"; do
+    if [ "$file" != "$ROOT/values/monitoring.yaml" ]; then plan_args+=(--monitoring-values "$file"); fi
+  done
+  for file in "${SUPPORT_VALUES[@]}"; do
+    if [ "$file" != "$ROOT/charts/full-stack-support/values.yaml" ]; then plan_args+=(--support-values "$file"); fi
+  done
+  python3 "$ROOT/scripts/components.py" "${plan_args[@]}"
+  # Generated file contains only fixed boolean flags, never credentials or YAML.
+  # shellcheck source=/dev/null
+  source "$PLAN/flags.env"
+}
+features() {
+  local flags
+  flags=$(python3 "$ROOT/scripts/components.py" flags --context "$CONTEXT" --namespace "$NAMESPACE")
+  # Only the known boolean flags printed by components.py are evaluated.
+  eval "$flags"
+}
 charts() {
-  if [ ! -s "$MILVUS_CHART" ]; then
+  if "$NEED_MILVUS" && [ ! -s "$MILVUS_CHART" ]; then
     curl -fL --retry 2 --connect-timeout 15 --max-time 180 \
       "https://github.com/zilliztech/milvus-helm/releases/download/milvus-$MILVUS_CHART_VERSION/milvus-$MILVUS_CHART_VERSION.tgz" \
       -o "$MILVUS_CHART.part"
     mv "$MILVUS_CHART.part" "$MILVUS_CHART"
   fi
-  if [ ! -s "$MONITORING_CHART" ]; then
+  if "$NEED_MONITORING" && [ ! -s "$MONITORING_CHART" ]; then
     helm pull kube-prometheus-stack --repo https://prometheus-community.github.io/helm-charts \
       --version "$MONITORING_CHART_VERSION" --destination "$STATE/charts"
   fi
 }
 render() {
+  prepare render
   charts
-  helm template milvus "$MILVUS_CHART" -n "$NAMESPACE" "${MV_VALUES[@]}" > "$STATE/rendered/milvus.yaml"
-  helm template monitoring "$MONITORING_CHART" -n "$NAMESPACE" \
-    "${MON_VALUES[@]}" > "$STATE/rendered/monitoring.yaml"
-  helm template full-stack "$ROOT/charts/full-stack-support" -n "$NAMESPACE" "${SUPPORT_VALUES[@]}" > "$STATE/rendered/support.yaml"
-  echo "Rendered manifests: $STATE/rendered"
+  mkdir -p "$PLAN/rendered"
+  helm template milvus "$MILVUS_CHART" -n "$NAMESPACE" -f "$PLAN/milvus.yaml" > "$PLAN/rendered/milvus.yaml"
+  : > "$PLAN/rendered/monitoring.yaml"
+  if "$NEED_MONITORING"; then
+    helm template monitoring "$MONITORING_CHART" -n "$NAMESPACE" -f "$PLAN/monitoring.yaml" > "$PLAN/rendered/monitoring.yaml"
+  fi
+  helm template full-stack "$ROOT/charts/full-stack-support" -n "$NAMESPACE" -f "$PLAN/support.yaml" > "$PLAN/rendered/support.yaml"
+  cp "$PLAN/rendered/"*.yaml "$STATE/rendered/"
+  echo "Rendered manifests: $STATE/rendered (isolated plan: $PLAN)"
 }
 preload() {
   render
-  # Includes regular containers, init containers, and Helm admission jobs.
   sed -nE 's/^[[:space:]]*image:[[:space:]]*"?([^"[:space:]]+).*/\1/p' \
-    "$STATE"/rendered/*.yaml | sort -u > "$STATE/images.txt"
-  # The operator creates this container dynamically; it appears as an argument,
-  # rather than a container image field in the rendered resources.
-  sed -nE 's/.*--prometheus-config-reloader=([^"[:space:]]+).*/\1/p' \
-    "$STATE/rendered/monitoring.yaml" >> "$STATE/images.txt"
+    "$PLAN"/rendered/*.yaml | sort -u > "$PLAN/images.txt"
+  if "$NEED_MONITORING"; then
+    sed -nE 's/.*--prometheus-config-reloader=([^"[:space:]]+).*/\1/p' \
+      "$PLAN/rendered/monitoring.yaml" >> "$PLAN/images.txt"
+  fi
+  cp "$PLAN/images.txt" "$STATE/images.txt"
   while IFS= read -r image; do
     echo "Loading $image"
-    if ! docker image inspect "$image" >/dev/null 2>&1; then
-      python3 "$ROOT/scripts/pull-image.py" "$image"
-    fi
-    if ! minikube -p "$PROFILE" image load "$image" --daemon; then
-      # Docker Desktop's containerd image store sometimes cannot export distroless images.
-      minikube -p "$PROFILE" image pull "$image"
-    fi
-  done < "$STATE/images.txt"
+    if ! docker image inspect "$image" >/dev/null 2>&1; then python3 "$ROOT/scripts/pull-image.py" "$image"; fi
+    if ! minikube -p "$PROFILE" image load "$image" --daemon; then minikube -p "$PROFILE" image pull "$image"; fi
+  done < "$PLAN/images.txt"
 }
 deploy() {
-  charts
   k get namespace "$NAMESPACE" >/dev/null 2>&1 || k create namespace "$NAMESPACE"
   k label namespace "$NAMESPACE" full-stack=milvus --overwrite
-  h upgrade --install monitoring "$MONITORING_CHART" --create-namespace \
-    "${MON_VALUES[@]}" --wait --timeout "$TIMEOUT"
-  h upgrade --install full-stack "$ROOT/charts/full-stack-support" "${SUPPORT_VALUES[@]}" --wait --timeout "$TIMEOUT"
-  h upgrade --install milvus "$MILVUS_CHART" "${MV_VALUES[@]}" --wait --timeout "$TIMEOUT"
-  k rollout status statefulset/prometheus-monitoring-kube-prometheus-prometheus --timeout="$TIMEOUT"
-  k rollout status statefulset/alertmanager-monitoring-kube-prometheus-alertmanager --timeout="$TIMEOUT"
+  prepare "$ACTION"
+  charts
+  # Stop exporting before removing Jaeger. Addon changes preserve all live core overrides.
+  if [ "$ACTION" = addons-clear ] && "$TRACE_CHANGED"; then
+    h upgrade milvus "$MILVUS_CHART" -f "$PLAN/milvus.yaml" --wait --timeout "$TIMEOUT"
+  fi
+  if "$NEED_MONITORING"; then
+    # Helm installs CRDs only on first install. Grafana may have been installed
+    # alone first, so ensure the pinned CRDs before enabling operator-backed addons.
+    if "$HAS_PROMETHEUS" || "$HAS_ALERTMANAGER"; then
+      helm show crds "$MONITORING_CHART" | k apply --server-side --field-manager=milvus-full-stack -f -
+    fi
+    h upgrade --install monitoring "$MONITORING_CHART" -f "$PLAN/monitoring.yaml" --wait --timeout "$TIMEOUT"
+  fi
+  h upgrade --install full-stack "$ROOT/charts/full-stack-support" -f "$PLAN/support.yaml" --wait --timeout "$TIMEOUT"
+  if "$NEED_MILVUS" && [ "$ACTION" != addons-clear ]; then
+    h upgrade --install milvus "$MILVUS_CHART" -f "$PLAN/milvus.yaml" --wait --timeout "$TIMEOUT"
+  fi
+  if ! "$NEED_MONITORING" && "$HAD_MONITORING"; then h uninstall monitoring --wait --timeout "$TIMEOUT"; fi
+  if [ "$ACTION" = addons-clear ]; then
+    if "$REMOVE_LOKI"; then k delete pvc --selector 'app in (full-stack-loki)' --ignore-not-found --wait; fi
+    if "$REMOVE_PROMETHEUS"; then k delete pvc --selector 'app.kubernetes.io/instance in (monitoring-kube-prometheus-prometheus)' --ignore-not-found --wait; fi
+    if "$REMOVE_ALERTMANAGER"; then k delete pvc --selector 'app.kubernetes.io/instance in (monitoring-kube-prometheus-alertmanager)' --ignore-not-found --wait; fi
+    if "$REMOVE_GRAFANA"; then k delete pvc --selector 'app.kubernetes.io/name=grafana,app.kubernetes.io/instance=monitoring' --ignore-not-found --wait; fi
+  fi
   k get pods,pvc
 }
 forward() {
-  if "$WPCLI"; then
-    if "$MAIL_CAPTURE"; then
-      connection_info --forward --mail-capture
-    else
-      connection_info --forward
-    fi
-    return
+  forward_args=(--forward)
+  if ! "$WPCLI"; then forward_args+=(--services-only); fi
+  if "$MAIL_CAPTURE"; then forward_args+=(--mail-capture); fi
+  connection_info "${forward_args[@]}"
+}
+verify() {
+  if ! "$HAS_PROMETHEUS"; then echo "Install Prometheus first: ./stack.sh addons-deploy --with prometheus" >&2; return 2; fi
+  if "$HAS_GRAFANA"; then
+    python3 "$ROOT/scripts/check.py" --output "$STATE/verification.json"
+  else
+    python3 "$ROOT/scripts/check.py" --skip-grafana --output "$STATE/verification.json"
   fi
-  k rollout status deployment/monitoring-grafana --timeout="$TIMEOUT"
-  k rollout status statefulset/prometheus-monitoring-kube-prometheus-prometheus --timeout="$TIMEOUT"
-  k rollout status deployment/milvus-proxy --timeout="$TIMEOUT"
-  k rollout status statefulset/alertmanager-monitoring-kube-prometheus-alertmanager --timeout="$TIMEOUT"
-  pids=()
-  trap 'for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done' EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  # Start kubectl directly so the trap owns the actual processes, not wrapper shells.
-  kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/monitoring-grafana "${GRAFANA_PORT:-3000}:80" & pids+=($!)
-  kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/monitoring-kube-prometheus-prometheus "${PROMETHEUS_PORT:-9099}:9090" & pids+=($!)
-  kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/milvus "${MILVUS_PORT:-19530}:19530" & pids+=($!)
-  kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/monitoring-kube-prometheus-alertmanager "${ALERTMANAGER_PORT:-9093}:9093" & pids+=($!)
-  if k get service full-stack-jaeger >/dev/null 2>&1; then
-    kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/full-stack-jaeger "${JAEGER_PORT:-16686}:16686" & pids+=($!)
-    echo "Jaeger: http://127.0.0.1:${JAEGER_PORT:-16686}"
-  fi
-  if "$MAIL_CAPTURE"; then
-    kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/full-stack-mailpit "${MAILPIT_PORT:-8025}:8025" & pids+=($!)
-    echo "Captured email: http://127.0.0.1:${MAILPIT_PORT:-8025}"
-  fi
-  echo "Grafana: http://127.0.0.1:${GRAFANA_PORT:-3000} (admin/admin)"
-  echo "Prometheus: http://127.0.0.1:${PROMETHEUS_PORT:-9099}"
-  echo "Milvus: http://127.0.0.1:${MILVUS_PORT:-19530}"
-  echo "Alertmanager: http://127.0.0.1:${ALERTMANAGER_PORT:-9093}"
-  # Keep all forwards in this foreground process; Ctrl-C closes only these children.
-  while true; do
-    sleep 2
-    for pid in "${pids[@]}"; do kill -0 "$pid" 2>/dev/null || return 1; done
-  done
+}
+perf() {
+  perf_args=(--context "$CONTEXT" --namespace "$NAMESPACE" --output "$STATE/perf")
+  if ! "$HAS_PROMETHEUS"; then perf_args+=(--skip-metrics); fi
+  if ! "$HAS_ALERTMANAGER"; then perf_args+=(--skip-alerts); fi
+  python3 "$ROOT/scripts/perf.py" "${perf_args[@]}"
 }
 collect() {
   local out
   out="$STATE/evidence/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$out"
-  k get pods,svc,pvc,podmonitor,prometheusrule,alertmanager -o wide > "$out/resources.txt"
+  k get pods,svc,pvc -o wide > "$out/resources.txt"
   k get events --sort-by=.lastTimestamp > "$out/events.txt"
   h list -o json > "$out/releases.json"
   k get pods -o 'custom-columns=NAME:.metadata.name,IMAGES:.spec.containers[*].image' > "$out/images.txt"
@@ -278,9 +320,10 @@ collect() {
   while IFS= read -r pod; do
     k logs "$pod" --all-containers --tail=1000 > "$out/${pod#pod/}.log" 2>&1 || true
   done < <(k get pods -o name)
-  python3 "$ROOT/scripts/check.py" --output "$out/observability.json" || true
-  python3 "$ROOT/scripts/check-alerts.py" --output "$out/alerting.json" || true
-  python3 "$ROOT/scripts/check-traces.py" --output "$out/tracing.json" || true
+  if "$HAS_PROMETHEUS"; then python3 "$ROOT/scripts/check.py" --skip-grafana --output "$out/observability.json" || true; fi
+  if "$HAS_PROMETHEUS" && "$HAS_ALERTMANAGER"; then python3 "$ROOT/scripts/check-alerts.py" --output "$out/alerting.json" || true; fi
+  if "$HAS_JAEGER"; then python3 "$ROOT/scripts/check-traces.py" --output "$out/tracing.json" || true; fi
+  if "$HAS_LOKI"; then python3 "$ROOT/scripts/check-logs.py" --namespace "$NAMESPACE" --output "$out/logging.json" || true; fi
   echo "Evidence: $out (review application logs before sharing)"
 }
 alerts_test() {
@@ -298,29 +341,35 @@ case "$ACTION" in
       --memory="${MEMORY:-6656}" --kubernetes-version="$KUBERNETES_VERSION" ;;
   stop) minikube stop -p "$PROFILE" ;;
   clear) clear_stack ;;
-  charts) charts ;;
+  charts) prepare render; charts ;;
   render) render ;;
   images) preload ;;
-  deploy) deploy ;;
-  status) h list; k get pods,pvc,podmonitor,prometheusrule,alertmanager ;;
+  deploy|addons-deploy|addons-clear) deploy ;;
+  addons-status) python3 "$ROOT/scripts/components.py" status --context "$CONTEXT" --namespace "$NAMESPACE" ;;
+  status) h list; k get pods,pvc; python3 "$ROOT/scripts/components.py" status --context "$CONTEXT" --namespace "$NAMESPACE" ;;
   connections) connection_info --format "$CONNECTION_FORMAT" ;;
   forward) forward ;;
   smoke) python3 "$ROOT/scripts/workload.py" | tee "$STATE/workload.jsonl" ;;
-  perf) python3 "$ROOT/scripts/perf.py" --context "$CONTEXT" --namespace "$NAMESPACE" --output "$STATE/perf" ;;
-  verify) python3 "$ROOT/scripts/check.py" --output "$STATE/verification.json" ;;
+  perf) features; perf ;;
+  verify) features; verify ;;
+  logs) python3 "$ROOT/scripts/check-logs.py" --namespace "$NAMESPACE" --output "$STATE/logging.json" ;;
+  logs-smoke) python3 "$ROOT/scripts/check-logs.py" --smoke --context "$CONTEXT" --namespace "$NAMESPACE" --output "$STATE/logging-smoke.json" ;;
   traces) python3 "$ROOT/scripts/check-traces.py" --output "$STATE/tracing.json" ;;
   traces-smoke) python3 "$ROOT/scripts/check-traces.py" --smoke --output "$STATE/tracing-smoke.json" ;;
   alerts) python3 "$ROOT/scripts/check-alerts.py" --output "$STATE/alerting.json" ;;
   alerts-smoke) python3 "$ROOT/scripts/check-alerts.py" --smoke --context "$CONTEXT" --output "$STATE/alerting-smoke.json" ;;
   email-smoke) python3 "$ROOT/scripts/check-email.py" --context "$CONTEXT" --output "$STATE/email-smoke.json" ;;
   acceptance)
-    alerts_test
+    features
+    if "$HAS_GRAFANA"; then curl -fsS "${GRAFANA_URL:-http://127.0.0.1:${GRAFANA_PORT:-3000}}/api/health" > "$STATE/grafana-health.json"; fi
+    if "$HAS_ALERTMANAGER"; then curl -fsS "${ALERTMANAGER_URL:-http://127.0.0.1:${ALERTMANAGER_PORT:-9093}}/-/ready" > "$STATE/alertmanager-health.txt"; fi
+    if "$HAS_PROMETHEUS"; then alerts_test; fi
     python3 "$ROOT/scripts/workload.py" | tee "$STATE/workload.jsonl"
-    python3 "$ROOT/scripts/check-traces.py" --smoke --output "$STATE/tracing-smoke.json"
+    if "$HAS_JAEGER"; then python3 "$ROOT/scripts/check-traces.py" --smoke --output "$STATE/tracing-smoke.json"; fi
+    if "$HAS_LOKI"; then python3 "$ROOT/scripts/check-logs.py" --smoke --context "$CONTEXT" --namespace "$NAMESPACE" --output "$STATE/logging-smoke.json"; fi
     # Wait for two scrapes so new workload metrics are visible to verification.
-    sleep 35
-    python3 "$ROOT/scripts/check.py" --output "$STATE/verification.json"
-    python3 "$ROOT/scripts/check-alerts.py" --smoke --context "$CONTEXT" --output "$STATE/alerting-smoke.json"
+    if "$HAS_PROMETHEUS"; then sleep 35; verify; fi
+    if "$HAS_PROMETHEUS" && "$HAS_ALERTMANAGER"; then python3 "$ROOT/scripts/check-alerts.py" --smoke --context "$CONTEXT" --output "$STATE/alerting-smoke.json"; fi
     if "$MAIL_CAPTURE"; then
       python3 "$ROOT/scripts/check-email.py" --context "$CONTEXT" --output "$STATE/email-smoke.json"
     else
@@ -328,5 +377,5 @@ case "$ACTION" in
     fi
     collect ;;
   alerts-test) alerts_test ;;
-  collect) collect ;;
+  collect) features; collect ;;
 esac

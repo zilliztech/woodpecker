@@ -7,7 +7,7 @@
 {{- define "wp.alertClient" -}}
 {{- include "wp.alertScope" . -}},component!="woodpecker"
 {{- end -}}
-{{- if .Values.alerts.enabled }}
+{{- if and .Values.alerts.enabled (or .Values.components.prometheus .Values.alerts.renderRuleFile) }}
 {{- $spec := fromYaml (tpl (.Files.Get "rules/woodpecker.yaml") .) }}
 {{- range $group := $spec.groups }}
 {{- range $rule := $group.rules }}

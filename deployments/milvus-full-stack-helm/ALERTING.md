@@ -10,7 +10,8 @@ The default receiver is `local-only`. The optional `--mail-capture` profile adds
 - Alertmanager: http://127.0.0.1:9093
 - Grafana also provisions an Alertmanager datasource.
 
-Run `./stack.sh forward` to expose the four services; set `ALERTMANAGER_PORT` or `ALERTMANAGER_URL` when overriding the local endpoint.
+Install the optional backends first: `./stack.sh addons-deploy --with prometheus,alertmanager`
+(and `--with grafana` for dashboards). Run `./stack.sh forward` to expose the selected services; set `ALERTMANAGER_PORT` or `ALERTMANAGER_URL` when overriding the local endpoint.
 Alertmanager runs in its own StatefulSet Pod, separate from Prometheus and Grafana.
 No SMTP service or Mailpit is needed for the default monitoring and alerting loop.
 
@@ -149,8 +150,8 @@ Secret using the file path:
 ```bash
 kubectl --context wp-ops-v0146 -n milvus-stack create secret generic alertmanager-smtp \
   --from-file=password=/absolute/path/to/smtp-password
-./stack.sh render --local-arm64 --monitoring-values .local/email-smtp.yaml
-./stack.sh deploy --local-arm64 --monitoring-values .local/email-smtp.yaml
+./stack.sh render --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml
+./stack.sh deploy --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml
 ```
 
 The operator mounts the password file at

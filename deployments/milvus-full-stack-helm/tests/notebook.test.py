@@ -71,14 +71,15 @@ class NotebookTests(unittest.TestCase):
                 spawn.assert_not_called()
                 kill.assert_not_called()
 
-    def test_partial_port_collision_fails_without_touching_existing_processes(self):
+    def test_partial_ports_delegate_ownership_checks_without_killing_external_processes(self):
         with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "stack.sh").write_text("echo offline fixture\n")
             lab = self.lab(folder)
             with patch.object(lab, "occupied", side_effect=[True, False, False, False]), \
-                    patch.object(helpers.subprocess, "Popen") as spawn, patch.object(helpers.os, "killpg") as kill:
-                with self.assertRaisesRegex(RuntimeError, "already occupied"):
+                    patch.object(helpers.subprocess, "Popen", return_value=Mock(poll=Mock(return_value=17))) as spawn, patch.object(helpers.os, "killpg") as kill:
+                with self.assertRaisesRegex(RuntimeError, "Forward process exited"):
                     lab.open_forwards()
-                spawn.assert_not_called()
+                spawn.assert_called_once()
                 kill.assert_not_called()
 
     def test_monitoring_waits_for_transient_errors_but_times_out_on_persistent_errors(self):

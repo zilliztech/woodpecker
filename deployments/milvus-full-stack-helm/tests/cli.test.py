@@ -29,6 +29,7 @@ class LifecycleCLI(unittest.TestCase):
             {"name": "grafana", "labels": {"app.kubernetes.io/instance": "monitoring"}},
             {"name": "etcd", "labels": {"app": "full-stack-etcd"}},
             {"name": "minio", "labels": {"app": "full-stack-minio"}},
+            {"name": "loki", "labels": {"app": "full-stack-loki"}},
             {"name": "other-milvus", "labels": {"app.kubernetes.io/instance": "other-milvus", "app.kubernetes.io/name": "milvus"}},
             {"name": "other-prometheus", "labels": {"app.kubernetes.io/instance": "other-prometheus", "app.kubernetes.io/name": "prometheus"}},
             {"name": "unlabeled", "labels": {}},
@@ -43,6 +44,16 @@ tool = os.path.basename(sys.argv[0])
 args = sys.argv[1:]
 with open(os.environ["CLI_TEST_TRACE"], "a") as output:
     output.write(json.dumps([tool] + args) + "\\n")
+if tool == "helm" and "list" in args:
+    print(json.dumps([{"name": n} for n in os.environ.get("CLI_TEST_RELEASES", "").split(",") if n]))
+if tool == "helm" and "get" in args:
+    release = args[args.index("values") + 1]
+    values = {"components": {n: True for n in ("grafana", "prometheus", "alertmanager", "jaeger", "loki")}} if release == "full-stack" else {}
+    if release == "milvus":
+        values = {"extraConfigFiles": {"user.yaml": "trace: {exporter: otlp, sampleFraction: 1, otlp: {endpoint: 'full-stack-jaeger:4317', method: grpc, secure: false}}"}}
+    print(json.dumps(values))
+if tool == "kubectl" and "deployments,statefulsets" in args:
+    print('{"items": []}')
 if tool == "helm" and "uninstall" in args:
     release = args[args.index("uninstall") + 1]
     if release == os.environ.get("CLI_TEST_FAIL_RELEASE"):
@@ -130,12 +141,49 @@ if tool == "kubectl" and "delete" in args:
         remaining = {pvc["name"] for pvc in json.loads(self.pvcs.read_text())}
         self.assertEqual(remaining, {"other-milvus", "other-prometheus", "unlabeled"})
 
+    def cached_charts(self):
+        charts = self.state / "charts"
+        charts.mkdir(parents=True)
+        for name in ("milvus-5.0.31.tgz", "kube-prometheus-stack-67.4.0.tgz"):
+            (charts / name).write_text("offline test fixture")
+
+    def test_first_deploy_installs_only_core_without_monitoring(self):
+        self.cached_charts()
+        result = self.run_cli("deploy")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        upgrades = [c for c in self.calls() if c[0] == "helm" and "upgrade" in c]
+        self.assertEqual([c[c.index("--install") + 1] for c in upgrades], ["full-stack", "milvus"])
+        self.assertFalse(any("pull" in c for c in self.calls()))
+
+    def test_adding_loki_does_not_upgrade_core(self):
+        self.cached_charts()
+        self.env["CLI_TEST_RELEASES"] = "milvus,full-stack,monitoring"
+        result = self.run_cli("addons-deploy", "--with", "loki")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        upgrades = [c for c in self.calls() if c[0] == "helm" and "upgrade" in c]
+        self.assertEqual([c[c.index("--install") + 1] for c in upgrades], ["monitoring", "full-stack"])
+
+    def test_removing_loki_keeps_core_and_other_addons(self):
+        self.cached_charts()
+        self.env["CLI_TEST_RELEASES"] = "milvus,full-stack,monitoring"
+        result = self.run_cli("addons-clear", "--with", "loki")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any("uninstall" in c for c in self.calls()))
+        self.assertFalse(any("upgrade" in c and "milvus" in c for c in self.calls()))
+        removed = [c for c in self.calls() if c[0] == "kubectl" and "delete" in c]
+        self.assertEqual(len(removed), 1)
+        self.assertIn("app in (full-stack-loki)", removed[0])
+        remaining = {p["name"] for p in json.loads(self.pvcs.read_text())}
+        self.assertNotIn("loki", remaining)
+        self.assertIn("wp-0", remaining)
+        self.assertIn("prometheus", remaining)
+
     def test_clear_stops_on_backend_failure(self):
         self.env["CLI_TEST_FAIL_RELEASE"] = "milvus"
         result = self.run_cli("clear")
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertEqual(len(self.calls()), 1)
-        self.assertEqual(len(json.loads(self.pvcs.read_text())), 10)
+        self.assertEqual(len(json.loads(self.pvcs.read_text())), 11)
 
     def test_clear_reports_storage_failure_and_can_be_retried(self):
         self.env["CLI_TEST_FAIL_PVC_DELETE"] = "1"

@@ -51,6 +51,13 @@ def inventory():
 
 
 class ConnectionTests(unittest.TestCase):
+    def test_core_only_inventory_omits_uninstalled_optional_endpoints(self):
+        result = inventory()
+        result.services = {k: v for k, v in result.services.items() if k in ("milvus", "full-stack-etcd")}
+        with patch.object(connections, "listening", return_value=False):
+            report = result.report()
+        self.assertEqual({e["name"] for e in report["endpoints"] if not e["name"].startswith("WP Admin")}, {"Milvus", "etcd"})
+
     def test_jaeger_is_discovered_only_when_deployed_and_reuses_actual_port(self):
         result = inventory()
         with patch.object(connections, "listening", return_value=False):
