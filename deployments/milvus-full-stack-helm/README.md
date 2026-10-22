@@ -1,7 +1,7 @@
 # Milvus + Woodpecker full stack with Helm
 
 A reproducible local Kubernetes environment for Milvus, **Woodpecker service mode**,
-Prometheus, and Grafana. Milvus is installed using the unmodified official
+Prometheus, Grafana, and Jaeger. Milvus is installed using the unmodified official
 [milvus-helm chart](https://github.com/zilliztech/milvus-helm). The example connects
 deployment, a real Milvus workload, metrics collection, dashboards, and diagnostic
 evidence so developers and local agents can repeat the same feedback loop.
@@ -15,6 +15,9 @@ alerts. Alertmanager defaults to a `local-only` receiver. An optional Mailpit
 profile tests real SMTP delivery locally, with firing and recovery emails addressed
 to `zhenyuan.wei@zilliz.com`; a separate sample supports a real SMTP relay.
 See [alerting rules, runbooks, and verification](ALERTING.md).
+Tracing exports to Jaeger by default for local diagnosis. See [trace verification
+and known E2E coverage gaps](TRACING.md); exporter availability alone does not
+establish a complete user-to-storage trace.
 
 ```mermaid
 flowchart LR
@@ -26,6 +29,9 @@ flowchart LR
   wp --> minio
   milvus -. metrics incl. Woodpecker client .-> prom[Prometheus]
   wp -. server metrics .-> prom
+  milvus -. OTLP traces .-> jaeger[Jaeger: local trace history]
+  wp -. OTLP traces .-> jaeger
+  jaeger --> grafana
   k8s[Kubelet and kube-state-metrics] -. resource metrics .-> prom
   prom --> grafana[Grafana: Milvus + WP client + WP server]
   prom --> am[Alertmanager: grouping and inhibition]
@@ -46,6 +52,7 @@ flowchart LR
 | Grafana | `11.4.0` (retains the exported Milvus dashboard's Graph panels) |
 | Prometheus / Prometheus operator | `3.0.1` / `0.79.2` |
 | Alertmanager | `0.27.0`, persistent local-only receiver |
+| Jaeger | `jaegertracing/all-in-one:1.53.0`, bounded in-memory trace history |
 | Optional Mailpit | `axllent/mailpit:v1.31.6`, local SMTP capture |
 | Local Kubernetes | minikube `v1.33.1`, Docker driver |
 
@@ -150,7 +157,7 @@ grouped command list, current targets, options and examples.
 | Stack lifecycle | `deploy` / `clear` | Install or upgrade / uninstall the three Helm releases and delete their PVC data |
 | Preparation | `charts`, `render`, `images` | Download charts, inspect manifests, preload local images |
 | Access and status | `connections`, `forward`, `status` | Show connection/configuration hints, open local ports and inspect deployed resources |
-| Validation | `acceptance`, `smoke`, `verify`, `alerts`, `alerts-test`, `alerts-smoke` | Exercise workloads, monitoring, rules and alert delivery |
+| Validation | `acceptance`, `smoke`, `verify`, `traces`, `traces-smoke`, `alerts`, `alerts-test`, `alerts-smoke` | Exercise workloads, trace coverage, monitoring, rules and alert delivery |
 | Write performance | `perf` | Measure concurrent inserts and retain correctness, metrics, alert and log evidence |
 | Diagnostics | `collect` | Save bounded logs, resource status and verification reports |
 | Optional email | `email-smoke` | Check local SMTP capture when Mailpit is explicitly enabled |
@@ -210,6 +217,7 @@ Keep this command running in a terminal:
 | Woodpecker server dashboard | http://127.0.0.1:3000/d/woodpecker-server-k8s |
 | Prometheus | http://127.0.0.1:9099 |
 | Alertmanager | http://127.0.0.1:9093 |
+| Jaeger | http://127.0.0.1:16686 |
 | Milvus REST / SDK endpoint | http://127.0.0.1:19530 |
 
 All forwards bind to loopback; Ctrl-C closes the four forwards. Override local
@@ -454,14 +462,14 @@ resolution, inhibition, and synthetic-event cleanup against the local stack.
 ## Configuration and lifecycle
 
 - `values/milvus.yaml`: upstream chart overrides, including three WP services,
-  S3/etcd connectivity, persistence, and resource sizing.
+  S3/etcd connectivity, persistence, resource sizing and shared OTLP tracing.
 - `values/local-arm64.yaml`: supplied local Milvus image override.
 - `values/monitoring.yaml`: metrics collection, Grafana provisioning, Alertmanager
   grouping/inhibition, local-only receiver, and 8-day / 3-GB-capped retention.
 - `values/mail-capture.yaml`: optional Mailpit and SMTP receiver with the example recipient.
 - `values/email-smtp.example.yaml`: external SMTP template with Secret-mounted credentials.
 - `charts/full-stack-support/`: small supporting chart for persistent single-node
-  etcd/MinIO, PodMonitors, dashboard ConfigMaps, and PrometheusRule resources. The upstream etcd dependency
+  etcd/MinIO, Jaeger, PodMonitors, dashboard ConfigMaps, and PrometheusRule resources. The upstream etcd dependency
   expects a different image layout; the supplied official etcd image is deployed
   directly here instead. Milvus consumes these through external dependency settings.
 - `stack.sh`: chart download, rendering, preload, installation, access and evidence.

@@ -1,0 +1,47 @@
+{{- if .Values.jaeger.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: {{ .Release.Name }}-jaeger}
+  template:
+    metadata:
+      labels: {app: {{ .Release.Name }}-jaeger}
+    spec:
+      containers:
+        - name: jaeger
+          image: {{ .Values.jaeger.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: COLLECTOR_OTLP_ENABLED, value: "true"}
+            - {name: SPAN_STORAGE_TYPE, value: memory}
+            - {name: MEMORY_MAX_TRACES, value: {{ .Values.jaeger.maxTraces | quote }}}
+            - {name: GOMAXPROCS, value: "2"}
+          ports:
+            - {name: query, containerPort: 16686}
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: otlp-http, containerPort: 4318}
+            - {name: admin, containerPort: 14269}
+          readinessProbe:
+            httpGet: {path: /, port: admin}
+          livenessProbe:
+            httpGet: {path: /, port: admin}
+            initialDelaySeconds: 15
+          resources:
+            {{- toYaml .Values.jaeger.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-jaeger
+spec:
+  type: ClusterIP
+  selector: {app: {{ .Release.Name }}-jaeger}
+  ports:
+    - {name: query, port: 16686, targetPort: query}
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+    - {name: otlp-http, port: 4318, targetPort: otlp-http}
+{{- end }}

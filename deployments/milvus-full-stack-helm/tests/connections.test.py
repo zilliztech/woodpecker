@@ -51,6 +51,17 @@ def inventory():
 
 
 class ConnectionTests(unittest.TestCase):
+    def test_jaeger_is_discovered_only_when_deployed_and_reuses_actual_port(self):
+        result = inventory()
+        with patch.object(connections, "listening", return_value=False):
+            self.assertNotIn("Jaeger", [e["name"] for e in result.report()["endpoints"]])
+        result.services["full-stack-jaeger"] = {"spec": {"ports": [{"port": 16686}]}}
+        result.forwards = [{"resource": "svc/full-stack-jaeger", "remote_port": 16686, "local_port": 17686, "pid": 123}]
+        with patch.object(connections, "listening", return_value=True):
+            endpoint = next(e for e in result.report()["endpoints"] if e["name"] == "Jaeger")
+        self.assertEqual(endpoint["url"], "http://127.0.0.1:17686")
+        self.assertEqual(endpoint["state"], "forwarded")
+
     def setUp(self):
         variables = ("GRAFANA_PORT", "PROMETHEUS_PORT", "MILVUS_PORT", "ALERTMANAGER_PORT", "WP_ADMIN_PORT_BASE", "ETCD_PORT")
         self.environment = patch.dict(os.environ, {key: str(value) for key, value in zip(variables, (3000, 9099, 19530, 9093, 19091, 32379))})

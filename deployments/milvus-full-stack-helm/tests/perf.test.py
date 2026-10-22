@@ -27,6 +27,7 @@ class PerfTest(unittest.TestCase):
         self.rows = {}
         self.duplicates = []
         self.inserts = 0
+        self.traceparents = []
         self.business_error = False
         self.lost_row = False
         self.metrics_down = False
@@ -67,6 +68,7 @@ class PerfTest(unittest.TestCase):
                 if path == "insert":
                     with owner.lock:
                         owner.inserts += 1
+                        owner.traceparents.append(self.headers.get("traceparent"))
                         if owner.business_error:
                             return self.reply({"code": 65535, "message": "simulated append failure"})
                         for row in data["data"]:
@@ -126,6 +128,9 @@ else:
         self.assertEqual(report["phases"]["measure"]["success_latency_ms"]["samples"], 10)
         records = [json.loads(line) for line in (benchmark.out / "requests.jsonl").read_text().splitlines()]
         self.assertEqual(len({r["request_id"] for r in records}), len(records))
+        self.assertEqual({p.split("-")[1] for p in self.traceparents}, {r["trace_id"] for r in records})
+        self.assertTrue(all(p.endswith("-01") for p in self.traceparents))
+        self.assertTrue(all(r["trace_sampled"] and r["trace_url"].endswith(r["trace_id"]) for r in records))
         self.assertTrue((benchmark.out / "milvus-proxy-test-proxy.log").exists())
         self.assertNotIn("must-not-export", (benchmark.out / "pods.json").read_text())
         self.assertTrue((benchmark.out / "metric-server_appends.json").exists())
@@ -142,6 +147,12 @@ else:
         self.assertIn("Milvus code 65535", records[0]["error"])
         self.assertIsNone(report["phases"]["measure"]["success_latency_ms"])
         self.assertTrue((benchmark.out / "pods.json").exists())
+
+    def test_trace_sampling_can_be_disabled_for_performance_comparisons(self):
+        code, benchmark, report = self.run_benchmark("--trace-sample-fraction", "0")
+        self.assertEqual(code, 0, report["failures"])
+        self.assertTrue(all(p.endswith("-00") for p in self.traceparents))
+        self.assertTrue(all(not r["trace_sampled"] and r["trace_url"] is None for r in benchmark.records))
 
     def test_missing_acknowledged_rows_fails_strong_read_check(self):
         self.lost_row = True

@@ -6643,7 +6643,7 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre></div
 <div class="doc-page stack-examples-page" id="page-stack-examples-observability">
 <h1>Monitoring &amp; Alerts</h1>
 <p class="page-desc">Follow the same workload from Milvus through the WP client and servers, then check that the operational signals reach your dashboards and Alertmanager.</p>
-<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-observability/chains">Start with an E2E operational dashboard</a><a href="#stack-examples-observability/dashboards">Open the three reference dashboards</a><a href="#stack-examples-observability/coverage">Check the monitoring chain</a><a href="#stack-examples-observability/alerts">Inspect and test alerting</a><a href="#stack-examples-observability/adopt">Adopt the signals in an existing deployment</a></nav>
+<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-observability/chains">Start with an E2E operational dashboard</a><a href="#stack-examples-observability/dashboards">Open the three reference dashboards</a><a href="#stack-examples-observability/coverage">Check the monitoring chain</a><a href="#stack-examples-observability/tracing">Inspect individual request traces</a><a href="#stack-examples-observability/alerts">Inspect and test alerting</a><a href="#stack-examples-observability/adopt">Adopt the signals in an existing deployment</a></nav>
 
 <h2 id="stack-examples-observability-chains">Start with an E2E operational dashboard</h2>
 <p>For a specific symptom, use the <a href="#stack-examples-dashboards">E2E dashboards</a>: Write / Append, WAL Read / Consume, Flush / Checkpoint, or Search / Query. They group the metrics by processing step and include investigation guidance. Use the three component reference dashboards below for deeper inspection.</p>
@@ -6658,6 +6658,7 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre></div
     <tr><td>WP server</td><td><code>http://127.0.0.1:3000/d/woodpecker-server-k8s</code></td><td>Node operations, flush/storage behavior and resource pressure.</td></tr>
     <tr><td>Prometheus</td><td><code>http://127.0.0.1:9099</code></td><td>Scrape target health, raw series, queries and pending/firing alerts.</td></tr>
     <tr><td>Alertmanager</td><td><code>http://127.0.0.1:9093</code></td><td>Received alerts, grouping, inhibition and silences.</td></tr>
+    <tr><td>Jaeger</td><td><code>http://127.0.0.1:16686</code></td><td>Individual request spans and cross-service trace coverage.</td></tr>
   </tbody>
 </table></div>
 <p>Grafana’s local example login is <code>admin / admin</code>. Dashboards and the Prometheus data source are provisioned from repository files. Select namespace <code>milvus-stack</code> and a time range containing the test; allow scrapes to collect the new workload.</p>
@@ -6668,6 +6669,15 @@ python3 -m pip install -r scripts/requirements-connections.txt</code></pre></div
 ./stack.sh verify</code></pre></div></div>
 <p>The verification report is saved to <code>.local/verification.json</code>. It checks target health, positive application/WP workload metrics, dashboard provisioning and query compatibility. Some panels need a particular operation or enough rate-window history before showing finite samples. An empty panel is an investigation prompt, not proof that the corresponding operation is healthy or broken.</p>
 <p>If application writes succeed but WP activity is missing, check the deployed Milvus configuration, metric families and label selection before drawing a conclusion about the write path. The <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/dashboards-sources.json">dashboard source record</a> documents the Milvus production export and adaptations of the WP Kubernetes templates.</p>
+
+<h2 id="stack-examples-observability-tracing">Inspect individual request traces</h2>
+<p>The stack deploys <code>jaegertracing/all-in-one:1.53.0</code> and exports Milvus and WP spans over OTLP. Open Jaeger directly, or select the provisioned <strong>Jaeger</strong> datasource in Grafana Explore.</p>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh traces
+./stack.sh traces-smoke
+# Strict E2E coverage: fails on disconnected request paths.
+TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke</code></pre></div></div>
+<p>The smoke probe writes 100 vectors and verifies Strong query/search, then saves exact request trace IDs, client latency and raw spans. Normal perf records also contain sampled trace links. The supplied image currently connects query/search through SN and segcore, while its user Insert trace does not continue into SN/WP. Separate WP exporter activity is not proof of an E2E write trace; the report explicitly records this gap as <code>partial</code>.</p>
+<p>Full sampling favors small diagnostic runs and changes system overhead. Lower both server and workload sampling for sustained tests. Jaeger history is bounded and in memory, so save evidence before eviction or restart. See <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/TRACING.md">tracing setup, interpretation and known gaps</a>.</p>
 
 <h2 id="stack-examples-observability-alerts">Inspect and test alerting</h2>
 <p>Prometheus evaluates the 31 reference WP rules covering resource pressure, failures, scaling signals and client behavior. Firing alerts are sent to Alertmanager for grouping and inhibition. The default <code>local-only</code> receiver lets you inspect alerts in the Prometheus and Alertmanager UIs without sending email or other external notifications.</p>
@@ -6788,7 +6798,7 @@ meta log list</code></pre></div></div>
 <h2 id="stack-examples-e2e-baseline">Establish a working baseline</h2>
 <p>With the stack and forwards running, start with the integrated acceptance path:</p>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh acceptance</code></pre></div></div>
-<p>This runs alert-rule tests, a Milvus insert/query/search workload, monitoring/dashboard verification, alert firing/recovery/inhibition checks and evidence collection. External email is not enabled. Each stage must succeed; keep the resulting reports if one fails so you can inspect that stage.</p>
+<p>This runs alert-rule tests, a Milvus insert/query/search workload, trace export/coverage checks, monitoring/dashboard verification, alert firing/recovery/inhibition checks and evidence collection. External email is not enabled. Each stage must succeed; keep the resulting reports if one fails so you can inspect that stage. Default trace verification reports known gaps separately; use strict E2E mode when a complete connected path is required.</p>
 
 <h2 id="stack-examples-e2e-writes">Run a bounded write experiment</h2>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh perf</code></pre></div></div>

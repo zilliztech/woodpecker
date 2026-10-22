@@ -1,5 +1,12 @@
 # Write performance and operational diagnosis
 
+The normal REST runner now records a W3C `trace_id`, sampling decision and Jaeger
+link for every insert; `summary.md` links the slowest sampled requests. Use
+`PERF_TRACE_SAMPLE_FRACTION` (0..1, default 1) to control client sampling. Jaeger
+history is ephemeral, and the supplied image's Insert trace does not yet connect
+through SN/WP. Read [TRACING.md](TRACING.md) before comparing tracing-on/off
+performance or treating an incomplete trace as a latency breakdown.
+
 `perf` makes a repeatable write experiment part of the full stack. It drives the
 real Milvus REST endpoint, so writes pass through Milvus and the embedded WP client
 to the independent Woodpecker services. It collects evidence on successful and

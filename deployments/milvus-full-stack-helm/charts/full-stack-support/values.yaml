@@ -1,5 +1,13 @@
 milvusRelease: milvus
 clusterLabel: local
+jaeger:
+  enabled: true
+  image: jaegertracing/all-in-one:1.53.0
+  # Bounded, ephemeral trace history for local diagnosis.
+  maxTraces: 10000
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
 mailpit:
   enabled: false
   image: axllent/mailpit:v1.31.6

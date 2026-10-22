@@ -4,6 +4,10 @@ Four focused dashboards follow processing stages from top to bottom. Start with
 the symptom, read the guidance above each group, then use the component reference
 dashboards and wpcli for deeper inspection. Grafana provisions all seven dashboards
 from the support chart; the new pages appear after a normal `stack.sh deploy`.
+For an individual slow request, use the provisioned Jaeger datasource in Grafana
+Explore or http://127.0.0.1:16686. Normal perf records include trace IDs/links;
+[TRACING.md](TRACING.md) explains sampling and the supplied image's disconnected
+Insert trace. A component's unexported span is not zero latency.
 
 | Symptom | Dashboard | Default local URL |
 | --- | --- | --- |

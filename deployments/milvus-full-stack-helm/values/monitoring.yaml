@@ -56,6 +56,16 @@ grafana:
     tag: 11.4.0
   testFramework:
     enabled: false
+  additionalDataSources:
+    - name: Jaeger
+      uid: jaeger
+      type: jaeger
+      access: proxy
+      url: http://full-stack-jaeger:16686
+      editable: false
+      jsonData:
+        nodeGraph:
+          enabled: true
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {memory: 512Mi}

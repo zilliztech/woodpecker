@@ -198,6 +198,9 @@ class Connections:
     def report(self, mail_capture=False):
         endpoints = [self.endpoint(name, "svc/" + service, remote, port_value(env, default))
                      for name, service, remote, env, default in SERVICE_PORTS]
+        if "full-stack-jaeger" in self.services:
+            endpoints.append(self.endpoint("Jaeger", "svc/full-stack-jaeger", 16686,
+                                           port_value("JAEGER_PORT", 16686)))
         etcd_port = port_value("ETCD_PORT", 32379)
         etcd = self.endpoint("etcd", "svc/full-stack-etcd", 2379, etcd_port, scheme="")
         endpoints.append(etcd)

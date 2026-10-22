@@ -46,9 +46,11 @@ Access and status
                   Add --wpcli for all Woodpecker Admin ports and tenant etcd
 
 Validation (keep forward running for live checks)
-  acceptance      Rule tests + workload + dashboards + alert lifecycle/inhibition
+  acceptance      Rules + workload + traces + dashboards + alert lifecycle/inhibition
   smoke           Run a Milvus insert/query/search workload
   verify          Check scrape targets, workload metrics and dashboard queries
+  traces          Check Jaeger services and trace evidence
+  traces-smoke    Run a small read/write workload and check cross-service traces
   alerts          Inspect rule health, coverage, receiver and AM discovery
   alerts-test     Run offline alert behavior tests using Docker; no forward needed
   alerts-smoke    Test firing, recovery and inhibition with temporary alerts
@@ -87,12 +89,14 @@ Targets and environment
   CPUS=${CPUS:-6}  MEMORY=${MEMORY:-6656}     Resources for start (memory in MiB)
   TIMEOUT=$TIMEOUT        Helm/rollout timeout
   Local ports: GRAFANA_PORT=3000 PROMETHEUS_PORT=9099 MILVUS_PORT=19530
-               ALERTMANAGER_PORT=9093 MAILPIT_PORT=8025 (optional)
+               ALERTMANAGER_PORT=9093 JAEGER_PORT=16686 MAILPIT_PORT=8025 (optional)
   wpcli ports: WP_ADMIN_PORT_BASE=19091 (plus Pod ordinal), ETCD_PORT=32379
   CONNECTIONS_PYTHON=python3  Python with PyYAML for connections/forward --wpcli
   Perf defaults: PERF_DURATION=60 PERF_CONCURRENCY=2 PERF_BATCH_SIZE=100
                  PERF_DIMENSION=128 PERF_RPS=5 (total batch requests/second)
   Perf gates: PERF_MIN_ROWS_PER_SECOND=0 PERF_MAX_P99_MS=0 (0 disables a gate)
+  Trace sampling: PERF_TRACE_SAMPLE_FRACTION=1 (client); edit shared server values too
+  Strict trace gate: TRACES_REQUIRE_E2E=1 (traces-smoke/acceptance)
   NOTEBOOK_PORT=8891     JupyterLab port; first launch installs an isolated runtime
 
 Typical workflow
@@ -137,7 +141,7 @@ while [ "$#" -gt 0 ]; do
 done
 case "$ACTION" in
   help|-h|--help) usage; exit 0 ;;
-  notebook|start|stop|deploy|clear|charts|render|images|status|connections|forward|smoke|perf|verify|alerts|alerts-smoke|email-smoke|acceptance|alerts-test|collect) ;;
+  notebook|start|stop|deploy|clear|charts|render|images|status|connections|forward|smoke|perf|verify|traces|traces-smoke|alerts|alerts-smoke|email-smoke|acceptance|alerts-test|collect) ;;
   *) echo "Unknown command: $ACTION (see ./stack.sh help)" >&2; exit 2 ;;
 esac
 if "$WPCLI" && [ "$ACTION" != forward ]; then echo "--wpcli applies only to forward" >&2; exit 2; fi
@@ -238,6 +242,10 @@ forward() {
   kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/monitoring-kube-prometheus-prometheus "${PROMETHEUS_PORT:-9099}:9090" & pids+=($!)
   kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/milvus "${MILVUS_PORT:-19530}:19530" & pids+=($!)
   kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/monitoring-kube-prometheus-alertmanager "${ALERTMANAGER_PORT:-9093}:9093" & pids+=($!)
+  if k get service full-stack-jaeger >/dev/null 2>&1; then
+    kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/full-stack-jaeger "${JAEGER_PORT:-16686}:16686" & pids+=($!)
+    echo "Jaeger: http://127.0.0.1:${JAEGER_PORT:-16686}"
+  fi
   if "$MAIL_CAPTURE"; then
     kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward --address 127.0.0.1 svc/full-stack-mailpit "${MAILPIT_PORT:-8025}:8025" & pids+=($!)
     echo "Captured email: http://127.0.0.1:${MAILPIT_PORT:-8025}"
@@ -272,6 +280,7 @@ collect() {
   done < <(k get pods -o name)
   python3 "$ROOT/scripts/check.py" --output "$out/observability.json" || true
   python3 "$ROOT/scripts/check-alerts.py" --output "$out/alerting.json" || true
+  python3 "$ROOT/scripts/check-traces.py" --output "$out/tracing.json" || true
   echo "Evidence: $out (review application logs before sharing)"
 }
 alerts_test() {
@@ -299,12 +308,15 @@ case "$ACTION" in
   smoke) python3 "$ROOT/scripts/workload.py" | tee "$STATE/workload.jsonl" ;;
   perf) python3 "$ROOT/scripts/perf.py" --context "$CONTEXT" --namespace "$NAMESPACE" --output "$STATE/perf" ;;
   verify) python3 "$ROOT/scripts/check.py" --output "$STATE/verification.json" ;;
+  traces) python3 "$ROOT/scripts/check-traces.py" --output "$STATE/tracing.json" ;;
+  traces-smoke) python3 "$ROOT/scripts/check-traces.py" --smoke --output "$STATE/tracing-smoke.json" ;;
   alerts) python3 "$ROOT/scripts/check-alerts.py" --output "$STATE/alerting.json" ;;
   alerts-smoke) python3 "$ROOT/scripts/check-alerts.py" --smoke --context "$CONTEXT" --output "$STATE/alerting-smoke.json" ;;
   email-smoke) python3 "$ROOT/scripts/check-email.py" --context "$CONTEXT" --output "$STATE/email-smoke.json" ;;
   acceptance)
     alerts_test
     python3 "$ROOT/scripts/workload.py" | tee "$STATE/workload.jsonl"
+    python3 "$ROOT/scripts/check-traces.py" --smoke --output "$STATE/tracing-smoke.json"
     # Wait for two scrapes so new workload metrics are visible to verification.
     sleep 35
     python3 "$ROOT/scripts/check.py" --output "$STATE/verification.json"

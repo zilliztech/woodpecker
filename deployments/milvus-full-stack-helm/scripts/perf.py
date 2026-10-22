@@ -25,9 +25,9 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
-def http(base, path, payload=None, timeout=5):
+def http(base, path, payload=None, timeout=5, headers=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    req = urllib.request.Request(base + path, headers={"Content-Type": "application/json"},
+    req = urllib.request.Request(base + path, headers={"Content-Type": "application/json", **(headers or {})},
                                  data=None if payload is None else json.dumps(payload).encode())
     try:
         with opener.open(req, timeout=timeout) as response:
@@ -111,8 +111,10 @@ class Benchmark:
         self.trace = (self.out / "requests.jsonl").open("w")
         self.signals = (self.out / "signals.jsonl").open("w")
 
-    def call(self, path, payload):
-        return http(self.args.milvus, "/v2/vectordb/" + path, payload, self.args.request_timeout).get("data")
+    def call(self, path, payload, trace_id=None, sampled=True):
+        headers = {"traceparent": "00-" + trace_id + "-" + uuid.uuid4().hex[:16] + "-" + ("01" if sampled else "00")} if trace_id else None
+        return http(self.args.milvus, "/v2/vectordb/" + path, payload,
+                    self.args.request_timeout, headers=headers).get("data")
 
     def diagnostic_error(self, stage, error):
         with self.lock:
@@ -172,8 +174,13 @@ class Benchmark:
                           "at": utc(), "first_id": first_id, "rows": len(rows), "ok": False,
                           "generation_ms": (submitted - generated) * 1000,
                           "schedule_lag_ms": max(0, generated - slot) * 1000}
+                trace_id = uuid.uuid4().hex
+                sampled = int(trace_id[:16], 16) / (1 << 64) < self.args.trace_sample_fraction
+                jaeger = os.getenv("JAEGER_URL", "http://127.0.0.1:" + os.getenv("JAEGER_PORT", "16686"))
+                record.update(trace_id=trace_id, trace_sampled=sampled,
+                              trace_url=jaeger + "/trace/" + trace_id if sampled else None)
                 try:
-                    result = self.call("entities/insert", {"collectionName": self.collection, "data": rows})
+                    result = self.call("entities/insert", {"collectionName": self.collection, "data": rows}, trace_id, sampled)
                     if result.get("insertCount") != len(rows):
                         raise RuntimeError("insertCount does not match submitted batch")
                     record["ok"] = True
@@ -337,6 +344,11 @@ class Benchmark:
         lines += ["- **" + f["area"] + "**: " + f["next_step"] for f in findings] or ["No heuristic triggered; inspect coverage before drawing conclusions."]
         lines += ["", "## Dashboards for this time window", ""]
         lines += ["- [" + name + "](" + url + ")" for name, url in self.report["dashboards"].items()]
+        slow = sorted((r for r in self.records if r.get("trace_url")), key=lambda r: r["latency_ms"], reverse=True)[:5]
+        if slow:
+            lines += ["", "## Slow request traces", "",
+                      "Trace links require retained sampled spans. An Insert trace may stop at Proxy in the supplied image; see TRACING.md.", ""]
+            lines += [f"- [{r['request_id']}]({r['trace_url']}): {r['latency_ms']:.1f} ms" for r in slow]
         lines += ["", "Raw evidence: `requests.jsonl`, `signals.jsonl`, `metric-*.json`, `pods.json`, `events.txt`, and bounded `*.log` files.", "",
                   "Client latency includes REST serialization/transport and any port-forward overhead. WP/resource metrics cover the deployment, not an end-to-end trace of this collection. Review logs before sharing."]
         (self.out / "summary.md").write_text("\n".join(lines) + "\n")
@@ -426,13 +438,14 @@ def arguments(argv=None):
                                 ("concurrency", 2, int), ("batch-size", 100, int), ("dimension", 128, int),
                                 ("rps", 5, float), ("request-timeout", 30, float), ("max-requests", 10000, int),
                                 ("max-errors", 5, int), ("sample-interval", 10, float),
-                                ("min-rows-per-second", 0, float), ("max-p99-ms", 0, float)):
+                                ("min-rows-per-second", 0, float), ("max-p99-ms", 0, float),
+                                ("trace-sample-fraction", 1, float)):
         parser.add_argument("--" + name, type=kind, default=os.getenv("PERF_" + name.upper().replace("-", "_"), default))
     args = parser.parse_args(argv)
     limits = {"duration": (1, 3600), "warmup": (0, 300), "cooldown": (0, 120), "concurrency": (1, 32),
               "batch_size": (1, 10000), "dimension": (2, 4096), "rps": (.1, 1000), "request_timeout": (1, 90),
               "max_requests": (1, 10000), "max_errors": (1, 10000), "sample_interval": (1, 60),
-              "min_rows_per_second": (0, 1e9), "max_p99_ms": (0, 1e9)}
+              "min_rows_per_second": (0, 1e9), "max_p99_ms": (0, 1e9), "trace_sample_fraction": (0, 1)}
     for name, (low, high) in limits.items():
         if not low <= getattr(args, name) <= high:
             parser.error(f"{name} must be in [{low}, {high}]")
