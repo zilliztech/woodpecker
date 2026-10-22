@@ -7,8 +7,8 @@ provisions a `Jaeger` datasource with UID `jaeger`.
 
 ```bash
 ./stack.sh images --local-arm64 --with jaeger,grafana
-./stack.sh deploy --local-arm64 -x
-./stack.sh addons-deploy --with jaeger,grafana -x
+./stack.sh install --local-arm64 -x
+./stack.sh addons-install --with jaeger,grafana -x
 ./stack.sh forward --wpcli -x
 # In another terminal:
 ./stack.sh connections
@@ -109,7 +109,7 @@ upstream decision, so change both settings when reducing trace volume. The small
 PERF_TRACE_SAMPLE_FRACTION=0.1 ./stack.sh perf -x
 ```
 
-For a tracing-off baseline, run `./stack.sh addons-clear --with jaeger` to disable
+For a tracing-off baseline, run `./stack.sh addons-uninstall --with jaeger` to disable
 the managed exporter and remove the ephemeral collector,
 and run perf with `PERF_TRACE_SAMPLE_FRACTION=0`. Hold the other parameters constant.
 Disabling client sampling alone does not disable all independently rooted
@@ -119,7 +119,7 @@ Jaeger uses bounded in-memory storage (`jaeger.maxTraces: 10000`), not a PVC.
 This is a trace-count limit, not a span-count limit or a fixed memory-byte budget.
 Restarts and trace eviction remove history; export JSON evidence while it exists.
 `stop` preserves application PVC data but does not guarantee Jaeger memory survives
-resume. `clear` removes the Jaeger Deployment with the supporting Helm release.
+resume. `uninstall` removes the Jaeger Deployment with the supporting Helm release.
 Adjust memory/trace limits for larger experiments. Jaeger's local UI is reachable
 through loopback port-forward; the example does not expose it through a public
 LoadBalancer or Ingress.

@@ -46,7 +46,7 @@ class ComponentTests(unittest.TestCase):
         _, _, traced, _ = components.build({"jaeger"}, support, mon, mv, "test")
         live = {"milvus": traced, "full-stack": {"minio": {"secretKey": "custom-secret"}}, "monitoring": {"grafana": {"adminPassword": "custom-password"}}}
         with tempfile.TemporaryDirectory() as folder, patch.object(components, "deployed", return_value=(live, {"jaeger"})), \
-                patch("sys.argv", ["components.py", "addons-deploy", "--with", "loki", "--output", folder]), contextlib.redirect_stdout(io.StringIO()):
+                patch("sys.argv", ["components.py", "addons-install", "--with", "loki", "--output", folder]), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(components.main(), 0)
             result = yaml.safe_load((Path(folder) / "milvus.yaml").read_text())
             self.assertEqual(result["image"]["all"]["tag"], "private-user-build")
@@ -55,9 +55,9 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(yaml.safe_load((Path(folder) / "monitoring.yaml").read_text())["grafana"]["adminPassword"], "custom-password")
             self.assertFalse(json.loads((Path(folder) / "plan.json").read_text())["trace_changed"])
 
-    def test_plain_deploy_keeps_previously_selected_addons(self):
+    def test_plain_install_keeps_previously_selected_addons(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(components, "deployed", return_value=({}, {"grafana", "loki"})), \
-                patch("sys.argv", ["components.py", "deploy", "--output", folder]), contextlib.redirect_stdout(io.StringIO()):
+                patch("sys.argv", ["components.py", "install", "--output", folder]), contextlib.redirect_stdout(io.StringIO()):
             components.main()
             self.assertEqual(json.loads((Path(folder) / "plan.json").read_text())["selected"], ["grafana", "loki"])
 

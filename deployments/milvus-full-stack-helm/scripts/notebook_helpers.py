@@ -65,7 +65,7 @@ class StackLab:
 
     def run(self, action, env=None, check=True):
         args = ["bash", str(self.snapshot()), action]
-        if action in ("render", "images", "deploy"):
+        if action in ("render", "images", "install"):
             args += self.flags
         if self.execute:
             args += ["-x"]

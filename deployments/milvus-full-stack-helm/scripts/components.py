@@ -110,7 +110,7 @@ def build(selected, support, monitoring, milvus, namespace):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("validate", "render", "deploy", "addons-deploy", "addons-clear", "status", "flags"))
+    parser.add_argument("mode", choices=("validate", "render", "install", "addons-install", "addons-uninstall", "status", "flags"))
     parser.add_argument("--with", dest="components", default="")
     parser.add_argument("--context", default="")
     parser.add_argument("--namespace", default="milvus-stack")
@@ -134,7 +134,7 @@ def main():
         return 0
     if args.mode.startswith("addons-") and (not requested or "milvus" not in live):
         raise ValueError("Addon changes require an existing Milvus release and --with <components>")
-    selected = previous - requested if args.mode == "addons-clear" else previous | requested
+    selected = previous - requested if args.mode == "addons-uninstall" else previous | requested
     support = merge(load_values([ROOT / "charts/full-stack-support/values.yaml"]), live.get("full-stack", {}))
     support = load_values(args.support_values, support)
     monitoring = merge(load_values([ROOT / "values/monitoring.yaml"]), live.get("monitoring", {}))
@@ -147,7 +147,7 @@ def main():
     for name, values in (("support", support), ("monitoring", monitoring), ("milvus", milvus)):
         (output / (name + ".yaml")).write_text(yaml.safe_dump(values, sort_keys=False))
     flags = {"NEED_MONITORING": bool(selected & {"grafana", "prometheus", "alertmanager"}),
-             "HAD_MONITORING": "monitoring" in live, "NEED_MILVUS": args.mode in ("render", "deploy") or trace_changed,
+             "HAD_MONITORING": "monitoring" in live, "NEED_MILVUS": args.mode in ("render", "install") or trace_changed,
              "TRACE_CHANGED": trace_changed}
     flags.update({"HAS_" + n.upper(): n in selected for n in NAMES})
     flags.update({"REMOVE_" + n.upper(): n in previous - selected for n in NAMES})

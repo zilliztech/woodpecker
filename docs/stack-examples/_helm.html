@@ -1,5 +1,5 @@
 <h1>Helm Stack Walkthrough</h1>
-<p class="page-desc">Deploy and operate Milvus + Woodpecker on your existing Kubernetes cluster using reviewable Helm and kubectl commands.</p>
+<p class="page-desc">Install and operate Milvus + Woodpecker on your existing Kubernetes cluster using reviewable Helm and kubectl commands.</p>
 
 <h2 id="prepare">Prepare an existing Kubernetes context</h2>
 <p>Use configured kubectl, Helm 3 and Python 3.9+. Kubernetes, its nodes, credentials, StorageClass and registry access are managed outside this tool. This applies equally to a shared cluster, kind or local minikube. Docker is optional for offline rule tests; Jupyter needs Python 3.11+.</p>
@@ -11,20 +11,20 @@ kubectl version
 ./stack.sh help</code></pre>
 <p>The default context is kubectl’s current context; override it with <code>--context NAME</code> or <code>CONTEXT</code>. The default namespace is <code>milvus-stack</code>, configurable with <code>--namespace</code> / <code>NAMESPACE</code>. An unavailable context produces configuration guidance; stack.sh never creates, starts, stops or deletes Kubernetes.</p>
 
-<h2 id="deploy">Review, then deploy</h2>
+<h2 id="install">Review, then install</h2>
 <pre><code>./stack.sh render
 ./stack.sh images                       # Image inventory only
-./stack.sh deploy                       # Preview native commands
-./stack.sh deploy -x                    # Execute the reviewed resource operations
+./stack.sh install                       # Preview native commands
+./stack.sh install -x                    # Execute the reviewed resource operations
 ./stack.sh status</code></pre>
 <p>Resource changes, workload writes and port forwards are previewed by default; <code>-x</code> executes them. Planning may read the cluster and save local values/manifests; it does not change resources. Read-only status and local rendering remain available without <code>-x</code>. Printed Helm/kubectl commands include the explicit target and can be copied directly.</p>
-<p>A first deployment contains only Milvus, three independent WP services and persistent etcd/MinIO. It wraps the official Milvus Helm chart and needs no monitoring CRDs. Public defaults use Milvus <code>v3.0.3</code> and WP <code>v0.1.46</code>. Add <code>--local-arm64</code> to render/images/deploy for the supplied private ARM64 build; prepare its image access outside the stack.</p>
+<p>A first deployment contains only Milvus, three independent WP services and persistent etcd/MinIO. It wraps the official Milvus Helm chart and needs no monitoring CRDs. Public defaults use Milvus <code>v3.0.3</code> and WP <code>v0.1.46</code>. Add <code>--local-arm64</code> to render/images/install for the supplied private ARM64 build; prepare its image access outside the stack.</p>
 
 <h2 id="addons">Add optional components later</h2>
-<pre><code>./stack.sh addons-deploy --with prometheus,grafana   # Preview
-./stack.sh addons-deploy --with prometheus,grafana -x
-./stack.sh addons-deploy --with alertmanager -x
-./stack.sh addons-deploy --with jaeger,loki -x
+<pre><code>./stack.sh addons-install --with prometheus,grafana   # Preview
+./stack.sh addons-install --with prometheus,grafana -x
+./stack.sh addons-install --with alertmanager -x
+./stack.sh addons-install --with jaeger,loki -x
 ./stack.sh addons-status</code></pre>
 <p>Use <code>--with all</code> for the complete observability example. Loki includes Alloy for log collection. Addon changes preserve live core overrides and previously selected components; changing Jaeger selection updates trace configuration and rolls Milvus/WP. See <a href="{{STACK_REPO}}/COMPONENTS.md">component dependencies and lifecycle</a>.</p>
 
@@ -44,24 +44,24 @@ kubectl version
 
 <h2 id="notebook">Follow the Jupyter guide</h2>
 <pre><code>./stack.sh notebook</code></pre>
-<p>Open the authenticated loopback URL and select <code>notebooks/full-stack-walkthrough.ipynb</code>. It selects the complete observability profile. <code>EXECUTE=False</code> previews by default; set <code>EXECUTE=True</code> after reviewing the target, images, ports and load. The guide never manages Kubernetes and keeps stop/clear cells disabled by default.</p>
+<p>Open the authenticated loopback URL and select <code>notebooks/full-stack-walkthrough.ipynb</code>. It selects the complete observability profile. <code>EXECUTE=False</code> previews by default; set <code>EXECUTE=True</code> after reviewing the target, images, ports and load. The guide never manages Kubernetes and keeps stop/uninstall cells disabled by default.</p>
 
 <h2 id="lifecycle">Pause/resume workloads or remove the deployment</h2>
 <table>
   <thead><tr><th>Command</th><th>Effect with -x</th><th>Data boundary</th></tr></thead>
   <tbody>
-    <tr><td><code>deploy</code></td><td>Install/upgrade Helm releases on the existing cluster and run the selected stack.</td><td>Retain PVCs and existing addons.</td></tr>
+    <tr><td><code>install</code></td><td>Install/upgrade Helm releases on the existing cluster and run the selected stack.</td><td>Retain PVCs and existing addons.</td></tr>
     <tr><td><code>stop</code></td><td>Record replica state and pause this stack’s workloads using native scale/patch/wait commands.</td><td>Retain Helm releases/PVCs; memory/ephemeral history may disappear.</td></tr>
     <tr><td><code>start</code></td><td>Restore the replica counts saved by stop and wait for rollouts.</td><td>Does not install a missing stack or start Kubernetes.</td></tr>
-    <tr><td><code>clear</code></td><td>Uninstall stack releases and delete their PVC data.</td><td>Retain Kubernetes, namespace, shared CRDs and local evidence.</td></tr>
-    <tr><td><code>addons-deploy</code> / <code>addons-clear</code></td><td>Add components / remove selected components and their data.</td><td>Retain the core deployment.</td></tr>
+    <tr><td><code>uninstall</code></td><td>Uninstall stack releases and delete their PVC data.</td><td>Retain Kubernetes, namespace, shared CRDs and local evidence.</td></tr>
+    <tr><td><code>addons-install</code> / <code>addons-uninstall</code></td><td>Add components / remove selected components and their data.</td><td>Retain the core deployment.</td></tr>
   </tbody>
 </table>
 <pre><code>./stack.sh stop                  # Review only
 ./stack.sh stop -x               # Pause workloads; leave Kubernetes running
 ./stack.sh start -x              # Restore saved workload replicas
 ./stack.sh forward --wpcli -x
-./stack.sh clear                 # Review the deletion plan
-# ./stack.sh clear -x            # Executes deletion of releases AND PVC data</code></pre>
+./stack.sh uninstall                 # Review the deletion plan
+# ./stack.sh uninstall -x            # Executes deletion of releases AND PVC data</code></pre>
 <p>Stop state is stored in the namespace ConfigMap <code>milvus-full-stack-lifecycle</code>, so resume does not depend on one machine. Prometheus/Alertmanager are scaled through their Operator resources, and Alloy’s DaemonSet uses a reversible scheduling selector. Resume before changing Helm releases. Unsafe scale-down PVC retention policies and active autoscalers are reported before any write.</p>
 <p>Continue with <a href="#stack-examples-observability">metrics, logs, traces and alerts</a> or <a href="#stack-examples-wpcli">wpcli operations</a>. See the <a href="{{STACK_REPO}}/README.md#optional-local-kubernetes-preparation-outside-stacksh">separate local Kubernetes preparation example</a> if you choose minikube.</p>

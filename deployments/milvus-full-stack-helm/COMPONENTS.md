@@ -1,6 +1,6 @@
 # Core deployment and optional components
 
-A new `deploy` installs **Milvus + three WP services + etcd/MinIO**. Grafana,
+A new `install` installs **Milvus + three WP services + etcd/MinIO**. Grafana,
 Prometheus, Alertmanager, Jaeger and Loki are all optional. Core-only rendering
 does not emit monitoring CRDs or download the monitoring chart. Trace export is
 `noop` until Jaeger is selected.
@@ -15,7 +15,7 @@ Kubernetes itself is always managed externally.
 python3 -m pip install -r scripts/requirements-connections.txt
 kubectl config current-context  # Configure and run Kubernetes separately.
 ./stack.sh images --local-arm64  # Image inventory; prepare node image access externally.
-./stack.sh deploy --local-arm64 -x
+./stack.sh install --local-arm64 -x
 ./stack.sh forward --wpcli -x
 # Another terminal:
 ./stack.sh smoke -x
@@ -28,11 +28,11 @@ metrics and Alertmanager checks are explicitly recorded as **skipped**, not
 healthy. A selected monitoring service that is unreachable still fails its checks.
 
 The Jupyter full walkthrough deliberately selects `--with all` for its render,
-images and deploy steps. Use the CLI above for a minimal deployment.
+images and install steps. Use the CLI above for a minimal deployment.
 
 ## Add components later
 
-`--with` accepts comma-separated names or `all`. `addons-deploy` is additive:
+`--with` accepts comma-separated names or `all`. `addons-install` is additive:
 previous components stay enabled, and live core image/resource/user overrides
 are preserved. Adding Loki or Grafana does not rebuild or restart the core.
 Changing whether Jaeger is selected changes the shared trace configuration and
@@ -40,11 +40,11 @@ rolls Milvus/WP Pods while retaining application PVC data.
 
 | Component | Preview command (add `-x` to execute) | Automatically included |
 | --- | --- | --- |
-| Grafana | `./stack.sh addons-deploy --with grafana` | Seven reference/E2E dashboards; datasources for selected services |
-| Prometheus | `./stack.sh addons-deploy --with prometheus` | Prometheus Operator, infrastructure collectors, PodMonitors and reference WP rules |
-| Alertmanager | `./stack.sh addons-deploy --with alertmanager` | Prometheus Operator; local-only receiver |
-| Jaeger | `./stack.sh addons-deploy --with jaeger` | OTLP export configuration in Milvus and WP |
-| Loki | `./stack.sh addons-deploy --with loki` | PVC-backed Loki and an Alloy collector DaemonSet |
+| Grafana | `./stack.sh addons-install --with grafana` | Seven reference/E2E dashboards; datasources for selected services |
+| Prometheus | `./stack.sh addons-install --with prometheus` | Prometheus Operator, infrastructure collectors, PodMonitors and reference WP rules |
+| Alertmanager | `./stack.sh addons-install --with alertmanager` | Prometheus Operator; local-only receiver |
+| Jaeger | `./stack.sh addons-install --with jaeger` | OTLP export configuration in Milvus and WP |
+| Loki | `./stack.sh addons-install --with loki` | PVC-backed Loki and an Alloy collector DaemonSet |
 
 Grafana can be installed without Prometheus or monitoring CRDs. Adding Prometheus
 or Alertmanager later applies the pinned Operator CRDs before upgrading the
@@ -58,11 +58,11 @@ caches outside this tool, then install the selected components. For example:
 
 ```bash
 ./stack.sh images --local-arm64 --with loki
-./stack.sh addons-deploy --with loki -x
+./stack.sh addons-install --with loki -x
 # Add a UI, then metrics and alerts, at any later point:
-./stack.sh addons-deploy --with grafana -x
-./stack.sh addons-deploy --with prometheus,alertmanager -x
-./stack.sh addons-deploy --with jaeger -x
+./stack.sh addons-install --with grafana -x
+./stack.sh addons-install --with prometheus,alertmanager -x
+./stack.sh addons-install --with jaeger -x
 ./stack.sh addons-status
 ```
 
@@ -70,11 +70,11 @@ Or install the complete example initially:
 
 ```bash
 ./stack.sh images --local-arm64 --with all
-./stack.sh deploy --local-arm64 --with all -x
+./stack.sh install --local-arm64 --with all -x
 ```
 
 `render`, `images` and `charts` use an **offline** selection: omitting `--with`
-means core only. `deploy` reads the installed selection and preserves existing
+means core only. `install` reads the installed selection and preserves existing
 addons, so a routine core upgrade cannot accidentally remove them. Repeat core
 override files such as `--local-arm64` on core upgrades. Addon commands reuse live
 core overrides and need no image flag. Values files adjust component settings;
@@ -112,23 +112,23 @@ to fail acceptance on that partial coverage too.
 See [LOGGING.md](LOGGING.md), [TRACING.md](TRACING.md), [ALERTING.md](ALERTING.md)
 and [E2E-DASHBOARDS.md](E2E-DASHBOARDS.md) for interpretation and focused steps.
 
-## Pause, remove addons, or clear everything
+## Pause, remove addons, or uninstall everything
 
 ```bash
 # Pause/resume this stack’s workloads; preserve releases and PVC data.
 ./stack.sh stop -x
 ./stack.sh start -x
 # Remove only Loki/Alloy AND their collected log data; leave Milvus/WP alone.
-./stack.sh addons-clear --with loki -x
-# Add them again later (starts a new log history after clear).
-./stack.sh addons-deploy --with loki -x
+./stack.sh addons-uninstall --with loki -x
+# Add them again later (starts a new log history after uninstall).
+./stack.sh addons-install --with loki -x
 # Remove all optional components and their data, retaining the core.
-./stack.sh addons-clear --with all -x
+./stack.sh addons-uninstall --with all -x
 # Remove all stack releases AND all their PVC data, including Loki.
-./stack.sh clear -x
+./stack.sh uninstall -x
 ```
 
-`addons-clear` is destructive for the named addons' data. It removes their Pods,
+`addons-uninstall` is destructive for the named addons' data. It removes their Pods,
 updates Grafana's managed datasources, and deletes only their selected PVCs.
 Removing Jaeger turns off the managed OTLP exporter before removing the collector.
 Jaeger uses memory rather than a PVC, so workload restart/stop does not retain
@@ -137,4 +137,4 @@ trace history. Shared monitoring CRDs, Kubernetes and the namespace are not dele
 `stop` saves replica counts in the namespace ConfigMap `milvus-full-stack-lifecycle`
 and uses native scale/patch/wait operations. `start` restores those exact counts,
 including any previous zero, and removes the pause state after successful rollouts.
-It never starts Kubernetes. Deploy/addon changes require resuming a paused stack first.
+It never starts Kubernetes. Install/addon changes require resuming a paused stack first.

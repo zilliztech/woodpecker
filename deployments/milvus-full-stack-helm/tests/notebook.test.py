@@ -97,7 +97,7 @@ class NotebookTests(unittest.TestCase):
             for execute in (False, True):
                 lab = helpers.StackLab(root, "test-context", "test-namespace", {}, execute=execute)
                 with contextlib.redirect_stdout(io.StringIO()) as output:
-                    lab.run("deploy")
+                    lab.run("install")
                 argv = output.getvalue().splitlines()[0]
                 self.assertEqual(" -x" in argv, execute)
                 self.assertIn("--with all", argv)

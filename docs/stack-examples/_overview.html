@@ -1,5 +1,5 @@
 <h1>Milvus–Woodpecker Stack Examples</h1>
-<p class="page-desc">Deploy, observe and operate Milvus with Woodpecker through a complete, open-source example stack.</p>
+<p class="page-desc">Install, observe and operate Milvus with Woodpecker through a complete, open-source example stack.</p>
 
 <h2 id="purpose">Why this stack exists</h2>
 <p>A running Milvus + Woodpecker deployment is easier to operate when application behavior, WAL health, resource pressure and alerts can be examined together. Users who have not yet deployed monitoring or operational tools can start here with a working example, then adapt its configuration and investigation methods to their own instances.</p>
@@ -11,7 +11,7 @@
 
 <h2 id="included">What you can do today</h2>
 <div class="stack-cards">
-  <a href="#stack-examples-helm"><strong>Deploy with Helm</strong><span>Install Milvus, three WP service replicas and persistent dependencies on existing Kubernetes; add observability independently. Preview native commands before executing.</span></a>
+  <a href="#stack-examples-helm"><strong>Install with Helm</strong><span>Install Milvus, three WP service replicas and persistent dependencies on existing Kubernetes; add observability independently. Preview native commands before executing.</span></a>
   <a href="#stack-examples-dashboards"><strong>Follow an E2E symptom</strong><span>Use four ordered dashboards for writes, WAL consumption, persistence and search/query; follow each step’s metrics and investigation guidance.</span></a>
   <a href="#stack-examples-wpcli"><strong>Operate with wpcli</strong><span>Discover reachable endpoints, select a WP service context and explicitly connect to a Milvus instance’s WP client metadata.</span></a>
   <a href="#stack-examples-e2e"><strong>Run a repeatable experiment</strong><span>Insert and read data, measure writes, inspect correlated metrics and logs, collect evidence and repeat after a change.</span></a>
@@ -21,7 +21,7 @@
 
 <h2 id="workflow">One operational feedback loop</h2>
 <ol>
-  <li><strong>Deploy a known environment.</strong> Record chart/image versions, namespace, resource settings and connection targets.</li>
+  <li><strong>Install a known environment.</strong> Record chart/image versions, namespace, resource settings and connection targets.</li>
   <li><strong>Run a real workload.</strong> Verify Milvus inserts, primary-key queries and vector search, then establish a small write-performance baseline.</li>
   <li><strong>Check the whole chain.</strong> Compare application results with Milvus/WP metrics, dashboards, alerts, wpcli state and logs for the same time window.</li>
   <li><strong>Improve and repeat.</strong> Investigate failures or missing signals, change one setting or instrument, and rerun the same scenario.</li>

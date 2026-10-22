@@ -10,7 +10,7 @@ The default receiver is `local-only`. The optional `--mail-capture` profile adds
 - Alertmanager: http://127.0.0.1:9093
 - Grafana also provisions an Alertmanager datasource.
 
-Install the optional backends first: `./stack.sh addons-deploy --with prometheus,alertmanager`
+Install the optional backends first: `./stack.sh addons-install --with prometheus,alertmanager`
 (and `--with grafana` for dashboards). Run `./stack.sh forward -x` to expose the selected services; set `ALERTMANAGER_PORT` or `ALERTMANAGER_URL` when overriding the local endpoint.
 Alertmanager runs in its own StatefulSet Pod, separate from Prometheus and Grafana.
 No SMTP service or Mailpit is needed for the default monitoring and alerting loop.
@@ -112,7 +112,7 @@ Use the rule's node/log/reader labels to narrow the investigation; do not reset 
 
 ```bash
 ./stack.sh images --local-arm64 --mail-capture
-./stack.sh deploy --local-arm64 --mail-capture -x
+./stack.sh install --local-arm64 --mail-capture -x
 ./stack.sh forward --mail-capture -x
 # Another terminal:
 ./stack.sh email-smoke   -x # Email lifecycle only
@@ -132,7 +132,7 @@ local-only. The email test creates a uniquely labeled temporary PrometheusRule,
 waits for a captured FIRING email, resolves the rule, then waits for a captured
 RESOLVED email. It checks the exact recipient, test identity, subject status and
 alert body, and cleans up the rule/events. Messages remain available for review;
-Mailpit storage is ephemeral and limited to 1000 messages. Tests never clear
+Mailpit storage is ephemeral and limited to 1000 messages. Tests never uninstall
 other runs' mail. Evidence is saved in `.local/email-smoke.json`.
 
 ### External SMTP sample
@@ -151,7 +151,7 @@ Secret using the file path:
 kubectl --context wp-ops-v0146 -n milvus-stack create secret generic alertmanager-smtp \
   --from-file=password=/absolute/path/to/smtp-password
 ./stack.sh render --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml
-./stack.sh deploy --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml -x
+./stack.sh install --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml -x
 ```
 
 The operator mounts the password file at

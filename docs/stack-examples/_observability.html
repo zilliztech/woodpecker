@@ -2,8 +2,8 @@
 <p class="page-desc">Follow the same workload from Milvus through the WP client and servers, then check that the operational signals reach your dashboards and Alertmanager.</p>
 
 <h2 id="install">Select the signals you need</h2>
-<pre><code>./stack.sh addons-deploy --with prometheus,grafana,alertmanager -x
-./stack.sh addons-deploy --with jaeger,loki -x
+<pre><code>./stack.sh addons-install --with prometheus,grafana,alertmanager -x
+./stack.sh addons-install --with jaeger,loki -x
 ./stack.sh forward --wpcli -x</code></pre>
 <p>Each component is optional and can be added after the core deployment. Grafana displays data from the selected backends; it does not store their metrics, logs or spans. Existing forwards need a new invocation to include newly installed services. See <a href="{{STACK_REPO}}/COMPONENTS.md">independent selection and removal</a>.</p>
 <h2 id="chains">Start with an E2E operational dashboard</h2>

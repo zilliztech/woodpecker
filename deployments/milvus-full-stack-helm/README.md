@@ -98,10 +98,10 @@ context/namespace and can be copied directly. Local values/manifest files are
 retained for inspection under `.local/plans/` and may contain credentials.
 
 ```bash
-./stack.sh deploy --local-arm64  # Preview native commands
-./stack.sh deploy --local-arm64 -x           # Install core on existing Kubernetes
-./stack.sh addons-deploy --with all  # Preview optional observability
-./stack.sh addons-deploy --with all -x
+./stack.sh install --local-arm64  # Preview native commands
+./stack.sh install --local-arm64 -x           # Install core on existing Kubernetes
+./stack.sh addons-install --with all  # Preview optional observability
+./stack.sh addons-install --with all -x
 ./stack.sh forward --wpcli -x                # Separate terminal
 ./stack.sh smoke -x
 ./stack.sh verify                           # Read-only checks
@@ -120,11 +120,11 @@ Prepare image access using your cluster's normal tools.
 
 | Command | Default behavior | Effect with `-x` |
 | --- | --- | --- |
-| `deploy` | Print native Helm/kubectl plan | Install/upgrade releases and run the selected stack; retain PVCs and existing addons |
+| `install` | Print native Helm/kubectl plan | Install/upgrade releases and run the selected stack; retain PVCs and existing addons |
 | `stop` | Print pause plan | Save replica state in a namespace ConfigMap; pause this stack's workloads; retain releases/PVCs |
 | `start` | Print resume plan | Restore the saved replica counts and scheduling; retain PVCs; does not install a missing stack |
-| `clear` | Print uninstall/data-deletion plan | Uninstall all stack releases and delete their PVC data |
-| `addons-deploy` / `addons-clear` | Print selected addon changes | Add components / remove selected components and their data |
+| `uninstall` | Print uninstall/data-deletion plan | Uninstall all stack releases and delete their PVC data |
+| `addons-install` / `addons-uninstall` | Print selected addon changes | Add components / remove selected components and their data |
 | `forward` | Print native port-forward commands | Open/reuse only this stack's forwards |
 | `smoke`, `perf`, `*-smoke`, `acceptance` | Print workload/probe entry points | Write test data and run the selected probes |
 | `status`, `connections`, `addons-status`, `verify`, `logs`, `traces`, `alerts`, `collect` | Inspect/read and optionally save local evidence | Same read-only resource behavior |
@@ -150,12 +150,12 @@ through this wrapper are refused while its saved stop state exists; resume first
 ./stack.sh stop -x          # Pause only this stack's workloads
 ./stack.sh start -x         # Resume those workloads on the same running cluster
 ./stack.sh forward --wpcli -x
-./stack.sh clear  # Inspect the destructive cleanup plan
-./stack.sh clear -x         # Delete stack releases AND their PVC data
+./stack.sh uninstall  # Inspect the destructive cleanup plan
+./stack.sh uninstall -x         # Delete stack releases AND their PVC data
 ```
 
 `stop` preserves **persistent volume data**, not in-memory/ephemeral state. Jaeger
-memory history disappears when its Pod exits. Clear retains Kubernetes, the
+memory history disappears when its Pod exits. Uninstall retains Kubernetes, the
 namespace, shared CRDs and local evidence; it does not remove other clusters.
 
 ## Jupyter walkthrough
@@ -167,7 +167,7 @@ namespace, shared CRDs and local evidence; it does not remove other clusters.
 Open the authenticated loopback URL and select
 `notebooks/full-stack-walkthrough.ipynb`. Review its context, images, ports and
 load. `EXECUTE=False` previews operations by default. Set `EXECUTE=True` explicitly
-for the full run, which selects `--with all`; stop/clear cells stay disabled by
+for the full run, which selects `--with all`; stop/uninstall cells stay disabled by
 default. The notebook reuses matching forwards and owns only those it starts.
 Its source is unexecuted; local runs/evidence remain under `.local/`.
 
@@ -338,7 +338,7 @@ port forwarding and acceptance:
 
 ```bash
 ./stack.sh images --local-arm64 --mail-capture
-./stack.sh deploy --local-arm64 --mail-capture -x
+./stack.sh install --local-arm64 --mail-capture -x
 ./stack.sh forward --mail-capture  -x # Keep running in a separate terminal
 # In another terminal:
 ./stack.sh acceptance --mail-capture -x
@@ -401,7 +401,7 @@ you deliberately change replica counts.
 `collect` writes timestamped artifacts under `.local/evidence/`: resource status,
 events, image versions, bounded container logs, Helm release versions, and live
 dashboard query coverage. It does not export Secrets or Helm values. Review
-application logs before sharing artifacts. The deploy and verify commands return
+application logs before sharing artifacts. The install and verify commands return
 nonzero on failure; the evidence command attempts to retain useful diagnostics
 even when observability verification fails.
 
@@ -473,25 +473,25 @@ Additional Milvus overrides can be supplied with `-f path/to/values.yaml`; use t
 same flags for rendering, image inventory, and deployment. Keep changes to S3 access
 credentials consistent between the support chart and Milvus values.
 Use `--monitoring-values file` and `--support-values file` for their corresponding
-releases. Component selection is stored in the supporting Helm release. Repeating `deploy`
-preserves already selected addons; `addons-deploy --with ...` adds components.
-Use `addons-clear --with ...` to remove selected addons and their data. Core
-override files still need to be repeated for a core `deploy`; addon changes
+releases. Component selection is stored in the supporting Helm release. Repeating `install`
+preserves already selected addons; `addons-install --with ...` adds components.
+Use `addons-uninstall --with ...` to remove selected addons and their data. Core
+override files still need to be repeated for a core `install`; addon changes
 preserve the live core image, resources and user configuration. See COMPONENTS.md.
 
-Re-running `deploy` performs a Helm upgrade. Pin and review chart/image changes,
+Re-running `install` performs a Helm upgrade. Pin and review chart/image changes,
 then verify them with the same workload and dashboards. Monitor CRDs are installed
 by kube-prometheus-stack; follow that chart's CRD upgrade instructions when changing
 its version. The scripts do not delete shared CRDs.
 
 ```bash
-# Remove the stack AND its persistent data; keep the cluster for a fresh deploy.
-./stack.sh clear -x
+# Remove the stack AND its persistent data; keep the cluster for a fresh install.
+./stack.sh uninstall -x
 # Or pause only this stack’s workloads while retaining releases/PVCs:
 ./stack.sh stop -x
 ```
 
-`clear` resets etcd, MinIO and Woodpecker storage together, preventing log-ID reuse
+`uninstall` resets etcd, MinIO and Woodpecker storage together, preventing log-ID reuse
 from a partial metadata/WAL reset. It also deletes Prometheus history and
 Alertmanager state. Local `.local/` reports and chart/image caches remain available.
 
@@ -499,7 +499,7 @@ The default minikube StorageClass uses the `Delete` reclaim policy, so removing
 these PVCs also reclaims their backing volumes. On an external cluster, a `Retain`
 policy can leave backing volumes/data for the storage administrator to remove.
 External S3 buckets or pre-existing storage outside this stack's labeled PVCs are
-not erased by `clear`.
+not erased by `uninstall`.
 
 ## Troubleshooting
 
@@ -514,7 +514,7 @@ The public default Milvus image was not exercised in that validation run.
 ```bash
 ./stack.sh status
 kubectl --context wp-ops-v0146 -n milvus-stack get events --sort-by=.lastTimestamp
-kubectl --context wp-ops-v0146 -n milvus-stack logs deploy/milvus-streamingnode --tail=100
+kubectl --context wp-ops-v0146 -n milvus-stack logs install/milvus-streamingnode --tail=100
 kubectl --context wp-ops-v0146 -n milvus-stack logs milvus-woodpecker-0 --tail=100
 ```
 
@@ -528,7 +528,7 @@ kubectl --context wp-ops-v0146 -n milvus-stack logs milvus-woodpecker-0 --tail=1
 - Missing WP client traffic: inspect Milvus's generated config for
   `woodpecker.storage.type: service`, its seed list, and server operation counters.
 
-The intended development loop is: deploy → run workload → verify/collect → inspect
+The intended development loop is: install → run workload → verify/collect → inspect
 gaps → update metrics/configuration/dashboards → rerun. Future work can extend this
 with authorized email notifications, automated failure/performance scenarios,
 agent orchestration, and a separate `milvus-full-stack-operator/` installation path.

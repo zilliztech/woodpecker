@@ -388,7 +388,7 @@ def forward_plan(report, services_only=False):
     # Preflight all ports before starting anything. Reuse only a verified forward
     # to this exact context/namespace/resource/remote port; never kill external owners.
     if not services_only and not report["woodpecker_nodes"]:
-        raise RuntimeError("No Woodpecker Pods found; deploy the stack before opening wpcli forwards")
+        raise RuntimeError("No Woodpecker Pods found; install the stack before opening wpcli forwards")
     endpoints = forward_endpoints(report, services_only)
     ports = [e["suggested_port"] for e in endpoints]
     if len(ports) != len(set(ports)):

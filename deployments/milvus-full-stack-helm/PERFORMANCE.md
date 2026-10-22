@@ -32,7 +32,7 @@ Defaults: 5 seconds of warm-up, 60 seconds of measurement, two workers, batches 
 samples to reach Prometheus. Expect about two minutes including evidence collection.
 
 The test creates its own collection. It does not overwrite existing collections.
-Both the collection and the reports are retained for inspection; `clear` removes
+Both the collection and the reports are retained for inspection; `uninstall` removes
 the collection with the stack's stored data, while local reports survive.
 
 To change the load or run a longer observation window:

@@ -17,7 +17,7 @@ MAIL = os.getenv("MAILPIT_URL", "http://127.0.0.1:" + os.getenv("MAILPIT_PORT", 
 
 def run(context, recipient, report):
     # Helm --wait covers Pod readiness, not asynchronous Secret/config reloads.
-    alerts.wait_for("SMTP capture receiver is active (deploy with --mail-capture)",
+    alerts.wait_for("SMTP capture receiver is active (install with --mail-capture)",
                     lambda: alerts.notification_mode() == "smtp-capture")
     alerts.request(MAIL, "/api/v1/messages?limit=1")
     run_id = uuid.uuid4().hex[:12]

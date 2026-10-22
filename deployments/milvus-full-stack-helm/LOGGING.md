@@ -5,7 +5,7 @@ The core deployment contains none of these components unless selected.
 
 ```bash
 ./stack.sh images --local-arm64 --with loki,grafana
-./stack.sh addons-deploy --with loki,grafana -x
+./stack.sh addons-install --with loki,grafana -x
 ./stack.sh forward --wpcli -x
 # Another terminal:
 ./stack.sh logs
@@ -77,8 +77,8 @@ When Prometheus is selected, PodMonitors also scrape Loki, Alloy and Jaeger
 (where selected), making their ingestion/queue/resource metrics available for
 inspection separately from Milvus/WP's eight application targets.
 
-`stop/start` preserves the Loki PVC. `addons-clear --with loki` removes Loki and
-Alloy and deletes that log PVC. `clear` removes all stack data. Removing Grafana
+`stop/start` preserves the Loki PVC. `addons-uninstall --with loki` removes Loki and
+Alloy and deletes that log PVC. `uninstall` removes all stack data. Removing Grafana
 alone leaves the Loki backend and its logs intact.
 
 ## Local validation

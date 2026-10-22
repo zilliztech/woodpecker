@@ -35,7 +35,7 @@ def inventory(context, namespace):
     h = ["helm", "--kube-context", context, "-n", namespace]
     releases = {r["name"] for r in read(h + ["list", "--all", "-o", "json"]) if r["name"] in RELEASES}
     if "milvus" not in releases:
-        raise ValueError("No Milvus release here; review ./stack.sh deploy first")
+        raise ValueError("No Milvus release here; review ./stack.sh install first")
     def manifest(name):
         return name, list(yaml.safe_load_all(read(h + ["get", "manifest", name], False)))
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -94,7 +94,7 @@ def plan(action, context, namespace, output):
     if saved and (saved.get("version") != 1 or saved.get("namespace") != namespace):
         raise ValueError("Unexpected lifecycle state; inspect ConfigMap " + STATE_NAME)
     if action == "start" and not saved:
-        print("# No saved stop state: no replica counts changed. Use deploy to install/upgrade.")
+        print("# No saved stop state: no replica counts changed. Use install to install/upgrade.")
         return []
     # Revalidate PVC retention even on a repeated stop.
     fresh = snapshot(items, children, namespace, saved.get("pause_token") if saved else None) if action == "stop" else None

@@ -1,6 +1,6 @@
 <h1>E2E Operational Dashboards</h1>
 <p class="page-desc">Choose the symptom, then follow numbered processing steps from top to bottom. Each step explains what to inspect and where to continue.</p>
-<p>Install the optional backends first: <code>./stack.sh addons-deploy --with prometheus,grafana -x</code>, then keep <code>./stack.sh forward -x</code> running.</p>
+<p>Install the optional backends first: <code>./stack.sh addons-install --with prometheus,grafana -x</code>, then keep <code>./stack.sh forward -x</code> running.</p>
 
 <h2 id="choose">Choose a chain</h2>
 <p>The Helm stack provisions four focused E2E dashboards alongside the three Milvus/WP reference dashboards. Keep the stack’s forwards running; Grafana defaults to <code>http://127.0.0.1:3000</code>. Use <code>./stack.sh connections</code> for actual ports.</p>
