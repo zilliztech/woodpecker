@@ -20,10 +20,12 @@ example credentials are `admin / admin`.
 
 ### Write / Append
 
-1. **Proxy:** write completions by status, successful mutation latency, DML queue,
-   inserted rows, timestamp allocation and primary-key preparation.
+1. **Proxy:** write completions by status, successful mutation latency, quota
+   write-rate reduction, process RSS relative to container memory limits, DML
+   queue, inserted rows, timestamp allocation and primary-key preparation.
 2. **Streaming Client:** produce latency/status, producer availability and SN
-   in-flight produce requests, split by physical channel.
+   in-flight produce requests, payload/producer byte rates and quota admission
+   delay, split by physical channel where available.
 3. **SN WAL:** full append versus backend append, before/after interceptors,
    append outcomes and backend retry rate.
 4. **WP client inside Milvus:** append latency, pending appends, writer outcomes
@@ -37,6 +39,19 @@ This separates Proxy preparation, producer routing, WAL interception and backend
 work. Slow local flush and buffer wait call for per-node disk/CPU/sync inspection;
 the reference WP dashboard contains further resources and configured watermarks.
 WP background compaction/upload is not a synchronous step of every append.
+
+For `rate=0` rejections, inspect stages 1–2 before blaming the storage backend.
+The reference QuotaCenter exports `milvus_rootcoord_rate_limit_ratio` as **one
+minus the allowed-rate factor**: zero means no reduction and one means full
+reduction. It does not identify the reason. Correlate it with memory, consume lag
+and QuotaCenter logs. StreamingNode hosts a query/delegator role, so a QueryNode
+memory-protection log can refer to the SN process. The RSS/limit graph preserves
+Pod/container identity but is not the exact hardware-metric input used by quota
+decisions; check configured low/high watermarks and the log's used/total memory.
+Long streaming quota-admission delays can explain multi-second writes while WAL
+and WP append remain much faster. In the reference image, observed streaming
+rate-limit rejections incremented Proxy `status=retry`, even with client retries
+disabled; inspect that series alongside `fail` and the client's error report.
 
 ### WAL Read / Consume
 
@@ -155,6 +170,20 @@ seven dashboards and the required families in 21 E2E stages passed verification.
 Browser checks scrolled all four E2E pages and observed numeric frames with no
 query/runtime errors. The local-only consumer handler and idle growing-segment
 families were recorded as optional coverage gaps, not converted into healthy zeros.
+
+A follow-up local test targeted 20 MB/s of raw float32 vectors for 60 seconds
+with concurrent Strong queries and vector searches. With the existing small
+resource limits, acknowledged throughput was about 8.65 MB/s (535 MB), all 255
+write batches succeeded, and final Strong count matched all 290,816 acknowledged
+rows including warmup. Query/search checks passed, but insert P99 was 5.36 s and
+search P99 was 4.90 s. An earlier run stopped after ten rate-limit rejections.
+QuotaCenter logs recorded the SN-hosted delegator at about 90% of its 1 GiB memory
+limit; quota-admission delay reached seconds while WP disk admission stayed
+normal. This evidence motivated the quota, memory, byte-rate and admission-delay
+graphs above. It is a diagnostic example, not a 20 MB/s capacity claim or a
+durability/recovery test. Short rejections can fall between scrapes; client traces
+and component logs remain necessary. The updated seven dashboards contain 861
+visible expressions.
 
 Performance reports and the notebook link to the four E2E pages and three
 reference dashboards. Run-window links make it easier to compare requests,

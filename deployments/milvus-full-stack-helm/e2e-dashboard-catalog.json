@@ -10,7 +10,7 @@
         {
           "key": "proxy",
           "title": "1. Proxy — admission, preparation and request completion",
-          "guidance": "Start here for slow/failed inserts. Compare successful mutation latency with completed request status and queue depth. If the queue grows while downstream latency stays stable, inspect Proxy resources and admission. If produce latency rises too, continue to stage 2. REST/network/client time is outside this successful-mutation timer.",
+          "guidance": "Start here for slow/failed inserts. Compare successful mutation latency with completed request status and queue depth. If writes fail with rate=0, inspect QuotaCenter reduction and memory first: the SN-hosted delegator can trigger query-node memory protection. If the queue grows while downstream latency stays stable, inspect Proxy resources and admission. If produce latency rises too, continue to stage 2. REST/network/client time is outside this successful-mutation timer.",
           "probes": [
             {
               "metric": "milvus_proxy_mutation_latency_count",
@@ -21,13 +21,23 @@
               "metric": "milvus_proxy_req_count",
               "expression": "milvus_proxy_req_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\",function_name=~\"Insert|Upsert|Delete\"}",
               "required": true
+            },
+            {
+              "metric": "milvus_rootcoord_rate_limit_ratio",
+              "expression": "milvus_rootcoord_rate_limit_ratio{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\"}",
+              "required": false
+            },
+            {
+              "metric": "process_resident_memory_bytes",
+              "expression": "process_resident_memory_bytes{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}",
+              "required": false
             }
           ]
         },
         {
           "key": "streaming-client",
           "title": "2. Proxy Streaming Client — route and send to StreamingNode",
-          "guidance": "Compare produce latency/status by channel. Unavailable producers suggest routing, ownership or reconnect problems. When producers are available but produce latency grows, inspect SN in-flight work and WAL append in stage 3.",
+          "guidance": "Compare produce latency/status by channel. Unavailable producers suggest routing, ownership or reconnect problems. When producers are available but produce latency grows, compare quota admission delay before inspecting SN in-flight work and WAL append in stage 3. Admission waits can dominate a write while backend append is relatively fast.",
           "probes": [
             {
               "metric": "milvus_streaming_produce_total",
@@ -37,6 +47,11 @@
             {
               "metric": "milvus_streaming_resuming_producer_total",
               "expression": "milvus_streaming_resuming_producer_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\",channel_name=~\"${channel:regex}\"}",
+              "required": false
+            },
+            {
+              "metric": "milvus_streaming_produce_rate_limit_delay_seconds_count",
+              "expression": "milvus_streaming_produce_rate_limit_delay_seconds_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"proxy\",channel_name=~\"${channel:regex}\"}",
               "required": false
             }
           ]

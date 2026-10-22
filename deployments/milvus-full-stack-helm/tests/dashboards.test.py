@@ -61,6 +61,15 @@ class DashboardTests(unittest.TestCase):
             self.assertTrue(target["expr"].endswith(" * 1000"))
         self.assertNotIn(" * 1000", dashboards.latency("Example", "wp_latency")["targets"][0]["expr"])
 
+    def test_quota_reduction_and_memory_join_explain_observed_backpressure(self):
+        stages = dashboards.definitions()[0][3]
+        quota = next(plot for plot in stages[0]["plots"] if "Quota write-rate reduction" in plot["title"])
+        self.assertIn("0=none, 1=fully reduced", quota["title"])
+        self.assertIn("1 minus", quota["description"])
+        memory = next(plot for plot in stages[0]["plots"] if "Process RSS" in plot["title"])
+        self.assertIn("/ on (namespace,pod,container)", memory["targets"][0]["expr"])
+        self.assertNotIn('component="querynode"', memory["targets"][0]["expr"])
+
     def test_required_coverage_cannot_pass_with_only_up_or_other_stage_data(self):
         stage = dashboards.stage("wal", "WAL", "Inspect backend", [], [dashboards.probe("milvus_wal_append_message_total", required=True)])
         with patch.object(checker, "query", return_value={"status": "success", "data": {"result": []}}):

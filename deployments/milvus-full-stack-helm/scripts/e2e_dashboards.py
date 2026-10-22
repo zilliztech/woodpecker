@@ -77,24 +77,39 @@ def definitions():
     write = [
         stage("proxy", "1. Proxy — admission, preparation and request completion",
               "Start here for slow/failed inserts. Compare successful mutation latency with completed request status and queue depth. "
+              "If writes fail with rate=0, inspect QuotaCenter reduction and memory first: the SN-hosted delegator can trigger query-node memory protection. "
               "If the queue grows while downstream latency stays stable, inspect Proxy resources and admission. "
               "If produce latency rises too, continue to stage 2. REST/network/client time is outside this successful-mutation timer.", [
                   line("Write request completions by status", rate("milvus_proxy_req_count", "pod,function_name,status", write_fn), "ops", "{{pod}} {{function_name}} {{status}}",
-                       "Use status=total for total completions; success/fail are classifications, not additional requests to add to total."),
+                       "Use status=total for total completions; success/fail/retry are classifications, not additional requests to add to total. In the reference image, streaming rate-limit rejections were reported as retry even with client write retries disabled."),
                   latency("Successful mutation latency", "milvus_proxy_mutation_latency", "pod,msg_type", mutation),
+                  line("Quota write-rate reduction (0=none, 1=fully reduced)", gauge("milvus_rootcoord_rate_limit_ratio", "pod,collection_id"), "percentunit", "{{pod}} collection={{collection_id}}",
+                       "The reference QuotaCenter exports 1 minus the allowed-rate factor. A rising value means MORE restriction. Correlate memory, lag and QuotaCenter logs; this gauge does not name the limiting reason."),
+                  line("Process RSS / container memory limit", gauge("process_resident_memory_bytes", "namespace,pod,container", 'component=~"proxy|streamingnode|querynode"')
+                       + ' / on (namespace,pod,container) max by (namespace,pod,container) (kube_pod_container_resource_limits{cluster="$cluster",namespace="$namespace",resource="memory",unit="byte"})',
+                       "percentunit", "{{pod}} {{container}}",
+                       "Context for memory protection, including the query/delegator hosted on SN. RSS is not the exact QuotaCenter hardware-metric input; confirm the reason and configured low/high watermarks in QuotaCenter logs/configuration."),
                   line("Proxy DML queue depth", gauge("milvus_proxy_queue_task_num", "pod,task_state", proxy + ',queue_type="dml"'), legend="{{pod}} {{task_state}}"),
                   line("Inserted rows / second", rate("milvus_proxy_insert_vectors_count", extra=proxy), "ops", description="Successful rows/second. Compare mutation latency with request completion rates; internal WAL message counts include control traffic."),
                   latency("Proxy timestamp allocation", "milvus_proxy_apply_timestamp_latency", extra=proxy),
                   latency("Proxy primary-key allocation", "milvus_proxy_apply_pk_latency", extra=proxy),
-              ], [probe("milvus_proxy_mutation_latency_count", mutation, True), probe("milvus_proxy_req_count", write_fn, True)]),
+              ], [probe("milvus_proxy_mutation_latency_count", mutation, True), probe("milvus_proxy_req_count", write_fn, True),
+                  probe("milvus_rootcoord_rate_limit_ratio"), probe("process_resident_memory_bytes", 'component="streamingnode"')]),
         stage("streaming-client", "2. Proxy Streaming Client — route and send to StreamingNode",
               "Compare produce latency/status by channel. Unavailable producers suggest routing, ownership or reconnect problems. "
-              "When producers are available but produce latency grows, inspect SN in-flight work and WAL append in stage 3.", [
+              "When producers are available but produce latency grows, compare quota admission delay before inspecting SN in-flight work and WAL append in stage 3. Admission waits can dominate a write while backend append is relatively fast.", [
                   latency("Produce latency", "milvus_streaming_produce_success_duration_seconds", ch_labels, proxy + "," + CHANNEL, True),
                   line("Produce completions by status", rate("milvus_streaming_produce_total", "pod,channel_name,status", proxy + "," + CHANNEL), "ops", "{{pod}} {{channel_name}} {{status}}"),
                   line("Resuming producers by availability", gauge("milvus_streaming_resuming_producer_total", "pod,channel_name,status", proxy + "," + CHANNEL), legend="{{pod}} {{channel_name}} {{status}}"),
                   line("SN in-flight produce requests", gauge("milvus_streamingnode_produce_inflight_total", ch_labels, sn), legend="{{pod}} {{channel_name}}"),
-              ], [probe("milvus_streaming_produce_total", proxy + "," + CHANNEL, True), probe("milvus_streaming_resuming_producer_total", proxy + "," + CHANNEL)]),
+                  line("Proxy received payload bytes / second", rate("milvus_proxy_receive_bytes_count", "pod,msg_type", mutation), "Bps", "{{pod}} {{msg_type}}",
+                       "Milvus-recorded input payload, not necessarily acknowledged writes, and not the same byte definition as raw float32 vectors or replicated WAL traffic."),
+                  line("Streaming producer bytes / second", rate("milvus_streaming_produce_bytes", "pod,channel_name,status", proxy + "," + CHANNEL), "Bps", "{{pod}} {{channel_name}} {{status}}"),
+                  latency("Streaming quota admission delay", "milvus_streaming_produce_rate_limit_delay_seconds", ch_labels, proxy + "," + CHANNEL, True),
+                  line("Quota delay observations / second", rate("milvus_streaming_produce_rate_limit_delay_seconds_count", ch_labels, proxy + "," + CHANNEL), "ops", "{{pod}} {{channel_name}}",
+                       "Lazy/version-specific. A long admission delay can dominate client latency even while the WAL backend remains comparatively fast."),
+              ], [probe("milvus_streaming_produce_total", proxy + "," + CHANNEL, True), probe("milvus_streaming_resuming_producer_total", proxy + "," + CHANNEL),
+                  probe("milvus_streaming_produce_rate_limit_delay_seconds_count", proxy + "," + CHANNEL)]),
         stage("wal", "3. StreamingNode WAL — interceptors and backend append",
               "Compare full WAL append, backend append and each interceptor. Overlapping timer scopes are not an additive latency breakdown. "
               "Inspect retries and per-channel confirmation progress. Backend latency rising points to stage 4; growing interceptor time points to the named interceptor.", [
