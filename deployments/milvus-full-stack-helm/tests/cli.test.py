@@ -45,8 +45,9 @@ tool = os.path.basename(sys.argv[0])
 args = sys.argv[1:]
 with open(os.environ["CLI_TEST_TRACE"], "a") as output:
     output.write(json.dumps([tool] + args) + "\\n")
-if tool == "kubectl" and "current-context" in args:
-    print("current-context-fixture")
+if tool == "kubectl" and "view" in args:
+    names = ["test-context", "current-context-fixture"]
+    print(json.dumps({"current-context": "current-context-fixture", "contexts": [{"name": n, "context": {"cluster": "test-cluster"}} for n in names]}))
 if tool == "kubectl" and "version" in args and os.environ.get("CLI_TEST_BAD_CLUSTER"):
     sys.exit(1)
 if tool == "helm" and "list" in args:
@@ -129,7 +130,7 @@ if tool == "kubectl" and "delete" in args and "pvc" in args:
         del self.env["CONTEXT"]
         result = self.run_cli("status")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(["kubectl", "config", "current-context"], self.calls())
+        self.assertIn(["kubectl", "config", "view", "-o", "json"], self.calls())
         self.assertTrue(all("current-context-fixture" in c for c in self.calls() if "--context" in c or "--kube-context" in c))
         self.assertFalse(any(c[0] == "minikube" for c in self.calls()))
 

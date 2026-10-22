@@ -6603,6 +6603,8 @@ kubectl version
 ./stack.sh help</code></pre></div></div>
 <p>The default context is kubectl’s current context; override it with <code>--context NAME</code> or <code>CONTEXT</code>. The default namespace is <code>milvus-stack</code>, configurable with <code>--namespace</code> / <code>NAMESPACE</code>. An unavailable context produces configuration guidance; stack.sh never creates, starts, stops or deletes Kubernetes.</p>
 
+<p>If configuration is incomplete, stack.sh distinguishes missing/unreadable kubeconfig files, an empty context list, an unselected/unknown context and API connection failures. It lists available context names and copyable commands, including <code>./stack.sh status --context YOUR_CONTEXT</code>. No context is switched automatically, and credentials are not printed. See <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/README.md#kubernetes-configuration-and-connection-diagnostics">configuration diagnostics</a>.</p>
+
 <h2 id="stack-examples-helm-install">Review, then install</h2>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>./stack.sh render
 ./stack.sh images                       # Image inventory only

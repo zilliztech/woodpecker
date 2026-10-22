@@ -503,6 +503,31 @@ not erased by `uninstall`.
 
 ## Troubleshooting
 
+### Kubernetes configuration and connection diagnostics
+
+Before a live operation, the stack reads the merged kubeconfig and validates the
+selected API connection. Diagnostics distinguish missing files, an unreadable
+configuration, no contexts, no current selection, an unknown explicit context,
+and API/network/authentication/TLS failures. They display file paths and available
+context/cluster names, never kubeconfig credentials or raw authentication output.
+No context is automatically selected and no cluster is started.
+
+```bash
+kubectl config get-contexts
+# Use a configured context for one invocation without changing your default:
+./stack.sh status --context YOUR_CONTEXT
+# Or explicitly choose your default outside this wrapper:
+kubectl config use-context YOUR_CONTEXT
+./stack.sh status
+```
+
+If no contexts exist, obtain/restore kubeconfig using your cluster provider's
+normal process, or set `KUBECONFIG=/absolute/path/to/your/kubeconfig`. For local
+Kubernetes, restore/start it with your own provider tools outside stack.sh.
+An existing context does not imply that its cluster is running or credentials
+are valid; connection failures print native kubectl diagnostic commands.
+
+
 The local ARM64 image override was live-validated on 2026-10-18: all five Milvus
 and three Woodpecker scrape targets were UP, a 1,200-vector workload passed insert,
 primary-key query, and vector-search checks, and all 695 dashboard expressions
@@ -535,7 +560,7 @@ agent orchestration, and a separate `milvus-full-stack-operator/` installation p
 
 ## Kubernetes lifecycle validation
 
-87 offline Python tests cover selection, native command previews/execution,
+95 offline Python tests cover selection, native command previews/execution,
 context/preflight failures, resource ownership, replica restoration, repeated
 stop, Operator resources, DaemonSet scheduling and PVC-retention/HPA guards,
 alongside the existing workload/observability checks. ShellCheck and local Helm

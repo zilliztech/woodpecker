@@ -177,13 +177,7 @@ case "$ACTION" in
     for tool in kubectl helm; do
       if ! command -v "$tool" >/dev/null 2>&1; then echo "Install $tool and configure your existing Kubernetes environment first." >&2; exit 2; fi
     done
-    if [ -z "$CONTEXT" ]; then
-      CONTEXT=$(kubectl config current-context 2>/dev/null) || { echo "No Kubernetes context. Configure KUBECONFIG and kubectl config use-context first." >&2; exit 2; }
-    fi
-    if [ -z "$CONTEXT" ] || ! kubectl --context "$CONTEXT" version --request-timeout=10s -o json >/dev/null 2>&1; then
-      echo "Kubernetes context '$CONTEXT' is unavailable. Configure credentials/connectivity and verify kubectl --context '$CONTEXT' get pods -n '$NAMESPACE'. Manage the cluster outside stack.sh." >&2
-      exit 2
-    fi ;;
+    CONTEXT=$(python3 "$ROOT/scripts/kube-context.py" --context "$CONTEXT" --namespace "$NAMESPACE" --action "$ACTION") || exit 2 ;;
 esac
 export CONTEXT NAMESPACE
 mkdir -p "$STATE/charts" "$STATE/rendered"
