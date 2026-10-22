@@ -1059,3 +1059,20 @@ func TestAzureReadStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestNewAzureClientDefaultAzureCredentialPath(t *testing.T) {
+	t.Setenv("AZURE_CLIENT_SECRET", "fake-secret")
+	t.Setenv("AZURE_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
+	t.Setenv("AZURE_TENANT_ID", "00000000-0000-0000-0000-000000000002")
+
+	cfg := &config.Configuration{}
+	cfg.Minio.UseIAM = true
+	cfg.Minio.AccessKeyID = "testaccount"
+	cfg.Minio.Address = "core.windows.net"
+	cfg.Minio.CreateBucket = false
+
+	client, err := newAzureObjectStorageClient(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+	assert.Equal(t, "https://testaccount.blob.core.windows.net/", client.URL())
+}
