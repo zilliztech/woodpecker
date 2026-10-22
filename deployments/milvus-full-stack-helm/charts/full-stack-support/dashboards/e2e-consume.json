@@ -1,0 +1,1612 @@
+{
+  "id": null,
+  "uid": "milvus-e2e-consume",
+  "title": "Milvus + WP — E2E WAL Read / Consume",
+  "description": "Memory or historical WAL → SN Scanner → subscription → processing / visibility. Ordered operational steps; see E2E-DASHBOARDS.md for metric scope and coverage.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "15s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "tags": [
+    "milvus",
+    "woodpecker",
+    "e2e",
+    "operations"
+  ],
+  "links": [
+    {
+      "title": "Write / Append",
+      "type": "link",
+      "url": "/d/milvus-e2e-write",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "WAL Read / Consume",
+      "type": "link",
+      "url": "/d/milvus-e2e-consume",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Flush / Checkpoint",
+      "type": "link",
+      "url": "/d/milvus-e2e-flush",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Search / Query",
+      "type": "link",
+      "url": "/d/milvus-e2e-query",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Milvus reference",
+      "type": "link",
+      "url": "/d/milvus-full-stack",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "WP client reference",
+      "type": "link",
+      "url": "/d/woodpecker-client-k8s",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "WP server reference",
+      "type": "link",
+      "url": "/d/woodpecker-server-k8s",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        }
+      },
+      {
+        "name": "cluster",
+        "label": "cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(up{woodpecker_id!=\"\"}, cluster)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(up{woodpecker_id!=\"\"}, cluster)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "local",
+          "value": "local"
+        },
+        "options": []
+      },
+      {
+        "name": "namespace",
+        "label": "namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(up{cluster=\"$cluster\",woodpecker_id!=\"\"}, namespace)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(up{cluster=\"$cluster\",woodpecker_id!=\"\"}, namespace)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "milvus-stack",
+          "value": "milvus-stack"
+        },
+        "options": []
+      },
+      {
+        "name": "woodpecker_id",
+        "label": "woodpecker id",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(up{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id!=\"\"}, woodpecker_id)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(up{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id!=\"\"}, woodpecker_id)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "milvus",
+          "value": "milvus"
+        },
+        "options": []
+      },
+      {
+        "name": "channel",
+        "label": "channel",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(milvus_wal_info{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\"}, channel_name)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(milvus_wal_info{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\"}, channel_name)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "allValue": ".*",
+        "options": []
+      },
+      {
+        "name": "log_ns",
+        "label": "log ns",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(woodpecker_client_append_requests_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\"}, log_ns)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(woodpecker_client_append_requests_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\"}, log_ns)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "allValue": ".*",
+        "options": []
+      },
+      {
+        "name": "log_id",
+        "label": "log id",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(woodpecker_client_append_requests_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",log_ns=~\"${log_ns:regex}\"}, log_id)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(woodpecker_client_append_requests_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",log_ns=~\"${log_ns:regex}\"}, log_id)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "allValue": ".*",
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "E2E WAL Read / Consume — read from top to bottom",
+      "options": {
+        "mode": "markdown",
+        "content": "**Memory or historical WAL → SN Scanner → subscription → processing / visibility**\n\nSelect a time window containing the workload. Channel filters apply to Milvus channel metrics; log filters apply to WP metrics. They are independent identities: use wpcli metadata to map them; there is no automatic channel-to-log or collection-to-log join. Legends identify the actual process.\n\n**No data ≠ healthy zero.** Lazy/error/remote-only metrics may be absent; `./stack.sh verify` records each stage's coverage. Timers overlap and quantiles are not additive. Read each step's guidance before interpreting an idle signal."
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 7
+      }
+    },
+    {
+      "type": "row",
+      "title": "1. Establish the read mode — memory tailing or WAL catchup",
+      "collapsed": false,
+      "panels": [],
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "text",
+      "title": "How to use this step",
+      "options": {
+        "mode": "markdown",
+        "content": "A tailing scanner can read the SN write-ahead memory buffer without WP RPCs. A cold/catchup reader may read an active segment from WP services or a compacted segment directly from object storage. Zero WP read traffic alone is not a fault. EOF/end_of_file is normal at the tail. Compare scanner modes and WP read sources before interpreting an idle backend. For a true durability test, use a separate controlled restart/recovery scenario."
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Scanners by mode",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name,scanner_model) (milvus_wal_scanner_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{channel_name}} {{scanner_model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SN write-ahead buffer bytes",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "max by (pod,channel_name) (milvus_wal_write_ahead_buffer_size_bytes{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{pod}} {{channel_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "WP active-segment quorum read bytes / second",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,log_id) (rate(woodpecker_client_quorum_read_bytes_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{pod}} log={{log_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "WP compacted-segment direct read outcomes",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,log_id,status) (rate(woodpecker_client_direct_read_requests_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{pod}} log={{log_id}} {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "2. Historical WAL read — WP Reader, services or object storage",
+      "collapsed": false,
+      "panels": [],
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "text",
+      "title": "How to use this step",
+      "options": {
+        "mode": "markdown",
+        "content": "Follow this group when catchup reads are active. Compare read_next success/error and backend read latency. A blocking read_next includes waiting for new data; a large duration alone does not prove a slow disk. EOF/end_of_file at the tail is an expected outcome. Per-reader read-frontier metrics are not exported by the example's WP v0.1.46; inspect wp log readers when needed."
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "WP reader read_next by result",
+      "description": "P50/P95/P99 of observed operations; no observations produce no data/NaN. Check the stage's observation rate. Quantiles from different stages cannot be added or subtracted. Values above the largest finite histogram bucket cannot be resolved accurately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.5, sum by (le,pod,log_id,status) (rate(woodpecker_client_reader_operation_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\",operation=\"read_next\"}[$__rate_interval])))",
+          "legendFormat": "P50 · {{pod}} · {{log_id}} · {{status}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.95, sum by (le,pod,log_id,status) (rate(woodpecker_client_reader_operation_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\",operation=\"read_next\"}[$__rate_interval])))",
+          "legendFormat": "P95 · {{pod}} · {{log_id}} · {{status}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.99, sum by (le,pod,log_id,status) (rate(woodpecker_client_reader_operation_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\",operation=\"read_next\"}[$__rate_interval])))",
+          "legendFormat": "P99 · {{pod}} · {{log_id}} · {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reader read_next outcomes / second",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,log_id,status) (rate(woodpecker_client_reader_operation_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\",operation=\"read_next\"}[$__rate_interval]))",
+          "legendFormat": "{{pod}} log={{log_id}} {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "x": 12,
+        "y": 33,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "WP service read batch latency",
+      "description": "P50/P95/P99 of observed operations; no observations produce no data/NaN. Check the stage's observation rate. Quantiles from different stages cannot be added or subtracted. Values above the largest finite histogram bucket cannot be resolved accurately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.5, sum by (le,pod,node_id,log_id) (rate(woodpecker_server_read_batch_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}[$__rate_interval])))",
+          "legendFormat": "P50 · {{pod}} · {{node_id}} · {{log_id}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.95, sum by (le,pod,node_id,log_id) (rate(woodpecker_server_read_batch_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}[$__rate_interval])))",
+          "legendFormat": "P95 · {{pod}} · {{node_id}} · {{log_id}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.99, sum by (le,pod,node_id,log_id) (rate(woodpecker_server_read_batch_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}[$__rate_interval])))",
+          "legendFormat": "P99 · {{pod}} · {{node_id}} · {{log_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Compacted-segment direct read latency",
+      "description": "P50/P95/P99 of observed operations; no observations produce no data/NaN. Check the stage's observation rate. Quantiles from different stages cannot be added or subtracted. Values above the largest finite histogram bucket cannot be resolved accurately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.5, sum by (le,pod,log_id) (rate(woodpecker_client_direct_read_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}[$__rate_interval])))",
+          "legendFormat": "P50 · {{pod}} · {{log_id}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.95, sum by (le,pod,log_id) (rate(woodpecker_client_direct_read_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}[$__rate_interval])))",
+          "legendFormat": "P95 · {{pod}} · {{log_id}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.99, sum by (le,pod,log_id) (rate(woodpecker_client_direct_read_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}[$__rate_interval])))",
+          "legendFormat": "P99 · {{pod}} · {{log_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 13,
+      "gridPos": {
+        "x": 12,
+        "y": 41,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "3. SN Scanner — scan, filter, ordering and transaction buffers",
+      "collapsed": false,
+      "panels": [],
+      "id": 14,
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "text",
+      "title": "How to use this step",
+      "options": {
+        "mode": "markdown",
+        "content": "Compare scanned and passed messages by message type and mode. Filtering TimeTicks/control messages is expected, so those rates are not a loss ratio. Growing pending/transaction buffers or a paused scanner warrant inspection of downstream processing and transaction completion. Continue to stages 4–5."
+      },
+      "id": 15,
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Scanned messages / second",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name,scanner_model,message_type) (rate(milvus_wal_scan_message_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{channel_name}} {{scanner_model}} {{message_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 16,
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Passed messages / second",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name,scanner_model,message_type) (rate(milvus_wal_scan_pass_message_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{channel_name}} {{scanner_model}} {{message_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 17,
+      "gridPos": {
+        "x": 12,
+        "y": 54,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Scanner pending bytes",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name) (milvus_wal_scanner_pending_queue_bytes{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{pod}} {{channel_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 18,
+      "gridPos": {
+        "x": 0,
+        "y": 62,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Scanner consumption paused",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "max by (pod,channel_name) (milvus_wal_scanner_pause_consumption{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{pod}} {{channel_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 19,
+      "gridPos": {
+        "x": 12,
+        "y": 62,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Transaction buffer bytes",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name) (milvus_wal_scanner_txn_buf_bytes{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{pod}} {{channel_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 20,
+      "gridPos": {
+        "x": 0,
+        "y": 70,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "TimeTick ordering buffer bytes",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name) (milvus_wal_scanner_time_tick_buf_bytes{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{pod}} {{channel_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 21,
+      "gridPos": {
+        "x": 12,
+        "y": 70,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "4. Subscription and dispatch — local and remote access",
+      "collapsed": false,
+      "panels": [],
+      "id": 22,
+      "gridPos": {
+        "x": 0,
+        "y": 78,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "text",
+      "title": "How to use this step",
+      "options": {
+        "mode": "markdown",
+        "content": "Consumer client metrics belong to the process that subscribes, which can be SN itself. A local consumer bypasses the remote gRPC handler. Missing remote-only server series is expected for a local subscription; unavailable consumers indicate a reconnect/routing problem."
+      },
+      "id": 23,
+      "gridPos": {
+        "x": 0,
+        "y": 79,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumers by access model",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name,access_model) (milvus_streaming_consumer_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{pod}} {{channel_name}} {{access_model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 24,
+      "gridPos": {
+        "x": 0,
+        "y": 83,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Resuming consumers by availability",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name,status) (milvus_streaming_resuming_consumer_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{pod}} {{channel_name}} {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 25,
+      "gridPos": {
+        "x": 12,
+        "y": 83,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Delivered bytes / second",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,channel_name) (rate(milvus_streaming_consume_bytes_sum{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",channel_name=~\"${channel:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{pod}} {{channel_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 26,
+      "gridPos": {
+        "x": 0,
+        "y": 91,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Remote server in-flight consume bodies",
+      "description": "Remote handler only; no data is expected when all subscribers use access_model=local.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "max by (pod,channel_name) (milvus_streamingnode_consume_inflight_total{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\",channel_name=~\"${channel:regex}\"})",
+          "legendFormat": "{{pod}} {{channel_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 27,
+      "gridPos": {
+        "x": 12,
+        "y": 91,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "5. Consumer processing and visibility — include the SN delegator",
+      "collapsed": false,
+      "panels": [],
+      "id": 28,
+      "gridPos": {
+        "x": 0,
+        "y": 99,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "text",
+      "title": "How to use this step",
+      "options": {
+        "mode": "markdown",
+        "content": "The querynode-named metrics can be emitted by StreamingNode's co-located delegator; legends preserve the actual component/Pod. Compare consumption lag, pending processing and insert/delete latency. Rising TSafe wait links this dashboard to Search/Query. Use a Strong-consistency workload to verify application visibility; these metrics do not measure per-row insert-to-visible latency."
+      },
+      "id": 29,
+      "gridPos": {
+        "x": 0,
+        "y": 100,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumer TimeTick lag",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "max by (pod,component,collection_id) (milvus_querynode_consume_tt_lag_ms{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"})",
+          "legendFormat": "{{pod}} {{component}} collection={{collection_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 30,
+      "gridPos": {
+        "x": 0,
+        "y": 104,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages waiting for processing",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,component,msg_type) (milvus_querynode_wait_processing_msg_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"})",
+          "legendFormat": "{{pod}} {{component}} {{msg_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 31,
+      "gridPos": {
+        "x": 12,
+        "y": 104,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Insert/delete processing latency",
+      "description": "P50/P95/P99 of observed operations; no observations produce no data/NaN. Check the stage's observation rate. Quantiles from different stages cannot be added or subtracted. Values above the largest finite histogram bucket cannot be resolved accurately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.5, sum by (le,pod,component,msg_type) (rate(milvus_querynode_process_insert_or_delete_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}[$__rate_interval])))",
+          "legendFormat": "P50 · {{pod}} · {{component}} · {{msg_type}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.95, sum by (le,pod,component,msg_type) (rate(milvus_querynode_process_insert_or_delete_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}[$__rate_interval])))",
+          "legendFormat": "P95 · {{pod}} · {{component}} · {{msg_type}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.99, sum by (le,pod,component,msg_type) (rate(milvus_querynode_process_insert_or_delete_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}[$__rate_interval])))",
+          "legendFormat": "P99 · {{pod}} · {{component}} · {{msg_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 32,
+      "gridPos": {
+        "x": 0,
+        "y": 112,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Search/query wait for TSafe",
+      "description": "P50/P95/P99 of observed operations; no observations produce no data/NaN. Check the stage's observation rate. Quantiles from different stages cannot be added or subtracted. Values above the largest finite histogram bucket cannot be resolved accurately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.5, sum by (le,pod,component,query_type) (rate(milvus_querynode_sq_wait_tsafe_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}[$__rate_interval])))",
+          "legendFormat": "P50 · {{pod}} · {{component}} · {{query_type}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.95, sum by (le,pod,component,query_type) (rate(milvus_querynode_sq_wait_tsafe_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}[$__rate_interval])))",
+          "legendFormat": "P95 · {{pod}} · {{component}} · {{query_type}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.99, sum by (le,pod,component,query_type) (rate(milvus_querynode_sq_wait_tsafe_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=~\"streamingnode|querynode\"}[$__rate_interval])))",
+          "legendFormat": "P99 · {{pod}} · {{component}} · {{query_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 33,
+      "gridPos": {
+        "x": 12,
+        "y": 112,
+        "w": 12,
+        "h": 8
+      }
+    }
+  ]
+}

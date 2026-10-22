@@ -1,0 +1,28 @@
+# Monitoring override ONLY. Copy into .local/, replace every placeholder, then:
+# ./stack.sh install --local-arm64 --with prometheus,alertmanager --monitoring-values .local/email-smtp.yaml -x
+# Do not combine this profile with --mail-capture.
+# A controlled email probe is routed here; real rule alerts remain local-only.
+# After inbox verification, add a second route for alert_set="woodpecker-full-stack".
+alertmanager:
+  alertmanagerSpec:
+    secrets: [alertmanager-smtp]
+  config:
+    route:
+      routes:
+        - receiver: smtp-email
+          matchers: ['notification_test="email"']
+          group_by: [alertname, test_run]
+          group_wait: 2s
+          group_interval: 10s
+          repeat_interval: 1h
+    receivers:
+      - name: local-only
+      - name: smtp-email
+        email_configs:
+          - to: zhenyuan.wei@zilliz.com
+            from: REPLACE_WITH_VERIFIED_SENDER
+            smarthost: REPLACE_WITH_SMTP_HOST:587
+            auth_username: REPLACE_WITH_SMTP_USERNAME
+            auth_password_file: /etc/alertmanager/secrets/alertmanager-smtp/password
+            require_tls: true
+            send_resolved: true

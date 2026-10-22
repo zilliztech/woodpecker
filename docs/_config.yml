@@ -26,3 +26,6 @@ exclude:
   # Quick Start generator/maintenance notes; runnable examples remain downloadable.
   - quickstart/generate.py
   - quickstart/README.md
+
+  # Stack examples are embedded in docs.html; exclude authoring sources.
+  - stack-examples

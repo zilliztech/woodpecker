@@ -1,0 +1,7 @@
+# Supplied development build. Preload with ./stack.sh images --local-arm64.
+# Keep this override separate so the base example uses public images.
+image:
+  all:
+    repository: harbor-us-vdc.zilliz.cc/milvusdb/milvus
+    tag: enhance-woodpecker-v0.1.46-3.0-20261012-27bd28d206-v2-arm64
+    pullPolicy: IfNotPresent

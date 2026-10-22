@@ -1,0 +1,40 @@
+<h1>E2E Testing &amp; Optimization</h1>
+<p class="page-desc">Use a repeatable workload and its operational evidence to find gaps, investigate bottlenecks and evaluate a change.</p>
+
+<h2 id="baseline">Establish a working baseline</h2>
+<p>With the stack and forwards running, start with the integrated acceptance path:</p>
+<pre><code>./stack.sh acceptance -x</code></pre>
+<p>This always runs a Milvus insert/query/search workload and collects evidence. It also tests the selected backends: Prometheus rules and metrics, Grafana dashboards, Jaeger trace coverage, Loki log delivery and the Prometheus + Alertmanager firing/recovery/inhibition path. External email is not enabled. Each stage must succeed; keep the resulting reports if one fails so you can inspect that stage. Default trace verification reports known gaps separately; use strict E2E mode when a complete connected path is required.</p>
+
+<h2 id="writes">Run a bounded write experiment</h2>
+<pre><code>./stack.sh perf -x</code></pre>
+<p>The default run uses a 5-second warm-up, a 60-second measurement window, two workers and a total target of five 100-vector insert requests per second. It then waits 35 seconds for observation. It creates and retains its own collection, checks live read/query/search results and records acknowledged throughput, errors and insert latency.</p>
+<pre><code>PERF_DURATION=300 PERF_CONCURRENCY=4 PERF_BATCH_SIZE=200 PERF_RPS=10 ./stack.sh perf -x</code></pre>
+<p>This example raises the requested load; achieved throughput depends on the workload generator and stack. Compare one change at a time with the same images, resources and parameters. REST transport and port-forward overhead are part of the measured latency, and successful live reads do not prove durability through a crash.</p>
+
+<h2 id="evidence">Follow the evidence</h2>
+<p>Each performance run writes a unique directory under <code>.local/perf/</code>, including:</p>
+<table>
+  <thead><tr><th>Artifact</th><th>Use</th></tr></thead>
+  <tbody>
+    <tr><td><code>summary.md</code>, <code>report.json</code></td><td>Results, parameters, correctness checks, missing signals, failures and investigation leads.</td></tr>
+    <tr><td><code>requests.jsonl</code></td><td>Insert attempts, row-ID ranges, timestamps, latency and errors.</td></tr>
+    <tr><td><code>signals.jsonl</code>, <code>metric-*.json</code></td><td>Metric/alert snapshots and exact queries over the run’s time range.</td></tr>
+    <tr><td><code>pods.json</code>, <code>events.txt</code>, logs</td><td>Component images/resources, Kubernetes events and bounded component logs.</td></tr>
+  </tbody>
+</table>
+<p>Start from failed writes or correctness checks, then compare Milvus mutation latency, WP client append/queue behavior, server RPC/flush latency and storage/resource signals. Use node/log identities and timestamps to narrow the wpcli and log investigation. Missing lazy error counters or idle histograms are coverage gaps until the corresponding behavior is exercised.</p>
+<p>For a wider snapshot, run <code>./stack.sh collect</code>. The detailed <a href="{{STACK_REPO}}/PERFORMANCE.md">performance guide</a> explains gates, artifact limits and interpretation. Review logs before sharing evidence.</p>
+
+<h2 id="own-system">Turn an observation into an improvement</h2>
+<ol>
+  <li><strong>Record the symptom and baseline.</strong> Keep the workload parameters, timestamps, selected instance and observed result.</li>
+  <li><strong>Locate the affected stage.</strong> Distinguish load-generator delay, Milvus processing, WP client queues, server work and object storage.</li>
+  <li><strong>Close the relevant gap.</strong> Improve a metric, query, alert, runbook or configuration based on that evidence.</li>
+  <li><strong>Rerun and compare.</strong> Verify application results, operational checks and the new signal under the same conditions.</li>
+</ol>
+<p>Use the same approach on your own Milvus + WP deployment after adapting endpoints, labels, permissions and workload limits. Treat a local result as evidence for the measured configuration, then validate the change on the target environment.</p>
+
+<h2 id="future">Future operational chapters</h2>
+<p>This collection can grow with controlled restart/recovery drills, read/write stall investigations, disk/object-store pressure scenarios, scaling/capacity comparisons and optimization experiments. These fault scenarios are not automatically exercised by the current performance test.</p>
+<p>Each new chapter should provide a reproducible starting state, bounded trigger, expected metrics and alerts, wpcli/log investigation, recovery procedure and application-level verification. Structured reports and meaningful exit status make those chapters reusable by local AI agents as well as people. Autonomous orchestration remains a future addition.</p>
