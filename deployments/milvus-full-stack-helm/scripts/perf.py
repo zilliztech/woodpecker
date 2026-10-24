@@ -103,7 +103,7 @@ class Benchmark:
         self.collection_created = False
         self.records = []
         self.queries = metric_queries(args.namespace, self.collection)
-        self.report = {"schema_version": 1, "run_id": self.run_id, "collection": self.collection,
+        self.report = {"schema_version": 2, "run_id": self.run_id, "collection": self.collection,
                        "started_at": utc(), "config": vars(args).copy(), "failures": [],
                        "diagnostic_errors": [], "metrics": {}, "phases": {}}
         self.report["config"]["output"] = str(args.output)
@@ -314,28 +314,20 @@ class Benchmark:
             except Exception as error:
                 self.diagnostic_error("range:" + name, error)
 
-    def triage(self):
-        findings = []
-        def add(area, evidence, next_step):
-            findings.append({"area": area, "evidence": evidence, "next_step": next_step})
+    def summarize(self):
+        observations = []
         failed = [r for r in self.records if not r["ok"]]
         if failed:
-            add("write requests", [{k: r[k] for k in ("request_id", "at", "error")} for r in failed[:5]],
-                "Match request times and the collection ID in proxy, streaming node and Woodpecker logs; inspect downstream signals before assigning a cause.")
-        for metric, threshold, area, next_step in (
-            ("server_backpressure", 1, "disk admission", "Inspect R5, node disk usage, configured watermarks and compaction/object-store progress."),
-            ("client_pending_appends", 5000, "client queue", "Inspect C3, append latency and downstream replica/flush pressure."),
-            ("server_flush_p99_ms", 100, "local flush", "Compare per-node flush latency, CPU and disk pressure; inspect F4/F5 hold periods."),
-            ("object_store_errors_per_second", 0, "object storage", "Inspect F7/F8, MinIO logs, credentials, connectivity and compaction progress.")):
-            value = self.report["metrics"].get(metric, {}).get("max")
-            if value is not None and value > threshold:
-                add(area, {"signal": metric, "observed_max": value}, next_step)
+            observations.append({"area": "write requests", "evidence": [
+                {k: r[k] for k in ("request_id", "at", "error")} for r in failed[:5]],
+                "next_step": "Inspect requests.jsonl and match the collection/time window in the recorded Pod logs."})
         if self.report["coverage_gaps"] or self.report["diagnostic_errors"]:
-            add("observability coverage", {"missing_finite_signals": self.report["coverage_gaps"],
-                                           "collection_errors": len(self.report["diagnostic_errors"])},
-                "Check targets, scrape labels, exported metric families and access to Prometheus/AM/Kubernetes. Missing data does not establish health.")
-        self.report["triage"] = findings
-        self.report["triage_scope"] = "Heuristic investigation leads; not proven root causes or proof that alert hold periods were met"
+            observations.append({"area": "evidence collection", "evidence": {
+                "missing_finite_signals": self.report["coverage_gaps"],
+                "collection_errors": len(self.report["diagnostic_errors"])},
+                "next_step": "Check source availability, scrape labels and exported metric families; missing data does not establish health."})
+        self.report["observations"] = observations
+        self.report["observations_scope"] = "Workload and evidence-collection facts only. WP diagnosis belongs to wpcli; this runner does not attribute component root causes."
         measured = self.report["phases"].get("measure", {})
         latency = measured.get("success_latency_ms") or {}
         lines = ["# Write performance run " + self.run_id, "", "Result: **" + ("PASS" if self.report["passed"] else "FAIL") + "**", "",
@@ -347,8 +339,8 @@ class Benchmark:
         for key in ("p50", "p95", "p99"):
             lines.append(f"| Insert {key} (ms) | {latency.get(key, 'unavailable')} |")
         lines += ["", "## Failures", ""] + (["- " + f for f in self.report["failures"]] or ["None."])
-        lines += ["", "## Investigation leads", ""]
-        lines += ["- **" + f["area"] + "**: " + f["next_step"] for f in findings] or ["No heuristic triggered; inspect coverage before drawing conclusions."]
+        lines += ["", "## Workload and collection observations", ""]
+        lines += ["- **" + item["area"] + "**: " + item["next_step"] for item in observations] or ["No workload/collection issues recorded. Raw metrics and source links are retained for inspection; no component diagnosis is performed."]
         lines += ["", "## Dashboards for this time window", ""]
         lines += ["- [" + name + "](" + url + ")" for name, url in self.report["dashboards"].items()]
         slow = sorted((r for r in self.records if r.get("trace_url")), key=lambda r: r["latency_ms"], reverse=True)[:5]
@@ -427,7 +419,7 @@ class Benchmark:
                 "var-collection": self.collection, "var-woodpecker_id": "milvus"})
                 for uid in ("milvus-e2e-write", "milvus-e2e-consume", "milvus-e2e-flush", "milvus-e2e-query",
                             "milvus-full-stack", "woodpecker-client-k8s", "woodpecker-server-k8s")}
-            self.triage()
+            self.summarize()
             save(self.out / "report.json", self.report)
             self.trace.close()
             self.signals.close()

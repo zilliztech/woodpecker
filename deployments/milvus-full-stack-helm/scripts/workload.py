@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded insert/query/vector-search workload through the Milvus REST API."""
+"""Bounded insert/query/search/flush workload through the Milvus REST API."""
 import json
 import os
 import random
@@ -53,6 +53,19 @@ def main():
         print(json.dumps({"stage": "batch", "batch": batch + 1,
                           "inserted": (batch + 1) * batch_size, "query_and_search": "passed"}), flush=True)
         time.sleep(interval)
+    # Tiny smoke workloads may never reach automatic flush thresholds. Exercise
+    # persistence explicitly so Flush/Checkpoint panels can collect real signals.
+    call("collections/flush", {"collectionName": name})
+    count = call("entities/query", {"collectionName": name, "filter": "id >= 0",
+                 "outputFields": ["count(*)"], "consistencyLevel": "Strong"})
+    if not count or count[0].get("count(*)") != batches * batch_size:
+        raise RuntimeError(f"Unexpected row count after flush: {count}")
+    result = call("entities/search", {"collectionName": name, "data": [first],
+                  "limit": 3, "outputFields": ["id"], "consistencyLevel": "Strong"})
+    if not result or result[0].get("id") != 0:
+        raise RuntimeError(f"Self vector was not the nearest result after flush: {result}")
+    print(json.dumps({"stage": "flushed", "rows": batches * batch_size,
+                      "query_and_search": "passed"}), flush=True)
     print(json.dumps({"stage": "passed", "collection": name, "rows": batches * batch_size,
                       "duration_seconds": round(time.monotonic() - started, 2),
                       "retained": True}), flush=True)

@@ -120,8 +120,8 @@ Each run has a unique directory under `.local/perf/<UTC-run-id>/`:
 
 | File | Purpose |
 | --- | --- |
-| `summary.md` | Human-readable result, investigation leads and dashboard links |
-| `report.json` | Versioned machine-readable parameters, phase statistics, collection metadata, correctness, gaps, failures and triage |
+| `summary.md` | Human-readable result, workload/collection observations and dashboard links |
+| `report.json` | Versioned machine-readable parameters, phase statistics, collection metadata, correctness, gaps, failures and workload/collection observations |
 | `requests.jsonl` | One record per insert attempt, including local request ID, phase, worker, row-ID range, timestamps, latency and error |
 | `signals.jsonl` | Periodic metrics and Alertmanager snapshots |
 | `metric-*.json` | Prometheus range results with the exact query, from one minute before the run through final observation |
@@ -143,8 +143,16 @@ storage; collection errors report that limitation. Review logs before sharing.
 ## Investigation workflow
 
 Start with `summary.md`, then the phase statistics and `failures` in `report.json`.
-The `triage` entries are investigation leads supported by observed signals; they
-do not assert root causes or prove that an alert's hold period was satisfied.
+Schema version 2 records `observations` about failed requests and incomplete evidence
+collection. It retains raw WP metrics without applying WP-specific flush, queue,
+backpressure or object-store diagnosis thresholds. Earlier local schema-version-1
+reports used a `triage` field; the source notebook now displays `observations`.
+
+WP diagnosis is tracked in [#451](https://github.com/zilliztech/woodpecker/issues/451)
+and [#452](https://github.com/zilliztech/woodpecker/issues/452); Milvus E2E correlation
+is tracked in [#456](https://github.com/zilliztech/woodpecker/issues/456). The table
+below is manual investigation guidance, not a second rule engine or proof that
+an alert's hold period was satisfied.
 
 | Observation | Investigate next |
 | --- | --- |

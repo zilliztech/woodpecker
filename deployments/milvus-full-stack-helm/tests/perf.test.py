@@ -31,6 +31,7 @@ class PerfTest(unittest.TestCase):
         self.business_error = False
         self.lost_row = False
         self.metrics_down = False
+        self.range_value = None
         self.lock = threading.Lock()
         owner = self
 
@@ -53,6 +54,8 @@ class PerfTest(unittest.TestCase):
                     return self.reply({"status": "success", "data": {"result": []}})
                 values = [[0, str(len(owner.rows))]]
                 if "/query_range?" in self.path:
+                    if owner.range_value is not None:
+                        values = [[0, str(owner.range_value)]]
                     return self.reply({"status": "success", "data": {"resultType": "matrix", "result": [
                         {"metric": {}, "values": values}]}})
                 self.reply({"status": "success", "data": {"resultType": "vector", "result": [
@@ -181,6 +184,19 @@ else:
         self.assertEqual(code, 1)
         self.assertTrue(report["correctness"]["search_passed"])
         self.assertTrue(any("p99" in failure for failure in report["failures"]))
+
+    def test_high_wp_metrics_are_retained_without_component_diagnosis(self):
+        self.range_value = 1000000
+        code, benchmark, report = self.run_benchmark()
+        self.assertEqual(code, 0, report["failures"])
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["metrics"]["server_flush_p99_ms"]["max"], 1000000)
+        self.assertEqual(report["metrics"]["client_pending_appends"]["max"], 1000000)
+        self.assertEqual(report["observations"], [])
+        self.assertNotIn("triage", report)
+        summary = (benchmark.out / "summary.md").read_text()
+        self.assertIn("no component diagnosis", summary)
+        self.assertNotIn("local flush", summary)
 
     def test_invalid_configuration_does_not_create_run_artifacts(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

@@ -328,7 +328,8 @@ The acceptance loop needs no SMTP service or Mailpit and checks only selected co
 ./stack.sh acceptance -x
 ```
 
-It runs the offline rule tests, a Milvus workload, checks all seven dashboards and
+It runs the offline rule tests, a Milvus workload (including explicit flush and
+post-flush reads), checks all seven dashboards and
 scrape targets, and exercises alert firing/resolution and inhibition. View the
 alerts in Prometheus and Alertmanager using the URLs above. Email testing is
 skipped by default.
@@ -363,6 +364,11 @@ To generate a longer observation window:
 ```bash
 BATCHES=120 BATCH_SIZE=100 INTERVAL=2 ./stack.sh smoke -x
 ```
+
+Smoke explicitly flushes the collection and verifies its complete row count and
+nearest-vector search afterward. Even a tiny workload exercises persistence, so
+Flush/Checkpoint metrics can appear without waiting for automatic flush thresholds.
+This is a functional check, not a crash-durability guarantee.
 
 For a measured concurrent write experiment with automatic diagnostic collection:
 
@@ -528,18 +534,18 @@ An existing context does not imply that its cluster is running or credentials
 are valid; connection failures print native kubectl diagnostic commands.
 
 
-The local ARM64 image override was live-validated on 2026-10-18: all five Milvus
-and three Woodpecker scrape targets were UP, a 1,200-vector workload passed insert,
-primary-key query, and vector-search checks, and all 695 dashboard expressions
-were accepted by Prometheus. Browser checks confirmed all three dashboards,
-the default Milvus namespace, and populated overview panels. Detailed coverage,
-workload output, diagnostic evidence, and screenshots are kept under `.local/`.
-The public default Milvus image was not exercised in that validation run.
+The public default `milvusdb/milvus:v3.0.3` and WP v0.1.46 were live-validated
+on ARM64 Kubernetes v1.33.1 on 2026-10-25: core-only writes/Strong queries/searches,
+actual WP service appends, later optional components, seven dashboards/all 861
+expressions and all 21 required E2E stages passed. The same run exercised real
+pause/resume, partial-stop recovery, exact replica/PVC retention and disposable
+uninstall. See [the acceptance receipt and repeatable commands](VALIDATION.md)
+for the environment, outputs, the explicit-flush fix and remaining limits.
 
 ```bash
 ./stack.sh status
 kubectl --context wp-ops-v0146 -n milvus-stack get events --sort-by=.lastTimestamp
-kubectl --context wp-ops-v0146 -n milvus-stack logs install/milvus-streamingnode --tail=100
+kubectl --context wp-ops-v0146 -n milvus-stack logs deployment/milvus-streamingnode --tail=100
 kubectl --context wp-ops-v0146 -n milvus-stack logs milvus-woodpecker-0 --tail=100
 ```
 
@@ -560,14 +566,20 @@ agent orchestration, and a separate `milvus-full-stack-operator/` installation p
 
 ## Kubernetes lifecycle validation
 
-95 offline Python tests cover selection, native command previews/execution,
+99 offline Python tests cover selection, native command previews/execution,
 context/preflight failures, resource ownership, replica restoration, repeated
 stop, Operator resources, DaemonSet scheduling and PVC-retention/HPA guards,
 alongside the existing workload/observability checks. ShellCheck and local Helm
 rendering pass. Website checks cover six pages and 66 internal links.
 
-Pause/resume behavior in this revision was verified with simulated backends;
-no live Kubernetes workload was stopped, resumed or cleared. An absent current
-context was checked locally and produced configuration guidance without starting
-a cluster. Earlier live metric/log/trace validation above describes the deployed
-ARM64 configuration before this lifecycle change.
+Live acceptance additionally covered Deployments, StatefulSets, Operator-owned
+Prometheus/Alertmanager and Alloy. Original zero replicas and repeated/partially
+failed stops restored correctly; PVC identities and queryable data survived.
+Preview paths made no native mutation attempts. Explicit uninstall removed only
+the disposable stack's releases/PVCs while preserving unrelated resources and
+the namespace. Kubernetes management remained external; see [VALIDATION.md](VALIDATION.md).
+
+Automatic WP diagnosis belongs in wpcli; Milvus E2E correlation and a guided
+report are separate work under [#450](https://github.com/zilliztech/woodpecker/issues/450).
+This foundation collects evidence and provides stage guidance without a second
+WP diagnosis engine.
