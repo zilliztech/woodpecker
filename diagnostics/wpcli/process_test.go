@@ -4,12 +4,32 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+// The subprocess emits a native wire fixture before testing parses wp's flags.
+// This exercises the real Module.Run/exec boundary in the coverage-bearing Go
+// suite, while smoke.py separately tests the actual wp binary and HTTP APIs.
+func TestMain(m *testing.M) {
+	if path := os.Getenv("WPDIAG_TEST_NATIVE_REPORT"); path != "" {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			os.Exit(1)
+		}
+		fmt.Print(string(body))
+		code, err := strconv.Atoi(os.Getenv("WPDIAG_TEST_NATIVE_EXIT"))
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(code)
+	}
+	os.Exit(m.Run())
+}
 
 func TestProcessHelper(t *testing.T) {
 	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "--" {
