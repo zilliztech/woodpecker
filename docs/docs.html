@@ -587,6 +587,7 @@
 <a class="sidebar-link" data-page="operations-cli-profile" href="#operations-cli-profile" onclick="showPage('operations-cli-profile',this)">Profiles &amp; trace</a>
 <a class="sidebar-link" data-page="operations-cli-ops" href="#operations-cli-ops" onclick="showPage('operations-cli-ops',this)">In-flight operations</a>
 <a class="sidebar-link" data-page="operations-cli-metrics" href="#operations-cli-metrics" onclick="showPage('operations-cli-metrics',this)">Metrics &amp; scenarios</a>
+<a class="sidebar-link" data-page="operations-cli-diagnosis" href="#operations-cli-diagnosis" onclick="showPage('operations-cli-diagnosis',this)">Native diagnosis</a>
 <a class="sidebar-link" data-page="operations-cli-logstore" href="#operations-cli-logstore" onclick="showPage('operations-cli-logstore',this)">Writer runtime</a>
 <a class="sidebar-link" data-page="operations-cli-instance" href="#operations-cli-instance" onclick="showPage('operations-cli-instance',this)">Local data inventory</a>
 <a class="sidebar-link" data-page="operations-cli-log" href="#operations-cli-log" onclick="showPage('operations-cli-log',this)">Log progress &amp; retention</a>
@@ -624,17 +625,17 @@
 
 <!-- BEGIN OPERATIONS CONTENT -->
 <div class="doc-page ops-page" id="page-operations-cli">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-shell">Interactive shell</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & retention</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-meta">Metadata inspection & repair</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/repair-format">Patch format</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-shell">Interactive shell</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-diagnosis">Native diagnosis</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & retention</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-meta">Metadata inspection & repair</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/repair-format">Patch format</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
 <section id="ops-cli-overview">
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">20 top-level commands/groups · 72 executable operations</span>
+<span class="badge">21 top-level commands/groups · 73 executable operations</span>
 </p>
 <p>
 <a href="#operations-cli-local/start">New to wp? Start with installation, connection setup and your first commands →</a>
 </p>
-<div class="note">The established operations are available in v0.1.47; <a href="#operations-cli-shell">Interactive shell</a> is a source-build addition and is not included in v0.1.47. This reference is generated from source. Check <code>wp version</code> and <code>wp --help</code> against your binary before following an example.</div>
+<div class="note">The established operations are available in v0.1.47; <a href="#operations-cli-shell">Interactive shell</a> and <a href="#operations-cli-diagnosis">native diagnosis</a> are source-build additions and are not included in v0.1.47. This reference is generated from source. Check <code>wp version</code> and <code>wp --help</code> against your binary before following an example.</div>
 <p>Each topic has command syntax, parameter explanations, a demo, illustrative output and result interpretation. The overview lists executable operations: <code>node</code> is a command group, while <code>node list</code> is an operation within it.</p>
 <nav class="ops-topic-grid" aria-label="CLI topics">
 <a href="#operations-cli-local">
@@ -676,6 +677,10 @@
 <a href="#operations-cli-metrics">
 <strong>Metrics &amp; scenarios</strong>
 <span>metrics</span>
+</a>
+<a href="#operations-cli-diagnosis">
+<strong>Native diagnosis</strong>
+<span>diagnose</span>
 </a>
 <a href="#operations-cli-logstore">
 <strong>Writer runtime</strong>
@@ -1275,6 +1280,33 @@
 <td>
 <code>&lt;metric-name&gt;</code>: Prometheus metric family to watch<br>
 <code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table></div>
+</section>
+<section class="ops-quick-section" id="ops-cli-quick-diagnosis">
+<h2>Native diagnosis · quick lookup</h2>
+<div class="ops-table-wrap"><table class="doc-table ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command: <code>wp diagnose</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-diagnosis/diagnose">
+<code>wp diagnose</code>
+</a>
+</td>
+<td>Diagnose current WP service state or sample a live window using existing</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1890,6 +1922,7 @@
 <p>Output formats vary by operation. Profile downloads binary data, and some diagnostic operations return findings with a nonzero exit code. Read the specific command's help and interpretation rather than treating every successful request as a health check.</p>
 </section>
 <section id="ops-cli-metrics-limits">
+<p>The source-build <a href="#operations-cli-diagnosis">wp diagnose</a> entry point provides versioned native WP findings with explicit snapshot/live-window coverage, counter reset checks, registry limits and conflicting same-log progress. It has two implemented stall rules; exit 0 means evaluation completed, including inconclusive outcomes. Use its JSON evidence and original context/node mappings for follow-up. Historical metrics, trace/log backends and Milvus E2E diagnosis belong to the separate diagnostic tool.</p>
 <h2>Metrics scenario limits</h2>
 <p>stuck-read and stuck-write require persistent matching operations as well as zero successful completion progress during the window. An idle cluster alone is not a stall. Latency rules currently use window-average histogram latency rather than the advertised p99/baseline model. Several scenario names have only partial evaluators; use counters, operation IDs, reader positions and replica evidence together. A scenario reporting no findings is not proof that the whole cluster is healthy.</p>
 </section>
@@ -4300,6 +4333,147 @@ Usage:
 Flags:
   -h, --help                help for watch
       --interval duration   Scrape interval (default 1s)</code></pre></div></div>
+</details>
+</article>
+</section>
+
+</div>
+<div class="doc-page ops-page" id="page-operations-cli-diagnosis">
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-diagnosis/diagnose">wp diagnose</a></nav></details></aside>
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Native diagnosis</p><h1>Native diagnosis</h1><p class="page-desc">Diagnose WP live read/write stalls with versioned evidence, explicit coverage and bounded collection. External monitoring and Milvus diagnosis are separate tools.</p><section id="ops-cli-diagnosis-topic-diagnosis">
+
+<article class="command" data-command-anchor="diagnose" id="ops-cli-diagnosis-diagnose">
+<h2>wp diagnose</h2>
+<p>Diagnose current WP service state or sample a live window using existing</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp diagnose [node] [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--budget duration</code>
+</td>
+<td>Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)</td>
+</tr>
+<tr>
+<td>
+<code>--fail-on-findings</code>
+</td>
+<td>Return exit 8 for suspected stalls after rendering the report</td>
+</tr>
+<tr>
+<td>
+<code>--interval duration</code>
+</td>
+<td>Interval between live sampling rounds (default 1s)</td>
+</tr>
+<tr>
+<td>
+<code>--list</code>
+</td>
+<td>List the implemented typed rule contracts without connecting</td>
+</tr>
+<tr>
+<td>
+<code>--max-nodes int</code>
+</td>
+<td>Maximum discovered targets; select a node if exceeded (default 8)</td>
+</tr>
+<tr>
+<td>
+<code>--max-ops int</code>
+</td>
+<td>Maximum ops per node per sample (1..1000) (default 100)</td>
+</tr>
+<tr>
+<td>
+<code>--max-response-bytes int</code>
+</td>
+<td>Maximum bytes per discovery/source response (default 2097152)</td>
+</tr>
+<tr>
+<td>
+<code>--max-samples int</code>
+</td>
+<td>Maximum sampling rounds per node (2..121) (default 31)</td>
+</tr>
+<tr>
+<td>
+<code>--max-series int</code>
+</td>
+<td>Maximum retained completion-counter series per sample (default 500)</td>
+</tr>
+<tr>
+<td>
+<code>--mode string</code>
+</td>
+<td>Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--scenario string</code>
+</td>
+<td>Native scenario: all|stuck-write|stuck-read (default &quot;all&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--window duration</code>
+</td>
+<td>Live observation window starting now (max 5m) (default 30s)</td>
+</tr>
+</tbody>
+</table></div>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context milvus-prod diagnose node-0 --scenario stuck-write --window 30s -o json &gt; write-report.json
+# Current snapshot, without asserting sustained no-progress:
+wp --context milvus-prod diagnose node-0 --mode snapshot -o json</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{&quot;schema_version&quot;:&quot;wp.diagnosis/v1&quot;,&quot;collection_status&quot;:&quot;completed&quot;,&quot;observation_mode&quot;:&quot;live_window&quot;,&quot;findings&quot;:[{&quot;rule_id&quot;:&quot;write_stall&quot;,&quot;outcome&quot;:&quot;suspected_stall&quot;,&quot;evidence_strength&quot;:&quot;suspected&quot;,&quot;unknown&quot;:[&quot;tenant_association_unknown&quot;]}]}
+# Abbreviated illustrative output; inspect actual observations and coverage_gaps.</code></pre></div></div>
+<p>Source-build capability. Reuses the WP service context and node Admin mappings; it does not select a tenant metadata namespace. Only stuck-write/read are implemented. --window samples from now; snapshot cannot prove a sustained stall. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for suspicions. Same-log completions cannot prove an individual op finished; resets, registry limits and missing evidence remain explicit. No external Prometheus, trace or Loki client is included. Missing evidence remains inconclusive rather than healthy.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>PartialCollection (exit 6): required metrics/ops were unavailable; report retained.
+Budget exhausted (exit 5) / cancellation (exit 7): partial evidence retained.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Diagnose current WP service state or sample a live window using existing
+metrics/Admin APIs. With no node argument, inspect all discovered nodes within
+the target budget. Reuses cli.yaml, --context, --endpoint and node mappings.
+
+Only stuck-write and stuck-read are implemented. Snapshot mode records current
+evidence but cannot establish a sustained stall. --window starts sampling now;
+historical Prometheus, trace and Loki queries belong to the separate tool.
+
+Exit 0 means evaluation completed, including inconclusive/conflicting findings;
+it is not a health assertion. --fail-on-findings returns 8 for suspected stalls.
+Required collection failure returns 1 (all failed) or 6 (partial), cancellation 7,
+and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these errors.
+
+Usage:
+  wp diagnose [node] [flags]
+
+Flags:
+      --budget duration          Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)
+      --fail-on-findings         Return exit 8 for suspected stalls after rendering the report
+  -h, --help                     help for diagnose
+      --interval duration        Interval between live sampling rounds (default 1s)
+      --list                     List the implemented typed rule contracts without connecting
+      --max-nodes int            Maximum discovered targets; select a node if exceeded (default 8)
+      --max-ops int              Maximum ops per node per sample (1..1000) (default 100)
+      --max-response-bytes int   Maximum bytes per discovery/source response (default 2097152)
+      --max-samples int          Maximum sampling rounds per node (2..121) (default 31)
+      --max-series int           Maximum retained completion-counter series per sample (default 500)
+      --mode string              Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)
+      --scenario string          Native scenario: all|stuck-write|stuck-read (default &quot;all&quot;)
+      --window duration          Live observation window starting now (max 5m) (default 30s)</code></pre></div></div>
 </details>
 </article>
 </section>

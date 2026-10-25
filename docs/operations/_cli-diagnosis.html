@@ -1,0 +1,147 @@
+<section id="topic-diagnosis">
+<h2>Native diagnosis</h2>
+<article class="command" id="diagnose">
+<h2>wp diagnose</h2>
+<p>Diagnose current WP service state or sample a live window using existing</p>
+<pre>
+<code>wp diagnose [node] [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--budget duration</code>
+</td>
+<td>Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)</td>
+</tr>
+<tr>
+<td>
+<code>--fail-on-findings</code>
+</td>
+<td>Return exit 8 for suspected stalls after rendering the report</td>
+</tr>
+<tr>
+<td>
+<code>--interval duration</code>
+</td>
+<td>Interval between live sampling rounds (default 1s)</td>
+</tr>
+<tr>
+<td>
+<code>--list</code>
+</td>
+<td>List the implemented typed rule contracts without connecting</td>
+</tr>
+<tr>
+<td>
+<code>--max-nodes int</code>
+</td>
+<td>Maximum discovered targets; select a node if exceeded (default 8)</td>
+</tr>
+<tr>
+<td>
+<code>--max-ops int</code>
+</td>
+<td>Maximum ops per node per sample (1..1000) (default 100)</td>
+</tr>
+<tr>
+<td>
+<code>--max-response-bytes int</code>
+</td>
+<td>Maximum bytes per discovery/source response (default 2097152)</td>
+</tr>
+<tr>
+<td>
+<code>--max-samples int</code>
+</td>
+<td>Maximum sampling rounds per node (2..121) (default 31)</td>
+</tr>
+<tr>
+<td>
+<code>--max-series int</code>
+</td>
+<td>Maximum retained completion-counter series per sample (default 500)</td>
+</tr>
+<tr>
+<td>
+<code>--mode string</code>
+</td>
+<td>Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--scenario string</code>
+</td>
+<td>Native scenario: all|stuck-write|stuck-read (default &quot;all&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--window duration</code>
+</td>
+<td>Live observation window starting now (max 5m) (default 30s)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp --context milvus-prod diagnose node-0 --scenario stuck-write --window 30s -o json &gt; write-report.json
+# Current snapshot, without asserting sustained no-progress:
+wp --context milvus-prod diagnose node-0 --mode snapshot -o json</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{&quot;schema_version&quot;:&quot;wp.diagnosis/v1&quot;,&quot;collection_status&quot;:&quot;completed&quot;,&quot;observation_mode&quot;:&quot;live_window&quot;,&quot;findings&quot;:[{&quot;rule_id&quot;:&quot;write_stall&quot;,&quot;outcome&quot;:&quot;suspected_stall&quot;,&quot;evidence_strength&quot;:&quot;suspected&quot;,&quot;unknown&quot;:[&quot;tenant_association_unknown&quot;]}]}
+# Abbreviated illustrative output; inspect actual observations and coverage_gaps.</code>
+</pre>
+<p>Source-build capability. Reuses the WP service context and node Admin mappings; it does not select a tenant metadata namespace. Only stuck-write/read are implemented. --window samples from now; snapshot cannot prove a sustained stall. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for suspicions. Same-log completions cannot prove an individual op finished; resets, registry limits and missing evidence remain explicit. No external Prometheus, trace or Loki client is included. Missing evidence remains inconclusive rather than healthy.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>PartialCollection (exit 6): required metrics/ops were unavailable; report retained.
+Budget exhausted (exit 5) / cancellation (exit 7): partial evidence retained.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Diagnose current WP service state or sample a live window using existing
+metrics/Admin APIs. With no node argument, inspect all discovered nodes within
+the target budget. Reuses cli.yaml, --context, --endpoint and node mappings.
+
+Only stuck-write and stuck-read are implemented. Snapshot mode records current
+evidence but cannot establish a sustained stall. --window starts sampling now;
+historical Prometheus, trace and Loki queries belong to the separate tool.
+
+Exit 0 means evaluation completed, including inconclusive/conflicting findings;
+it is not a health assertion. --fail-on-findings returns 8 for suspected stalls.
+Required collection failure returns 1 (all failed) or 6 (partial), cancellation 7,
+and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these errors.
+
+Usage:
+  wp diagnose [node] [flags]
+
+Flags:
+      --budget duration          Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)
+      --fail-on-findings         Return exit 8 for suspected stalls after rendering the report
+  -h, --help                     help for diagnose
+      --interval duration        Interval between live sampling rounds (default 1s)
+      --list                     List the implemented typed rule contracts without connecting
+      --max-nodes int            Maximum discovered targets; select a node if exceeded (default 8)
+      --max-ops int              Maximum ops per node per sample (1..1000) (default 100)
+      --max-response-bytes int   Maximum bytes per discovery/source response (default 2097152)
+      --max-samples int          Maximum sampling rounds per node (2..121) (default 31)
+      --max-series int           Maximum retained completion-counter series per sample (default 500)
+      --mode string              Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)
+      --scenario string          Native scenario: all|stuck-write|stuck-read (default &quot;all&quot;)
+      --window duration          Live observation window starting now (max 5m) (default 30s)</code>
+</pre>
+</details>
+</article>
+</section>

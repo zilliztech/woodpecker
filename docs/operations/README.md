@@ -3,7 +3,7 @@
 Both documents are native content pages in the existing Docs shell:
 
 - `docs.html#operations-cli`: overview and searchable operation lookup.
-- Seventeen topic pages, defined in `cli-categories.json`, each with one clear
+- Eighteen topic pages, defined in `cli-categories.json`, each with one clear
   operational purpose. Most correspond to exactly one command group; only
   local CLI setup (ctx/completion/version) and cluster/node status combine groups.
 - `docs.html#operations-scenarios`: choose a troubleshooting path.
@@ -54,8 +54,12 @@ and legacy redirects.
 
 The current handbook covers the established operations, including typed metadata
 inspection/repair and log truncation, and the source-build interactive shell.
-It lists 20 top-level commands/groups
-and 72 executable operations across 17 topics; an operation such as `meta log show`
+It lists 21 top-level commands/groups
+and 73 executable operations across 18 topics; an operation such as `meta log show`
 is not a separate top-level command. Update examples and category configuration
 together when adding CLI capabilities. The generator fails if an operation lacks
 an authored example or topic.
+
+The source-build `diagnose` command has a native-diagnosis topic. It preserves
+current/live-window evidence and explicit uncertainty; the detailed v1 contract
+and legacy scenario audit are in `cmd/wpcli/diagnosis/README.md`.

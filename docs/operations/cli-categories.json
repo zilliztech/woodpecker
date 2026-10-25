@@ -72,6 +72,13 @@
     ],
     "purpose": "Inspect Prometheus samples, trends and supported scenario findings."
   },
+  "diagnosis": {
+    "title": "Native diagnosis",
+    "groups": [
+      "diagnose"
+    ],
+    "purpose": "Diagnose WP live read/write stalls with versioned evidence, explicit coverage and bounded collection. External monitoring and Milvus diagnosis are separate tools."
+  },
   "logstore": {
     "title": "Writer runtime",
     "groups": [

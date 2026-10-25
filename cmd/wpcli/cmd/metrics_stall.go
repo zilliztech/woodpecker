@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/zilliztech/woodpecker/cmd/wpcli/diagnosis"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/internal/prom"
 )
 
@@ -15,10 +16,7 @@ type pendingOp struct {
 }
 
 func stallOperationMatches(ruleID, opType string) bool {
-	if ruleID == "read_stall" {
-		return opType == "logstore.get_batch_entries"
-	}
-	return ruleID == "write_stall" && (opType == "logstore.add_entry" || opType == "logstore.add_entry_batch")
+	return diagnosis.MatchesOperation(ruleID, opType)
 }
 
 // Operations lack tenant labels, so progress is conservatively aggregated across
@@ -43,19 +41,19 @@ func completedOps(families map[string]*prom.MetricFamily, ruleID, nodeID string,
 }
 
 func evaluateStalledOps(rule ruleDef, first, last map[string]*prom.MetricFamily, nodeID string, firstOps, lastOps []pendingOp) *finding {
-	initial := make(map[string]pendingOp, len(firstOps))
-	for _, op := range firstOps {
-		if op.ID != "" && stallOperationMatches(rule.ID, op.Type) {
-			initial[op.ID] = op
+	convert := func(ops []pendingOp) []diagnosis.Operation {
+		var result []diagnosis.Operation
+		for _, op := range ops {
+			logID := op.Log
+			result = append(result, diagnosis.Operation{ID: op.ID, Type: op.Type, LogID: &logID})
 		}
+		return result
 	}
-	for _, op := range lastOps {
-		old, ok := initial[op.ID]
-		if !ok || old != op {
-			continue
-		}
-		before := completedOps(first, rule.ID, nodeID, op.Log)
-		after := completedOps(last, rule.ID, nodeID, op.Log)
+	// Preserve the legacy first/last aggregate heuristic and its output/exit code;
+	// wp diagnose uses the stricter versioned per-sample coverage evaluation.
+	for _, op := range diagnosis.PersistentOperations([][]diagnosis.Operation{convert(firstOps), convert(lastOps)}, rule.ID) {
+		before := completedOps(first, rule.ID, nodeID, *op.LogID)
+		after := completedOps(last, rule.ID, nodeID, *op.LogID)
 		if after != before {
 			// Includes counter resets: a restart is not evidence of zero progress.
 			continue
@@ -63,8 +61,8 @@ func evaluateStalledOps(rule ruleDef, first, last map[string]*prom.MetricFamily,
 		return &finding{
 			RuleID: rule.ID, Severity: rule.Severity,
 			Message: fmt.Sprintf("no successful %s completions in sampled window; operation %s remained pending (type=%s, log_id=%d)",
-				strings.TrimSuffix(rule.ID, "_stall"), op.ID, op.Type, op.Log),
-			Hints: []string{fmt.Sprintf("wp ops list %s --type %s --log %d", nodeID, op.Type, op.Log)},
+				strings.TrimSuffix(rule.ID, "_stall"), op.ID, op.Type, *op.LogID),
+			Hints: []string{fmt.Sprintf("wp ops list %s --type %s --log %d", nodeID, op.Type, *op.LogID)},
 		}
 	}
 	return nil

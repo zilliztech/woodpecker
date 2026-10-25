@@ -29,6 +29,23 @@ type resolved struct {
 // admin HTTP client, and fetches the memberlist. This is called at the start
 // of nearly every command that touches cluster state.
 func resolveAndDiscover() (*resolved, error) {
+	r, err := resolveConfiguration()
+	if err != nil {
+		return nil, err
+	}
+	ml, err := r.Client.GetMemberlist()
+	if err != nil {
+		return nil, wperrors.NewNetworkError(fmt.Sprintf("fetch memberlist from %s: %v", r.Context.Endpoint, err))
+	}
+	r.Members = ml
+	r.announceSource()
+	r.announceMappings()
+	return r, nil
+}
+
+// resolveConfiguration shares connection precedence without network access or
+// output. Bounded commands can attach their own cancellation to discovery.
+func resolveConfiguration() (*resolved, error) {
 	// 1. Load cli.yaml (if present).
 	var ctx config.Context
 	var configPath, contextName string
@@ -94,24 +111,20 @@ func resolveAndDiscover() (*resolved, error) {
 		AdminPort:     ctx.AdminPort,
 		NodeAdminURLs: ctx.NodeAdminURLs,
 	})
-	ml, err := c.GetMemberlist()
-	if err != nil {
-		return nil, wperrors.NewNetworkError(fmt.Sprintf("fetch memberlist from %s: %v", ctx.Endpoint, err))
-	}
+	return &resolved{Context: ctx, Client: c, ConfigPath: configPath, ContextName: contextName}, nil
+}
 
-	r := &resolved{Context: ctx, Client: c, Members: ml, ConfigPath: configPath, ContextName: contextName}
-	r.announceSource()
+func (r *resolved) announceMappings() {
 	if sourceWriter != nil && !renderedOutput() {
-		keys := make([]string, 0, len(ctx.NodeAdminURLs))
-		for key := range ctx.NodeAdminURLs {
+		keys := make([]string, 0, len(r.Context.NodeAdminURLs))
+		for key := range r.Context.NodeAdminURLs {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			fmt.Fprintf(sourceWriter, "wp: node admin mapping %s -> %s\n", key, ctx.NodeAdminURLs[key])
+			fmt.Fprintf(sourceWriter, "wp: node admin mapping %s -> %s\n", key, r.Context.NodeAdminURLs[key])
 		}
 	}
-	return r, nil
 }
 
 // resolveEndpoint applies the wp endpoint precedence:

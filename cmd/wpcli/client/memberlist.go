@@ -1,8 +1,10 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -92,7 +94,13 @@ func splitHostPort(s string) (string, string, bool) {
 
 // GetMemberlist fetches and parses /admin/memberlist from the client's seed URL.
 func (c *Client) GetMemberlist() (*Memberlist, error) {
-	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/admin/memberlist", nil)
+	return c.GetMemberlistContext(context.Background(), 0)
+}
+
+// GetMemberlistContext permits bounded, cancellable discovery without changing
+// the existing commands' GetMemberlist behavior. A zero byte limit is legacy mode.
+func (c *Client) GetMemberlistContext(ctx context.Context, maxBytes int64) (*Memberlist, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/admin/memberlist", nil)
 	if err != nil {
 		return nil, fmt.Errorf("build memberlist request: %w", err)
 	}
@@ -106,6 +114,19 @@ func (c *Client) GetMemberlist() (*Memberlist, error) {
 		return nil, fmt.Errorf("memberlist returned status %d", resp.StatusCode)
 	}
 	var ml Memberlist
+	if maxBytes > 0 {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+		if err != nil {
+			return nil, fmt.Errorf("read memberlist: %w", err)
+		}
+		if int64(len(body)) > maxBytes {
+			return nil, fmt.Errorf("memberlist exceeds response byte budget")
+		}
+		if err := json.Unmarshal(body, &ml); err != nil {
+			return nil, fmt.Errorf("decode memberlist: %w", err)
+		}
+		return &ml, nil
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&ml); err != nil {
 		return nil, fmt.Errorf("decode memberlist: %w", err)
 	}

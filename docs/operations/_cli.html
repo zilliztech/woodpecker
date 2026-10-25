@@ -2,12 +2,12 @@
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">20 top-level commands/groups · 72 executable operations</span>
+<span class="badge">21 top-level commands/groups · 73 executable operations</span>
 </p>
 <p>
 <a href="cli.html#start">New to wp? Start with installation, connection setup and your first commands →</a>
 </p>
-<div class="note">The established operations are available in v0.1.47; <a href="cli.html#shell">Interactive shell</a> is a source-build addition and is not included in v0.1.47. This reference is generated from source. Check <code>wp version</code> and <code>wp --help</code> against your binary before following an example.</div>
+<div class="note">The established operations are available in v0.1.47; <a href="cli.html#shell">Interactive shell</a> and <a href="cli.html#diagnosis">native diagnosis</a> are source-build additions and are not included in v0.1.47. This reference is generated from source. Check <code>wp version</code> and <code>wp --help</code> against your binary before following an example.</div>
 <p>Each topic has command syntax, parameter explanations, a demo, illustrative output and result interpretation. The overview lists executable operations: <code>node</code> is a command group, while <code>node list</code> is an operation within it.</p>
 <nav class="ops-topic-grid" aria-label="CLI topics">
 <a href="#local">
@@ -49,6 +49,10 @@
 <a href="#metrics">
 <strong>Metrics &amp; scenarios</strong>
 <span>metrics</span>
+</a>
+<a href="#diagnosis">
+<strong>Native diagnosis</strong>
+<span>diagnose</span>
 </a>
 <a href="#logstore">
 <strong>Writer runtime</strong>
@@ -648,6 +652,33 @@
 <td>
 <code>&lt;metric-name&gt;</code>: Prometheus metric family to watch<br>
 <code>&lt;node&gt;</code>: Discovered node ID</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section class="ops-quick-section" id="quick-diagnosis">
+<h2>Native diagnosis · quick lookup</h2>
+<table class="ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command: <code>wp diagnose</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#diagnose">
+<code>wp diagnose</code>
+</a>
+</td>
+<td>Diagnose current WP service state or sample a live window using existing</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
 </tr>
 </tbody>
 </table>
@@ -1263,6 +1294,7 @@
 <p>Output formats vary by operation. Profile downloads binary data, and some diagnostic operations return findings with a nonzero exit code. Read the specific command's help and interpretation rather than treating every successful request as a health check.</p>
 </section>
 <section id="metrics-limits">
+<p>The source-build <a href="cli.html#diagnosis">wp diagnose</a> entry point provides versioned native WP findings with explicit snapshot/live-window coverage, counter reset checks, registry limits and conflicting same-log progress. It has two implemented stall rules; exit 0 means evaluation completed, including inconclusive outcomes. Use its JSON evidence and original context/node mappings for follow-up. Historical metrics, trace/log backends and Milvus E2E diagnosis belong to the separate diagnostic tool.</p>
 <h2>Metrics scenario limits</h2>
 <p>stuck-read and stuck-write require persistent matching operations as well as zero successful completion progress during the window. An idle cluster alone is not a stall. Latency rules currently use window-average histogram latency rather than the advertised p99/baseline model. Several scenario names have only partial evaluators; use counters, operation IDs, reader positions and replica evidence together. A scenario reporting no findings is not proof that the whole cluster is healthy.</p>
 </section>
