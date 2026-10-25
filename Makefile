@@ -83,6 +83,10 @@ wpcli: | $(BIN_DIR) ## Build wp CLI binary (outputs bin/wp)
 
 WPCLI_PLATFORMS ?= linux/amd64 linux/arm64 darwin/arm64 windows/amd64
 
+.PHONY: wpdiag
+wpdiag: | $(BIN_DIR) ## Build independent diagnostic CLI (outputs bin/wpdiag)
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BIN_DIR)/wpdiag ./cmd/wpdiag
+
 .PHONY: wpcli-release
 wpcli-release: | $(BIN_DIR) ## Build wp CLI for all release platforms
 	@for platform in $(WPCLI_PLATFORMS); do \

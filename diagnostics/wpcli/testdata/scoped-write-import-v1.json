@@ -1,0 +1,493 @@
+{
+  "schema_version": "wpdiag.report/v1",
+  "run_id": "fixture-454",
+  "selection": {
+    "sources": [
+      "wpcli"
+    ],
+    "scope": "wp",
+    "flow": "write",
+    "stage": "append",
+    "profile": "wp.write_stall",
+    "target": {},
+    "window": {
+      "mode": "live",
+      "duration_ms": 2000,
+      "interval_ms": 1000
+    }
+  },
+  "limits": {
+    "budget_ms": 60000,
+    "max_input_bytes": 8388608,
+    "max_output_bytes": 16777216,
+    "max_targets": 8
+  },
+  "started_at": "2026-10-25T01:00:00Z",
+  "finished_at": "2026-10-25T01:00:03Z",
+  "status": "completed",
+  "results": [
+    {
+      "source": "wpcli",
+      "connection": "local",
+      "profile": "wp.write_stall",
+      "status": "completed",
+      "problems": [],
+      "observations": [
+        {
+          "id": "metrics0",
+          "source_id": "metrics",
+          "kind": "metrics",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:00Z",
+          "finished_at": "2026-10-25T01:00:00.001Z",
+          "status": "observed",
+          "data": {
+            "round": 0,
+            "counters": [
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "add_entry",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "add_entry_batch",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "end_of_file"
+                },
+                "value": 0
+              }
+            ],
+            "process_start_time_seconds": 100
+          }
+        },
+        {
+          "id": "ops0",
+          "source_id": "ops",
+          "kind": "ops",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:00Z",
+          "finished_at": "2026-10-25T01:00:00.001Z",
+          "status": "observed",
+          "data": {
+            "round": 0,
+            "ops": [
+              {
+                "op_id": "op-slow",
+                "op_type": "logstore.add_entry",
+                "log_id": "2",
+                "segment_id": "7",
+                "started_at": "2026-10-25T00:59:00Z",
+                "trace_id": "1234567890abcdef1234567890abcdef",
+                "span_id": "1234567890abcdef"
+              }
+            ]
+          }
+        },
+        {
+          "id": "registry0",
+          "source_id": "registry",
+          "kind": "registry",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:00Z",
+          "finished_at": "2026-10-25T01:00:00.001Z",
+          "status": "observed",
+          "data": {
+            "round": 0,
+            "registry": {
+              "capacity": 1024,
+              "in_use": 1,
+              "evicted_total": 3
+            }
+          }
+        },
+        {
+          "id": "metrics1",
+          "source_id": "metrics",
+          "kind": "metrics",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:01.001Z",
+          "finished_at": "2026-10-25T01:00:01.002Z",
+          "status": "observed",
+          "data": {
+            "round": 1,
+            "counters": [
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "add_entry",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "add_entry_batch",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "end_of_file"
+                },
+                "value": 0
+              }
+            ],
+            "process_start_time_seconds": 100
+          }
+        },
+        {
+          "id": "ops1",
+          "source_id": "ops",
+          "kind": "ops",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:01.001Z",
+          "finished_at": "2026-10-25T01:00:01.002Z",
+          "status": "observed",
+          "data": {
+            "round": 1,
+            "ops": [
+              {
+                "op_id": "op-slow",
+                "op_type": "logstore.add_entry",
+                "log_id": "2",
+                "segment_id": "7",
+                "started_at": "2026-10-25T00:59:00Z",
+                "trace_id": "1234567890abcdef1234567890abcdef",
+                "span_id": "1234567890abcdef"
+              }
+            ]
+          }
+        },
+        {
+          "id": "registry1",
+          "source_id": "registry",
+          "kind": "registry",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:01.001Z",
+          "finished_at": "2026-10-25T01:00:01.002Z",
+          "status": "observed",
+          "data": {
+            "round": 1,
+            "registry": {
+              "capacity": 1024,
+              "in_use": 1,
+              "evicted_total": 3
+            }
+          }
+        },
+        {
+          "id": "metrics2",
+          "source_id": "metrics",
+          "kind": "metrics",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:02.001Z",
+          "finished_at": "2026-10-25T01:00:02.002Z",
+          "status": "observed",
+          "data": {
+            "round": 2,
+            "counters": [
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "add_entry",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "add_entry_batch",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "value": 5
+              },
+              {
+                "labels": {
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "end_of_file"
+                },
+                "value": 0
+              }
+            ],
+            "process_start_time_seconds": 100
+          }
+        },
+        {
+          "id": "ops2",
+          "source_id": "ops",
+          "kind": "ops",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:02.001Z",
+          "finished_at": "2026-10-25T01:00:02.002Z",
+          "status": "observed",
+          "data": {
+            "round": 2,
+            "ops": [
+              {
+                "op_id": "op-slow",
+                "op_type": "logstore.add_entry",
+                "log_id": "2",
+                "segment_id": "7",
+                "started_at": "2026-10-25T00:59:00Z",
+                "trace_id": "1234567890abcdef1234567890abcdef",
+                "span_id": "1234567890abcdef"
+              }
+            ]
+          }
+        },
+        {
+          "id": "registry2",
+          "source_id": "registry",
+          "kind": "registry",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:02.001Z",
+          "finished_at": "2026-10-25T01:00:02.002Z",
+          "status": "observed",
+          "data": {
+            "round": 2,
+            "registry": {
+              "capacity": 1024,
+              "in_use": 1,
+              "evicted_total": 3
+            }
+          }
+        },
+        {
+          "id": "build",
+          "source_id": "build",
+          "kind": "build",
+          "target": {
+            "node_id": "node-1",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "started_at": "2026-10-25T01:00:00Z",
+          "finished_at": "2026-10-25T01:00:00Z",
+          "status": "observed",
+          "data": {
+            "round": 0,
+            "build_version": "v0.1.46"
+          }
+        }
+      ],
+      "findings": [
+        {
+          "id": "fixture-451:findings:0",
+          "rule_id": "write_stall",
+          "rule_version": 1,
+          "flow": "write",
+          "stage": "append",
+          "target": {
+            "node_id": "node-1",
+            "log_id": "2",
+            "segment_id": "7",
+            "operation_id": "op-slow",
+            "trace_id": "1234567890abcdef1234567890abcdef",
+            "tenant_association": "unresolved: ops has no tenant namespace",
+            "observed_service_cluster": "fixture-service",
+            "identity": "discovered"
+          },
+          "outcome": "suspected_stall",
+          "severity": "warning",
+          "evidence_strength": "suspected",
+          "summary": "Same operation persisted with no observed matching-log completion increase; investigate, not a confirmed root cause",
+          "supporting_observations": [
+            "ops0",
+            "ops1",
+            "ops2",
+            "metrics0",
+            "metrics1",
+            "metrics2"
+          ],
+          "contradicting_observations": [],
+          "unknown": [
+            "tenant_association_unknown",
+            "sampled_not_continuous",
+            "metrics_and_ops_not_atomic"
+          ],
+          "next_read_only_checks": [
+            "wp ops list node-1",
+            "wp ops stats node-1",
+            "Select the authoritative WP-client metadata namespace before joining tenant/log state"
+          ]
+        }
+      ],
+      "coverage_gaps": [
+        {
+          "code": "tenant_association_unknown",
+          "node_id": "node-1",
+          "detail": "Applies to finding fixture-451:findings:0"
+        },
+        {
+          "code": "sampled_not_continuous",
+          "node_id": "node-1",
+          "detail": "Applies to finding fixture-451:findings:0"
+        },
+        {
+          "code": "metrics_and_ops_not_atomic",
+          "node_id": "node-1",
+          "detail": "Applies to finding fixture-451:findings:0"
+        }
+      ],
+      "metadata": {
+        "native_schema_version": "wp.diagnosis/v1",
+        "native_run_id": "fixture-451",
+        "native_source": "wp-runtime",
+        "service_context": "fixture",
+        "native_exit_code": 0,
+        "started_at": "2026-10-25T01:00:00Z",
+        "finished_at": "2026-10-25T01:00:03Z",
+        "observation_mode": "live_window",
+        "requested_window_ms": 2000,
+        "requested_interval_ms": 1000,
+        "native_limits": {
+          "max_nodes": 1,
+          "max_samples_per_node": 3,
+          "max_ops_per_sample": 10,
+          "max_counter_series_per_sample": 100,
+          "max_response_bytes": 4096,
+          "wall_clock_budget_ms": 5000
+        },
+        "native_targets": [
+          {
+            "node_id": "node-1",
+            "service_cluster": "fixture-service",
+            "identity": "discovered"
+          }
+        ],
+        "native_rules": [
+          {
+            "id": "write_stall",
+            "version": 1,
+            "scenario": "stuck-write",
+            "flow": "write",
+            "stage": "append",
+            "description": "Persistent matching operation with no observed matching-log completion progress; suspicion only, not a root cause",
+            "required_evidence": [
+              "ops identity in successive samples",
+              "labelled completion counter coverage"
+            ],
+            "optional_evidence": [
+              "registry statistics",
+              "process start time",
+              "build version"
+            ],
+            "applicability": "WP service mode; v0.1.x/dev API shape; other or unknown builds are explicitly qualified",
+            "comparison": "same operation across all samples; compare each counter series between consecutive samples (counts); never equate absence to zero",
+            "minimum_samples": 2,
+            "exclusions": [
+              "snapshot/insufficient window",
+              "idle or new/completed operation",
+              "counter/process reset",
+              "EOF/read progress",
+              "missing/changed series",
+              "unsupported API/build"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
