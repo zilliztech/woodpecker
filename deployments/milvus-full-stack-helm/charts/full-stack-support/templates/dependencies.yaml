@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: full-stack-etcd
+spec:
+  selector: {app: full-stack-etcd}
+  ports:
+    - {name: client, port: 2379, targetPort: client}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: full-stack-etcd
+spec:
+  serviceName: full-stack-etcd
+  replicas: 1
+  selector:
+    matchLabels: {app: full-stack-etcd}
+  template:
+    metadata:
+      labels: {app: full-stack-etcd}
+    spec:
+      containers:
+        - name: etcd
+          image: {{ .Values.etcd.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [etcd]
+          args:
+            - --name=default
+            - --data-dir=/etcd-data
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://full-stack-etcd:2379
+            - --auto-compaction-mode=revision
+            - --auto-compaction-retention=1000
+            - --quota-backend-bytes=536870912
+          ports:
+            - {name: client, containerPort: 2379}
+          volumeMounts:
+            - {name: data, mountPath: /etcd-data}
+          readinessProbe:
+            exec:
+              command: [etcdctl, --endpoints=http://127.0.0.1:2379, endpoint, health]
+            initialDelaySeconds: 5
+          livenessProbe:
+            tcpSocket: {port: client}
+            initialDelaySeconds: 15
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {memory: 256Mi}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.etcd.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: full-stack-minio
+spec:
+  selector: {app: full-stack-minio}
+  ports:
+    - {name: api, port: 9000, targetPort: api}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: full-stack-minio
+spec:
+  serviceName: full-stack-minio
+  replicas: 1
+  selector:
+    matchLabels: {app: full-stack-minio}
+  template:
+    metadata:
+      labels: {app: full-stack-minio}
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [minio, server, /data]
+          env:
+            - {name: MINIO_ROOT_USER, value: {{ .Values.minio.accessKey | quote }}}
+            - {name: MINIO_ROOT_PASSWORD, value: {{ .Values.minio.secretKey | quote }}}
+          ports:
+            - {name: api, containerPort: 9000}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: api}
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: {path: /minio/health/live, port: api}
+            initialDelaySeconds: 15
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.minio.storage }}
