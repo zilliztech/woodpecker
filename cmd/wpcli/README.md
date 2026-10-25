@@ -273,7 +273,8 @@ returns TargetNotFound; its historical data may still exist. Use `log scan` or
 - `wp metrics snapshot [<node>|--all]` — point-in-time snapshot
 - `wp metrics top --by <metric>` — cross-node top-N
 - `wp metrics watch <metric> <node>` — real-time trend stream
-- `wp metrics report --scenario <name>` — scenario-based analysis (12 built-in)
+- `wp metrics report --scenario <name>` — legacy analysis (12 scenario definitions;
+  not all stated conditions are implemented; see the [audit](diagnosis/README.md#audit-of-legacy-metrics-report))
 
 `stuck-read` and `stuck-write` compare relevant completion counters and the
 in-flight operation registry over the sampled window. A finding requires the
@@ -286,6 +287,31 @@ This is a node-local heuristic: registry entries are bounded and do not describe
 every client-side wait. Successful operations on the same log can mask an
 individual slow operation; inspect `ops list/show` and application checkpoints
 when investigating that case.
+
+### Native diagnosis (source build)
+
+```bash
+wp --context local diagnose node-0 --scenario stuck-write --window 30s
+wp --context local diagnose node-0 --scenario stuck-read -o json > report.json
+wp --context local diagnose node-0 --mode snapshot -o json
+wp diagnose --list
+```
+
+Uses existing WP metrics/Admin/ops interfaces and connection settings. With no
+node argument, inspect discovered nodes within the explicit target budget.
+Snapshot mode cannot establish a sustained stall; live windows start sampling
+now and do not retrieve history. The versioned report preserves suspicious ops,
+counter evidence, reset/eviction/identity gaps and same-log progress conflicts.
+Tenant metadata is not guessed from runtime log IDs.
+
+Exit 0 means evaluation completed, including inconclusive findings; it does not
+mean healthy. Opt into exit 8 for suspicions with `--fail-on-findings`. Required
+collection failures, cancellation and budget exhaustion retain JSON evidence and
+return their own nonzero codes. Existing `metrics report` formats/exits remain
+unchanged. See the [contract, limits, fixtures and legacy audit](diagnosis/README.md).
+
+Prometheus history, trace/Loki queries, Milvus E2E correlation and UI belong to
+the separate diagnostic tool under #450, not this wpcli entry point.
 
 ### Ops registry
 - `wp ops list <node>` — in-flight operations

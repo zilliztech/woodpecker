@@ -135,3 +135,11 @@ func TestMetricsReport_StallEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyStallPreservesRegistryOrdering(t *testing.T) {
+	ops := []pendingOp{{ID: "z-oldest", Type: "logstore.add_entry", Log: 2}, {ID: "a-younger", Type: "logstore.add_entry", Log: 2}}
+	metrics := stallMetrics(t, 0, 0, 5)
+	f := evaluateStalledOps(builtinScenarios["stuck-write"].Rules[0], metrics, metrics, "node-1", ops, ops)
+	require.NotNil(t, f)
+	require.Contains(t, f.Message, "z-oldest")
+}

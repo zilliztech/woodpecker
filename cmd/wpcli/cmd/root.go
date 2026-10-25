@@ -53,6 +53,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newMarkingCommand())
 	root.AddCommand(newOpsCommand())
 	root.AddCommand(newMetricsCommand())
+	root.AddCommand(newDiagnoseCommand())
 	root.AddCommand(newK8sCommand())
 	root.AddCommand(newShellCommand())
 
