@@ -12,6 +12,8 @@ import (
 )
 
 type Fact struct {
+	Counter        *CounterFact      `json:"counter,omitempty"`
+	CollectionKey  string            `json:"collection_identity,omitempty"`
 	Population     string            `json:"population_id"`
 	Labels         map[string]string `json:"labels"`
 	ObservedFromMS int64             `json:"observed_from_ms,omitempty"`
@@ -27,7 +29,7 @@ type Fact struct {
 }
 
 type GaugeFact struct {
-	// Samples are retained only for persistence profiles for exact-time comparisons.
+	// Samples are retained for persistence/consume profiles for exact-time comparisons.
 	Samples     []Point `json:"retained_samples,omitempty"`
 	First       float64 `json:"first"`
 	Last        float64 `json:"last"`
@@ -76,6 +78,9 @@ func evaluate(data *Dataset, sig signal, r d.Request, p Policy, id string) []d.F
 		return []d.Finding{f}
 	}
 	if sig.Gauge {
+		if strings.HasPrefix(sig.GaugeUnit, "counter_") {
+			return evaluateCounter(data, sig, r, p, id)
+		}
 		if sig.GaugeUnit != "" {
 			return evaluateGauge(data, sig, r, p, id)
 		}
@@ -329,6 +334,18 @@ func evaluateGauge(data *Dataset, sig signal, r d.Request, p Policy, id string) 
 			continue
 		}
 		points := series.Points
+		if sig.Stage == "consume" && sig.GaugeUnit == "state_indicator" {
+			valid := true
+			for _, point := range points {
+				valid = valid && (point.Value == 0 || point.Value == 1)
+			}
+			if !valid {
+				f.Summary = "Unsupported exported state indicator"
+				f.Unknown = append(f.Unknown, "unknown_state_indicator")
+				findings = append(findings, f)
+				continue
+			}
+		}
 		if sig.Stage == "persistence" {
 			valid := true
 			for _, point := range points {
@@ -359,7 +376,7 @@ func evaluateGauge(data *Dataset, sig signal, r d.Request, p Policy, id string) 
 			}
 		}
 		g := GaugeFact{First: points[0].Value, Last: points[len(points)-1].Value, Peak: points[0].Value, Minimum: points[0].Value, LastTwoZero: len(points) >= 2 && points[len(points)-1].Value == 0 && points[len(points)-2].Value == 0}
-		if sig.Stage == "persistence" {
+		if sig.Stage == "persistence" || sig.Stage == "consume" {
 			g.Samples = append([]Point{}, points...)
 		}
 		for _, point := range points {

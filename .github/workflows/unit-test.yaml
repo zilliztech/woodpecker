@@ -66,6 +66,9 @@ jobs:
       - name: Run Milvus query-stage smoke test
         run: python3 cmd/wpdiag/tests/query_smoke.py
 
+      - name: Run Milvus consume-stage smoke test
+        run: python3 cmd/wpdiag/tests/consume_smoke.py
+
       - name: Run Jaeger source smoke test
         run: |
           docker pull jaegertracing/all-in-one:1.53.0

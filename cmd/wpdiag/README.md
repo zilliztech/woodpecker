@@ -6,7 +6,9 @@ connection, capability, selection and report contracts outside wpcli and the
 Helm stack. The native adapter (#454) runs the WP evidence collector from #451.
 The independent Prometheus module (#460) queries retained metrics and evaluates
 bounded WP/Milvus/E2E read/write profiles. The independent Milvus query-stage
-command (#466) interprets query-step metric facts. The independent Jaeger module
+command (#466) interprets query-step metric facts. The independent consume-stage
+command (#464) interprets scanner, subscription, processing and visibility
+evidence. The independent Jaeger module
 (#461) diagnoses retained spans and relationship coverage. The independent Loki
 module (#462) diagnoses known log events with bounded candidate queries and
 explicit event/identity lineage. Integrated E2E assessment remains separate work.
@@ -126,6 +128,22 @@ bin/wpdiag milvus query --config wpdiag.yaml --connection local \
 Replace the bounds with your retained workload interval. See the
 [Milvus query guide](../../diagnostics/milvusquery/README.md) for the five groups,
 queue recovery interpretation, source policies and E2E mapping limitations.
+
+For WAL consumption or growing visibility delay, use the separate consume
+command with the same Prometheus connection:
+
+```bash
+bin/wpdiag milvus consume --list
+bin/wpdiag milvus consume --config wpdiag.yaml --connection local \
+  --scope e2e --mode historical \
+  --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z
+```
+
+See the [consume-stage guide](../../diagnostics/milvusconsume/README.md) for the
+five groups and 20-signal catalog. Scanner/processing pressure requires matching
+evidence; normal blocking ReadNext, EOF, idle and local/memory paths are not
+reader-stall verdicts. WP observations remain unassociated until authoritative
+client-metadata mappings exist. Native/trace/Loki enrichment is not collected.
 
 | Source | Scope / flow / stage | Modes | Target filters | Status |
 | --- | --- | --- | --- | --- |

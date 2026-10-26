@@ -51,6 +51,12 @@ meta log list</code></pre>
 bin/wpdiag milvus query --config wpdiag.yaml --connection stack \
   --scope milvus --mode historical \
   --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z</code></pre>
+<p>For WAL consumption or visibility lag, use <code>wpdiag milvus consume</code>. Its five groups cover read modes, separately observed WP retrieval, scanner buffers, subscription/dispatch and consumer processing. It distinguishes sampled pressure from recovery and normal blocking ReadNext/EOF; idle or missing series do not prove a stall. The initial path uses Prometheus only and shows missing client-metadata mappings explicitly. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvusconsume">consume-stage guide, metric catalog and evidence limits</a>.</p>
+<pre><code>bin/wpdiag milvus consume --list
+# Substitute the retained interval for your workload.
+bin/wpdiag milvus consume --config wpdiag.yaml --connection stack \
+  --scope e2e --mode historical \
+  --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z -o json</code></pre>
 <p>Source builds also provide an independent <code>wpdiag</code> binary for bounded diagnostic reports. Build it with <code>make wpcli wpdiag</code>, inspect <code>bin/wpdiag capabilities</code>, and configure a named connection referring to the generated wpcli context and cli.yaml. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/cmd/wpdiag">wpdiag setup and examples</a>.</p>
 <pre><code># From the repository root, after preparing wpdiag.yaml with your connection.
 bin/wpdiag wpcli diagnose --config wpdiag.yaml --connection local \

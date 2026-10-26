@@ -82,6 +82,17 @@ Optional `Report.Assessments`, `Finding.DerivedFrom` and `Catalog.Stages` are
 additive v1 contract fields; existing source-only reports are unchanged. See
 [the query-stage guide](milvusquery/README.md) for applicability and reuse.
 
+## Independent consume-stage assessment
+
+`prometheus.ConsumeModule` collects bounded scanner, subscription, consumer and
+optional WP retrieval facts. `milvusconsume.Assess(ctx, report)` interprets those
+facts without I/O, mutation or copied histogram thresholds. It preserves IDs and
+requires matching sample identities/times for corroboration; normal blocking
+ReadNext/EOF and idle are not stalled-reader evidence. E2E WP populations remain
+unassociated when no authoritative client-metadata mapping exists. See the
+[consume-stage guide](milvusconsume/README.md) for catalog, counter/gauge contracts
+and optional-source boundaries. This module is reusable by later integration/UI.
+
 ## Reports, findings and lineage
 
 `wpdiag.report/v1` includes the normalized selection, limits, execution run/time
