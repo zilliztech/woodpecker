@@ -11,13 +11,14 @@ import (
 	"github.com/spf13/cobra"
 
 	d "github.com/zilliztech/woodpecker/diagnostics"
+	"github.com/zilliztech/woodpecker/diagnostics/jaeger"
 	"github.com/zilliztech/woodpecker/diagnostics/milvusquery"
 	"github.com/zilliztech/woodpecker/diagnostics/prometheus"
 	"github.com/zilliztech/woodpecker/diagnostics/wpcli"
 )
 
 func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
-	engine, err := d.NewEngine(wpcli.Module{}, prometheus.Module{})
+	engine, err := d.NewEngine(wpcli.Module{}, prometheus.Module{}, jaeger.Module{})
 	if err != nil {
 		fmt.Fprintln(errout, "Cannot initialize diagnostic modules")
 		return 1
@@ -49,10 +50,13 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 	}})
 	for _, source := range []string{"wpcli", "prometheus", "trace", "loki"} {
 		short := "Diagnose using " + source
-		if source == "trace" || source == "loki" {
+		if source == "loki" {
 			short += " (not implemented; see capabilities)"
 		}
 		group := &cobra.Command{Use: source, Short: short}
+		if source == "trace" {
+			group.Aliases = []string{"jaeger"}
+		}
 		group.AddCommand(diagnoseCommand(engine, source, &output, &code, out))
 		root.AddCommand(group)
 	}
@@ -167,7 +171,21 @@ func diagnosticCommand(engine *d.Engine, source string, output *string, code *in
 				fmt.Fprintf(out, "  %s node=%q: %s (strength=%s, impact=%s)\n    %s\n    evidence: %d support / %d contradiction; unknown=%q\n", finding.RuleID, finding.Target.NodeID, finding.Outcome, finding.Strength, finding.Severity, finding.Summary, len(finding.Supporting), len(finding.Contradicting), finding.Unknown)
 			}
 			fmt.Fprintf(out, "  Evidence: %d observations, %d findings, %d coverage gaps\n", len(result.Observations), len(result.Findings), len(result.Gaps))
-			if queryStage {
+			if result.Source == "trace" {
+				for _, observation := range result.Observations {
+					if observation.Kind != "jaeger_trace" {
+						continue
+					}
+					var link struct {
+						ID   string `json:"trace_id"`
+						Path string `json:"jaeger_ui_path"`
+					}
+					if json.Unmarshal(observation.Data, &link) == nil && link.ID != "" {
+						fmt.Fprintf(out, "  Trace %s: %s (relative to the configured Jaeger endpoint)\n", link.ID, link.Path)
+					}
+				}
+			}
+			if queryStage || result.Source == "trace" {
 				unavailable := map[string]bool{}
 				for _, o := range result.Observations {
 					if o.Status != "observed" {
@@ -227,7 +245,11 @@ func diagnosticCommand(engine *d.Engine, source string, output *string, code *in
 	f.DurationVar(&budget, "budget", time.Minute, "Total execution budget including discovery (max 10m)")
 	f.Int64Var(&r.Limits.MaxInputBytes, "max-input-bytes", r.Limits.MaxInputBytes, "Maximum total source input bytes (native stderr separately capped at 64KiB)")
 	f.Int64Var(&r.Limits.MaxOutputBytes, "max-output-bytes", r.Limits.MaxOutputBytes, "Maximum JSON report bytes; emits compact failure on overflow")
-	f.IntVar(&r.Limits.MaxTargets, "max-targets", r.Limits.MaxTargets, "Maximum discovered nodes (1..32)")
+	f.IntVar(&r.Limits.MaxTargets, "max-targets", r.Limits.MaxTargets, "Maximum source targets: nodes/exporters/services (1..32)")
+	if source == "trace" {
+		f.StringVar(&r.Selection.Target.TraceID, "trace-id", "", "Exact nonzero 16/32-digit hexadecimal trace ID; snapshot or time-bounded selection")
+		f.StringVar(&r.Selection.Target.OperationID, "request-id", "", "Exact request-ID tag value; configure request_id_tag (alias of trace --operation-id)")
+	}
 	for _, item := range []struct {
 		name  string
 		value *string

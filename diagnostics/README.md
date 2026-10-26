@@ -51,11 +51,21 @@ match a registered profile. Target filters are validated against that profile;
 they are never silently dropped. Log/segment IDs are canonical nonnegative
 int64 decimal **strings**, retaining precision for browser clients.
 
-Observed service cluster, identity verification, trace IDs and tenant
-association are evidence annotations, not authoritative selection assertions.
+Observed service cluster, identity verification and tenant association are
+evidence annotations, not authoritative selection assertions. The trace source
+also accepts a nonzero 16/32-digit hexadecimal trace-ID selector, normalizes it
+losslessly and checks the returned identity. Other sources cannot accept that
+selector as an unverified association assertion.
 In particular, a metric's log_ns plus an ops log ID does not establish the
 authoritative Milvus-client metadata namespace. Native import preserves this
 association as unresolved.
+
+`diagnostics/jaeger.Module` owns the source-only Jaeger profiles, connection,
+read-only query, span normalization and relationship rules. `trace`/`jaeger`
+CLI aliases use that same module; future stage/UI callers must reuse its public
+results rather than copying thresholds or inferring a critical path. See the
+[trace contract](jaeger/README.md). Request-tag selection remains a candidate,
+with anchor/descendant identity and uniqueness gaps preserved.
 
 Snapshot omits live/historical endpoints. Live cannot specify historical
 endpoints; historical requires explicit from/to and no live duration. Modules

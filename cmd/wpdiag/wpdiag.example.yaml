@@ -32,12 +32,29 @@ sources:
             namespace: milvus-stack
             woodpecker_id: milvus-stack
           # bearer_token_env: PROMETHEUS_TOKEN
-  # These disabled placeholders do not implement future clients (#461–#462).
+  # Optional independent Jaeger source. Enable only with reachable Query/UI.
   trace:
     connections:
       local:
         enabled: false
-        settings: {}
+        settings:
+          endpoint: http://127.0.0.1:16686
+          deployment: milvus-stack
+          services:
+            proxy: proxy
+            streamingnode: streamingnode
+            segcore: segcore
+            mixture: other
+            milvus-woodpecker-0: wp_server
+            milvus-woodpecker-1: wp_server
+            milvus-woodpecker-2: wp_server
+          search:
+            service: proxy
+          # request_id_tag: request_id
+          # bearer_token_env: JAEGER_TOKEN
+          policy:
+            slow_span_ms: 1000
+  # Disabled placeholder; Loki implementation remains #462.
   loki:
     connections:
       local:
