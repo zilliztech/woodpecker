@@ -45,5 +45,12 @@ meta log list</code></pre>
 <p><code>status --check</code> verifies Admin and etcd access for the current session. These connection checks establish reachability; use a workload and the relevant log/data checks to establish application progress and readability.</p>
 
 <h2 id="investigate">Use wpcli with the dashboards</h2>
+<p>Source builds also provide an independent <code>wpdiag</code> binary for bounded diagnostic reports. Build it with <code>make wpcli wpdiag</code>, inspect <code>bin/wpdiag capabilities</code>, and configure a named connection referring to the generated wpcli context and cli.yaml. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/cmd/wpdiag">wpdiag setup and examples</a>.</p>
+<pre><code># From the repository root, after preparing wpdiag.yaml with your connection.
+bin/wpdiag wpcli diagnose --config wpdiag.yaml --connection local \
+  --scope wp --flow write --window 30s --interval 1s --budget 1m -o json
+bin/wpdiag wpcli diagnose --config wpdiag.yaml --connection local \
+  --scope wp --flow read --stage wal_read --mode snapshot -o json</code></pre>
+<p>The current module imports native WP runtime evidence from <code>wp diagnose</code>; it does not require Prometheus, Jaeger or Loki. Completion is not a health verdict, snapshots cannot establish sustained stalls, and current ops cannot answer historical questions. Monitoring-source clients and integrated Milvus E2E diagnosis remain separate roadmap modules; unimplemented combinations return an explicit unsupported result.</p>
 <p>Start from the symptom and the test’s time window. Use <a href="#operations-cli-ops">in-flight operations</a> and <a href="#operations-cli-logstore">writer runtime</a> for slow writes, <a href="#operations-cli-log">log progress</a> and <a href="#operations-cli-segment">segment diagnosis</a> for stalled progress, and <a href="#operations-cli-meta">metadata inspection</a> when coordinator state needs examination.</p>
 <p>The <a href="#operations-scenarios-write">write-stall</a>, <a href="#operations-scenarios-read">read-stall</a> and <a href="#operations-scenarios-corruption">data-corruption</a> guides explain the evidence and verification needed for each investigation. Begin with their read-only inspection steps and choose any repair from the observed cause and consequences.</p>

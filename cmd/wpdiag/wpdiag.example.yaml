@@ -1,0 +1,38 @@
+schema_version: wpdiag.config/v1
+sources:
+  wpcli:
+    connections:
+      local:
+        enabled: true
+        settings:
+          # A bare executable name uses PATH. Relative paths containing a path
+          # separator and cli_config resolve relative to this file's directory.
+          executable: wp
+          context: wp-ops-v0146/milvus-stack
+          # Optional: omit to let wpcli use its default ~/.woodpecker/cli.yaml.
+          # An ambient WOODPECKER_CLI_CONFIG/WOODPECKER_ENDPOINT is not inherited.
+          cli_config: ./cli.yaml
+          native_limits:
+            max_samples: 121
+            max_ops: 100
+            max_series: 500
+            max_response_bytes: 2097152
+            concurrency: 8
+            timeout_ms: 30000
+  # Private settings are owned by each source module. These disabled connection
+  # placeholders do NOT install or implement their future clients (#460–#462).
+  prometheus:
+    connections:
+      local:
+        enabled: false
+        settings: {}
+  trace:
+    connections:
+      local:
+        enabled: false
+        settings: {}
+  loki:
+    connections:
+      local:
+        enabled: false
+        settings: {}

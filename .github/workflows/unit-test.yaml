@@ -10,6 +10,9 @@ on:
       - "**.go"
       - "go.mod"
       - "go.sum"
+      - "cmd/wpdiag/**"
+      - "diagnostics/**"
+      - "Makefile"
       - ".github/workflows/unit-test.yaml"
   pull_request:
     branches:
@@ -19,6 +22,9 @@ on:
       - "**.go"
       - "go.mod"
       - "go.sum"
+      - "cmd/wpdiag/**"
+      - "diagnostics/**"
+      - "Makefile"
       - ".github/workflows/unit-test.yaml"
 
 concurrency:
@@ -44,6 +50,11 @@ jobs:
         run: |
           go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
             $(go list ./... | grep -v -E '(tests/)')
+
+      - name: Run standalone diagnostic smoke test
+        run: |
+          make wpcli wpdiag
+          python3 cmd/wpdiag/tests/smoke.py
 
       - name: Upload coverage to Codecov
         if: success()
