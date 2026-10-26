@@ -894,7 +894,9 @@ func TestNewAzureObjectStorageClient_NonIAM_FromEnvConnectionString(t *testing.T
 }
 
 func TestNewAzureObjectStorageClient_IAM_InvalidCredentials(t *testing.T) {
-	// Clear Azure env vars to make IAM credential creation fail
+	// Set AZURE_CLIENT_SECRET with missing CLIENT_ID and TENANT_ID to verify that
+	// the SPN branch returns an error rather than silently falling through to MI.
+	t.Setenv("AZURE_CLIENT_SECRET", "fake-secret")
 	t.Setenv("AZURE_CLIENT_ID", "")
 	t.Setenv("AZURE_TENANT_ID", "")
 	t.Setenv("AZURE_FEDERATED_TOKEN_FILE", "")
@@ -906,7 +908,7 @@ func TestNewAzureObjectStorageClient_IAM_InvalidCredentials(t *testing.T) {
 	cfg.Minio.BucketName = "test-bucket"
 
 	_, err := newAzureObjectStorageClient(context.Background(), cfg)
-	// NewWorkloadIdentityCredential fails with empty token file path
+	// SPN branch: missing TENANT_ID and CLIENT_ID must be a hard error.
 	assert.Error(t, err)
 }
 
@@ -1060,7 +1062,7 @@ func TestAzureReadStatus(t *testing.T) {
 	}
 }
 
-func TestNewAzureClientDefaultAzureCredentialPath(t *testing.T) {
+func TestNewAzureClientSPNCredentialPath(t *testing.T) {
 	t.Setenv("AZURE_CLIENT_SECRET", "fake-secret")
 	t.Setenv("AZURE_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	t.Setenv("AZURE_TENANT_ID", "00000000-0000-0000-0000-000000000002")
