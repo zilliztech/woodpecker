@@ -12,13 +12,14 @@ import (
 
 	d "github.com/zilliztech/woodpecker/diagnostics"
 	"github.com/zilliztech/woodpecker/diagnostics/jaeger"
+	"github.com/zilliztech/woodpecker/diagnostics/loki"
 	"github.com/zilliztech/woodpecker/diagnostics/milvusquery"
 	"github.com/zilliztech/woodpecker/diagnostics/prometheus"
 	"github.com/zilliztech/woodpecker/diagnostics/wpcli"
 )
 
 func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
-	engine, err := d.NewEngine(wpcli.Module{}, prometheus.Module{}, jaeger.Module{})
+	engine, err := d.NewEngine(wpcli.Module{}, prometheus.Module{}, jaeger.Module{}, loki.Module{})
 	if err != nil {
 		fmt.Fprintln(errout, "Cannot initialize diagnostic modules")
 		return 1
@@ -50,9 +51,6 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 	}})
 	for _, source := range []string{"wpcli", "prometheus", "trace", "loki"} {
 		short := "Diagnose using " + source
-		if source == "loki" {
-			short += " (not implemented; see capabilities)"
-		}
 		group := &cobra.Command{Use: source, Short: short}
 		if source == "trace" {
 			group.Aliases = []string{"jaeger"}
@@ -169,6 +167,11 @@ func diagnosticCommand(engine *d.Engine, source string, output *string, code *in
 					continue
 				}
 				fmt.Fprintf(out, "  %s node=%q: %s (strength=%s, impact=%s)\n    %s\n    evidence: %d support / %d contradiction; unknown=%q\n", finding.RuleID, finding.Target.NodeID, finding.Outcome, finding.Strength, finding.Severity, finding.Summary, len(finding.Supporting), len(finding.Contradicting), finding.Unknown)
+				if source == "loki" {
+					for _, check := range finding.NextChecks {
+						fmt.Fprintf(out, "    Next: %s\n", check)
+					}
+				}
 			}
 			fmt.Fprintf(out, "  Evidence: %d observations, %d findings, %d coverage gaps\n", len(result.Observations), len(result.Findings), len(result.Gaps))
 			if result.Source == "trace" {
