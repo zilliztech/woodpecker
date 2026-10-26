@@ -112,6 +112,14 @@ func EvaluateContext(ctx context.Context, report *Report) {
 				evaluateWriteRule(ctx, report, target, rule, byRound, rounds, conflicts[target.NodeID], versionUnsupported)
 				continue
 			}
+			if rule.Scenario == "read" {
+				if rule.ID == "read_activity" {
+					evaluateReadActivity(ctx, report, target, rule, byRound, rounds, conflicts[target.NodeID], versionUnsupported)
+				} else if report.Targets[0].NodeID == target.NodeID {
+					evaluateReaderProgress(ctx, report, rule, conflicts)
+				}
+				continue
+			}
 			base := Finding{
 				RuleID: rule.ID, RuleVersion: rule.Version, Flow: rule.Flow, Stage: rule.Stage,
 				Scope:   Scope{NodeID: target.NodeID, Tenant: "unresolved: ops has no tenant namespace"},

@@ -38,7 +38,8 @@ func Rules() []Rule {
 			Exclusions:     []string{"snapshot/insufficient window", "idle or new/completed operation", "counter/process reset", "EOF/read progress", "missing/changed series", "unsupported API/build"},
 		})
 	}
-	return append(rules, writeRules()...)
+	rules = append(rules, writeRules()...)
+	return append(rules, readRules()...)
 }
 
 type Target struct {
@@ -53,6 +54,7 @@ type Scope struct {
 	SegmentID *int64 `json:"segment_id,omitempty"`
 	Operation string `json:"operation_id,omitempty"`
 	TraceID   string `json:"trace_id,omitempty"`
+	Reader    string `json:"reader_name,omitempty"`
 	Tenant    string `json:"tenant_association"`
 }
 
@@ -79,23 +81,25 @@ type Registry struct {
 }
 
 type Observation struct {
-	ID           string      `json:"id"`
-	SourceID     string      `json:"source_id"`
-	NodeID       string      `json:"node_id"`
-	Kind         string      `json:"kind"`
-	Round        int         `json:"round"`
-	StartedAt    time.Time   `json:"started_at"`
-	FinishedAt   time.Time   `json:"finished_at"`
-	Status       string      `json:"status"`
-	Code         string      `json:"code,omitempty"`
-	Counters     []Counter   `json:"counters,omitempty"`
-	ProcessStart *float64    `json:"process_start_time_seconds,omitempty"`
-	Ops          []Operation `json:"ops,omitempty"`
-	Registry     *Registry   `json:"registry,omitempty"`
-	Version      string      `json:"build_version,omitempty"`
-	Signals      []Signal    `json:"write_signals,omitempty"`
-	Writers      []Writer    `json:"writers,omitempty"`
-	Quorum       *Quorum     `json:"quorum,omitempty"`
+	ID           string        `json:"id"`
+	SourceID     string        `json:"source_id"`
+	NodeID       string        `json:"node_id"`
+	Kind         string        `json:"kind"`
+	Round        int           `json:"round"`
+	StartedAt    time.Time     `json:"started_at"`
+	FinishedAt   time.Time     `json:"finished_at"`
+	Status       string        `json:"status"`
+	Code         string        `json:"code,omitempty"`
+	Counters     []Counter     `json:"counters,omitempty"`
+	ProcessStart *float64      `json:"process_start_time_seconds,omitempty"`
+	Ops          []Operation   `json:"ops,omitempty"`
+	Registry     *Registry     `json:"registry,omitempty"`
+	Version      string        `json:"build_version,omitempty"`
+	Signals      []Signal      `json:"write_signals,omitempty"`
+	Writers      []Writer      `json:"writers,omitempty"`
+	Quorum       *Quorum       `json:"quorum,omitempty"`
+	ReadState    *ReadState    `json:"read_state,omitempty"`
+	ReadPosition *ReadPosition `json:"read_position,omitempty"`
 }
 
 type Gap struct {
@@ -130,6 +134,7 @@ type Limits struct {
 	ResponseBytes int64 `json:"max_response_bytes"`
 	BudgetMS      int64 `json:"wall_clock_budget_ms"`
 	MaxWriters    int   `json:"max_writers_per_sample,omitempty"`
+	MaxReaders    int   `json:"max_readers_per_sample,omitempty"`
 }
 
 type Report struct {
@@ -139,6 +144,7 @@ type Report struct {
 	Scope         string        `json:"scope"`
 	Context       string        `json:"service_context,omitempty"`
 	Mode          string        `json:"observation_mode"`
+	ReadMode      string        `json:"read_mode,omitempty"`
 	WindowMS      int64         `json:"requested_window_ms"`
 	IntervalMS    int64         `json:"requested_interval_ms"`
 	StartedAt     time.Time     `json:"started_at"`

@@ -14,6 +14,7 @@ wp diagnose --list
 wp --context local diagnose node-0 --scenario stuck-write --window 30s
 wp --context local diagnose --scenario write --window 30s --max-writers 16 -o json
 wp --context local diagnose node-0 --scenario stuck-read -o json > read-report.json
+wp --context local diagnose --scenario read --window 30s -o json
 wp --context local diagnose node-0 --mode snapshot -o json > snapshot.json
 wp --context local diagnose --scenario all -o json > nodes-report.json
 ```
@@ -43,7 +44,8 @@ selection as establishing tenant ownership of every runtime operation.
 
 The focused typed rules are `write_stall`/`stuck-write` and
 `read_stall`/`stuck-read`. `write` includes `write_stall`, `flush_buildup`,
-`disk_admission` and `replica_participation`; `all` includes all five.
+`disk_admission` and `replica_participation`; `read` includes `read_activity`,
+`reader_progress` and `read_quorum_visibility`. `all` includes all eight rules.
 `--list -o json` exports their versions, flow/stage,
 required/optional evidence, applicability, comparison and exclusions.
 
@@ -111,6 +113,59 @@ resolution. Sampling and post-collection evaluation share the total budget.
 
 ## Machine contract
 
+### Expanded read scenario
+
+`--scenario read` runs three native rules without changing the focused stall
+scenarios used by the standalone adapter. It does not import the old stall
+suspicion into the reader assessment without expected-work evidence.
+
+| Rule | Trigger and evidence | Exclusions / units / next checks |
+| --- | --- | --- |
+| `read_activity` v1 | Matching-log success/EOF counter deltas and persistent server read operations | Completion counts, not delivered entries or client latency. Missing/changed series, resets, restarts, explicit metric timestamps and several namespaces sharing a log ID are inconclusive. Registry eviction qualifies absent work. Use ops and raw scoped metrics; no reader identity is inferred. |
+| `reader_progress` v1 | Same leased reader generation and position; fresh attempt reports renew; explicit catch-up expectation; data available at every sample | Requires at least the profile's 30s report interval for unchanged-position suspicion. Position/segment IDs establish progress; timestamp renewal does not. Lease expiry, stale/future reports, reopening/reset, scope changes, partial expected-data evidence, truncation and unknown/tail mode exclude a stall verdict. Reader movement remains observable independently of partial replica coverage. |
+| `read_quorum_visibility` v1 | Active segment: configured aq-th highest observed durable entry ID; Sealed/Completed: recorded metadata end | Snapshot/current boundary only; no payload verification. Missing replicas, unloaded writers, ambiguous identities and unsupported node builds remain explicit partial/inconclusive evidence. Use scoped `logstore lac` and optional explicitly bounded segment probe/inspect. No automatic whole-log scan. |
+
+For optional reader evidence, supply `--log-name NAME --segment ID --etcd
+ENDPOINTS --meta-prefix PREFIX`, with the actual WP-client namespace. Existing
+TLS/auth flags apply. Reader mode is explicit `--read-mode unknown|tail|catch-up`.
+The metadata sampler reads the exact log identity and a transaction containing
+that log, segment and bounded reader records at one revision. It rejects a
+re-created/changed log identity and validates each reader's key/payload identity.
+Each selected lease is checked with a read-only TTL RPC. No response bodies,
+credentials, endpoint URLs or metadata prefix are retained.
+
+Defaults permit 16 readers/sample, hard limit 64; `--reader` selects one exact
+key. Prefix queries request at most max-readers + 1 records to detect truncation.
+Each round performs at most two metadata KV/transaction requests plus one TTL
+query per selected distinct lease, and one byte-bounded writer-list request per
+selected Active-segment quorum node. It never requests another metadata segment
+or scans physical data implicitly. These calls share existing duration, sample,
+node, concurrency, per-request timeout and response-byte bounds. Reader metadata
+and positions are collected only when explicitly requested. Failure of a
+requested source is partial/failed collection; omitting metadata is a coverage
+gap, not a transport failure.
+
+New optional v1 fields: report `read_mode`, limit `max_readers_per_sample`,
+observation `read_state`/`read_position` and finding target `reader_name`.
+Reader and segment IDs remain exact signed int64 values. Leased reader reports
+retain generation revision, opened/report times (ms), next position and checked
+lease TTL (seconds). Node durability, metadata readability and physical
+verification are distinct. The 30s profile comes from this source revision's
+client constant; the selected deployed client version is not proven by a server
+build query, and that assumption remains an explicit gap.
+
+Read outcomes include `eof_observed`, `forward_progress_observed`,
+`pending_read_expectation_unknown`, `no_pending_read_observed`,
+`reader_forward_progress_observed`, `caught_up_or_awaiting_data`,
+`read_expectation_unverified`, `no_reader_observed`,
+`suspected_catchup_no_progress`, `readable_boundary_observed`,
+`partial_reachability` and `inconclusive`. Catch-up no-progress is a **suspected**
+warning, not a storage cause or corruption verdict. A normal sampled observation
+has none impact only for its stated scope; it is not a global health assertion.
+Duplicate API views do not promote confidence. The existing focused standalone
+profiles remain unchanged; importing these expanded native results is separate
+stage-integration work, without copying their rules.
+
 The JSON envelope is `schema_version: "wp.diagnosis/v1"`. YAML uses the same field
 names and preserves int64 identities. The contract lives in `model.go`; committed
 fixtures are [`testdata/scoped-write-v1.json`](testdata/scoped-write-v1.json) and
@@ -133,7 +188,8 @@ the report; source names or repeated wrappers do not create independent evidence
 
 An observed ops source with no `ops` entries means the decoded list was empty;
 an unavailable/invalid source is never an empty-list assertion. A missing counter
-family is not zero. Target log/segment IDs come from the ops record. Its absent
+family is not zero. Focused stall target log/segment IDs come from the ops record;
+expanded read targets can come from explicitly selected metadata. Its absent
 tenant field remains unresolved even if only one metric namespace was seen.
 
 Initial outcomes are `suspected_stall`, `conflicting`,
@@ -215,6 +271,6 @@ conflict handling rather than silently changing that older output contract.
 | `hot-write`, `fencing`, `read-amplification`, `quorum-degraded`, `under-replication` | Descriptive definitions without their stated evaluators in the current implementation |
 
 The legacy catalog's twelve names are not twelve completed diagnostic algorithms.
-`diagnose` exposes the two native stall rules plus the three write-pressure rules
-above. Native read expansion belongs to #453; Prometheus, trace, Loki, Milvus stages, integration
+`diagnose` exposes the focused native stall rules and expanded read/write scenarios.
+Prometheus, trace, Loki, Milvus stages, integration
 and WebUI remain separate program children under #450.

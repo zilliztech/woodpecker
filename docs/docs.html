@@ -4340,7 +4340,7 @@ Flags:
 </div>
 <div class="doc-page ops-page" id="page-operations-cli-diagnosis">
 <aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-diagnosis/diagnose">wp diagnose</a></nav></details></aside>
-<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Native diagnosis</p><h1>Native diagnosis</h1><p class="page-desc">Diagnose WP append stalls, writer buffer/flush buildup, configured disk admission and explicitly scoped replica lag with bounded native evidence. External monitoring and Milvus diagnosis are separate tools.</p><section id="ops-cli-diagnosis-topic-diagnosis">
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Native diagnosis</p><h1>Native diagnosis</h1><p class="page-desc">Diagnose WP append/flush/disk/replica pressure, read activity, reader progress and scoped quorum visibility. Native evidence is bounded and current; external monitoring and Milvus diagnosis are separate tools.</p><section id="ops-cli-diagnosis-topic-diagnosis">
 
 <article class="command" data-command-anchor="diagnose" id="ops-cli-diagnosis-diagnose">
 <h2>wp diagnose</h2>
@@ -4383,7 +4383,7 @@ Flags:
 <td>
 <code>--log-name string</code>
 </td>
-<td>Explicit WP-client metadata log name for replica checks; requires --segment, --etcd and --meta-prefix</td>
+<td>Explicit WP-client metadata log; requires --segment, --etcd and --meta-prefix</td>
 </tr>
 <tr>
 <td>
@@ -4396,6 +4396,12 @@ Flags:
 <code>--max-ops int</code>
 </td>
 <td>Maximum ops per node per sample (1..1000) (default 100)</td>
+</tr>
+<tr>
+<td>
+<code>--max-readers int</code>
+</td>
+<td>Maximum reader records and lease checks per metadata sample (1..64) (default 16)</td>
 </tr>
 <tr>
 <td>
@@ -4429,15 +4435,27 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--read-mode string</code>
+</td>
+<td>Expected reader use: unknown|tail|catch-up; not historical metrics retrieval (default &quot;unknown&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--reader string</code>
+</td>
+<td>Select one reader by exact name; otherwise inspect up to --max-readers</td>
+</tr>
+<tr>
+<td>
 <code>--scenario string</code>
 </td>
-<td>Native scenario: all|write|stuck-write|stuck-read (default &quot;all&quot;)</td>
+<td>Native scenario: all|write|read|stuck-write|stuck-read (default &quot;all&quot;)</td>
 </tr>
 <tr>
 <td>
 <code>--segment int</code>
 </td>
-<td>Explicit metadata segment ID for replica checks</td>
+<td>Explicit metadata segment ID for replica/reader checks</td>
 </tr>
 <tr>
 <td>
@@ -4453,11 +4471,19 @@ Flags:
 # Current disk admission; progress rules remain inconclusive:
 wp --context milvus-prod diagnose node-0 --scenario write --mode snapshot -o json
 # Optional replica check: select the Milvus WP-client metadata namespace explicitly.
-wp --context milvus-prod diagnose --scenario write --log-name YOUR_LOG --segment 0 --etcd http://127.0.0.1:2379 --meta-prefix YOUR_WP_CLIENT_PREFIX -o json</code></pre></div></div>
+wp --context milvus-prod diagnose --scenario write --log-name YOUR_LOG --segment 0 --etcd http://127.0.0.1:2379 --meta-prefix YOUR_WP_CLIENT_PREFIX -o json
+# Native read scenario:
+wp --context milvus-prod diagnose --scenario read --window 30s -o json &gt; read-report.json
+# Optional reader check with a suitable reporting window and explicit WP-client namespace:
+wp --context milvus-prod diagnose --scenario read --read-mode catch-up --log-name YOUR_LOG --segment 0 --etcd http://127.0.0.1:2379 --meta-prefix YOUR_WP_CLIENT_PREFIX --window 65s --interval 5s --max-samples 14 --budget 90s -o json
+# Existing focused append check:
+wp --context milvus-prod diagnose node-0 --scenario stuck-write --window 30s -o json</code></pre></div></div>
 <h3>Output and interpretation</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{&quot;schema_version&quot;:&quot;wp.diagnosis/v1&quot;,&quot;collection_status&quot;:&quot;completed&quot;,&quot;observation_mode&quot;:&quot;live_window&quot;,&quot;findings&quot;:[{&quot;rule_id&quot;:&quot;write_stall&quot;,&quot;outcome&quot;:&quot;suspected_stall&quot;,&quot;evidence_strength&quot;:&quot;suspected&quot;,&quot;unknown&quot;:[&quot;tenant_association_unknown&quot;]}]}
 # Abbreviated illustrative output; inspect actual observations and coverage_gaps.</code></pre></div></div>
-<p>Source-build capability. Reuses the WP service context and node Admin mappings. The write scenario checks append, writer-local buffer/flush trends, actual disk watermarks and optional explicitly selected log/segment quorum. Missing metadata does not fall back to another namespace. All includes these checks; focused stuck-write/read contracts remain compatible. --window samples from now; snapshot cannot prove a sustained stall. Queue pressure does not prove a disk/fsync cause, and missing replica observations do not prove quorum loss. Maintenance/object-store attribution remains an explicit evidence gap. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for warning/critical findings. Same-log completions cannot prove an individual op finished; resets, registry limits and missing evidence remain explicit. No external Prometheus, trace or Loki client is included.</p>
+<p>Source-build capability. Reuses the WP service context and node Admin mappings. The write scenario checks append, writer-local buffer/flush trends, actual disk watermarks and optional explicitly selected log/segment quorum. Missing metadata does not fall back to another namespace. All includes these checks; focused stuck-write/read contracts remain compatible. --window samples from now; snapshot cannot prove a sustained stall. Queue pressure does not prove a disk/fsync cause, and missing replica observations do not prove quorum loss. Maintenance/object-store attribution remains an explicit evidence gap. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for warning/critical findings. Same-log completions cannot prove an individual op finished; resets, registry limits and missing evidence remain explicit. No external Prometheus, trace or Loki client is included.
+
+Source-build capability. Reuses the WP service context and node Admin mappings. The read scenario separates success/EOF and pending server activity from leased reader progress and configured quorum evidence. Reader checks require explicit log/segment and WP-client etcd/prefix; there is no fallback namespace. The source client profile reports about every 30 seconds, so short unchanged-position windows are inconclusive. Fresh renewed attempts plus available data and catch-up expectation are needed for a no-progress suspicion. A missing replica is not quorum loss or corruption; a metadata end is not payload verification. Server ops lack reader identity, and duplicate numeric log IDs do not establish a tenant join. Existing focused stuck-write/read contracts remain compatible. --window samples now, not history. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for warning/critical findings. No external Prometheus, trace or Loki client is included.</p>
 <details class="ops-help">
 <summary>Finding or error example</summary>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>PartialCollection (exit 6): required metrics/ops/writers were unavailable or writer details exceeded the bound; report retained.
@@ -4470,9 +4496,11 @@ metrics/Admin APIs. With no node argument, inspect all discovered nodes within
 the target budget. Reuses cli.yaml, --context, --endpoint and node mappings.
 
 Use --scenario write for append, flush, disk admission and explicit replica
-checks; stuck-write/stuck-read retain their original focused contracts.
-Snapshot mode records current admission evidence but cannot establish a sustained
-stall or buildup. --window starts sampling now;
+checks, or --scenario read for activity, reader progress and quorum visibility.
+Focused stuck-write/stuck-read retain their original v1 contracts. Snapshot mode
+captures current evidence but cannot establish a sustained stall or buildup.
+Reader progress needs the 30s client-profile reporting cadence and an explicit
+read expectation. --window starts sampling now;
 historical Prometheus, trace and Loki queries belong to the separate tool.
 
 Exit 0 means evaluation completed, including inconclusive/conflicting findings;
@@ -4496,17 +4524,20 @@ Flags:
   -h, --help                          help for diagnose
       --interval duration             Interval between live sampling rounds (default 1s)
       --list                          List the implemented typed rule contracts without connecting
-      --log-name string               Explicit WP-client metadata log name for replica checks; requires --segment, --etcd and --meta-prefix
+      --log-name string               Explicit WP-client metadata log; requires --segment, --etcd and --meta-prefix
       --max-nodes int                 Maximum discovered targets; select a node if exceeded (default 8)
       --max-ops int                   Maximum ops per node per sample (1..1000) (default 100)
+      --max-readers int               Maximum reader records and lease checks per metadata sample (1..64) (default 16)
       --max-response-bytes int        Maximum bytes per discovery/source response (default 2097152)
       --max-samples int               Maximum sampling rounds per node (2..121) (default 31)
       --max-series int                Maximum retained completion-counter series per sample (default 500)
       --max-writers int               Maximum writer detail requests per node per sample (1..64; write/all) (default 16)
       --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
       --mode string                   Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)
-      --scenario string               Native scenario: all|write|stuck-write|stuck-read (default &quot;all&quot;)
-      --segment int                   Explicit metadata segment ID for replica checks
+      --read-mode string              Expected reader use: unknown|tail|catch-up; not historical metrics retrieval (default &quot;unknown&quot;)
+      --reader string                 Select one reader by exact name; otherwise inspect up to --max-readers
+      --scenario string               Native scenario: all|write|read|stuck-write|stuck-read (default &quot;all&quot;)
+      --segment int                   Explicit metadata segment ID for replica/reader checks
       --window duration               Live observation window starting now (max 5m) (default 30s)</code></pre></div></div>
 </details>
 </article>
