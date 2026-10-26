@@ -218,3 +218,5 @@ qualified/error responses, redirects, identity mismatches, duplicate/conflicting
 lineage, histogram resolution/saturation and data budgets. Tests run in CI.
 
 The separate `prometheus.AppendModule` and source-owned `AppendCatalog()` reuse this transport, quality checks and threshold policy for [`wpdiag milvus append`](../milvusappend/README.md). Append-step profiles use a 24-query default budget; existing overview and query profiles keep their defaults. This does not expand the default `prometheus diagnose` overview catalog.
+
+The independent `prometheus.PersistenceModule` and versioned `PersistenceCatalog()` reuse this source for [`wpdiag milvus persistence`](../milvuspersistence/README.md). Persistence gauge facts add retained samples for exact-time comparisons. Its 24-query plan does not change overview/query defaults or add stage reasoning to the default source command.
