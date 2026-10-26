@@ -25,9 +25,7 @@ func newDiagnoseCommand() *cobra.Command {
 		Limits: diagnosis.Limits{MaxNodes: 8, MaxSamples: 31, MaxOps: 100, MaxSeries: 500, ResponseBytes: 2 << 20},
 	}
 	var list, failOnFindings bool
-	var logName string
-	var segmentID int64
-	var metadataFlags metaEtcdFlags
+	var readFlags readDiagnosisFlags
 	cmd := &cobra.Command{
 		Use:   "diagnose [node]",
 		Short: "Diagnose native WP write pressure and read/write stalls with bounded live evidence",
@@ -36,9 +34,11 @@ metrics/Admin APIs. With no node argument, inspect all discovered nodes within
 the target budget. Reuses cli.yaml, --context, --endpoint and node mappings.
 
 Use --scenario write for append, flush, disk admission and explicit replica
-checks; stuck-write/stuck-read retain their original focused contracts.
-Snapshot mode records current admission evidence but cannot establish a sustained
-stall or buildup. --window starts sampling now;
+checks, or --scenario read for activity, reader progress and quorum visibility.
+Focused stuck-write/stuck-read retain their original v1 contracts. Snapshot mode
+captures current evidence but cannot establish a sustained stall or buildup.
+Reader progress needs the 30s client-profile reporting cadence and an explicit
+read expectation. --window starts sampling now;
 historical Prometheus, trace and Loki queries belong to the separate tool.
 
 Exit 0 means evaluation completed, including inconclusive/conflicting findings;
@@ -62,16 +62,8 @@ and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these error
 			if err := o.Validate(); err != nil {
 				return wperrors.NewUsageError(err.Error())
 			}
-			if logName != "" || cmd.Flags().Changed("segment") {
-				if !cmd.Flags().Changed("segment") || logName == "" || (o.Scenario != "write" && o.Scenario != "all") || metadataFlags.etcdEndpoints == "" || metadataFlags.metaPrefix == "" {
-					return wperrors.NewUsageError("replica diagnosis requires --scenario write (or all), --log-name, --segment, explicit --etcd and --meta-prefix for the WP-client namespace")
-				}
-				if err := validateMetaTarget("segment", []string{logName, fmt.Sprint(segmentID)}); err != nil {
-					return err
-				}
-			}
-			if logName == "" && (cmd.Flags().Changed("etcd") || cmd.Flags().Changed("meta-prefix")) {
-				return wperrors.NewUsageError("diagnose metadata flags require --log-name and --segment")
+			if err := readFlags.validate(o.Scenario); err != nil {
+				return err
 			}
 			// Resolve exactly the existing connection precedence, but discovery must
 			// share the diagnosis budget and never echo endpoint credentials.
@@ -101,10 +93,15 @@ and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these error
 				if err != nil {
 					return err
 				}
-				if logName != "" {
+				if readFlags.logName != "" && (o.Scenario == "write" || o.Scenario == "all") {
 					o.MetadataRequired = true
-					collectDiagnosisQuorum(ctx, &report, &o, &metadataFlags, res.Client, members, logName, segmentID)
+					collectDiagnosisQuorum(ctx, &report, &o, &readFlags.metadata, res.Client, members, readFlags.logName, readFlags.segment)
 				}
+				closeMetadata := func() {}
+				if o.Scenario == "read" || o.Scenario == "all" {
+					closeMetadata = readFlags.configure(ctx, &o, res.Client, members)
+				}
+				defer closeMetadata()
 				diagnosis.Collect(ctx, &report, nodes, o)
 			}
 			if err := renderDiagnosis(cmd, report); err != nil {
@@ -115,7 +112,7 @@ and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these error
 	}
 	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return wperrors.NewUsageError(err.Error()) })
 	f := cmd.Flags()
-	f.StringVar(&o.Scenario, "scenario", o.Scenario, "Native scenario: all|write|stuck-write|stuck-read")
+	f.StringVar(&o.Scenario, "scenario", o.Scenario, "Native scenario: all|write|read|stuck-write|stuck-read")
 	f.StringVar(&o.Mode, "mode", o.Mode, "Observation mode: live|snapshot; no historical retrieval")
 	f.DurationVar(&o.Window, "window", o.Window, "Live observation window starting now (max 5m)")
 	f.DurationVar(&o.Interval, "interval", o.Interval, "Interval between live sampling rounds")
@@ -124,13 +121,11 @@ and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these error
 	f.IntVar(&o.Limits.MaxSamples, "max-samples", o.Limits.MaxSamples, "Maximum sampling rounds per node (2..121)")
 	f.IntVar(&o.Limits.MaxOps, "max-ops", o.Limits.MaxOps, "Maximum ops per node per sample (1..1000)")
 	f.IntVar(&o.Limits.MaxWriters, "max-writers", 16, "Maximum writer detail requests per node per sample (1..64; write/all)")
-	f.StringVar(&logName, "log-name", "", "Explicit WP-client metadata log name for replica checks; requires --segment, --etcd and --meta-prefix")
-	f.Int64Var(&segmentID, "segment", 0, "Explicit metadata segment ID for replica checks")
 	f.IntVar(&o.Limits.MaxSeries, "max-series", o.Limits.MaxSeries, "Maximum retained completion-counter series per sample")
 	f.Int64Var(&o.Limits.ResponseBytes, "max-response-bytes", o.Limits.ResponseBytes, "Maximum bytes per discovery/source response")
 	f.BoolVar(&list, "list", false, "List the implemented typed rule contracts without connecting")
 	f.BoolVar(&failOnFindings, "fail-on-findings", false, "Return exit 8 for warning/critical findings after rendering the report")
-	metadataFlags.register(cmd)
+	readFlags.register(cmd, &o)
 	return cmd
 }
 
@@ -214,8 +209,14 @@ func renderDiagnosis(cmd *cobra.Command, report diagnosis.Report) error {
 	w := cmd.OutOrStdout()
 	fmt.Fprintf(w, "WP diagnosis %s — %s (%s)\n", report.RunID, report.Status, report.Mode)
 	fmt.Fprintf(w, "Observed %s to %s; requested window %dms. Collection completion is not a health verdict.\n", report.StartedAt.Format(time.RFC3339Nano), report.FinishedAt.Format(time.RFC3339Nano), report.WindowMS)
+	if report.ReadMode != "" {
+		fmt.Fprintf(w, "Reader expectation: %s (operator supplied).\n", report.ReadMode)
+	}
 	for _, f := range report.Findings {
 		fmt.Fprintf(w, "\n%s / %s: %s [%s, impact=%s]\n  %s\n", f.Scope.NodeID, f.RuleID, f.Outcome, f.Strength, f.Severity, f.Summary)
+		if f.Scope.Reader != "" {
+			fmt.Fprintf(w, "  Reader: %s; tenant: %s\n", f.Scope.Reader, f.Scope.Tenant)
+		}
 		if f.Scope.Operation != "" {
 			fmt.Fprintf(w, "  Operation: %s; tenant: %s\n", f.Scope.Operation, f.Scope.Tenant)
 		}

@@ -36,11 +36,14 @@ type Options struct {
 	LogID            *int64
 	SegmentID        *int64
 	MetadataRequired bool
+	ReadMode         string
+	ReadMetadata     func(context.Context) Observation
+	ReadScope        *ReadState
 }
 
 func (o Options) Validate() error {
-	if o.Scenario != "all" && o.Scenario != "write" && o.Scenario != "stuck-write" && o.Scenario != "stuck-read" {
-		return fmt.Errorf("--scenario must be all, write, stuck-write or stuck-read")
+	if o.Scenario != "all" && o.Scenario != "write" && o.Scenario != "read" && o.Scenario != "stuck-write" && o.Scenario != "stuck-read" {
+		return fmt.Errorf("--scenario must be all, write, read, stuck-write or stuck-read")
 	}
 	if o.Mode != "snapshot" && o.Mode != "live" {
 		return fmt.Errorf("--mode must be snapshot or live (historical retrieval is not supported)")
@@ -54,6 +57,9 @@ func (o Options) Validate() error {
 	l := o.Limits
 	if o.writeEnabled() && (o.writerLimit() < 1 || o.writerLimit() > 64 || l.MaxNodes*l.MaxSamples*o.writerLimit() > 20000) {
 		return fmt.Errorf("use --max-writers in 1..64; nodes × samples × writers must not exceed 20000")
+	}
+	if o.readEnabled() && (o.readerLimit() < 1 || o.readerLimit() > 64 || o.ReadMode != "" && o.ReadMode != "unknown" && o.ReadMode != "tail" && o.ReadMode != "catch-up") {
+		return fmt.Errorf("use --max-readers in 1..64 and --read-mode unknown, tail or catch-up")
 	}
 	if l.MaxNodes < 1 || l.MaxNodes > 32 || l.MaxSamples < 2 || l.MaxSamples > 121 || l.MaxOps < 1 || l.MaxOps > 1000 || l.MaxSeries < 1 || l.MaxSeries > 5000 || l.ResponseBytes < 1024 || l.ResponseBytes > 8<<20 {
 		return fmt.Errorf("limits: nodes 1..32, samples 2..121, ops 1..1000, series 1..5000, response bytes 1024..8388608")
@@ -95,17 +101,29 @@ func NewReport(o Options, serviceContext string) Report {
 	} else {
 		l.MaxWriters = 0
 	}
+	if o.readEnabled() {
+		l.MaxReaders = o.readerLimit()
+	} else {
+		l.MaxReaders = 0
+	}
 	l.BudgetMS = o.Budget.Milliseconds()
 	windowMS, intervalMS := o.Window.Milliseconds(), o.Interval.Milliseconds()
 	if o.Mode == "snapshot" {
 		windowMS, intervalMS = 0, 0
 	}
-	return Report{
+	report := Report{
 		SchemaVersion: SchemaVersion, RunID: uuid.NewString(), Source: "wp-runtime", Scope: "wp",
 		Context: serviceContext, Mode: mode, WindowMS: windowMS, IntervalMS: intervalMS,
 		StartedAt: time.Now().UTC(), Status: "completed", Limits: l, Rules: rules,
 		Targets: []Target{}, Observations: []Observation{}, Findings: []Finding{}, Gaps: []Gap{},
 	}
+	if o.readEnabled() {
+		report.ReadMode = o.ReadMode
+		if report.ReadMode == "" {
+			report.ReadMode = "unknown"
+		}
+	}
+	return report
 }
 
 // Collect has no backend or configuration discovery of its own. The caller
@@ -141,6 +159,15 @@ func Collect(ctx context.Context, report *Report, nodes []Node, o Options) {
 		if ctx.Err() != nil {
 			break
 		}
+		if o.readEnabled() && o.ReadMetadata != nil {
+			obs := o.ReadMetadata(ctx)
+			obs.ID, obs.SourceID, obs.Kind, obs.Round = fmt.Sprintf("%s:metadata:r%d", report.RunID, round), report.RunID+":read-metadata", "read_metadata", round
+			report.Observations = append(report.Observations, obs)
+			o.ReadScope = nil
+			if obs.Status == "observed" {
+				o.ReadScope = obs.ReadState
+			}
+		}
 		// Per-node requests are sequential, nodes are bounded-concurrent. Merge in
 		// target order so report ordering does not depend on network scheduling.
 		results := make([][]Observation, len(nodes))
@@ -159,6 +186,9 @@ func Collect(ctx context.Context, report *Report, nodes []Node, o Options) {
 				kinds := []string{"metrics", "ops", "registry"}
 				if o.writeEnabled() {
 					kinds = append(kinds, "writers")
+				}
+				if o.readEnabled() && o.ReadScope != nil && o.ReadScope.SegmentState == "Active" && readQuorumNode(o.ReadScope, node.Target.NodeID) {
+					kinds = append(kinds, "read_position")
 				}
 				if round == 0 {
 					kinds = append(kinds, "build")
@@ -192,7 +222,7 @@ func Collect(ctx context.Context, report *Report, nodes []Node, o Options) {
 				Detail: obs.Kind + " evidence was not collected completely; response contents/credentials are not retained",
 			})
 		}
-		if obs.Kind == "metrics" || obs.Kind == "ops" || obs.Kind == "writers" {
+		if obs.Kind == "metrics" || obs.Kind == "ops" || obs.Kind == "writers" || obs.Kind == "read_metadata" || obs.Kind == "read_position" {
 			if obs.Status == "observed" {
 				good++
 			} else {
@@ -221,6 +251,11 @@ func collectOne(ctx context.Context, client *http.Client, node Node, kind string
 	obs := Observation{NodeID: node.Target.NodeID, Kind: kind, Round: round, StartedAt: time.Now().UTC(), Status: "observed"}
 	if kind == "writers" {
 		collectWriters(ctx, client, node, &obs, o)
+		obs.FinishedAt = time.Now().UTC()
+		return obs
+	}
+	if kind == "read_position" {
+		collectReadPosition(ctx, client, node, &obs, o)
 		obs.FinishedAt = time.Now().UTC()
 		return obs
 	}

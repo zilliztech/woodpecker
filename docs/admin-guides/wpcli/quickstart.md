@@ -116,6 +116,10 @@ wp logging set-level node-1 --level info    # restore
 For a bounded native write-path assessment, see the
 [write diagnosis walkthrough](write-diagnosis.md). It covers append, buffer/flush,
 disk admission and explicitly scoped replicas without external monitoring.
+
+For current reader progress, EOF/tailing and explicitly scoped quorum evidence,
+see the [native read diagnosis walkthrough](read-diagnosis.md). It requires no
+external monitoring backend and explains the reader reporting interval.
 ```bash
 wp metrics report node-1 --scenario stuck-flush --window 1m
 ```

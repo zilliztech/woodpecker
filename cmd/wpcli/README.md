@@ -294,6 +294,7 @@ when investigating that case.
 wp --context local diagnose node-0 --scenario stuck-write --window 30s
 wp --context local diagnose --scenario write --window 30s --max-writers 16 -o json
 wp --context local diagnose node-0 --scenario stuck-read -o json > report.json
+wp --context local diagnose --scenario read --window 30s -o json
 wp --context local diagnose node-0 --mode snapshot -o json
 wp diagnose --list
 ```
@@ -309,6 +310,13 @@ optional replica comparison with an explicitly selected metadata log/segment.
 See the [write diagnosis walkthrough](../../docs/admin-guides/wpcli/write-diagnosis.md)
 for evidence interpretation, replica selection and limits. `all` includes these
 checks; `stuck-write`/`stuck-read` retain their focused v1 contracts.
+
+`--scenario read` separates node read activity, optional reader progress and
+quorum visibility. Reader checks require explicit `--log-name`, `--segment`,
+`--etcd` and `--meta-prefix`; catch-up suspicions also require a suitable reporting
+window and `--read-mode catch-up`. Normal tailing/EOF, stale records, lease loss
+and partial replicas are not automatically read faults. See the
+[read diagnosis walkthrough](../../docs/admin-guides/wpcli/read-diagnosis.md).
 
 Exit 0 means evaluation completed, including inconclusive findings; it does not
 mean healthy. Opt into exit 8 for suspicions with `--fail-on-findings`. Required

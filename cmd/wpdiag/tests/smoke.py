@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--wpdiag", default="bin/wpdiag")
     args = parser.parse_args()
     wp, wpdiag = str(Path(args.wp).resolve()), str(Path(args.wpdiag).resolve())
-    state = {"mode": "write", "requests": 0, "writer_reads": 0}
+    state = {"mode": "write", "requests": 0, "writer_reads": 0, "metric_reads": 0}
     observed = threading.Event()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -39,7 +39,8 @@ def main():
                     body = json.dumps({"members": [{"id": "node-1", "service_addr": "internal:8080", "cluster_name": "fixture"}]})
             elif path == "/metrics":
                 observed.set()
-                operation = "get_batch_entries" if mode == "read" else "add_entry"
+                state["metric_reads"] += 1
+                operation = "get_batch_entries" if mode == "read" or mode.startswith("native-read-") else "add_entry"
                 body = ('# TYPE process_start_time_seconds gauge\nprocess_start_time_seconds 100\n'
                         '# TYPE woodpecker_server_logstore_operations_total counter\n'
                         'woodpecker_server_logstore_operations_total{node_id="node-1",log_id="2",log_ns="tenant-a",operation="'
@@ -49,15 +50,27 @@ def main():
                                         ("disk_watermark_hard", .9), ("write_backpressure_state", 0)]:
                         metric = "woodpecker_server_logstore_" + name
                         body += f'# TYPE {metric} gauge\n{metric}{{node_id="node-1"}} {value}\n'
+                if mode == "native-read-progress":
+                    body = body.replace('} 5\n', '} ' + str(5 + state["metric_reads"]) + '\n')
+                elif mode == "native-read-reset" and state["metric_reads"] == 2:
+                    body = body.replace('} 5\n', '} 1\n')
+                elif mode == "native-read-eof":
+                    body += ('woodpecker_server_logstore_operations_total{node_id="node-1",log_id="2",log_ns="tenant-a",'
+                             'operation="get_batch_entries",status="end_of_file"} ' + str(state["metric_reads"]) + '\n')
+                elif mode == "native-read-ambiguous":
+                    body += ('woodpecker_server_logstore_operations_total{node_id="node-1",log_id="2",log_ns="tenant-b",'
+                             'operation="get_batch_entries",status="success"} 5\n')
+                elif mode == "native-read-unavailable":
+                    code, body = 501, "sentinel-secret"
             elif path == "/admin/runtime/ops":
                 if mode == "ops-down":
                     code, body = 503, "sentinel-secret"
                 else:
-                    operation = "get_batch_entries" if mode == "read" else "add_entry"
-                    body = json.dumps([] if mode in ("idle", "native-idle") else [{"op_id": "pending", "op_type": "logstore." + operation,
+                    operation = "get_batch_entries" if mode == "read" or mode.startswith("native-read-") else "add_entry"
+                    body = json.dumps([] if mode in ("idle", "native-idle", "native-read-idle") else [{"op_id": "pending", "op_type": "logstore." + operation,
                                       "log_id": 2, "segment_id": 7, "started_at": "2026-10-01T00:00:00Z"}])
             elif path == "/admin/runtime/ops/stats":
-                body = json.dumps({"capacity": 1024, "in_use": 0 if mode in ("idle", "native-idle") else 1, "evicted_total": 0})
+                body = json.dumps({"capacity": 1024, "in_use": 0 if mode in ("idle", "native-idle", "native-read-idle") else 1, "evicted_total": 0})
             elif path == "/admin/env":
                 body = json.dumps({"build": {"version": "v0.1.46"}, "env": {"TOKEN": "sentinel-secret"}})
             elif path == "/admin/logstore/segments":
@@ -174,6 +187,34 @@ def main():
                 assert findings["disk_admission"]["outcome"] == "below_configured_watermarks"
                 assert findings["replica_participation"]["outcome"] == "inconclusive"
                 assert state["writer_reads"] <= 4, "Writer detail request bound exceeded"
+                ids = {o["id"] for o in report["observations"]}
+                assert all(set(f["supporting_observations"]) <= ids for f in report["findings"])
+                assert "sentinel-secret" not in proc.stdout + proc.stderr
+                assert url not in proc.stdout
+                results.append({"case": mode, "exit": proc.returncode, "status": report["collection_status"]})
+            native_env = dict(os.environ, WOODPECKER_CLI_CONFIG=str(root / "cli.yaml"))
+            native_env.pop("WOODPECKER_ENDPOINT", None)
+            native_base = [wp, "--context", "fixture", "diagnose", "--scenario", "read", "--window", "30ms",
+                           "--interval", "10ms", "--max-samples", "4", "--budget", "2s", "-o", "json"]
+            for mode, expected, outcome, extra in [
+                ("native-read-pending", 0, "pending_read_expectation_unknown", []),
+                ("native-read-progress", 0, "forward_progress_observed", []),
+                ("native-read-eof", 0, "eof_observed", []),
+                ("native-read-idle", 0, "no_pending_read_observed", []),
+                ("native-read-reset", 0, "inconclusive", []),
+                ("native-read-ambiguous", 0, "inconclusive", []),
+                ("native-read-unavailable", 6, "inconclusive", []),
+                ("native-read-snapshot", 0, "inconclusive", ["--mode", "snapshot"]),
+            ]:
+                state["mode"], state["metric_reads"] = mode, 0
+                proc = subprocess.run(native_base + extra, env=native_env, capture_output=True, text=True, timeout=5)
+                report = json.loads(proc.stdout)
+                assert proc.returncode == expected, (mode, proc.returncode, report, proc.stderr)
+                assert len(report["rules"]) == 3
+                findings = {f["rule_id"]: f for f in report["findings"]}
+                assert findings["read_activity"]["outcome"] == outcome, (mode, report)
+                assert findings["reader_progress"]["outcome"] == "inconclusive"
+                assert findings["read_quorum_visibility"]["outcome"] == "inconclusive"
                 ids = {o["id"] for o in report["observations"]}
                 assert all(set(f["supporting_observations"]) <= ids for f in report["findings"])
                 assert "sentinel-secret" not in proc.stdout + proc.stderr

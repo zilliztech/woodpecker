@@ -74,6 +74,19 @@ woodpecker_server_logstore_write_backpressure_state{node_id="node-1"} 1
 			require.Equal(t, "observed_admission_pressure", outcomes["disk_admission"])
 			require.Equal(t, "inconclusive", outcomes["replica_participation"])
 			require.Equal(t, 16, r.Limits.MaxWriters)
+			// The default combined scenario must retain both families after the
+			// read/write collector and command flags are merged.
+			all, _, allErr := runDiagnose(t, server, context.Background(), "--scenario", "all", "--mode", "snapshot")
+			require.NoError(t, allErr)
+			require.Len(t, all.Rules, 8)
+			require.Equal(t, 16, all.Limits.MaxWriters)
+			require.Equal(t, 16, all.Limits.MaxReaders)
+			ruleIDs := []string{}
+			for _, rule := range all.Rules {
+				ruleIDs = append(ruleIDs, rule.ID)
+			}
+			require.Contains(t, ruleIDs, "flush_buildup")
+			require.Contains(t, ruleIDs, "reader_progress")
 			r, _, err = runDiagnose(t, server, context.Background(), "--scenario", "write", "--mode", "snapshot", "--fail-on-findings")
 			require.Equal(t, 8, wperrors.ExitCodeFor(err))
 			for _, f := range r.Findings {
