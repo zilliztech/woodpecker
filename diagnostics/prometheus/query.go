@@ -20,12 +20,12 @@ func (QueryModule) Descriptor() d.Descriptor {
 }
 
 func (QueryModule) ValidateConnection(c d.Connection) error {
-	_, err := settingsFor(c, true)
+	_, err := settingsFor(c, queryPlan)
 	return err
 }
 
 func (QueryModule) Run(ctx context.Context, r d.Request, c d.Connection) d.Result {
-	return runPlan(ctx, r, c, true)
+	return runPlan(ctx, r, c, queryPlan)
 }
 
 // QuerySignal is the source-owned, versioned metric contract exposed to stage

@@ -327,6 +327,18 @@ func evaluateGauge(data *Dataset, sig signal, r d.Request, p Policy, id string) 
 			continue
 		}
 		points := series.Points
+		if sig.GaugeUnit == "state_0_normal_1_warn_2_blocked" {
+			valid := true
+			for _, p := range points {
+				valid = valid && (p.Value == 0 || p.Value == 1 || p.Value == 2)
+			}
+			if !valid {
+				f.Summary = "Unsupported exported disk admission state"
+				f.Unknown = append(f.Unknown, "unknown_disk_admission_state")
+				findings = append(findings, f)
+				continue
+			}
+		}
 		g := GaugeFact{First: points[0].Value, Last: points[len(points)-1].Value, Peak: points[0].Value, Minimum: points[0].Value, LastTwoZero: len(points) >= 2 && points[len(points)-1].Value == 0 && points[len(points)-2].Value == 0}
 		for _, point := range points {
 			g.Peak = max(g.Peak, point.Value)

@@ -26,6 +26,12 @@ func TestCLIIndependentCapabilitiesAndFailures(t *testing.T) {
 		{"help", []string{"--help"}, 0, "capabilities"},
 		{"capabilities", []string{"capabilities", "-o", "json"}, 0, d.CatalogSchema},
 		{"text capabilities", []string{"capabilities"}, 0, "wp.write_stall"},
+		{"append catalog", []string{"milvus", "append", "--list", "-o", "json"}, 0, "wp.flush"},
+		{"append text catalog", []string{"milvus", "append", "--list"}, 0, "milvus_streaming_produce_rate_limit_delay_seconds"},
+		{"append wrong flow", []string{"milvus", "append", "--flow", "read", "-o", "json"}, 2, "invalid_selection"},
+		{"append wrong scope", []string{"milvus", "append", "--scope", "wp", "-o", "json"}, 3, "profile_not_supported"},
+		{"append unsupported native", []string{"milvus", "append", "--source", "wpcli", "-o", "json"}, 3, "stage_source_not_supported"},
+		{"append unsupported mapping", []string{"milvus", "append", "--channel", "ch", "-o", "json"}, 3, "target_filter_not_supported"},
 		{"query catalog", []string{"milvus", "query", "--list", "-o", "json"}, 0, "milvus.query.tsafe"},
 		{"query text catalog", []string{"milvus", "query", "--list"}, 0, "milvus_querynode_sq_core_latency"},
 		{"query unsupported source", []string{"milvus", "query", "--source", "trace", "-o", "json"}, 3, "stage_source_not_supported"},
@@ -51,7 +57,7 @@ func TestCLIIndependentCapabilitiesAndFailures(t *testing.T) {
 			require.Equal(t, tc.exit, code)
 			require.Contains(t, out.String()+errout.String(), tc.contains)
 			require.NotContains(t, out.String()+errout.String(), "sentinel-secret")
-			if json.Valid(out.Bytes()) && tc.name != "capabilities" && tc.name != "query catalog" {
+			if json.Valid(out.Bytes()) && tc.name != "capabilities" && tc.name != "query catalog" && tc.name != "append catalog" {
 				var report d.Report
 				require.NoError(t, json.Unmarshal(out.Bytes(), &report))
 				require.Equal(t, d.ReportSchema, report.SchemaVersion)
@@ -106,4 +112,21 @@ func TestQueryTextAssessmentSourceErrorsAndOutputBudget(t *testing.T) {
 		require.NotContains(t, out.String(), "assessments")
 		server.Close()
 	}
+}
+
+func TestAppendTextAndIndependentSources(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"matrix","result":[]}}`)
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "wpdiag.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("schema_version: wpdiag.config/v1\nsources:\n  prometheus:\n    connections:\n      test:\n        settings:\n          endpoint: %q\n          deployment: fixture\n          match_labels: {cluster: test}\n", server.URL)), 0o600))
+	var out, errout bytes.Buffer
+	code := Execute(context.Background(), []string{"milvus", "append", "--config", path, "--connection", "test", "--scope", "e2e", "--mode", "historical", "--from", "1970-01-01T00:16:40Z", "--to", "1970-01-01T00:17:40Z"}, &out, &errout)
+	require.Zero(t, code)
+	require.Contains(t, out.String(), "Milvus append assessment")
+	require.Contains(t, out.String(), "1 Proxy preparation")
+	require.Contains(t, out.String(), "5 WP server")
+	require.Contains(t, out.String(), "wp_append_mapping_unavailable")
+	require.Empty(t, errout.String())
 }

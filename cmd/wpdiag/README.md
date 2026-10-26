@@ -234,3 +234,18 @@ source modules in #460–#462 and stage modules in #463–#466 reuse this founda
 It reports known log symptoms, actual sanitized excerpts and identity-based
 associations. No-match remains inconclusive. See the
 [Loki profiles, configuration and evidence limits](../../diagnostics/loki/README.md).
+
+## Milvus append-stage diagnosis
+
+Use `wpdiag milvus append --list` for the versioned write-step metric catalog.
+The command needs only its own Prometheus connection:
+
+```bash
+bin/wpdiag milvus append --config wpdiag.yaml --connection local \
+  --scope e2e --window 30s --budget 1m -o json
+```
+
+It distinguishes Proxy completion/preparation, producer quota/routing and SN
+WAL/interceptor symptoms; E2E also reports separately observed WP append/flush/
+disk context. No collection/channel/WP mapping or latency residual is invented.
+See the [append-stage hypotheses and limits](../../diagnostics/milvusappend/README.md).

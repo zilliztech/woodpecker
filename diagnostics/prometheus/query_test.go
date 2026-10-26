@@ -41,7 +41,7 @@ func TestQuerySourceUsesSharedRulesAndExplicitPolicies(t *testing.T) {
 func TestQueryDefaultBudgetAndSourceOnlyGaugeCoverage(t *testing.T) {
 	c, err := d.ParseConfig([]byte("schema_version: wpdiag.config/v1\nsources:\n  prometheus:\n    connections:\n      test:\n        settings: {endpoint: 'http://127.0.0.1:1', deployment: test, match_labels: {cluster: test}}\n"), "")
 	require.NoError(t, err)
-	settings, err := settingsFor(c.Sources["prometheus"].Connections["test"], true)
+	settings, err := settingsFor(c.Sources["prometheus"].Connections["test"], queryPlan)
 	require.NoError(t, err)
 	require.Equal(t, 24, settings.Limits.MaxQueries)
 	require.GreaterOrEqual(t, len(settings.Policy.LatencyMS), len(queryThresholds()))

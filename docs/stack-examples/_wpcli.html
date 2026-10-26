@@ -74,3 +74,8 @@ bin/wpdiag prometheus diagnose --config wpdiag.yaml --connection stack \
 <pre><code># Configure sources.loki.connections.stack using the Alloy namespace/cluster labels.
 bin/wpdiag loki diagnose --config wpdiag.yaml --connection stack \
   --scope e2e --flow write --window 30s --budget 1m -o json</code></pre>
+
+<p>For slow inserts, <code>wpdiag milvus append</code> assesses Proxy preparation/completion, producer quota/routing, SN WAL/interceptors and, with <code>--scope e2e</code>, separate WP append/flush/disk context. It reuses Prometheus source findings and reports concrete steps, evidence and next checks. Internal quantiles are never subtracted to invent waiting time; WP evidence stays unassociated until an authoritative client metadata mapping exists. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvusappend">append-stage catalog, setup and interpretation limits</a>.</p>
+<pre><code>bin/wpdiag milvus append --list
+bin/wpdiag milvus append --config wpdiag.yaml --connection stack \
+  --scope e2e --window 30s --budget 1m -o json</code></pre>
