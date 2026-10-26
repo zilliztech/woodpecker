@@ -65,7 +65,17 @@ func Normalize(s Selection) (Selection, error) {
 			return s, fmt.Errorf("log/segment identities must be canonical nonnegative int64 decimal strings")
 		}
 	}
-	if s.Target.Identity != "" || s.Target.ServiceCluster != "" || s.Target.TenantAssociation != "" || s.Target.TraceID != "" {
+	if s.Target.TraceID != "" {
+		id := strings.ToLower(s.Target.TraceID)
+		if len(s.Sources) != 1 || s.Sources[0] != "trace" || !regexp.MustCompile(`^([0-9a-f]{16}|[0-9a-f]{32})$`).MatchString(id) || strings.Trim(id, "0") == "" {
+			return s, fmt.Errorf("trace ID selection requires the trace source and a nonzero 16/32-digit hex ID")
+		}
+		if len(id) == 16 {
+			id = strings.Repeat("0", 16) + id
+		}
+		s.Target.TraceID = id
+	}
+	if s.Target.Identity != "" || s.Target.ServiceCluster != "" || s.Target.TenantAssociation != "" {
 		return s, fmt.Errorf("observed identity/association fields cannot be supplied as selection assertions")
 	}
 	w := s.Window
@@ -98,9 +108,9 @@ func ValidateLimits(l Limits) error {
 }
 
 func SelectedTargetFields(t Target) []string {
-	values := map[string]string{"deployment": t.Deployment, "instance": t.Instance, "node_id": t.NodeID, "log_id": t.LogID, "segment_id": t.SegmentID, "reader_id": t.ReaderID, "collection": t.Collection, "channel": t.Channel, "operation_id": t.OperationID}
+	values := map[string]string{"deployment": t.Deployment, "instance": t.Instance, "node_id": t.NodeID, "log_id": t.LogID, "segment_id": t.SegmentID, "reader_id": t.ReaderID, "collection": t.Collection, "channel": t.Channel, "operation_id": t.OperationID, "trace_id": t.TraceID}
 	fields := []string{}
-	for _, name := range []string{"deployment", "instance", "node_id", "log_id", "segment_id", "reader_id", "collection", "channel", "operation_id"} {
+	for _, name := range []string{"deployment", "instance", "node_id", "log_id", "segment_id", "reader_id", "collection", "channel", "operation_id", "trace_id"} {
 		if values[name] != "" {
 			fields = append(fields, name)
 		}

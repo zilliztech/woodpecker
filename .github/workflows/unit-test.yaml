@@ -66,6 +66,11 @@ jobs:
       - name: Run Milvus query-stage smoke test
         run: python3 cmd/wpdiag/tests/query_smoke.py
 
+      - name: Run Jaeger source smoke test
+        run: |
+          docker pull jaegertracing/all-in-one:1.53.0
+          python3 cmd/wpdiag/tests/jaeger_smoke.py
+
       - name: Upload coverage to Codecov
         if: success()
         uses: codecov/codecov-action@v5

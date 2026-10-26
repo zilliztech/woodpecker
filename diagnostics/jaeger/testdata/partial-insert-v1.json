@@ -1,0 +1,336 @@
+{
+  "traceID": "07568c94769d4d26a058e79889480239",
+  "spans": [
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "0baced02004ae60c",
+      "operationName": "milvus.proto.rootcoord.RootCoord/DescribeCollection",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "4f6f702a6e830a8b"
+        }
+      ],
+      "startTime": 1792650796248884,
+      "duration": 795,
+      "tags": [
+        {
+          "key": "rpc.grpc.status_code",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "client"
+        }
+      ],
+      "logs": [],
+      "processID": "p1"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "69ce916b49d3c492",
+      "operationName": "milvus.proto.rootcoord.RootCoord/ShowPartitions",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "4f6f702a6e830a8b"
+        }
+      ],
+      "startTime": 1792650796249825,
+      "duration": 453,
+      "tags": [
+        {
+          "key": "rpc.grpc.status_code",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "client"
+        }
+      ],
+      "logs": [],
+      "processID": "p1"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "95b002d8bf36dc91",
+      "operationName": "milvus.proto.rootcoord.RootCoord/AllocTimestamp",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "835e9416051c9924"
+        }
+      ],
+      "startTime": 1792650796253096,
+      "duration": 400,
+      "tags": [
+        {
+          "key": "rpc.grpc.status_code",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "client"
+        }
+      ],
+      "logs": [],
+      "processID": "p1"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "a2c52667b058a9dc",
+      "operationName": "Proxy-Insert-PreExecute",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "639cf1b074395e73"
+        }
+      ],
+      "startTime": 1792650796253571,
+      "duration": 1997,
+      "tags": [
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "internal"
+        }
+      ],
+      "logs": [],
+      "processID": "p2"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "312299bf02a4a3eb",
+      "operationName": "Proxy-Insert-Execute",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "639cf1b074395e73"
+        }
+      ],
+      "startTime": 1792650796255574,
+      "duration": 17989,
+      "tags": [
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "internal"
+        }
+      ],
+      "logs": [],
+      "processID": "p2"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "639cf1b074395e73",
+      "operationName": "InsertTask",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "835e9416051c9924"
+        }
+      ],
+      "startTime": 1792650796253563,
+      "duration": 20012,
+      "tags": [
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "internal"
+        }
+      ],
+      "logs": [],
+      "processID": "p2"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "835e9416051c9924",
+      "operationName": "Proxy-Insert",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "4f6f702a6e830a8b"
+        }
+      ],
+      "startTime": 1792650796252500,
+      "duration": 21198,
+      "tags": [
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "internal"
+        }
+      ],
+      "logs": [],
+      "processID": "p2"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "4f6f702a6e830a8b",
+      "operationName": "/v2/vectordb/entities/insert",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "325066fccda74afa"
+        }
+      ],
+      "startTime": 1792650796244464,
+      "duration": 30706,
+      "tags": [
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "internal"
+        }
+      ],
+      "logs": [],
+      "processID": "p2"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "837284040ae41f84",
+      "operationName": "milvus.proto.rootcoord.RootCoord/DescribeCollection",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "0baced02004ae60c"
+        }
+      ],
+      "startTime": 1792650796249441,
+      "duration": 152,
+      "tags": [
+        {
+          "key": "rpc.grpc.status_code",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "server"
+        }
+      ],
+      "logs": [],
+      "processID": "p3"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "e6e8361f3d2e98b7",
+      "operationName": "milvus.proto.rootcoord.RootCoord/ShowPartitions",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "69ce916b49d3c492"
+        }
+      ],
+      "startTime": 1792650796249954,
+      "duration": 204,
+      "tags": [
+        {
+          "key": "rpc.grpc.status_code",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "server"
+        }
+      ],
+      "logs": [],
+      "processID": "p3"
+    },
+    {
+      "traceID": "07568c94769d4d26a058e79889480239",
+      "spanID": "edcd212081af3c69",
+      "operationName": "milvus.proto.rootcoord.RootCoord/AllocTimestamp",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "07568c94769d4d26a058e79889480239",
+          "spanID": "95b002d8bf36dc91"
+        }
+      ],
+      "startTime": 1792650796253312,
+      "duration": 92,
+      "tags": [
+        {
+          "key": "rpc.grpc.status_code",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "server"
+        }
+      ],
+      "logs": [],
+      "processID": "p3"
+    }
+  ],
+  "processes": {
+    "p1": {
+      "serviceName": "proxy",
+      "tags": [
+        {
+          "key": "NodeID",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "otel.library.name",
+          "type": "string",
+          "value": "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+        }
+      ]
+    },
+    "p2": {
+      "serviceName": "proxy",
+      "tags": [
+        {
+          "key": "NodeID",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "otel.library.name",
+          "type": "string",
+          "value": "proxy"
+        }
+      ]
+    },
+    "p3": {
+      "serviceName": "mixture",
+      "tags": [
+        {
+          "key": "NodeID",
+          "type": "int64",
+          "value": 0
+        },
+        {
+          "key": "otel.library.name",
+          "type": "string",
+          "value": "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+        }
+      ]
+    }
+  },
+  "warnings": null
+}

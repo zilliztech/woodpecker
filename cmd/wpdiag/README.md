@@ -6,8 +6,9 @@ connection, capability, selection and report contracts outside wpcli and the
 Helm stack. The native adapter (#454) runs the WP evidence collector from #451.
 The independent Prometheus module (#460) queries retained metrics and evaluates
 bounded WP/Milvus/E2E read/write profiles. The independent Milvus query-stage
-command (#466) interprets query-step metric facts. Trace/Loki and integrated E2E
-assessment remain separate work.
+command (#466) interprets query-step metric facts. The independent Jaeger module
+(#461) diagnoses retained spans and relationship coverage. Loki and integrated
+E2E assessment remain separate work.
 
 ## Build and run
 
@@ -89,6 +90,25 @@ Replace the example UTC times with your retained workload interval. See the
 [Prometheus guide](../../diagnostics/prometheus/README.md) for all six profiles,
 metric units, policy thresholds, authentication and evidence limits.
 
+## Jaeger trace diagnosis
+
+Use a separate trace connection with the Jaeger Query endpoint, deployment and
+exact service/component bindings. No wpcli or Prometheus connection is needed:
+
+```bash
+bin/wpdiag trace diagnose --config wpdiag.yaml --connection local \
+  --scope e2e --flow write --mode snapshot --trace-id YOUR_TRACE_ID -o json
+```
+
+Replace the ID with an actual retained 16/32-digit hexadecimal ID. Snapshot reads
+immediately; live/historical modes have explicit event-time bounds. Service/
+operation searches are bounded and configured per connection; `--request-id`
+requires a configured request-ID tag. The `jaeger` command is an alias of `trace`.
+See the [Jaeger guide](../../diagnostics/jaeger/README.md) for the six profiles,
+auth, thresholds, limits and partial-trace interpretation. Long ReadNext tailing
+is not automatically a fault; overlapping/async spans are not added into client
+latency, and separate traces are never merged by time proximity.
+
 ## Supported boundaries
 
 For a query/search symptom, use the separate stage command. It works with the
@@ -111,11 +131,11 @@ queue recovery interpretation, source policies and E2E mapping limitations.
 | wpcli | wp / write / append | snapshot, live | node_id, or discovered nodes within budget | Implemented: native write_stall v1 |
 | wpcli | wp / read / wal_read | snapshot, live | node_id, or discovered nodes within budget | Implemented: native read_stall v1 |
 | Prometheus | WP/Milvus/E2E read/write profiles | live, historical | Explicit profile-declared deployment/instance/node filters | [Implemented catalog and limits](../../diagnostics/prometheus/README.md) |
-| Trace | Future WP/Milvus/E2E read/write profiles | Not implemented | Not implemented | [#461](https://github.com/zilliztech/woodpecker/issues/461) |
+| Trace (Jaeger) | WP/Milvus/E2E read/write profiles | snapshot with exact ID; live, historical | deployment, trace_id, configured request-ID tag | [Implemented catalog and limits](../../diagnostics/jaeger/README.md) |
 | Loki | Future WP/Milvus/E2E read/write profiles | Not implemented | Not implemented | [#462](https://github.com/zilliztech/woodpecker/issues/462) |
 
-`capabilities` is authoritative for implemented profiles. Trace/Loki
-`diagnose` commands return `unsupported/module_not_implemented` and exit 3.
+`capabilities` is authoritative for implemented profiles. The Loki
+`diagnose` command returns `unsupported/module_not_implemented` and exit 3.
 Historical input is represented by `--mode historical --from RFC3339 --to
 RFC3339`; wpcli rejects it before spawning a process. It never relabels current
 ops or metrics as historical. Log/segment/reader/collection/channel filters
@@ -193,6 +213,7 @@ their own queries/results before returning them.
 go test -race ./diagnostics/... ./cmd/wpdiag/...
 make wpcli wpdiag
 python3 cmd/wpdiag/tests/smoke.py
+python3 cmd/wpdiag/tests/jaeger_smoke.py  # Isolated Jaeger 1.53 Docker fixture.
 ```
 
 The smoke test runs both real binaries against a temporary loopback HTTP
