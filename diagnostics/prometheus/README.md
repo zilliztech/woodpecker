@@ -104,8 +104,11 @@ E2E here means **source-only, partial stage coverage**. The read overview does
 not put WAL reads and user queries into one serial timer. These profiles do not
 diagnose SN scanner progress, visibility/TSafe, WP-client queues, query execution
 or persistence. Every E2E report includes `source_only_partial_stage_coverage`.
-Those business-stage relationships remain #463–#466, and multi-source synthesis
-remains #467.
+For scanner/subscription/processing evidence use the separate
+[consume-stage collector and assessor](../milvusconsume/README.md); for query
+scheduling/execution use the [query-stage guide](../milvusquery/README.md).
+Other stage work is tracked by #463–#466; multi-source synthesis remains #467.
+These separate collectors do not change the overview profiles above.
 
 ## Rules and interpretation
 

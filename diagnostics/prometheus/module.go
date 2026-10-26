@@ -24,6 +24,7 @@ const (
 	queryPlan
 	appendPlan
 	persistencePlan
+	consumePlan
 )
 
 func runPlan(ctx context.Context, r d.Request, connection d.Connection, planKind queryPlanKind) d.Result {
@@ -60,6 +61,8 @@ func runPlan(ctx context.Context, r d.Request, connection d.Connection, planKind
 		plan = appendSignals(r.Selection.Scope)
 	} else if planKind == persistencePlan {
 		plan = persistenceSignals(r.Selection.Scope)
+	} else if planKind == consumePlan {
+		plan = consumeSignals(r.Selection.Scope)
 	}
 	if len(plan) > s.Limits.MaxQueries {
 		return d.Failure("prometheus", "invalid", "query_budget_invalid", "Profile does not fit max_queries; no requests were sent")
@@ -110,8 +113,11 @@ func runPlan(ctx context.Context, r d.Request, connection d.Connection, planKind
 		} else {
 			okQueries++
 			findings := evaluate(&data, sig, r, s.Policy, id)
-			if planKind != defaultPlan {
+			if planKind == queryPlan || planKind == appendPlan || planKind == persistencePlan {
 				annotateExporters(&data)
+			}
+			if planKind == consumePlan {
+				annotateConsume(&data)
 			}
 			result.Findings = append(result.Findings, findings...)
 			for _, f := range findings {

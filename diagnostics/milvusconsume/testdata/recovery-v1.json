@@ -1,0 +1,538 @@
+{
+  "finding": {
+    "id": "fixture-consume-source:q12:d4ed11f79037b70d266ddf0530f588484aa24af8a6f31fde54a17858ffe28bcb:milvus-consume",
+    "rule_id": "milvus.consume.step.milvus.consume.processing",
+    "rule_version": 1,
+    "flow": "read",
+    "stage": "consume",
+    "target": {
+      "deployment": "fixture",
+      "instance": "streamingnode:9091",
+      "node_id": "streamingnode",
+      "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+    },
+    "outcome": "slow_processing_with_backlog_recovery",
+    "severity": "unknown",
+    "evidence_strength": "inconclusive",
+    "summary": "5 Consumer processing / visibility: milvus_querynode_process_insert_or_delete_latency P95 is at least 1000.000ms, above configured 250.000ms; 100 completions at 2.000/s [component=\"streamingnode\", msg_type=\"Insert\"]",
+    "supporting_observations": [
+      "fixture-consume-source:q12"
+    ],
+    "contradicting_observations": [
+      "fixture-consume-source:q11"
+    ],
+    "unknown": [
+      "completed_operations_only",
+      "pending_work_and_error_coverage_not_established",
+      "events_between_scrapes_unobservable",
+      "independent_populations_not_one_reader_or_request",
+      "overlapping_timers_do_not_add_or_subtract_quantiles",
+      "per_row_visibility_and_client_latency_not_measured",
+      "wait_processing_is_aggregate_not_reader_identity"
+    ],
+    "next_read_only_checks": [
+      "Compare same-exporter pending processing and completion latency; inspect actual consistency/TSafe using wpdiag milvus query. Sampled lag/MsgPacks do not measure per-row insert-to-visible time or identify a WP reader stall"
+    ],
+    "derived_from_findings": [
+      "fixture-consume-source:q12:d4ed11f79037b70d266ddf0530f588484aa24af8a6f31fde54a17858ffe28bcb",
+      "fixture-consume-source:q11:d4ed11f79037b70d266ddf0530f588484aa24af8a6f31fde54a17858ffe28bcb"
+    ]
+  },
+  "observations": [
+    {
+      "id": "fixture-consume-source:q11",
+      "source_id": "prometheus:milvus.consume.waiting",
+      "kind": "prometheus_matrix",
+      "target": {
+        "deployment": "fixture"
+      },
+      "started_at": "1970-01-01T00:17:41Z",
+      "finished_at": "1970-01-01T00:17:41.001Z",
+      "status": "observed",
+      "data": {
+        "signal": "milvus.consume.waiting",
+        "from": "1970-01-01T00:16:40Z",
+        "to": "1970-01-01T00:17:40Z",
+        "unit": "messages",
+        "series": [
+          {
+            "series_id": "b31ba7d422667926ed11b6b235f72dfd5f29b59a5b503143a57909eafa6dff89",
+            "labels": {
+              "__name__": "milvus_querynode_wait_processing_msg_count",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 3
+              },
+              {
+                "time_ms": 1015000,
+                "value": 3
+              },
+              {
+                "time_ms": 1025000,
+                "value": 2
+              },
+              {
+                "time_ms": 1035000,
+                "value": 1
+              },
+              {
+                "time_ms": 1045000,
+                "value": 0
+              },
+              {
+                "time_ms": 1055000,
+                "value": 0
+              }
+            ]
+          }
+        ],
+        "notes": [],
+        "facts": [
+          {
+            "population_id": "d4ed11f79037b70d266ddf0530f588484aa24af8a6f31fde54a17858ffe28bcb",
+            "labels": {
+              "__name__": "milvus_querynode_wait_processing_msg_count",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "observed_from_ms": 1005000,
+            "observed_to_ms": 1055000,
+            "observed_completions": 0,
+            "completions_per_second": 0,
+            "gauge": {
+              "retained_samples": [
+                {
+                  "time_ms": 1005000,
+                  "value": 3
+                },
+                {
+                  "time_ms": 1015000,
+                  "value": 3
+                },
+                {
+                  "time_ms": 1025000,
+                  "value": 2
+                },
+                {
+                  "time_ms": 1035000,
+                  "value": 1
+                },
+                {
+                  "time_ms": 1045000,
+                  "value": 0
+                },
+                {
+                  "time_ms": 1055000,
+                  "value": 0
+                }
+              ],
+              "first": 3,
+              "last": 0,
+              "peak": 3,
+              "minimum": 0,
+              "last_two_zero": true
+            }
+          }
+        ]
+      },
+      "query": {
+        "language": "promql",
+        "expression": "{__name__=\"milvus_querynode_wait_processing_msg_count\",cluster=\"test\",component=~\"streamingnode|querynode\"}[60000ms] @ 1060.000",
+        "executed": true
+      }
+    },
+    {
+      "id": "fixture-consume-source:q12",
+      "source_id": "prometheus:milvus.consume.processing",
+      "kind": "prometheus_matrix",
+      "target": {
+        "deployment": "fixture"
+      },
+      "started_at": "1970-01-01T00:17:41Z",
+      "finished_at": "1970-01-01T00:17:41.001Z",
+      "status": "observed",
+      "data": {
+        "signal": "milvus.consume.processing",
+        "from": "1970-01-01T00:16:40Z",
+        "to": "1970-01-01T00:17:40Z",
+        "unit": "milliseconds",
+        "series": [
+          {
+            "series_id": "4f1078b3cd5d0d2adcaf810b262e3f9210a9f6827178acba5e98fa07238ab88d",
+            "labels": {
+              "__name__": "milvus_querynode_process_insert_or_delete_latency_count",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 0
+              },
+              {
+                "time_ms": 1015000,
+                "value": 20
+              },
+              {
+                "time_ms": 1025000,
+                "value": 40
+              },
+              {
+                "time_ms": 1035000,
+                "value": 60
+              },
+              {
+                "time_ms": 1045000,
+                "value": 80
+              },
+              {
+                "time_ms": 1055000,
+                "value": 100
+              }
+            ]
+          },
+          {
+            "series_id": "645222e9c519d44f860543e2394035d65342a36415492ea59f505dab08cfe865",
+            "labels": {
+              "__name__": "milvus_querynode_process_insert_or_delete_latency_sum",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 0
+              },
+              {
+                "time_ms": 1015000,
+                "value": 100000
+              },
+              {
+                "time_ms": 1025000,
+                "value": 200000
+              },
+              {
+                "time_ms": 1035000,
+                "value": 300000
+              },
+              {
+                "time_ms": 1045000,
+                "value": 400000
+              },
+              {
+                "time_ms": 1055000,
+                "value": 500000
+              }
+            ]
+          },
+          {
+            "series_id": "f18c98691010c5f0edd260e409257637492ca320182851a045b7931fb7eb5f58",
+            "labels": {
+              "__name__": "milvus_querynode_process_insert_or_delete_latency_bucket",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "le": "10",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 0
+              },
+              {
+                "time_ms": 1015000,
+                "value": 0
+              },
+              {
+                "time_ms": 1025000,
+                "value": 0
+              },
+              {
+                "time_ms": 1035000,
+                "value": 0
+              },
+              {
+                "time_ms": 1045000,
+                "value": 0
+              },
+              {
+                "time_ms": 1055000,
+                "value": 0
+              }
+            ]
+          },
+          {
+            "series_id": "33bc466c945def887b3a4e053f2bfa8ae34f7514d1555ca2b9466616b1801aa2",
+            "labels": {
+              "__name__": "milvus_querynode_process_insert_or_delete_latency_bucket",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "le": "100",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 0
+              },
+              {
+                "time_ms": 1015000,
+                "value": 0
+              },
+              {
+                "time_ms": 1025000,
+                "value": 0
+              },
+              {
+                "time_ms": 1035000,
+                "value": 0
+              },
+              {
+                "time_ms": 1045000,
+                "value": 0
+              },
+              {
+                "time_ms": 1055000,
+                "value": 0
+              }
+            ]
+          },
+          {
+            "series_id": "c044f8bda12a7ff46a1dafe300c26abea7b1f324be8c62edda20c6e72ab0e3ad",
+            "labels": {
+              "__name__": "milvus_querynode_process_insert_or_delete_latency_bucket",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "le": "1000",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 0
+              },
+              {
+                "time_ms": 1015000,
+                "value": 0
+              },
+              {
+                "time_ms": 1025000,
+                "value": 0
+              },
+              {
+                "time_ms": 1035000,
+                "value": 0
+              },
+              {
+                "time_ms": 1045000,
+                "value": 0
+              },
+              {
+                "time_ms": 1055000,
+                "value": 0
+              }
+            ]
+          },
+          {
+            "series_id": "e6dc30cb2a0785369061c014c19d5e5d8046a5edc3563f43097ea3b8e8d9d8b8",
+            "labels": {
+              "__name__": "milvus_querynode_process_insert_or_delete_latency_bucket",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "le": "10000",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 0
+              },
+              {
+                "time_ms": 1015000,
+                "value": 20
+              },
+              {
+                "time_ms": 1025000,
+                "value": 40
+              },
+              {
+                "time_ms": 1035000,
+                "value": 60
+              },
+              {
+                "time_ms": 1045000,
+                "value": 80
+              },
+              {
+                "time_ms": 1055000,
+                "value": 100
+              }
+            ]
+          },
+          {
+            "series_id": "16c2c9ec54f1f2d214bbd196634072274da8bb248366ef7a0eb8d4655d32f342",
+            "labels": {
+              "__name__": "milvus_querynode_process_insert_or_delete_latency_bucket",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "le": "+Inf",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 0
+              },
+              {
+                "time_ms": 1015000,
+                "value": 20
+              },
+              {
+                "time_ms": 1025000,
+                "value": 40
+              },
+              {
+                "time_ms": 1035000,
+                "value": 60
+              },
+              {
+                "time_ms": 1045000,
+                "value": 80
+              },
+              {
+                "time_ms": 1055000,
+                "value": 100
+              }
+            ]
+          }
+        ],
+        "notes": [],
+        "facts": [
+          {
+            "population_id": "d4ed11f79037b70d266ddf0530f588484aa24af8a6f31fde54a17858ffe28bcb",
+            "labels": {
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "msg_type": "Insert",
+              "node_id": "streamingnode"
+            },
+            "observed_from_ms": 1005000,
+            "observed_to_ms": 1055000,
+            "observed_completions": 100,
+            "completions_per_second": 2,
+            "mean_ms": 5000,
+            "p95_lower_ms": 1000,
+            "p95_upper_ms": 10000,
+            "threshold_ms": 250
+          }
+        ]
+      },
+      "query": {
+        "language": "promql",
+        "expression": "{__name__=~\"milvus_querynode_process_insert_or_delete_latency_(bucket|count|sum)\",cluster=\"test\",component=~\"streamingnode|querynode\"}[60000ms] @ 1060.000",
+        "executed": true
+      }
+    }
+  ],
+  "profile": "milvus.consume",
+  "schema_version": "wpdiag.consume.example/v1",
+  "source_findings": [
+    {
+      "id": "fixture-consume-source:q11:d4ed11f79037b70d266ddf0530f588484aa24af8a6f31fde54a17858ffe28bcb",
+      "rule_id": "milvus.consume.waiting.gauge",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "consume",
+      "target": {
+        "deployment": "fixture",
+        "instance": "streamingnode:9091",
+        "node_id": "streamingnode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "gauge_observations_only",
+      "severity": "unknown",
+      "evidence_strength": "inconclusive",
+      "summary": "milvus_querynode_wait_processing_msg_count: first=3.000 last=0.000 peak=3.000 messages; no causal inference",
+      "supporting_observations": [
+        "fixture-consume-source:q11"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "sampled_exporter_state_not_request_specific",
+        "events_between_scrapes_unobservable"
+      ],
+      "next_read_only_checks": [
+        "Compare the exact exported population and observation window; do not add/subtract unrelated stage quantiles",
+        "Inspect workload demand and the relevant E2E dashboard before assigning a cause"
+      ]
+    },
+    {
+      "id": "fixture-consume-source:q12:d4ed11f79037b70d266ddf0530f588484aa24af8a6f31fde54a17858ffe28bcb",
+      "rule_id": "milvus.consume.processing.latency",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "consume",
+      "target": {
+        "deployment": "fixture",
+        "instance": "streamingnode:9091",
+        "node_id": "streamingnode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "suspected_high_latency",
+      "severity": "warning",
+      "evidence_strength": "suspected",
+      "summary": "milvus_querynode_process_insert_or_delete_latency P95 is at least 1000.000ms, above configured 250.000ms; 100 completions at 2.000/s",
+      "supporting_observations": [
+        "fixture-consume-source:q12"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable"
+      ],
+      "next_read_only_checks": [
+        "Compare the exact exported population and observation window; do not add/subtract unrelated stage quantiles",
+        "Inspect workload demand and the relevant E2E dashboard before assigning a cause"
+      ]
+    }
+  ],
+  "version": 1
+}

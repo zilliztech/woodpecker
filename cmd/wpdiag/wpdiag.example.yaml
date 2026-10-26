@@ -32,6 +32,8 @@ sources:
             namespace: milvus-stack
             woodpecker_id: milvus-stack
           # bearer_token_env: PROMETHEUS_TOKEN
+          # Consume-stage defaults: 15 (milvus) / 20 (e2e) bounded queries;
+          # max_queries defaults to 24 for that stage. Explicit smaller limits fail.
           # Optional stage policy (examples, not product SLOs):
           # policy:
           #   latency_ms:
@@ -39,6 +41,7 @@ sources:
           #     wp.flush: 100
           #     milvus.persistence.queue: 250
           #     wp.compaction: 1000
+          #     milvus.consume.processing: 250
   # Optional independent Jaeger source. Enable only with reachable Query/UI.
   trace:
     connections:
