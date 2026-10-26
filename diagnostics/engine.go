@@ -152,6 +152,7 @@ func EncodeReport(report Report) ([]byte, int, error) {
 	if int64(len(data))+1 > limit {
 		report.Status = "budget_exceeded"
 		report.Selection = Selection{Sources: []string{}}
+		report.Assessments = nil
 		report.Results = []Result{Failure("", "budget_exceeded", "report_output_limit", "Result exceeded the output budget; evidence was not emitted as truncated JSON")}
 		data, err = json.MarshalIndent(report, "", "  ")
 	}

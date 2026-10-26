@@ -1,0 +1,496 @@
+{
+  "profile": "milvus.query",
+  "version": 1,
+  "status": "completed",
+  "findings": [
+    {
+      "id": "fixture-query-source:q0:7790bbf9ca1aac03fc37821d242f6b31a4552d676c5c66f462004cbbca4d03bb:milvus-query",
+      "rule_id": "milvus.query.proxy_completion",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "proxy:9091",
+        "node_id": "proxy",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "1 Proxy completion: milvus_proxy_sq_latency observed P95 upper bound 10.000ms is within 1000.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"proxy\", query_type=\"Search\"]",
+      "supporting_observations": [
+        "fixture-query-source:q0"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Check client latency/error counts and query_type. Proxy success timers exclude SDK/network time and failed/pending requests"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q0:7790bbf9ca1aac03fc37821d242f6b31a4552d676c5c66f462004cbbca4d03bb"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q1:3d64c2dd1e72666a0b0651dadf89721559e52b13f4276507b3b866b15f846cc6:milvus-query",
+      "rule_id": "milvus.query.tsafe",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "2 Visibility / handler: milvus_querynode_sq_wait_tsafe_latency observed P95 upper bound 10.000ms is within 250.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"querynode\", query_type=\"Search\"]",
+      "supporting_observations": [
+        "fixture-query-source:q1"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Check the requested consistency level and authoritative collection/channel consumption. TSafe waiting does not establish a WP read or disk fault"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q1:3d64c2dd1e72666a0b0651dadf89721559e52b13f4276507b3b866b15f846cc6"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q2:3d64c2dd1e72666a0b0651dadf89721559e52b13f4276507b3b866b15f846cc6:milvus-query",
+      "rule_id": "milvus.query.handler",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "2 Visibility / handler: milvus_querynode_sq_req_latency observed P95 upper bound 10.000ms is within 1000.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"querynode\", query_type=\"Search\"]",
+      "supporting_observations": [
+        "fixture-query-source:q2"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Check the requested consistency level and authoritative collection/channel consumption. TSafe waiting does not establish a WP read or disk fault"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q2:3d64c2dd1e72666a0b0651dadf89721559e52b13f4276507b3b866b15f846cc6"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q3:e99c702fe4d28963dfe6818a9736d4b0094d1fddf60e3d316f94f48f6ca395e9:milvus-query",
+      "rule_id": "milvus.query.queue",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "slow_queue_completions_with_backlog_recovery",
+      "severity": "unknown",
+      "evidence_strength": "inconclusive",
+      "summary": "3 Scheduling: milvus_querynode_sq_queue_latency P95 is at least 1000.000ms, above configured 100.000ms; 100 completions at 2.000/s [component=\"querynode\", query_type=\"Search\", db_name=\"default\"]; ready-queue observations contradict sustained current pressure, without disproving earlier queue delay",
+      "supporting_observations": [
+        "fixture-query-source:q3"
+      ],
+      "contradicting_observations": [
+        "fixture-query-source:q4"
+      ],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles",
+        "ready_queue_is_exporter_aggregate_not_request_specific"
+      ],
+      "next_read_only_checks": [
+        "Compare ready backlog and actual execution concurrency on the same exporter; inspect configured scheduling capacity separately"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q3:e99c702fe4d28963dfe6818a9736d4b0094d1fddf60e3d316f94f48f6ca395e9",
+        "fixture-query-source:q4:f4d7408db4546688577c78a8d5f2e12840d6a5297e81bd87f1ab2198495ff64c"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q4:f4d7408db4546688577c78a8d5f2e12840d6a5297e81bd87f1ab2198495ff64c:milvus-query",
+      "rule_id": "milvus.query.ready",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "ready_backlog_recovery_observed",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "3 Scheduling: milvus_querynode_read_task_ready_len: first=3.000 last=0.000 peak=3.000 tasks; no causal inference [component=\"querynode\"]; retained range 0..3, latest 0",
+      "supporting_observations": [
+        "fixture-query-source:q4"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "sampled_exporter_state_not_request_specific",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Compare ready backlog and actual execution concurrency on the same exporter; inspect configured scheduling capacity separately"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q4:f4d7408db4546688577c78a8d5f2e12840d6a5297e81bd87f1ab2198495ff64c"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q5:f4d7408db4546688577c78a8d5f2e12840d6a5297e81bd87f1ab2198495ff64c:milvus-query",
+      "rule_id": "milvus.query.concurrency",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "executing_concurrency_observed",
+      "severity": "unknown",
+      "evidence_strength": "inconclusive",
+      "summary": "3 Scheduling: milvus_querynode_read_task_concurrency: first=2.000 last=2.000 peak=2.000 tasks; no causal inference [component=\"querynode\"]; retained range 2..2, latest 2",
+      "supporting_observations": [
+        "fixture-query-source:q5"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "sampled_exporter_state_not_request_specific",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles",
+        "executing_concurrency_is_not_configured_capacity"
+      ],
+      "next_read_only_checks": [
+        "Compare ready backlog and actual execution concurrency on the same exporter; inspect configured scheduling capacity separately"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q5:f4d7408db4546688577c78a8d5f2e12840d6a5297e81bd87f1ab2198495ff64c"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q6:3d64c2dd1e72666a0b0651dadf89721559e52b13f4276507b3b866b15f846cc6:milvus-query",
+      "rule_id": "milvus.query.core",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "4 Execution / loading: milvus_querynode_sq_core_latency observed P95 upper bound 10.000ms is within 500.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"querynode\", query_type=\"Search\"]",
+      "supporting_observations": [
+        "fixture-query-source:q6"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Inspect query plan, NQ/topK, growing/sealed segments and loading; these timers have different populations and cannot be added"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q6:3d64c2dd1e72666a0b0651dadf89721559e52b13f4276507b3b866b15f846cc6"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q7:bde12cde1e0ca776c52acabb9685b05aad0ecceb14466fcd016473758c2f9fda:milvus-query",
+      "rule_id": "milvus.query.segment",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "4 Execution / loading: milvus_querynode_sq_segment_latency observed P95 upper bound 10.000ms is within 500.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"querynode\", query_type=\"Search\", segment_state=\"sealed\"]",
+      "supporting_observations": [
+        "fixture-query-source:q7"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Inspect query plan, NQ/topK, growing/sealed segments and loading; these timers have different populations and cannot be added"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q7:bde12cde1e0ca776c52acabb9685b05aad0ecceb14466fcd016473758c2f9fda"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q8:f4d7408db4546688577c78a8d5f2e12840d6a5297e81bd87f1ab2198495ff64c:milvus-query",
+      "rule_id": "milvus.query.loading",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "4 Execution / loading: milvus_querynode_load_segment_latency observed P95 upper bound 10.000ms is within 1000.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"querynode\"]",
+      "supporting_observations": [
+        "fixture-query-source:q8"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Inspect query plan, NQ/topK, growing/sealed segments and loading; these timers have different populations and cannot be added"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q8:f4d7408db4546688577c78a8d5f2e12840d6a5297e81bd87f1ab2198495ff64c"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q9:7790bbf9ca1aac03fc37821d242f6b31a4552d676c5c66f462004cbbca4d03bb:milvus-query",
+      "rule_id": "milvus.query.wait_result",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "proxy:9091",
+        "node_id": "proxy",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "5 Result return: milvus_proxy_sq_wait_result_latency observed P95 upper bound 10.000ms is within 1000.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"proxy\", query_type=\"Search\"]",
+      "supporting_observations": [
+        "fixture-query-source:q9"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Inspect fan-out, reduction/result size and decoding. Proxy result wait includes downstream execution and transport, not pure network latency"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q9:7790bbf9ca1aac03fc37821d242f6b31a4552d676c5c66f462004cbbca4d03bb"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q10:7790bbf9ca1aac03fc37821d242f6b31a4552d676c5c66f462004cbbca4d03bb:milvus-query",
+      "rule_id": "milvus.query.proxy_reduce",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "proxy:9091",
+        "node_id": "proxy",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "5 Result return: milvus_proxy_sq_reduce_result_latency observed P95 upper bound 10.000ms is within 250.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"proxy\", query_type=\"Search\"]",
+      "supporting_observations": [
+        "fixture-query-source:q10"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Inspect fan-out, reduction/result size and decoding. Proxy result wait includes downstream execution and transport, not pure network latency"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q10:7790bbf9ca1aac03fc37821d242f6b31a4552d676c5c66f462004cbbca4d03bb"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q11:7790bbf9ca1aac03fc37821d242f6b31a4552d676c5c66f462004cbbca4d03bb:milvus-query",
+      "rule_id": "milvus.query.decode",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "proxy:9091",
+        "node_id": "proxy",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "5 Result return: milvus_proxy_sq_decode_result_latency observed P95 upper bound 10.000ms is within 250.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"proxy\", query_type=\"Search\"]",
+      "supporting_observations": [
+        "fixture-query-source:q11"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Inspect fan-out, reduction/result size and decoding. Proxy result wait includes downstream execution and transport, not pure network latency"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q11:7790bbf9ca1aac03fc37821d242f6b31a4552d676c5c66f462004cbbca4d03bb"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q12:3d64c2dd1e72666a0b0651dadf89721559e52b13f4276507b3b866b15f846cc6:milvus-query",
+      "rule_id": "milvus.query.node_reduce",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "within_configured_latency_for_observed_completions",
+      "severity": "none",
+      "evidence_strength": "inconclusive",
+      "summary": "5 Result return: milvus_querynode_sq_reduce_latency observed P95 upper bound 10.000ms is within 250.000ms; 100 completions at 2.000/s. This does not establish end-to-end health [component=\"querynode\", query_type=\"Search\"]",
+      "supporting_observations": [
+        "fixture-query-source:q12"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "completed_operations_only",
+        "pending_work_and_error_coverage_not_established",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles"
+      ],
+      "next_read_only_checks": [
+        "Inspect fan-out, reduction/result size and decoding. Proxy result wait includes downstream execution and transport, not pure network latency"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q12:3d64c2dd1e72666a0b0651dadf89721559e52b13f4276507b3b866b15f846cc6"
+      ]
+    },
+    {
+      "id": "fixture-query-source:q13:94e48f0eb7fa91334cbbaef937a590960560e91edfb7320a4639fb9f1421d572:milvus-query",
+      "rule_id": "milvus.query.tt_lag",
+      "rule_version": 1,
+      "flow": "read",
+      "stage": "query",
+      "target": {
+        "deployment": "fixture",
+        "instance": "querynode:9091",
+        "node_id": "querynode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "consumer_time_tick_lag_observed",
+      "severity": "unknown",
+      "evidence_strength": "inconclusive",
+      "summary": "2 Visibility / handler: milvus_querynode_consume_tt_lag_ms: first=0.000 last=0.000 peak=0.000 milliseconds; no causal inference [component=\"querynode\", collection_id=\"7\"]; retained range 0..0, latest 0",
+      "supporting_observations": [
+        "fixture-query-source:q13"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "sampled_exporter_state_not_request_specific",
+        "events_between_scrapes_unobservable",
+        "independent_metric_populations_not_one_request",
+        "timers_may_overlap_do_not_add_quantiles",
+        "collection_time_tick_is_not_query_tsafe_or_wp_binding"
+      ],
+      "next_read_only_checks": [
+        "Check the requested consistency level and authoritative collection/channel consumption. TSafe waiting does not establish a WP read or disk fault"
+      ],
+      "derived_from_findings": [
+        "fixture-query-source:q13:94e48f0eb7fa91334cbbaef937a590960560e91edfb7320a4639fb9f1421d572"
+      ]
+    }
+  ],
+  "coverage_gaps": [
+    {
+      "code": "wp_visibility_mapping_unavailable",
+      "detail": "No authoritative, time-valid collection/channel/WP-client namespace/log association was collected. Query-only findings remain useful; WP is not implicated"
+    },
+    {
+      "code": "optional_sources_not_selected",
+      "detail": "wpcli, trace and Loki were not queried; unsupported requested sources fail explicitly"
+    }
+  ]
+}

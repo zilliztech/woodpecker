@@ -63,6 +63,9 @@ jobs:
           docker pull quay.io/prometheus/prometheus:v3.0.1
           python3 cmd/wpdiag/tests/prometheus_smoke.py
 
+      - name: Run Milvus query-stage smoke test
+        run: python3 cmd/wpdiag/tests/query_smoke.py
+
       - name: Upload coverage to Codecov
         if: success()
         uses: codecov/codecov-action@v5

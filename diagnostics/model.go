@@ -88,8 +88,17 @@ type Descriptor struct {
 }
 
 type Catalog struct {
-	SchemaVersion string       `json:"schema_version"`
-	Sources       []Descriptor `json:"sources"`
+	SchemaVersion string            `json:"schema_version"`
+	Sources       []Descriptor      `json:"sources"`
+	Stages        []StageDescriptor `json:"stages,omitempty"`
+}
+
+// StageDescriptor describes an independently invoked business-stage assessor.
+type StageDescriptor struct {
+	Command  string    `json:"command"`
+	Issue    int       `json:"issue"`
+	Sources  []string  `json:"sources"`
+	Profiles []Profile `json:"profiles"`
 }
 
 // Connection contains private settings, never serialized into a report. The
@@ -144,6 +153,7 @@ type Finding struct {
 	Contradicting []string `json:"contradicting_observations"`
 	Unknown       []string `json:"unknown"`
 	NextChecks    []string `json:"next_read_only_checks"`
+	DerivedFrom   []string `json:"derived_from_findings,omitempty"`
 }
 
 type Gap struct {
@@ -166,14 +176,25 @@ type Result struct {
 }
 
 type Report struct {
-	SchemaVersion string    `json:"schema_version"`
-	RunID         string    `json:"run_id"`
-	Selection     Selection `json:"selection"`
-	Limits        Limits    `json:"limits"`
-	StartedAt     time.Time `json:"started_at"`
-	FinishedAt    time.Time `json:"finished_at"`
-	Status        string    `json:"status"`
-	Results       []Result  `json:"results"`
+	SchemaVersion string       `json:"schema_version"`
+	RunID         string       `json:"run_id"`
+	Selection     Selection    `json:"selection"`
+	Limits        Limits       `json:"limits"`
+	StartedAt     time.Time    `json:"started_at"`
+	FinishedAt    time.Time    `json:"finished_at"`
+	Status        string       `json:"status"`
+	Results       []Result     `json:"results"`
+	Assessments   []Assessment `json:"assessments,omitempty"`
+}
+
+// Assessment adds stage semantics to source evidence without copying or
+// replacing source results. References resolve against Report.Results.
+type Assessment struct {
+	Profile  string    `json:"profile"`
+	Version  int       `json:"version"`
+	Status   string    `json:"status"`
+	Findings []Finding `json:"findings"`
+	Gaps     []Gap     `json:"coverage_gaps"`
 }
 
 // Module is a compile-time interface, not a dynamic plugin/DSL. Public results

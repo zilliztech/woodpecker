@@ -14,7 +14,11 @@ import (
 )
 
 func (Module) Run(ctx context.Context, r d.Request, connection d.Connection) d.Result {
-	s, err := settings(connection)
+	return runPlan(ctx, r, connection, false)
+}
+
+func runPlan(ctx context.Context, r d.Request, connection d.Connection, querySteps bool) d.Result {
+	s, err := settingsFor(connection, querySteps)
 	if err != nil {
 		return d.Failure("prometheus", "invalid", "invalid_connection_settings", "Check the source-owned Prometheus settings")
 	}
@@ -41,6 +45,9 @@ func (Module) Run(ctx context.Context, r d.Request, connection d.Connection) d.R
 		s.Policy.MaxGapMS = min(s.Policy.MaxGapMS, r.Selection.Window.IntervalMS)
 	}
 	plan := signals(r.Selection.Scope, r.Selection.Flow)
+	if querySteps {
+		plan = querySignals()
+	}
 	if len(plan) > s.Limits.MaxQueries {
 		return d.Failure("prometheus", "invalid", "query_budget_invalid", "Profile does not fit max_queries; no requests were sent")
 	}
@@ -90,6 +97,9 @@ func (Module) Run(ctx context.Context, r d.Request, connection d.Connection) d.R
 		} else {
 			okQueries++
 			findings := evaluate(&data, sig, r, s.Policy, id)
+			if querySteps {
+				annotateExporters(&data)
+			}
 			result.Findings = append(result.Findings, findings...)
 			for _, f := range findings {
 				for _, gap := range f.Unknown {
@@ -116,7 +126,7 @@ func (Module) Run(ctx context.Context, r d.Request, connection d.Connection) d.R
 			result.Status = "budget_exceeded"
 		}
 	}
-	if r.Selection.Scope == "e2e" {
+	if r.Selection.Scope == "e2e" && !querySteps {
 		result.Gaps = append(result.Gaps, d.Gap{Code: "source_only_partial_stage_coverage", Detail: "Profiles compare independent exporter populations. They do not establish request/channel/log joins, SN consumption/visibility, query execution, or cross-source causality; stage rules remain #463–#466"})
 	}
 	result.Metadata, _ = json.Marshal(struct {

@@ -22,6 +22,16 @@ type Fact struct {
 	P95LowerMS     *float64          `json:"p95_lower_ms,omitempty"`
 	P95UpperMS     *float64          `json:"p95_upper_ms,omitempty"`
 	ThresholdMS    float64           `json:"threshold_ms,omitempty"`
+	ExporterKey    string            `json:"exporter_identity,omitempty"`
+	Gauge          *GaugeFact        `json:"gauge,omitempty"`
+}
+
+type GaugeFact struct {
+	First       float64 `json:"first"`
+	Last        float64 `json:"last"`
+	Peak        float64 `json:"peak"`
+	Minimum     float64 `json:"minimum"`
+	LastTwoZero bool    `json:"last_two_zero"`
 }
 
 func quality(points []Point, from, to time.Time, gap int64, counter bool) string {
@@ -64,6 +74,9 @@ func evaluate(data *Dataset, sig signal, r d.Request, p Policy, id string) []d.F
 		return []d.Finding{f}
 	}
 	if sig.Gauge {
+		if sig.GaugeUnit != "" {
+			return evaluateGauge(data, sig, r, p, id)
+		}
 		return evaluateAdmission(data, sig, r, p, id)
 	}
 	type population struct {
@@ -294,3 +307,36 @@ func evaluateAdmission(data *Dataset, sig signal, r d.Request, p Policy, id stri
 }
 
 func isBudget(code string) bool { return strings.HasSuffix(code, "budget_exceeded") }
+
+func evaluateGauge(data *Dataset, sig signal, r d.Request, p Policy, id string) []d.Finding {
+	findings := []d.Finding{}
+	for _, series := range data.Series {
+		labels := map[string]string{}
+		for k, v := range series.AllLabels {
+			if k != "__name__" {
+				labels[k] = v
+			}
+		}
+		pop := fingerprint(labels)
+		f := finding(sig, r, id, pop, series.Labels)
+		f.RuleID = sig.ID + ".gauge"
+		if code := quality(series.Points, data.From, data.To, p.MaxGapMS, false); code != "" {
+			f.Summary = "Gauge temporal coverage is incomplete"
+			f.Unknown = append(f.Unknown, code)
+			findings = append(findings, f)
+			continue
+		}
+		points := series.Points
+		g := GaugeFact{First: points[0].Value, Last: points[len(points)-1].Value, Peak: points[0].Value, Minimum: points[0].Value, LastTwoZero: len(points) >= 2 && points[len(points)-1].Value == 0 && points[len(points)-2].Value == 0}
+		for _, point := range points {
+			g.Peak = max(g.Peak, point.Value)
+			g.Minimum = min(g.Minimum, point.Value)
+		}
+		data.Facts = append(data.Facts, Fact{Population: pop, Labels: series.Labels, ObservedFromMS: points[0].TimeMS, ObservedToMS: points[len(points)-1].TimeMS, Gauge: &g})
+		f.Outcome = "gauge_observations_only"
+		f.Unknown = []string{"sampled_exporter_state_not_request_specific", "events_between_scrapes_unobservable"}
+		f.Summary = fmt.Sprintf("%s: first=%.3f last=%.3f peak=%.3f %s; no causal inference", sig.Metric, g.First, g.Last, g.Peak, sig.GaugeUnit)
+		findings = append(findings, f)
+	}
+	return findings
+}

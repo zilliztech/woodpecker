@@ -96,14 +96,20 @@ func responseSeries(t *testing.T, query string, slow bool) []wireSeries {
 	require.NoError(t, err)
 	from := int64(end*1000) - duration
 	var sig signal
-	for _, candidate := range append(signals("e2e", "write"), signals("e2e", "read")...) {
+	candidates := append(signals("e2e", "write"), signals("e2e", "read")...)
+	candidates = append(candidates, querySignals()...)
+	for _, candidate := range candidates {
 		if strings.Contains(query, candidate.Metric) && !(candidate.ID == "wp.append" && strings.Contains(query, "get_batch_entries")) {
 			sig = candidate
 			break
 		}
 	}
 	require.NotEmpty(t, sig.Metric)
-	labels := map[string]string{"cluster": "test", "instance": sig.Component + ":9091", "component": sig.Component, "password": "sentinel-secret"}
+	component := sig.Component
+	if component == "" {
+		component = "querynode"
+	}
+	labels := map[string]string{"cluster": "test", "instance": component + ":9091", "component": component, "password": "sentinel-secret"}
 	if sig.Component == "woodpecker" {
 		labels["node_id"] = "node-1"
 		if !sig.Gauge {

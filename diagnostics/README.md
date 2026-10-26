@@ -62,6 +62,16 @@ endpoints; historical requires explicit from/to and no live duration. Modules
 declare which modes they can actually retrieve. Never substitute current ops
 for historical evidence or conflate WAL read progress with query latency.
 
+## Independent query-stage assessment
+
+`milvusquery.Run` uses the public request/config/report interfaces with a
+Prometheus query-step collector. `milvusquery.Assess(ctx, report)` applies the
+same stage business rules to an existing supported source report without I/O
+or mutation. Source rule implementations, thresholds and IDs stay source-owned.
+Optional `Report.Assessments`, `Finding.DerivedFrom` and `Catalog.Stages` are
+additive v1 contract fields; existing source-only reports are unchanged. See
+[the query-stage guide](milvusquery/README.md) for applicability and reuse.
+
 ## Reports, findings and lineage
 
 `wpdiag.report/v1` includes the normalized selection, limits, execution run/time

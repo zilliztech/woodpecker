@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	d "github.com/zilliztech/woodpecker/diagnostics"
+	"github.com/zilliztech/woodpecker/diagnostics/milvusquery"
 	"github.com/zilliztech/woodpecker/diagnostics/prometheus"
 	"github.com/zilliztech/woodpecker/diagnostics/wpcli"
 )
@@ -30,7 +31,9 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 	root.PersistentFlags().StringVarP(&output, "output", "o", "text", "Output: text|json")
 	root.AddCommand(&cobra.Command{Use: "capabilities", Short: "List implemented profiles and planned sources without connecting", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
 		if output == "json" {
-			return json.NewEncoder(out).Encode(engine.Catalog())
+			catalog := engine.Catalog()
+			catalog.Stages = []d.StageDescriptor{milvusquery.Descriptor()}
+			return json.NewEncoder(out).Encode(catalog)
 		}
 		if output != "text" {
 			return fmt.Errorf("invalid output")
@@ -41,6 +44,7 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 				fmt.Fprintf(out, "  %s v%d: scope=%s flow=%s stage=%s modes=%v targets=%v\n", p.ID, p.Version, p.Scope, p.Flow, p.Stage, p.Modes, p.TargetFields)
 			}
 		}
+		fmt.Fprintln(out, "milvus query: available (#466), source=prometheus, scopes=milvus|e2e, flow=read, stage=query")
 		return nil
 	}})
 	for _, source := range []string{"wpcli", "prometheus", "trace", "loki"} {
@@ -52,6 +56,9 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 		group.AddCommand(diagnoseCommand(engine, source, &output, &code, out))
 		root.AddCommand(group)
 	}
+	milvus := &cobra.Command{Use: "milvus", Short: "Independent Milvus business-stage diagnosis"}
+	milvus.AddCommand(diagnosticCommand(engine, "prometheus", &output, &code, out, true))
+	root.AddCommand(milvus)
 	if root.ExecuteContext(ctx) != nil {
 		fmt.Fprintln(errout, "Invalid command or arguments. Run wpdiag --help or wpdiag <source> diagnose --help.")
 		return 2
@@ -60,12 +67,36 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 }
 
 func diagnoseCommand(engine *d.Engine, source string, output *string, code *int, out io.Writer) *cobra.Command {
+	return diagnosticCommand(engine, source, output, code, out, false)
+}
+
+func diagnosticCommand(engine *d.Engine, source string, output *string, code *int, out io.Writer, queryStage bool) *cobra.Command {
 	r := d.Request{Selection: d.Selection{Sources: []string{source}, Scope: "wp", Window: d.Window{Mode: "live"}}, Limits: d.DefaultLimits()}
+	if queryStage {
+		r.Selection.Scope = "milvus"
+		r.Selection.Flow = "read"
+		r.Selection.Stage = "query"
+	}
+	selectedSource := source
+	var list bool
 	var configPath, from, to string
 	var window, interval, budget time.Duration
 	cmd := &cobra.Command{Use: "diagnose", Short: "Run a source profile with explicit scope, flow and observation mode", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if *output != "text" && *output != "json" {
 			return fmt.Errorf("invalid output")
+		}
+		if queryStage && list {
+			if *output == "json" {
+				return json.NewEncoder(out).Encode(map[string]any{"stage": milvusquery.Descriptor(), "signals": prometheus.QueryCatalog()})
+			}
+			for _, signal := range prometheus.QueryCatalog() {
+				threshold := "n/a"
+				if signal.Kind == "histogram" {
+					threshold = fmt.Sprintf("%.3fms", signal.ThresholdMS)
+				}
+				fmt.Fprintf(out, "%s: %s component=%s kind=%s threshold=%s\n", signal.ID, signal.Metric, signal.Component, signal.Kind, threshold)
+			}
+			return nil
 		}
 		if r.Selection.Window.Mode == "live" {
 			if !cmd.Flags().Changed("window") {
@@ -100,7 +131,13 @@ func diagnoseCommand(engine *d.Engine, source string, output *string, code *int,
 		if loadErr != nil {
 			config = d.Config{}
 		}
-		report := engine.Run(cmd.Context(), config, r)
+		var report d.Report
+		if queryStage {
+			r.Selection.Sources = []string{selectedSource}
+			report = milvusquery.Run(cmd.Context(), config, r)
+		} else {
+			report = engine.Run(cmd.Context(), config, r)
+		}
 		if loadErr != nil && len(report.Results) > 0 && report.Results[0].Status == "invalid" && report.Results[0].Problems[0].Code == "connection_not_found" {
 			report.Results[0] = d.Failure(source, "invalid", "configuration_unavailable", loadErr.Error())
 			report.Results[0].Connection = r.Connection
@@ -124,18 +161,59 @@ func diagnoseCommand(engine *d.Engine, source string, output *string, code *int,
 				fmt.Fprintf(out, "  %s: %s\n", problem.Code, problem.Message)
 			}
 			for _, finding := range result.Findings {
+				if queryStage {
+					continue
+				}
 				fmt.Fprintf(out, "  %s node=%q: %s (strength=%s, impact=%s)\n    %s\n    evidence: %d support / %d contradiction; unknown=%q\n", finding.RuleID, finding.Target.NodeID, finding.Outcome, finding.Strength, finding.Severity, finding.Summary, len(finding.Supporting), len(finding.Contradicting), finding.Unknown)
 			}
 			fmt.Fprintf(out, "  Evidence: %d observations, %d findings, %d coverage gaps\n", len(result.Observations), len(result.Findings), len(result.Gaps))
+			if queryStage {
+				unavailable := map[string]bool{}
+				for _, o := range result.Observations {
+					if o.Status != "observed" {
+						unavailable[o.ID] = true
+					}
+				}
+				printed := 0
+				for _, gap := range result.Gaps {
+					if !unavailable[gap.ObservationID] {
+						continue
+					}
+					if printed == 5 {
+						fmt.Fprintln(out, "  Additional source gaps are retained in JSON.")
+						break
+					}
+					fmt.Fprintf(out, "  Source gap %s: %s\n", gap.Code, gap.Detail)
+					printed++
+				}
+			}
+		}
+		for _, a := range report.Assessments {
+			fmt.Fprintf(out, "\nMilvus query assessment %s v%d: %s\n", a.Profile, a.Version, a.Status)
+			for _, f := range a.Findings {
+				fmt.Fprintf(out, "  %s: %s (strength=%s, impact=%s)\n    deployment=%q instance=%q node=%q\n    %s\n", f.RuleID, f.Outcome, f.Strength, f.Severity, f.Target.Deployment, f.Target.Instance, f.Target.NodeID, f.Summary)
+				for _, check := range f.NextChecks {
+					fmt.Fprintf(out, "    Next: %s\n", check)
+				}
+			}
+			for _, gap := range a.Gaps {
+				fmt.Fprintf(out, "  Stage gap %s: %s\n", gap.Code, gap.Detail)
+			}
 		}
 		return nil
 	}}
 	f := cmd.Flags()
+	if queryStage {
+		cmd.Use = "query"
+		cmd.Short = "Diagnose query steps: completion, visibility, scheduling, execution and return"
+		f.StringVar(&selectedSource, "source", "prometheus", "Selected source (only prometheus is implemented; other requested sources fail explicitly)")
+		f.BoolVar(&list, "list", false, "List the source metric catalog and stage capabilities without connecting")
+	}
 	f.StringVar(&configPath, "config", "wpdiag.yaml", "Independent source connections file (does not replace cli.yaml)")
 	f.StringVar(&r.Connection, "connection", "", "Named connection in the selected source section")
-	f.StringVar(&r.Selection.Scope, "scope", "wp", "Scope: wp|milvus|e2e; inspect capabilities")
-	f.StringVar(&r.Selection.Flow, "flow", "", "Required flow: write|read")
-	f.StringVar(&r.Selection.Stage, "stage", "", "Optional stage ID; omitted resolves a unique profile")
+	f.StringVar(&r.Selection.Scope, "scope", r.Selection.Scope, "Scope: wp|milvus|e2e; inspect capabilities")
+	f.StringVar(&r.Selection.Flow, "flow", r.Selection.Flow, "Flow: write|read (Milvus query is fixed to read)")
+	f.StringVar(&r.Selection.Stage, "stage", r.Selection.Stage, "Stage ID; Milvus query is fixed to query")
 	f.StringVar(&r.Selection.Profile, "profile", "", "Optional profile ID")
 	f.StringVar(&r.Selection.Window.Mode, "mode", "live", "Window: snapshot|live|historical (source must support it)")
 	f.DurationVar(&window, "window", 0, "Live duration starting now (default 30s in live mode)")
