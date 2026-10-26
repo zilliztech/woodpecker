@@ -184,7 +184,7 @@ func TestDiagnoseYAMLAndHumanOutput(t *testing.T) {
 		out := new(bytes.Buffer)
 		root.SetOut(out)
 		root.SetErr(new(bytes.Buffer))
-		root.SetArgs([]string{"diagnose", "node-1", "--mode", "snapshot", "--node-admin-url", "node-1=" + server.URL, "-o", format})
+		root.SetArgs([]string{"diagnose", "node-1", "--scenario", "stuck-write", "--mode", "snapshot", "--node-admin-url", "node-1=" + server.URL, "-o", format})
 		require.NoError(t, root.Execute())
 		if format == "yaml" {
 			var report map[string]any

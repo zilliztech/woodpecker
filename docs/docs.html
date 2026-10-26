@@ -4340,7 +4340,7 @@ Flags:
 </div>
 <div class="doc-page ops-page" id="page-operations-cli-diagnosis">
 <aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-diagnosis/diagnose">wp diagnose</a></nav></details></aside>
-<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Native diagnosis</p><h1>Native diagnosis</h1><p class="page-desc">Diagnose WP live read/write stalls with versioned evidence, explicit coverage and bounded collection. External monitoring and Milvus diagnosis are separate tools.</p><section id="ops-cli-diagnosis-topic-diagnosis">
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Native diagnosis</p><h1>Native diagnosis</h1><p class="page-desc">Diagnose WP append stalls, writer buffer/flush buildup, configured disk admission and explicitly scoped replica lag with bounded native evidence. External monitoring and Milvus diagnosis are separate tools.</p><section id="ops-cli-diagnosis-topic-diagnosis">
 
 <article class="command" data-command-anchor="diagnose" id="ops-cli-diagnosis-diagnose">
 <h2>wp diagnose</h2>
@@ -4365,7 +4365,7 @@ Flags:
 <td>
 <code>--fail-on-findings</code>
 </td>
-<td>Return exit 8 for suspected stalls after rendering the report</td>
+<td>Return exit 8 for warning/critical findings after rendering the report</td>
 </tr>
 <tr>
 <td>
@@ -4378,6 +4378,12 @@ Flags:
 <code>--list</code>
 </td>
 <td>List the implemented typed rule contracts without connecting</td>
+</tr>
+<tr>
+<td>
+<code>--log-name string</code>
+</td>
+<td>Explicit WP-client metadata log name for replica checks; requires --segment, --etcd and --meta-prefix</td>
 </tr>
 <tr>
 <td>
@@ -4411,6 +4417,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--max-writers int</code>
+</td>
+<td>Maximum writer detail requests per node per sample (1..64; write/all) (default 16)</td>
+</tr>
+<tr>
+<td>
 <code>--mode string</code>
 </td>
 <td>Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)</td>
@@ -4419,7 +4431,13 @@ Flags:
 <td>
 <code>--scenario string</code>
 </td>
-<td>Native scenario: all|stuck-write|stuck-read (default &quot;all&quot;)</td>
+<td>Native scenario: all|write|stuck-write|stuck-read (default &quot;all&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--segment int</code>
+</td>
+<td>Explicit metadata segment ID for replica checks</td>
 </tr>
 <tr>
 <td>
@@ -4429,17 +4447,20 @@ Flags:
 </tr>
 </tbody>
 </table></div>
+<p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context milvus-prod diagnose node-0 --scenario stuck-write --window 30s -o json &gt; write-report.json
-# Current snapshot, without asserting sustained no-progress:
-wp --context milvus-prod diagnose node-0 --mode snapshot -o json</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context milvus-prod diagnose --scenario write --window 30s --max-writers 16 -o json &gt; write-report.json
+# Current disk admission; progress rules remain inconclusive:
+wp --context milvus-prod diagnose node-0 --scenario write --mode snapshot -o json
+# Optional replica check: select the Milvus WP-client metadata namespace explicitly.
+wp --context milvus-prod diagnose --scenario write --log-name YOUR_LOG --segment 0 --etcd http://127.0.0.1:2379 --meta-prefix YOUR_WP_CLIENT_PREFIX -o json</code></pre></div></div>
 <h3>Output and interpretation</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>{&quot;schema_version&quot;:&quot;wp.diagnosis/v1&quot;,&quot;collection_status&quot;:&quot;completed&quot;,&quot;observation_mode&quot;:&quot;live_window&quot;,&quot;findings&quot;:[{&quot;rule_id&quot;:&quot;write_stall&quot;,&quot;outcome&quot;:&quot;suspected_stall&quot;,&quot;evidence_strength&quot;:&quot;suspected&quot;,&quot;unknown&quot;:[&quot;tenant_association_unknown&quot;]}]}
 # Abbreviated illustrative output; inspect actual observations and coverage_gaps.</code></pre></div></div>
-<p>Source-build capability. Reuses the WP service context and node Admin mappings; it does not select a tenant metadata namespace. Only stuck-write/read are implemented. --window samples from now; snapshot cannot prove a sustained stall. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for suspicions. Same-log completions cannot prove an individual op finished; resets, registry limits and missing evidence remain explicit. No external Prometheus, trace or Loki client is included. Missing evidence remains inconclusive rather than healthy.</p>
+<p>Source-build capability. Reuses the WP service context and node Admin mappings. The write scenario checks append, writer-local buffer/flush trends, actual disk watermarks and optional explicitly selected log/segment quorum. Missing metadata does not fall back to another namespace. All includes these checks; focused stuck-write/read contracts remain compatible. --window samples from now; snapshot cannot prove a sustained stall. Queue pressure does not prove a disk/fsync cause, and missing replica observations do not prove quorum loss. Maintenance/object-store attribution remains an explicit evidence gap. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for warning/critical findings. Same-log completions cannot prove an individual op finished; resets, registry limits and missing evidence remain explicit. No external Prometheus, trace or Loki client is included.</p>
 <details class="ops-help">
 <summary>Finding or error example</summary>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>PartialCollection (exit 6): required metrics/ops were unavailable; report retained.
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>PartialCollection (exit 6): required metrics/ops/writers were unavailable or writer details exceeded the bound; report retained.
 Budget exhausted (exit 5) / cancellation (exit 7): partial evidence retained.</code></pre></div></div>
 </details>
 <details class="ops-help">
@@ -4448,12 +4469,14 @@ Budget exhausted (exit 5) / cancellation (exit 7): partial evidence retained.</c
 metrics/Admin APIs. With no node argument, inspect all discovered nodes within
 the target budget. Reuses cli.yaml, --context, --endpoint and node mappings.
 
-Only stuck-write and stuck-read are implemented. Snapshot mode records current
-evidence but cannot establish a sustained stall. --window starts sampling now;
+Use --scenario write for append, flush, disk admission and explicit replica
+checks; stuck-write/stuck-read retain their original focused contracts.
+Snapshot mode records current admission evidence but cannot establish a sustained
+stall or buildup. --window starts sampling now;
 historical Prometheus, trace and Loki queries belong to the separate tool.
 
 Exit 0 means evaluation completed, including inconclusive/conflicting findings;
-it is not a health assertion. --fail-on-findings returns 8 for suspected stalls.
+it is not a health assertion. --fail-on-findings returns 8 for warning/critical findings.
 Required collection failure returns 1 (all failed) or 6 (partial), cancellation 7,
 and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these errors.
 
@@ -4461,19 +4484,30 @@ Usage:
   wp diagnose [node] [flags]
 
 Flags:
-      --budget duration          Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)
-      --fail-on-findings         Return exit 8 for suspected stalls after rendering the report
-  -h, --help                     help for diagnose
-      --interval duration        Interval between live sampling rounds (default 1s)
-      --list                     List the implemented typed rule contracts without connecting
-      --max-nodes int            Maximum discovered targets; select a node if exceeded (default 8)
-      --max-ops int              Maximum ops per node per sample (1..1000) (default 100)
-      --max-response-bytes int   Maximum bytes per discovery/source response (default 2097152)
-      --max-samples int          Maximum sampling rounds per node (2..121) (default 31)
-      --max-series int           Maximum retained completion-counter series per sample (default 500)
-      --mode string              Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)
-      --scenario string          Native scenario: all|stuck-write|stuck-read (default &quot;all&quot;)
-      --window duration          Live observation window starting now (max 5m) (default 30s)</code></pre></div></div>
+      --budget duration               Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)
+      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
+      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
+      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
+      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
+      --etcd-password string          Etcd auth password; overrides context and discovery
+      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
+      --etcd-username string          Etcd auth username; overrides context and discovery
+      --fail-on-findings              Return exit 8 for warning/critical findings after rendering the report
+  -h, --help                          help for diagnose
+      --interval duration             Interval between live sampling rounds (default 1s)
+      --list                          List the implemented typed rule contracts without connecting
+      --log-name string               Explicit WP-client metadata log name for replica checks; requires --segment, --etcd and --meta-prefix
+      --max-nodes int                 Maximum discovered targets; select a node if exceeded (default 8)
+      --max-ops int                   Maximum ops per node per sample (1..1000) (default 100)
+      --max-response-bytes int        Maximum bytes per discovery/source response (default 2097152)
+      --max-samples int               Maximum sampling rounds per node (2..121) (default 31)
+      --max-series int                Maximum retained completion-counter series per sample (default 500)
+      --max-writers int               Maximum writer detail requests per node per sample (1..64; write/all) (default 16)
+      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
+      --mode string                   Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)
+      --scenario string               Native scenario: all|write|stuck-write|stuck-read (default &quot;all&quot;)
+      --segment int                   Explicit metadata segment ID for replica checks
+      --window duration               Live observation window starting now (max 5m) (default 30s)</code></pre></div></div>
 </details>
 </article>
 </section>

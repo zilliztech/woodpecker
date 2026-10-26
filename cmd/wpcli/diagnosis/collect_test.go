@@ -15,7 +15,7 @@ import (
 
 func testOptions() Options {
 	return Options{
-		Scenario: "all", Mode: "live", Window: 20 * time.Millisecond, Interval: 10 * time.Millisecond,
+		Scenario: "stuck-write", Mode: "live", Window: 20 * time.Millisecond, Interval: 10 * time.Millisecond,
 		Budget: time.Second, RequestTimeout: time.Second, Concurrency: 1,
 		Limits: Limits{MaxNodes: 1, MaxSamples: 3, MaxOps: 10, MaxSeries: 20, ResponseBytes: 4096},
 	}
@@ -138,7 +138,7 @@ func TestCollectorCancellationAndBudget(t *testing.T) {
 			want = "cancelled"
 		}
 		require.Equal(t, want, r.Status)
-		require.Len(t, r.Findings, 2)
+		require.Len(t, r.Findings, 1)
 		for _, f := range r.Findings {
 			require.Equal(t, "inconclusive", f.Outcome)
 		}

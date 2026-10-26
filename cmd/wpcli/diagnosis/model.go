@@ -38,7 +38,7 @@ func Rules() []Rule {
 			Exclusions:     []string{"snapshot/insufficient window", "idle or new/completed operation", "counter/process reset", "EOF/read progress", "missing/changed series", "unsupported API/build"},
 		})
 	}
-	return rules
+	return append(rules, writeRules()...)
 }
 
 type Target struct {
@@ -93,6 +93,9 @@ type Observation struct {
 	Ops          []Operation `json:"ops,omitempty"`
 	Registry     *Registry   `json:"registry,omitempty"`
 	Version      string      `json:"build_version,omitempty"`
+	Signals      []Signal    `json:"write_signals,omitempty"`
+	Writers      []Writer    `json:"writers,omitempty"`
+	Quorum       *Quorum     `json:"quorum,omitempty"`
 }
 
 type Gap struct {
@@ -126,6 +129,7 @@ type Limits struct {
 	MaxSeries     int   `json:"max_counter_series_per_sample"`
 	ResponseBytes int64 `json:"max_response_bytes"`
 	BudgetMS      int64 `json:"wall_clock_budget_ms"`
+	MaxWriters    int   `json:"max_writers_per_sample,omitempty"`
 }
 
 type Report struct {
@@ -150,6 +154,9 @@ type Report struct {
 
 // MatchesOperation is shared with the legacy metrics report's stall evaluator.
 func MatchesOperation(ruleID, opType string) bool {
+	if ruleID == "flush_buildup" {
+		return opType == "file.flush"
+	}
 	if ruleID == "read_stall" {
 		return opType == "logstore.get_batch_entries"
 	}

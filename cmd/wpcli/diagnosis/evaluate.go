@@ -62,7 +62,7 @@ func persistentOperations(ctx context.Context, samples [][]Operation, ruleID str
 	return result
 }
 
-// Evaluate applies only the two typed native stall rules. A completed report
+// Evaluate applies the selected typed native rules. A completed report
 // with an inconclusive outcome is never an assertion that the target is healthy.
 func Evaluate(report *Report) {
 	EvaluateContext(context.Background(), report)
@@ -108,6 +108,10 @@ func EvaluateContext(ctx context.Context, report *Report) {
 			}
 		}
 		for _, rule := range report.Rules {
+			if rule.Scenario == "write" {
+				evaluateWriteRule(ctx, report, target, rule, byRound, rounds, conflicts[target.NodeID], versionUnsupported)
+				continue
+			}
 			base := Finding{
 				RuleID: rule.ID, RuleVersion: rule.Version, Flow: rule.Flow, Stage: rule.Stage,
 				Scope:   Scope{NodeID: target.NodeID, Tenant: "unresolved: ops has no tenant namespace"},
