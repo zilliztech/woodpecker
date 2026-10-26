@@ -256,7 +256,7 @@ func matches(s Settings, sig signal, target d.Target, labels map[string]string) 
 func publicLabels(labels map[string]string, s Settings) map[string]string {
 	out := map[string]string{}
 	for k, v := range labels {
-		if d.Has([]string{"__name__", "le", "instance", "node_id", "log_ns", "log_id", "status", "operation", "component", "pod", "namespace", "cluster", "woodpecker_id", "msg_type", "query_type", "channel_name", "job", "collection_id", "collection_name", "database", "resource_group", "db_name", "rg", "segment_state", "reduce_level", "reduce_type", "interceptor_name"}, k) || s.MatchLabels[k] != "" {
+		if d.Has([]string{"__name__", "le", "instance", "node_id", "log_ns", "log_id", "status", "operation", "component", "pod", "namespace", "cluster", "woodpecker_id", "msg_type", "query_type", "channel_name", "job", "collection_id", "collection_name", "database", "resource_group", "db_name", "rg", "segment_state", "reduce_level", "reduce_type", "interceptor_name", "term", "state", "lv", "persistent_data_op_type"}, k) || s.MatchLabels[k] != "" {
 			out[k] = v
 		}
 	}

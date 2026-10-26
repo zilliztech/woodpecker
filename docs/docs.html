@@ -7454,6 +7454,11 @@ bin/wpdiag loki diagnose --config wpdiag.yaml --connection stack \
 bin/wpdiag milvus append --config wpdiag.yaml --connection stack \
   --scope e2e --window 30s --budget 1m -o json</code></pre></div></div>
 
+<p>For persistence lag, <code>wpdiag milvus persistence</code> uses an independent Prometheus connection to assess growing pressure, sync scheduling/recovery, execution/upload timing and checkpoint advancement. A flusher-seen TimeTick is not a durable checkpoint; idle checkpoint age is not a stall. E2E WP flush/offload is shown as a parallel path with explicit mapping gaps. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvuspersistence">persistence-stage hypotheses, configuration and evidence limits</a>.</p>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>bin/wpdiag milvus persistence --list
+bin/wpdiag milvus persistence --config wpdiag.yaml --connection stack \
+  --scope e2e --window 30s --budget 1m -o json</code></pre></div></div>
+
 <div class="doc-pagination"><a href="#stack-examples-dashboards"><div class="pg-label">Previous</div><div class="pg-title">E2E dashboards</div></a><a href="#stack-examples-e2e"><div class="pg-label">Next</div><div class="pg-title">E2E testing &amp; optimization</div></a></div>
 </div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-e2e">

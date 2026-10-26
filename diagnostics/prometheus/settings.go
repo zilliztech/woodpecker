@@ -58,6 +58,8 @@ func settingsFor(c d.Connection, planKind queryPlanKind) (Settings, error) {
 		thresholds := queryThresholds()
 		if planKind == appendPlan {
 			thresholds = appendThresholds()
+		} else if planKind == persistencePlan {
+			thresholds = persistenceThresholds()
 		}
 		for k, v := range thresholds {
 			s.Policy.LatencyMS[k] = v
@@ -82,6 +84,9 @@ func settingsFor(c d.Connection, planKind queryPlanKind) (Settings, error) {
 	}
 	allowed := queryThresholds()
 	for k, v := range appendThresholds() {
+		allowed[k] = v
+	}
+	for k, v := range persistenceThresholds() {
 		allowed[k] = v
 	}
 	for _, key := range []string{"wp.append", "wp.wal_read", "milvus.append", "milvus.query", "milvus.wal_append"} {

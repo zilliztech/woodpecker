@@ -32,9 +32,13 @@ sources:
             namespace: milvus-stack
             woodpecker_id: milvus-stack
           # bearer_token_env: PROMETHEUS_TOKEN
-          # Optional append-stage policy (example, not a product SLO):
+          # Optional stage policy (examples, not product SLOs):
           # policy:
-          #   latency_ms: {milvus.append.quota: 250, wp.flush: 100}
+          #   latency_ms:
+          #     milvus.append.quota: 250
+          #     wp.flush: 100
+          #     milvus.persistence.queue: 250
+          #     wp.compaction: 1000
   # Optional independent Jaeger source. Enable only with reachable Query/UI.
   trace:
     connections:

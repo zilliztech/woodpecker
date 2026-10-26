@@ -23,6 +23,7 @@ const (
 	defaultPlan queryPlanKind = iota
 	queryPlan
 	appendPlan
+	persistencePlan
 )
 
 func runPlan(ctx context.Context, r d.Request, connection d.Connection, planKind queryPlanKind) d.Result {
@@ -57,6 +58,8 @@ func runPlan(ctx context.Context, r d.Request, connection d.Connection, planKind
 		plan = querySignals()
 	} else if planKind == appendPlan {
 		plan = appendSignals(r.Selection.Scope)
+	} else if planKind == persistencePlan {
+		plan = persistenceSignals(r.Selection.Scope)
 	}
 	if len(plan) > s.Limits.MaxQueries {
 		return d.Failure("prometheus", "invalid", "query_budget_invalid", "Profile does not fit max_queries; no requests were sent")

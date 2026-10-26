@@ -249,3 +249,19 @@ It distinguishes Proxy completion/preparation, producer quota/routing and SN
 WAL/interceptor symptoms; E2E also reports separately observed WP append/flush/
 disk context. No collection/channel/WP mapping or latency residual is invented.
 See the [append-stage hypotheses and limits](../../diagnostics/milvusappend/README.md).
+
+## Milvus persistence-stage diagnosis
+
+`wpdiag milvus persistence --list` exposes the versioned flush/checkpoint metric
+catalog. Use an independent Prometheus connection:
+
+```bash
+bin/wpdiag milvus persistence --config wpdiag.yaml --connection local \
+  --scope e2e --window 30s --budget 1m -o json
+```
+
+The command distinguishes growing pressure, sync scheduling/recovery, execution/
+upload timing and persisted frontier/checkpoint progress. WP offload remains a
+parallel, unassociated context. Idle checkpoint age, missing lazy metrics and
+flusher-seen TimeTicks are not durability/stall verdicts. See the
+[persistence-stage hypotheses and evidence limits](../../diagnostics/milvuspersistence/README.md).

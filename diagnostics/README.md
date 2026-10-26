@@ -140,3 +140,5 @@ contract change with `go test ./diagnostics/wpcli -run TestImportedReportFixture
 Standalone [Loki log diagnosis](loki/README.md) owns its connection, six initial profiles, bounded queries and known-message evidence catalog.
 
 `milvusappend.Run` and pure `milvusappend.Assess` provide the independently runnable [append-stage assessment](milvusappend/README.md), reusing source-owned metric rules with explicit WP mapping gaps.
+
+`milvuspersistence.Run` and pure `milvuspersistence.Assess` provide the independently runnable [persistence/flush/checkpoint assessment](milvuspersistence/README.md), preserving source-owned rules and explicit WP parallel-path/mapping gaps.

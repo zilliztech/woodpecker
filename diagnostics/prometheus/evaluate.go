@@ -27,6 +27,8 @@ type Fact struct {
 }
 
 type GaugeFact struct {
+	// Samples are retained only for persistence profiles for exact-time comparisons.
+	Samples     []Point `json:"retained_samples,omitempty"`
 	First       float64 `json:"first"`
 	Last        float64 `json:"last"`
 	Peak        float64 `json:"peak"`
@@ -327,6 +329,23 @@ func evaluateGauge(data *Dataset, sig signal, r d.Request, p Policy, id string) 
 			continue
 		}
 		points := series.Points
+		if sig.Stage == "persistence" {
+			valid := true
+			for _, point := range points {
+				if sig.GaugeUnit == "state_indicator" {
+					valid = valid && (point.Value == 0 || point.Value == 1)
+				}
+				if sig.GaugeUnit == "state_0_normal_1_warn_2_blocked" {
+					valid = valid && (point.Value == 0 || point.Value == 1 || point.Value == 2)
+				}
+			}
+			if !valid {
+				f.Summary = "Unsupported exported state indicator"
+				f.Unknown = append(f.Unknown, "unknown_state_indicator")
+				findings = append(findings, f)
+				continue
+			}
+		}
 		if sig.GaugeUnit == "state_0_normal_1_warn_2_blocked" {
 			valid := true
 			for _, p := range points {
@@ -340,6 +359,9 @@ func evaluateGauge(data *Dataset, sig signal, r d.Request, p Policy, id string) 
 			}
 		}
 		g := GaugeFact{First: points[0].Value, Last: points[len(points)-1].Value, Peak: points[0].Value, Minimum: points[0].Value, LastTwoZero: len(points) >= 2 && points[len(points)-1].Value == 0 && points[len(points)-2].Value == 0}
+		if sig.Stage == "persistence" {
+			g.Samples = append([]Point{}, points...)
+		}
 		for _, point := range points {
 			g.Peak = max(g.Peak, point.Value)
 			g.Minimum = min(g.Minimum, point.Value)
