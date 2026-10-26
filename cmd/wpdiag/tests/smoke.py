@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--wpdiag", default="bin/wpdiag")
     args = parser.parse_args()
     wp, wpdiag = str(Path(args.wp).resolve()), str(Path(args.wpdiag).resolve())
-    state = {"mode": "write", "requests": 0}
+    state = {"mode": "write", "requests": 0, "writer_reads": 0}
     observed = threading.Event()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -44,17 +44,38 @@ def main():
                         '# TYPE woodpecker_server_logstore_operations_total counter\n'
                         'woodpecker_server_logstore_operations_total{node_id="node-1",log_id="2",log_ns="tenant-a",operation="'
                         + operation + '",status="success"} 5\n')
+                if mode.startswith("native-"):
+                    for name, value in [("disk_usage_ratio", .6), ("disk_watermark_soft", .8),
+                                        ("disk_watermark_hard", .9), ("write_backpressure_state", 0)]:
+                        metric = "woodpecker_server_logstore_" + name
+                        body += f'# TYPE {metric} gauge\n{metric}{{node_id="node-1"}} {value}\n'
             elif path == "/admin/runtime/ops":
                 if mode == "ops-down":
                     code, body = 503, "sentinel-secret"
                 else:
                     operation = "get_batch_entries" if mode == "read" else "add_entry"
-                    body = json.dumps([] if mode == "idle" else [{"op_id": "pending", "op_type": "logstore." + operation,
+                    body = json.dumps([] if mode in ("idle", "native-idle") else [{"op_id": "pending", "op_type": "logstore." + operation,
                                       "log_id": 2, "segment_id": 7, "started_at": "2026-10-01T00:00:00Z"}])
             elif path == "/admin/runtime/ops/stats":
-                body = json.dumps({"capacity": 1024, "in_use": 0 if mode == "idle" else 1, "evicted_total": 0})
+                body = json.dumps({"capacity": 1024, "in_use": 0 if mode in ("idle", "native-idle") else 1, "evicted_total": 0})
             elif path == "/admin/env":
                 body = json.dumps({"build": {"version": "v0.1.46"}, "env": {"TOKEN": "sentinel-secret"}})
+            elif path == "/admin/logstore/segments":
+                writers = [{"log_id": 2, "segment_id": 7, "backend": "stagedstorage"}]
+                if mode == "native-idle":
+                    writers = []
+                elif mode == "native-limit":
+                    writers.append({"log_id": 2, "segment_id": 8, "backend": "stagedstorage"})
+                elif mode == "native-unavailable":
+                    code = 501
+                body = json.dumps({"segments": writers})
+            elif path == "/admin/logstore/segments/detail":
+                state["writer_reads"] += 1
+                durable = state["writer_reads"] if mode == "native-progress" else 5
+                body = json.dumps({"log_id": 2, "segment_id": 7, "backend": "stagedstorage",
+                                   "writable": True, "fenced": False, "finalized": False, "closed": False,
+                                   "buffer_bytes": 1024, "buffer_entries": 8,
+                                   "flush_queue_depth": 2, "flush_queue_capacity": 8, "last_entry_id": durable})
             else:
                 code, body = 404, "unknown"
             self.send_response(code)
@@ -132,6 +153,32 @@ def main():
             assert proc.returncode == 3 and json.loads(proc.stdout)["status"] == "unsupported"
             assert state["requests"] == before, "Historical request silently queried current state"
             results.append({"case": "historical makes no request", "exit": 3, "status": "unsupported"})
+            # Exercise the expanded native scenario through the real binary.
+            # The standalone adapter deliberately keeps its focused v1 profile.
+            native_env = dict(os.environ, WOODPECKER_CLI_CONFIG=str(root / "cli.yaml"))
+            native_env.pop("WOODPECKER_ENDPOINT", None)
+            native_base = [wp, "--context", "fixture", "diagnose", "--scenario", "write", "--window", "30ms",
+                           "--interval", "10ms", "--max-samples", "4", "--budget", "2s", "--max-writers", "1", "-o", "json"]
+            for mode, expected, outcome in [("native-buildup", 0, "no_durable_progress_observed"),
+                                            ("native-progress", 0, "no_buildup_observed"),
+                                            ("native-idle", 0, "no_loaded_writer_observed"),
+                                            ("native-limit", 6, "inconclusive"),
+                                            ("native-unavailable", 6, "inconclusive")]:
+                state["mode"], state["writer_reads"] = mode, 0
+                proc = subprocess.run(native_base, env=native_env, capture_output=True, text=True, timeout=5)
+                report = json.loads(proc.stdout)
+                assert proc.returncode == expected, (mode, proc.returncode, report, proc.stderr)
+                assert len(report["rules"]) == 4
+                findings = {f["rule_id"]: f for f in report["findings"]}
+                assert findings["flush_buildup"]["outcome"] == outcome, (mode, report)
+                assert findings["disk_admission"]["outcome"] == "below_configured_watermarks"
+                assert findings["replica_participation"]["outcome"] == "inconclusive"
+                assert state["writer_reads"] <= 4, "Writer detail request bound exceeded"
+                ids = {o["id"] for o in report["observations"]}
+                assert all(set(f["supporting_observations"]) <= ids for f in report["findings"])
+                assert "sentinel-secret" not in proc.stdout + proc.stderr
+                assert url not in proc.stdout
+                results.append({"case": mode, "exit": proc.returncode, "status": report["collection_status"]})
         print(json.dumps({"passed": True, "checks": results}, indent=2))
     finally:
         server.shutdown()

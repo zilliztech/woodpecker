@@ -292,6 +292,7 @@ when investigating that case.
 
 ```bash
 wp --context local diagnose node-0 --scenario stuck-write --window 30s
+wp --context local diagnose --scenario write --window 30s --max-writers 16 -o json
 wp --context local diagnose node-0 --scenario stuck-read -o json > report.json
 wp --context local diagnose node-0 --mode snapshot -o json
 wp diagnose --list
@@ -302,7 +303,12 @@ node argument, inspect discovered nodes within the explicit target budget.
 Snapshot mode cannot establish a sustained stall; live windows start sampling
 now and do not retrieve history. The versioned report preserves suspicious ops,
 counter evidence, reset/eviction/identity gaps and same-log progress conflicts.
-Tenant metadata is not guessed from runtime log IDs.
+Tenant metadata is not guessed from runtime log IDs. `--scenario write` adds
+writer-local buffer/flush buildup, deployed disk-watermark admission checks and
+optional replica comparison with an explicitly selected metadata log/segment.
+See the [write diagnosis walkthrough](../../docs/admin-guides/wpcli/write-diagnosis.md)
+for evidence interpretation, replica selection and limits. `all` includes these
+checks; `stuck-write`/`stuck-read` retain their focused v1 contracts.
 
 Exit 0 means evaluation completed, including inconclusive findings; it does not
 mean healthy. Opt into exit 8 for suspicions with `--fail-on-findings`. Required

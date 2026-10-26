@@ -77,7 +77,7 @@
     "groups": [
       "diagnose"
     ],
-    "purpose": "Diagnose WP live read/write stalls with versioned evidence, explicit coverage and bounded collection. External monitoring and Milvus diagnosis are separate tools."
+    "purpose": "Diagnose WP append stalls, writer buffer/flush buildup, configured disk admission and explicitly scoped replica lag with bounded native evidence. External monitoring and Milvus diagnosis are separate tools."
   },
   "logstore": {
     "title": "Writer runtime",

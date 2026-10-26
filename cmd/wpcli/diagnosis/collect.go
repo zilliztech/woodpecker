@@ -25,19 +25,22 @@ type Node struct {
 }
 
 type Options struct {
-	Scenario       string
-	Mode           string
-	Window         time.Duration
-	Interval       time.Duration
-	Budget         time.Duration
-	RequestTimeout time.Duration
-	Concurrency    int
-	Limits         Limits
+	Scenario         string
+	Mode             string
+	Window           time.Duration
+	Interval         time.Duration
+	Budget           time.Duration
+	RequestTimeout   time.Duration
+	Concurrency      int
+	Limits           Limits
+	LogID            *int64
+	SegmentID        *int64
+	MetadataRequired bool
 }
 
 func (o Options) Validate() error {
-	if o.Scenario != "all" && o.Scenario != "stuck-write" && o.Scenario != "stuck-read" {
-		return fmt.Errorf("--scenario must be all, stuck-write or stuck-read")
+	if o.Scenario != "all" && o.Scenario != "write" && o.Scenario != "stuck-write" && o.Scenario != "stuck-read" {
+		return fmt.Errorf("--scenario must be all, write, stuck-write or stuck-read")
 	}
 	if o.Mode != "snapshot" && o.Mode != "live" {
 		return fmt.Errorf("--mode must be snapshot or live (historical retrieval is not supported)")
@@ -49,6 +52,9 @@ func (o Options) Validate() error {
 		return fmt.Errorf("use 1ms <= --budget <= 10m, --timeout >= 1ms and --concurrency in 1..32")
 	}
 	l := o.Limits
+	if o.writeEnabled() && (o.writerLimit() < 1 || o.writerLimit() > 64 || l.MaxNodes*l.MaxSamples*o.writerLimit() > 20000) {
+		return fmt.Errorf("use --max-writers in 1..64; nodes × samples × writers must not exceed 20000")
+	}
 	if l.MaxNodes < 1 || l.MaxNodes > 32 || l.MaxSamples < 2 || l.MaxSamples > 121 || l.MaxOps < 1 || l.MaxOps > 1000 || l.MaxSeries < 1 || l.MaxSeries > 5000 || l.ResponseBytes < 1024 || l.ResponseBytes > 8<<20 {
 		return fmt.Errorf("limits: nodes 1..32, samples 2..121, ops 1..1000, series 1..5000, response bytes 1024..8388608")
 	}
@@ -79,11 +85,16 @@ func NewReport(o Options, serviceContext string) Report {
 	}
 	rules := []Rule{}
 	for _, rule := range Rules() {
-		if o.Scenario == "all" || o.Scenario == rule.Scenario {
+		if o.Scenario == "all" || o.Scenario == rule.Scenario || (o.Scenario == "write" && rule.ID == "write_stall") {
 			rules = append(rules, rule)
 		}
 	}
 	l := o.Limits
+	if o.writeEnabled() {
+		l.MaxWriters = o.writerLimit()
+	} else {
+		l.MaxWriters = 0
+	}
 	l.BudgetMS = o.Budget.Milliseconds()
 	windowMS, intervalMS := o.Window.Milliseconds(), o.Interval.Milliseconds()
 	if o.Mode == "snapshot" {
@@ -146,6 +157,9 @@ func Collect(ctx context.Context, report *Report, nodes []Node, o Options) {
 					return
 				}
 				kinds := []string{"metrics", "ops", "registry"}
+				if o.writeEnabled() {
+					kinds = append(kinds, "writers")
+				}
 				if round == 0 {
 					kinds = append(kinds, "build")
 				}
@@ -168,6 +182,9 @@ func Collect(ctx context.Context, report *Report, nodes []Node, o Options) {
 		}
 	}
 	good, bad := 0, 0
+	if o.writeEnabled() {
+		report.Gaps = append(report.Gaps, Gap{Code: "maintenance_object_store_pressure_not_assessed", Detail: "Writer queues and file.flush operations do not establish maintenance, object-store, disk or fsync causes; inspect backend-specific evidence"})
+	}
 	for _, obs := range report.Observations {
 		if obs.Status != "observed" {
 			report.Gaps = append(report.Gaps, Gap{
@@ -175,7 +192,7 @@ func Collect(ctx context.Context, report *Report, nodes []Node, o Options) {
 				Detail: obs.Kind + " evidence was not collected completely; response contents/credentials are not retained",
 			})
 		}
-		if obs.Kind == "metrics" || obs.Kind == "ops" {
+		if obs.Kind == "metrics" || obs.Kind == "ops" || obs.Kind == "writers" {
 			if obs.Status == "observed" {
 				good++
 			} else {
@@ -202,6 +219,11 @@ func Collect(ctx context.Context, report *Report, nodes []Node, o Options) {
 
 func collectOne(ctx context.Context, client *http.Client, node Node, kind string, round int, o Options) Observation {
 	obs := Observation{NodeID: node.Target.NodeID, Kind: kind, Round: round, StartedAt: time.Now().UTC(), Status: "observed"}
+	if kind == "writers" {
+		collectWriters(ctx, client, node, &obs, o)
+		obs.FinishedAt = time.Now().UTC()
+		return obs
+	}
 	path := map[string]string{
 		"metrics": "/metrics", "ops": "/admin/runtime/ops?limit=" + strconv.Itoa(o.Limits.MaxOps),
 		"registry": "/admin/runtime/ops/stats", "build": "/admin/env",
@@ -216,6 +238,9 @@ func collectOne(ctx context.Context, client *http.Client, node Node, kind string
 		switch kind {
 		case "metrics":
 			decodeMetrics(body, &obs, o.Limits.MaxSeries)
+			if o.writeEnabled() && obs.Status == "observed" {
+				decodeWriteSignals(body, &obs, o.Limits.MaxSeries)
+			}
 		case "ops":
 			if err := json.Unmarshal(body, &obs.Ops); err != nil || obs.Ops == nil {
 				obs.Status, obs.Code = "invalid", "invalid_ops_schema"
