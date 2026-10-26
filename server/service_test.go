@@ -211,6 +211,31 @@ func TestWaitAndStartCurrentNode_Success(t *testing.T) {
 	}
 }
 
+func TestWaitAndStartCurrentNode_UsesResolvedAdvertiseIP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s := createTestServer(ctx, &membership.ServerConfig{
+		NodeID:               "test-node-resolved-advertise-ip",
+		AdvertiseAddr:        "localhost",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "default",
+		AZ:                   "default",
+		Tags:                 map[string]string{"role": "test"},
+	})
+
+	err := s.waitAndStartCurrentNode(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", s.serverConfig.AdvertiseAddr)
+
+	if s.serverNode != nil {
+		require.NoError(t, s.serverNode.Shutdown())
+	}
+}
+
 func TestGetStartupErrCh(t *testing.T) {
 	s := createTestServer(context.Background(), &membership.ServerConfig{})
 	defer s.cancel()
