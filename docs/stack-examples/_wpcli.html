@@ -69,3 +69,8 @@ bin/wpdiag prometheus diagnose --config wpdiag.yaml --connection stack \
   --from 2026-10-25T08:00:00Z --to 2026-10-25T08:05:00Z -o json</code></pre>
 <p>Start from the symptom and the test’s time window. Use <a href="#operations-cli-ops">in-flight operations</a> and <a href="#operations-cli-logstore">writer runtime</a> for slow writes, <a href="#operations-cli-log">log progress</a> and <a href="#operations-cli-segment">segment diagnosis</a> for stalled progress, and <a href="#operations-cli-meta">metadata inspection</a> when coordinator state needs examination.</p>
 <p>The <a href="#operations-scenarios-write">write-stall</a>, <a href="#operations-scenarios-read">read-stall</a> and <a href="#operations-scenarios-corruption">data-corruption</a> guides explain the evidence and verification needed for each investigation. Begin with their read-only inspection steps and choose any repair from the observed cause and consequences.</p>
+
+<p>The independent <code>wpdiag loki diagnose</code> command reads retained WP/Milvus logs using its own Loki connection. Select WP, Milvus or source-only E2E reads/writes. Findings include known message excerpts, event lineage and exact LogQL/windows; no-match remains inconclusive. Cross-component association requires an actual shared request/trace identity. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/loki">Loki configuration, supported patterns and evidence limits</a>.</p>
+<pre><code># Configure sources.loki.connections.stack using the Alloy namespace/cluster labels.
+bin/wpdiag loki diagnose --config wpdiag.yaml --connection stack \
+  --scope e2e --flow write --window 30s --budget 1m -o json</code></pre>

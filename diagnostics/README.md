@@ -136,3 +136,5 @@ ambiguous-read/scoped-write import cases tested by this adapter.
 The [normalized v1 report fixture](wpcli/testdata/scoped-write-import-v1.json)
 shows the consumer envelope. Regenerate it after an intentional compatible
 contract change with `go test ./diagnostics/wpcli -run TestImportedReportFixture -update`.
+
+Standalone [Loki log diagnosis](loki/README.md) owns its connection, six initial profiles, bounded queries and known-message evidence catalog.

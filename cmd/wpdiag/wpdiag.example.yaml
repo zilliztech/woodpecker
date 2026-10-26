@@ -54,9 +54,16 @@ sources:
           # bearer_token_env: JAEGER_TOKEN
           policy:
             slow_span_ms: 1000
-  # Disabled placeholder; Loki implementation remains #462.
+  # Loki is independently usable; these are the Alloy labels, not metric labels.
   loki:
     connections:
       local:
-        enabled: false
-        settings: {}
+        enabled: true
+        settings:
+          endpoint: http://127.0.0.1:3100
+          deployment: milvus-stack
+          match_labels:
+            cluster: wp-ops-v0146
+            namespace: milvus-stack
+          # bearer_token_env: LOKI_TOKEN
+          # tenant_env: LOKI_TENANT

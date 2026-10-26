@@ -224,3 +224,11 @@ It does not benchmark or assert the health of a live deployment.
 
 The [public module contract](../../diagnostics/README.md) describes how the
 source modules in #460–#462 and stage modules in #463–#466 reuse this foundation.
+
+## Loki diagnosis
+
+`wpdiag loki diagnose` connects directly using its own Loki settings. Select
+`--scope wp|milvus|e2e`, `--flow write|read` and a live or historical interval.
+It reports known log symptoms, actual sanitized excerpts and identity-based
+associations. No-match remains inconclusive. See the
+[Loki profiles, configuration and evidence limits](../../diagnostics/loki/README.md).

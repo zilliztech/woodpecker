@@ -36,7 +36,7 @@ func TestCLIIndependentCapabilitiesAndFailures(t *testing.T) {
 		{"bad report output", []string{"wpcli", "diagnose", "-o", "yaml"}, 2, "Invalid command"},
 		{"bad timestamp", []string{"wpcli", "diagnose", "--from", "invalid"}, 2, "Invalid command"},
 		{"submillisecond duration", []string{"wpcli", "diagnose", "--window", "1ns"}, 2, "Invalid command"},
-		{"text unavailable source", []string{"loki", "diagnose", "--flow", "write"}, 3, "module_not_implemented"},
+		{"Loki missing connection", []string{"loki", "diagnose", "--flow", "write"}, 2, "configuration_unavailable"},
 		{"unsupported trace stage", []string{"trace", "diagnose", "--scope", "wp", "--flow", "write", "--stage", "persistence", "-o", "json"}, 3, "profile_not_supported"},
 		{"invalid stage", []string{"wpcli", "diagnose", "--flow", "write", "--stage", "wal_read", "-o", "json"}, 2, "invalid_selection"},
 		{"historical is unsupported", []string{"wpcli", "diagnose", "--flow", "write", "--mode", "historical", "--from", "2026-10-01T00:00:00Z", "--to", "2026-10-01T01:00:00Z", "-o", "json"}, 3, "profile_not_supported"},
