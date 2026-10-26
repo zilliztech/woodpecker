@@ -185,6 +185,13 @@ func TestReportBudgetAndPrivateConfig(t *testing.T) {
 	require.LessOrEqual(t, len(body), 4096)
 	require.True(t, json.Valid(body))
 	require.Contains(t, string(body), "report_output_limit")
+	report.Results = []d.Result{d.NewResult("prometheus")}
+	report.Assessments = []d.Assessment{{Profile: "milvus.query", Findings: []d.Finding{{Summary: strings.Repeat("a", 5000)}}}}
+	body, code, err = d.EncodeReport(report)
+	require.NoError(t, err)
+	require.Equal(t, 5, code)
+	require.LessOrEqual(t, len(body), 4096)
+	require.NotContains(t, string(body), "assessments")
 	r.Limits.BudgetMS = 0
 	r.Limits.MaxOutputBytes = 0
 	report = e.Run(context.Background(), d.Config{}, r)

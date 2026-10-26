@@ -60,7 +60,9 @@ func expression(s Settings, sig signal, target d.Target, from, to time.Time) str
 	for k, v := range s.MatchLabels {
 		labels[k] = v
 	}
-	labels["component"] = sig.Component
+	if sig.Component != "" {
+		labels["component"] = sig.Component
+	}
 	if target.Instance != "" {
 		labels["instance"] = target.Instance
 	}
@@ -91,6 +93,9 @@ func (c client) query(ctx context.Context, expr string, sig signal, target d.Tar
 	data := Dataset{Signal: sig.ID, From: from, To: to, Unit: "milliseconds", Series: []Series{}, Notes: []string{}, Facts: []Fact{}}
 	if sig.Gauge {
 		data.Unit = "admission_state_0_normal_1_warn_2_blocked"
+		if sig.GaugeUnit != "" {
+			data.Unit = sig.GaugeUnit
+		}
 	} else if sig.Factor == 1000 {
 		data.Unit = "seconds (histogram); milliseconds (derived latency)"
 	}
@@ -229,7 +234,7 @@ func matches(s Settings, sig signal, target d.Target, labels map[string]string) 
 			return false
 		}
 	}
-	if labels["component"] != sig.Component || (target.Instance != "" && labels["instance"] != target.Instance) || (target.NodeID != "" && labels["node_id"] != target.NodeID) {
+	if (sig.Component != "" && labels["component"] != sig.Component) || (target.Instance != "" && labels["instance"] != target.Instance) || (target.NodeID != "" && labels["node_id"] != target.NodeID) {
 		return false
 	}
 	for k, v := range sig.Match {
@@ -251,7 +256,7 @@ func matches(s Settings, sig signal, target d.Target, labels map[string]string) 
 func publicLabels(labels map[string]string, s Settings) map[string]string {
 	out := map[string]string{}
 	for k, v := range labels {
-		if d.Has([]string{"__name__", "le", "instance", "node_id", "log_ns", "log_id", "status", "operation", "component", "pod", "namespace", "cluster", "woodpecker_id", "msg_type", "query_type", "channel_name", "job"}, k) || s.MatchLabels[k] != "" {
+		if d.Has([]string{"__name__", "le", "instance", "node_id", "log_ns", "log_id", "status", "operation", "component", "pod", "namespace", "cluster", "woodpecker_id", "msg_type", "query_type", "channel_name", "job", "collection_id", "collection_name", "database", "resource_group", "db_name", "rg", "segment_state", "reduce_level", "reduce_type"}, k) || s.MatchLabels[k] != "" {
 			out[k] = v
 		}
 	}

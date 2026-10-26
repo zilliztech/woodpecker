@@ -5,7 +5,8 @@ in [#450](https://github.com/zilliztech/woodpecker/issues/450). It exposes commo
 connection, capability, selection and report contracts outside wpcli and the
 Helm stack. The native adapter (#454) runs the WP evidence collector from #451.
 The independent Prometheus module (#460) queries retained metrics and evaluates
-bounded WP/Milvus/E2E read/write profiles. Trace/Loki and integrated E2E
+bounded WP/Milvus/E2E read/write profiles. The independent Milvus query-stage
+command (#466) interprets query-step metric facts. Trace/Loki and integrated E2E
 assessment remain separate work.
 
 ## Build and run
@@ -89,6 +90,21 @@ Replace the example UTC times with your retained workload interval. See the
 metric units, policy thresholds, authentication and evidence limits.
 
 ## Supported boundaries
+
+For a query/search symptom, use the separate stage command. It works with the
+same Prometheus connection and adds step-level findings without requiring other
+monitoring sources:
+
+```bash
+bin/wpdiag milvus query --list
+bin/wpdiag milvus query --config wpdiag.yaml --connection local \
+  --scope milvus --mode historical \
+  --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z
+```
+
+Replace the bounds with your retained workload interval. See the
+[Milvus query guide](../../diagnostics/milvusquery/README.md) for the five groups,
+queue recovery interpretation, source policies and E2E mapping limitations.
 
 | Source | Scope / flow / stage | Modes | Target filters | Status |
 | --- | --- | --- | --- | --- |

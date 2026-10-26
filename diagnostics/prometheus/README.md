@@ -190,6 +190,17 @@ returned data and duration, not the backend's global TSDB resources. Prometheus
 owns server-side query resource limits. Unimplemented filtering, budget overflow,
 auth/transport failure and partial collection never become healthy zeros.
 
+## Query-stage source reuse
+
+The independent [Milvus query command](../milvusquery/README.md) uses
+`prometheus.QueryModule` to collect 14 query-step families through this same
+bounded client and evaluator. Its collector profiles are separate from the six
+source defaults, avoiding ambiguous source selection. Query-stage collection
+defaults to 24 queries; ordinary source collection remains 8. Shared policies
+accept the documented query-step latency keys, and stage code never copies or
+recalculates source thresholds. Generic gauges retain sampled facts and do not
+reuse the WP-specific admission-state rule.
+
 ## Validation
 
 ```bash

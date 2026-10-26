@@ -45,6 +45,12 @@ meta log list</code></pre>
 <p><code>status --check</code> verifies Admin and etcd access for the current session. These connection checks establish reachability; use a workload and the relevant log/data checks to establish application progress and readability.</p>
 
 <h2 id="investigate">Use wpcli with the dashboards</h2>
+<p>For slow query/search, the independent <code>wpdiag milvus query</code> command uses a Prometheus connection to assess Proxy completion, visibility waiting, scheduling, execution/loading and result return. It preserves source evidence and distinguishes persistent ready backlog from recovery; TSafe or query delay alone does not implicate WP. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvusquery">query-stage guide, metric catalog and evidence limits</a>.</p>
+<pre><code>bin/wpdiag milvus query --list
+# Configure the named Prometheus connection and use your actual workload interval.
+bin/wpdiag milvus query --config wpdiag.yaml --connection stack \
+  --scope milvus --mode historical \
+  --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z</code></pre>
 <p>Source builds also provide an independent <code>wpdiag</code> binary for bounded diagnostic reports. Build it with <code>make wpcli wpdiag</code>, inspect <code>bin/wpdiag capabilities</code>, and configure a named connection referring to the generated wpcli context and cli.yaml. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/cmd/wpdiag">wpdiag setup and examples</a>.</p>
 <pre><code># From the repository root, after preparing wpdiag.yaml with your connection.
 bin/wpdiag wpcli diagnose --config wpdiag.yaml --connection local \

@@ -42,6 +42,7 @@ type signal struct {
 	Match     map[string]string
 	Regex     map[string]string
 	Gauge     bool
+	GaugeUnit string
 }
 
 func signals(scope, flow string) []signal {
