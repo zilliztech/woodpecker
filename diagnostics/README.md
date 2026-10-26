@@ -32,7 +32,7 @@ context. Use only bounded read-only operations and honor the context.
 The first Engine version runs one source, with no fallback to another. A source
 module can assess its own cross-component evidence under scope=e2e; that does
 not grant it evidence from other sources. Multi-source execution and synthesis
-remain #467; Milvus stage rules remain #463–#466.
+remain #467; Milvus stage rules are separate modules (#463–#466).
 
 ## Selection
 
@@ -138,3 +138,5 @@ shows the consumer envelope. Regenerate it after an intentional compatible
 contract change with `go test ./diagnostics/wpcli -run TestImportedReportFixture -update`.
 
 Standalone [Loki log diagnosis](loki/README.md) owns its connection, six initial profiles, bounded queries and known-message evidence catalog.
+
+`milvusappend.Run` and pure `milvusappend.Assess` provide the independently runnable [append-stage assessment](milvusappend/README.md), reusing source-owned metric rules with explicit WP mapping gaps.

@@ -49,16 +49,21 @@ var (
 	envName   = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 )
 
-func settings(c d.Connection) (Settings, error) { return settingsFor(c, false) }
+func settings(c d.Connection) (Settings, error) { return settingsFor(c, defaultPlan) }
 
-func settingsFor(c d.Connection, querySteps bool) (Settings, error) {
+func settingsFor(c d.Connection, planKind queryPlanKind) (Settings, error) {
 	s := Settings{Limits: Limits{MaxQueries: 8, MaxSeries: 500, MaxSamples: 50000, MaxResponseBytes: 2 << 20, MaxWindowMS: 3600000, TimeoutMS: 10000}, Policy: Policy{MaxGapMS: 30000, MinObservations: 20, ThroughputDropRatio: 0.5, LatencyMS: map[string]float64{"wp.append": 250, "wp.wal_read": 250, "milvus.append": 1000, "milvus.query": 1000, "milvus.wal_append": 500}}}
-	if querySteps {
+	if planKind != defaultPlan {
 		s.Limits.MaxQueries = 24
-		for k, v := range queryThresholds() {
+		thresholds := queryThresholds()
+		if planKind == appendPlan {
+			thresholds = appendThresholds()
+		}
+		for k, v := range thresholds {
 			s.Policy.LatencyMS[k] = v
 		}
 	}
+
 	if d.DecodeSettings(c, &s) != nil {
 		return s, fmt.Errorf("invalid Prometheus connection settings (values withheld)")
 	}
@@ -76,6 +81,9 @@ func settingsFor(c d.Connection, querySteps bool) (Settings, error) {
 		return s, fmt.Errorf("invalid Prometheus query/data/policy budgets")
 	}
 	allowed := queryThresholds()
+	for k, v := range appendThresholds() {
+		allowed[k] = v
+	}
 	for _, key := range []string{"wp.append", "wp.wal_read", "milvus.append", "milvus.query", "milvus.wal_append"} {
 		allowed[key] = 1
 	}

@@ -14,11 +14,19 @@ import (
 )
 
 func (Module) Run(ctx context.Context, r d.Request, connection d.Connection) d.Result {
-	return runPlan(ctx, r, connection, false)
+	return runPlan(ctx, r, connection, defaultPlan)
 }
 
-func runPlan(ctx context.Context, r d.Request, connection d.Connection, querySteps bool) d.Result {
-	s, err := settingsFor(connection, querySteps)
+type queryPlanKind int
+
+const (
+	defaultPlan queryPlanKind = iota
+	queryPlan
+	appendPlan
+)
+
+func runPlan(ctx context.Context, r d.Request, connection d.Connection, planKind queryPlanKind) d.Result {
+	s, err := settingsFor(connection, planKind)
 	if err != nil {
 		return d.Failure("prometheus", "invalid", "invalid_connection_settings", "Check the source-owned Prometheus settings")
 	}
@@ -45,8 +53,10 @@ func runPlan(ctx context.Context, r d.Request, connection d.Connection, querySte
 		s.Policy.MaxGapMS = min(s.Policy.MaxGapMS, r.Selection.Window.IntervalMS)
 	}
 	plan := signals(r.Selection.Scope, r.Selection.Flow)
-	if querySteps {
+	if planKind == queryPlan {
 		plan = querySignals()
+	} else if planKind == appendPlan {
+		plan = appendSignals(r.Selection.Scope)
 	}
 	if len(plan) > s.Limits.MaxQueries {
 		return d.Failure("prometheus", "invalid", "query_budget_invalid", "Profile does not fit max_queries; no requests were sent")
@@ -97,7 +107,7 @@ func runPlan(ctx context.Context, r d.Request, connection d.Connection, querySte
 		} else {
 			okQueries++
 			findings := evaluate(&data, sig, r, s.Policy, id)
-			if querySteps {
+			if planKind != defaultPlan {
 				annotateExporters(&data)
 			}
 			result.Findings = append(result.Findings, findings...)
@@ -126,7 +136,7 @@ func runPlan(ctx context.Context, r d.Request, connection d.Connection, querySte
 			result.Status = "budget_exceeded"
 		}
 	}
-	if r.Selection.Scope == "e2e" && !querySteps {
+	if r.Selection.Scope == "e2e" && planKind == defaultPlan {
 		result.Gaps = append(result.Gaps, d.Gap{Code: "source_only_partial_stage_coverage", Detail: "Profiles compare independent exporter populations. They do not establish request/channel/log joins, SN consumption/visibility, query execution, or cross-source causality; stage rules remain #463–#466"})
 	}
 	result.Metadata, _ = json.Marshal(struct {

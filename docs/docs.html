@@ -7449,6 +7449,11 @@ bin/wpdiag prometheus diagnose --config wpdiag.yaml --connection stack \
 bin/wpdiag loki diagnose --config wpdiag.yaml --connection stack \
   --scope e2e --flow write --window 30s --budget 1m -o json</code></pre></div></div>
 
+<p>For slow inserts, <code>wpdiag milvus append</code> assesses Proxy preparation/completion, producer quota/routing, SN WAL/interceptors and, with <code>--scope e2e</code>, separate WP append/flush/disk context. It reuses Prometheus source findings and reports concrete steps, evidence and next checks. Internal quantiles are never subtracted to invent waiting time; WP evidence stays unassociated until an authoritative client metadata mapping exists. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvusappend">append-stage catalog, setup and interpretation limits</a>.</p>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>bin/wpdiag milvus append --list
+bin/wpdiag milvus append --config wpdiag.yaml --connection stack \
+  --scope e2e --window 30s --budget 1m -o json</code></pre></div></div>
+
 <div class="doc-pagination"><a href="#stack-examples-dashboards"><div class="pg-label">Previous</div><div class="pg-title">E2E dashboards</div></a><a href="#stack-examples-e2e"><div class="pg-label">Next</div><div class="pg-title">E2E testing &amp; optimization</div></a></div>
 </div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-e2e">

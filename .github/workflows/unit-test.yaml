@@ -76,6 +76,9 @@ jobs:
           docker pull grafana/loki:3.5.7
           python3 cmd/wpdiag/tests/loki_smoke.py
 
+      - name: Run Milvus append-stage smoke test
+        run: python3 cmd/wpdiag/tests/append_smoke.py
+
       - name: Upload coverage to Codecov
         if: success()
         uses: codecov/codecov-action@v5

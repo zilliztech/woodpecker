@@ -216,3 +216,5 @@ sparse controls. It creates and removes one Docker container; no Kubernetes or
 existing stack is changed. HTTP tests additionally cover auth, cancellation,
 qualified/error responses, redirects, identity mismatches, duplicate/conflicting
 lineage, histogram resolution/saturation and data budgets. Tests run in CI.
+
+The separate `prometheus.AppendModule` and source-owned `AppendCatalog()` reuse this transport, quality checks and threshold policy for [`wpdiag milvus append`](../milvusappend/README.md). Append-step profiles use a 24-query default budget; existing overview and query profiles keep their defaults. This does not expand the default `prometheus diagnose` overview catalog.
