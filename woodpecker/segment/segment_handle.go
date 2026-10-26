@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -350,6 +351,7 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 		s.quorumInfo,
 		s.nodeScopes,
 	)
+	pendingAppendOp.traceParent = trace.SpanContextFromContext(ctx)
 	return pendingAppendOp
 }
 

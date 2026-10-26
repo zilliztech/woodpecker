@@ -19,8 +19,12 @@ package segment
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -71,7 +75,14 @@ func (b *BatchAppendOp) Execute() {
 	if len(b.ops) == 0 {
 		return
 	}
-	ctx, sp := logger.NewIntentCtx("BatchAppendOp", "Execute")
+	// A batch can combine independent requests. Its RPC has one context, so
+	// represent every contributing request with links instead of choosing an
+	// arbitrary request as the parent or changing coalescing/ack semantics.
+	ctx, sp := logger.NewIntentCtxWithOptions(context.Background(), "BatchAppendOp", "Execute",
+		trace.WithLinks(b.traceLinks()...),
+		trace.WithAttributes(attribute.Int("append.entries", len(b.ops)),
+			attribute.String("log_id", strconv.FormatInt(b.ops[0].logId, 10)),
+			attribute.String("segment_id", strconv.FormatInt(b.ops[0].segmentId, 10))))
 	defer sp.End()
 
 	quorumInfo := b.ops[0].quorumInfo
@@ -203,4 +214,24 @@ func (b *BatchAppendOp) failNode(ctx context.Context, nodeIdx int, serverAddr st
 			op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, nodeIdx, serverAddr)
 		}
 	}()
+}
+
+// Links are deduplicated by trace/span identity, not by trace ID alone. SDK
+// sampling and link limits still apply; a retained link is not a durability ack.
+func (b *BatchAppendOp) traceLinks() []trace.Link {
+	type identity struct {
+		traceID trace.TraceID
+		spanID  trace.SpanID
+	}
+	seen := make(map[identity]bool, len(b.ops))
+	links := make([]trace.Link, 0, len(b.ops))
+	for _, op := range b.ops {
+		sc := op.traceParent
+		key := identity{sc.TraceID(), sc.SpanID()}
+		if sc.IsValid() && !seen[key] {
+			seen[key] = true
+			links = append(links, trace.Link{SpanContext: sc})
+		}
+	}
+	return links
 }

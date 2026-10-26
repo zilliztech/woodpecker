@@ -199,7 +199,13 @@ func NewIntentCtx(scopeName string, intent string) (context.Context, trace.Span)
 }
 
 func NewIntentCtxWithParent(parent context.Context, scopeName string, intent string) (context.Context, trace.Span) {
-	intentCtx, initSpan := otel.Tracer(scopeName).Start(parent, intent)
+	return NewIntentCtxWithOptions(parent, scopeName, intent)
+}
+
+// NewIntentCtxWithOptions supplies span options at creation so sampling can
+// inspect links. NewIntentCtxWithParent retains its existing function signature.
+func NewIntentCtxWithOptions(parent context.Context, scopeName string, intent string, options ...trace.SpanStartOption) (context.Context, trace.Span) {
+	intentCtx, initSpan := otel.Tracer(scopeName).Start(parent, intent, options...)
 	// Use WithFieldsReplace to avoid accumulating duplicate scope/intent fields
 	intentCtx = WithFieldsReplace(intentCtx,
 		zap.String("scope", scopeName),
