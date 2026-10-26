@@ -3,8 +3,10 @@
 `wpdiag` is a separate diagnostic binary for the modular operations roadmap
 in [#450](https://github.com/zilliztech/woodpecker/issues/450). It exposes common
 connection, capability, selection and report contracts outside wpcli and the
-Helm stack. This first slice (#454) runs the native WP evidence collector from
-#451; monitoring backend clients and E2E assessment are separate work.
+Helm stack. The native adapter (#454) runs the WP evidence collector from #451.
+The independent Prometheus module (#460) queries retained metrics and evaluates
+bounded WP/Milvus/E2E read/write profiles. Trace/Loki and integrated E2E
+assessment remain separate work.
 
 ## Build and run
 
@@ -59,7 +61,8 @@ bin/wpdiag wpcli diagnose --config wpdiag.yaml --connection local \
   --window 30s --interval 1s -o json > read-report.json
 ```
 
-`wpdiag` invokes exactly one read-only `wp diagnose` subprocess per run. No
+The native adapter invokes exactly one read-only `wp diagnose` subprocess per
+native run. No
 shell parses the arguments. It does not read, rewrite or attach etcd metadata
 to cli.yaml. The optional cli_config path is passed to wpcli via
 `WOODPECKER_CLI_CONFIG`; if omitted, wpcli resolves its normal default file.
@@ -69,17 +72,33 @@ reported native context must match the configured context. Relative executable
 paths containing a separator and cli_config paths resolve against wpdiag.yaml's
 directory; a bare executable uses PATH.
 
+## Prometheus diagnosis
+
+Configure the independent Prometheus connection in
+[wpdiag.example.yaml](wpdiag.example.yaml), using your actual deployment labels.
+It requires no wpcli executable or Admin access:
+
+```bash
+bin/wpdiag prometheus diagnose --config wpdiag.yaml --connection local \
+  --scope e2e --flow write --mode historical \
+  --from 2026-10-25T08:00:00Z --to 2026-10-25T08:05:00Z -o json
+```
+
+Replace the example UTC times with your retained workload interval. See the
+[Prometheus guide](../../diagnostics/prometheus/README.md) for all six profiles,
+metric units, policy thresholds, authentication and evidence limits.
+
 ## Supported boundaries
 
 | Source | Scope / flow / stage | Modes | Target filters | Status |
 | --- | --- | --- | --- | --- |
 | wpcli | wp / write / append | snapshot, live | node_id, or discovered nodes within budget | Implemented: native write_stall v1 |
 | wpcli | wp / read / wal_read | snapshot, live | node_id, or discovered nodes within budget | Implemented: native read_stall v1 |
-| Prometheus | Future WP/Milvus/E2E read/write profiles | Not implemented | Not implemented | [#460](https://github.com/zilliztech/woodpecker/issues/460) |
+| Prometheus | WP/Milvus/E2E read/write profiles | live, historical | Explicit profile-declared deployment/instance/node filters | [Implemented catalog and limits](../../diagnostics/prometheus/README.md) |
 | Trace | Future WP/Milvus/E2E read/write profiles | Not implemented | Not implemented | [#461](https://github.com/zilliztech/woodpecker/issues/461) |
 | Loki | Future WP/Milvus/E2E read/write profiles | Not implemented | Not implemented | [#462](https://github.com/zilliztech/woodpecker/issues/462) |
 
-`capabilities` is authoritative for implemented profiles. Planned-source
+`capabilities` is authoritative for implemented profiles. Trace/Loki
 `diagnose` commands return `unsupported/module_not_implemented` and exit 3.
 Historical input is represented by `--mode historical --from RFC3339 --to
 RFC3339`; wpcli rejects it before spawning a process. It never relabels current
@@ -89,7 +108,7 @@ native profiles. `--node-id` requires the actual node ID, not an address alias.
 
 WAL consumption, Milvus visibility and search are distinct steps. Background
 persistence is a write-related branch, not another duration to add to an
-append request. A future single-source E2E result only assesses evidence from
+append request. A single-source E2E result only assesses evidence from
 that source; cross-source synthesis is [#467](https://github.com/zilliztech/woodpecker/issues/467).
 No E2E engine or WebUI ships here.
 

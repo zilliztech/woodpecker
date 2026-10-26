@@ -11,11 +11,12 @@ import (
 	"github.com/spf13/cobra"
 
 	d "github.com/zilliztech/woodpecker/diagnostics"
+	"github.com/zilliztech/woodpecker/diagnostics/prometheus"
 	"github.com/zilliztech/woodpecker/diagnostics/wpcli"
 )
 
 func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
-	engine, err := d.NewEngine(wpcli.Module{})
+	engine, err := d.NewEngine(wpcli.Module{}, prometheus.Module{})
 	if err != nil {
 		fmt.Fprintln(errout, "Cannot initialize diagnostic modules")
 		return 1
@@ -44,7 +45,7 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 	}})
 	for _, source := range []string{"wpcli", "prometheus", "trace", "loki"} {
 		short := "Diagnose using " + source
-		if source != "wpcli" {
+		if source == "trace" || source == "loki" {
 			short += " (not implemented; see capabilities)"
 		}
 		group := &cobra.Command{Use: source, Short: short}
@@ -72,6 +73,9 @@ func diagnoseCommand(engine *d.Engine, source string, output *string, code *int,
 			}
 			if !cmd.Flags().Changed("interval") {
 				interval = time.Second
+				if source == "prometheus" {
+					interval = 30 * time.Second
+				}
 			}
 		}
 		if window%time.Millisecond != 0 || interval%time.Millisecond != 0 || budget%time.Millisecond != 0 {
@@ -135,11 +139,15 @@ func diagnoseCommand(engine *d.Engine, source string, output *string, code *int,
 	f.StringVar(&r.Selection.Profile, "profile", "", "Optional profile ID")
 	f.StringVar(&r.Selection.Window.Mode, "mode", "live", "Window: snapshot|live|historical (source must support it)")
 	f.DurationVar(&window, "window", 0, "Live duration starting now (default 30s in live mode)")
-	f.DurationVar(&interval, "interval", 0, "Live sampling interval (default 1s in live mode)")
+	intervalHelp := "Live sampling interval (default 1s in live mode)"
+	if source == "prometheus" {
+		intervalHelp = "Maximum tolerated retained-scrape gap (live default 30s); does not reconfigure or resample Prometheus"
+	}
+	f.DurationVar(&interval, "interval", 0, intervalHelp)
 	f.StringVar(&from, "from", "", "Historical start, RFC3339; not supported by wpcli")
 	f.StringVar(&to, "to", "", "Historical end, RFC3339; not supported by wpcli")
 	f.DurationVar(&budget, "budget", time.Minute, "Total execution budget including discovery (max 10m)")
-	f.Int64Var(&r.Limits.MaxInputBytes, "max-input-bytes", r.Limits.MaxInputBytes, "Maximum native stdout bytes; stderr separately capped at 64KiB")
+	f.Int64Var(&r.Limits.MaxInputBytes, "max-input-bytes", r.Limits.MaxInputBytes, "Maximum total source input bytes (native stderr separately capped at 64KiB)")
 	f.Int64Var(&r.Limits.MaxOutputBytes, "max-output-bytes", r.Limits.MaxOutputBytes, "Maximum JSON report bytes; emits compact failure on overflow")
 	f.IntVar(&r.Limits.MaxTargets, "max-targets", r.Limits.MaxTargets, "Maximum discovered nodes (1..32)")
 	for _, item := range []struct {

@@ -19,13 +19,20 @@ sources:
             max_response_bytes: 2097152
             concurrency: 8
             timeout_ms: 30000
-  # Private settings are owned by each source module. These disabled connection
-  # placeholders do NOT install or implement their future clients (#460–#462).
+  # Prometheus works independently of wpcli/Admin, trace and Loki.
   prometheus:
     connections:
       local:
-        enabled: false
-        settings: {}
+        enabled: true
+        settings:
+          endpoint: http://127.0.0.1:9090
+          deployment: milvus-stack
+          match_labels:
+            cluster: wp-ops-v0146
+            namespace: milvus-stack
+            woodpecker_id: milvus-stack
+          # bearer_token_env: PROMETHEUS_TOKEN
+  # These disabled placeholders do not implement future clients (#461–#462).
   trace:
     connections:
       local:

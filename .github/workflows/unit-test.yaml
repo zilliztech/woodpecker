@@ -56,6 +56,13 @@ jobs:
           make wpcli wpdiag
           python3 cmd/wpdiag/tests/smoke.py
 
+      # Use the same Prometheus build as the Helm example, isolated from the
+      # operator's cluster. Deterministic TSDB fixtures cover retained samples.
+      - name: Run Prometheus source smoke test
+        run: |
+          docker pull quay.io/prometheus/prometheus:v3.0.1
+          python3 cmd/wpdiag/tests/prometheus_smoke.py
+
       - name: Upload coverage to Codecov
         if: success()
         uses: codecov/codecov-action@v5

@@ -28,7 +28,7 @@ func TestCLIIndependentCapabilitiesAndFailures(t *testing.T) {
 		{"bad timestamp", []string{"wpcli", "diagnose", "--from", "invalid"}, 2, "Invalid command"},
 		{"submillisecond duration", []string{"wpcli", "diagnose", "--window", "1ns"}, 2, "Invalid command"},
 		{"text unavailable source", []string{"loki", "diagnose", "--flow", "write"}, 3, "module_not_implemented"},
-		{"planned source", []string{"prometheus", "diagnose", "--scope", "e2e", "--flow", "read", "--stage", "query", "-o", "json"}, 3, "module_not_implemented"},
+		{"planned source", []string{"trace", "diagnose", "--scope", "e2e", "--flow", "read", "--stage", "query", "-o", "json"}, 3, "module_not_implemented"},
 		{"invalid stage", []string{"wpcli", "diagnose", "--flow", "write", "--stage", "wal_read", "-o", "json"}, 2, "invalid_selection"},
 		{"historical is unsupported", []string{"wpcli", "diagnose", "--flow", "write", "--mode", "historical", "--from", "2026-10-01T00:00:00Z", "--to", "2026-10-01T01:00:00Z", "-o", "json"}, 3, "profile_not_supported"},
 		{"missing config", []string{"wpcli", "diagnose", "--flow", "write", "--mode", "snapshot", "--connection", "local", "--config", filepath.Join(t.TempDir(), "missing.yaml"), "-o", "json"}, 2, "configuration_unavailable"},
