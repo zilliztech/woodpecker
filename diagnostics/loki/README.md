@@ -60,7 +60,13 @@ The patterns reference WP `server/logstore.go`, `server/maintenance.go`,
 `woodpecker/log/log_reader.go`, and Milvus `metricsutil/wal_write.go` and
 `proxy/search_reduce_util.go`. They recognize JSON `msg`/`message`, or bracket
 Zap `[timestamp] [WARN|ERROR|INFO] [caller] ["message"]` output. Version 1 is a
-pattern contract, not a claim to support every application release. Unknown
+pattern contract, not a claim to support every application release. Stream components
+and the escaped LogQL candidate-message filter are derived from this same selected
+scope/flow catalog. Components with no applicable rules (including querynode in
+v1) are not queried. Ordinary INFO/DEBUG traffic without candidate messages is
+filtered by Loki before its returned-line limit, so it cannot hide a later known
+error by exhausting that limit. Exact message/format validation still runs locally:
+a substring inside an error body is only a candidate, not a matching event. Unknown
 messages/formats remain uninterpreted. Read progress, timeouts, producer quota,
 flush and channel/log identity joins remain outside this initial catalog; inspect
 metrics/native evidence with their independent commands. Integration is #467.
@@ -71,7 +77,10 @@ Each finding cites actual executed `logql` page observations, with exact start
 and exclusive end nanoseconds, unique event IDs, timestamps, safe stream labels,
 pattern/version, counts and the **actual matching message excerpt**. Raw lines,
 error bodies, arbitrary attributes, structured metadata and authenticated URLs
-are withheld. Only validated request/trace IDs are retained. Keep IDs and selected
+are withheld. Only validated request/trace IDs are retained. Text IDs are read from top-level
+fields after the message, respecting quotes, escapes and nested brackets. IDs
+inside errors/objects/arrays are ignored; the first valid top-level field wins
+over later duplicates. JSON uses top-level structured fields. Keep IDs and selected
 labels free of secrets. Auth credentials and optional tenant headers are read from
 environment references, never exported; redirects are not followed.
 
@@ -82,6 +91,12 @@ produce an association finding; this does not establish causation or guarantee I
 uniqueness. Same-window errors are not joined. No collection-to-WP namespace/log
 mapping is inferred. Duplicate stream/timestamp/line identities are collapsed,
 with occurrence counts and a gap explaining replay versus producer ambiguity.
+Both request and trace identities are indexed when present. Identical event sets
+matched through both IDs produce one association. Result metadata's `associations`
+records each finding's exact event IDs and identity kinds. Partially overlapping
+sets retain separate associations and explicit shared-event lineage, rather than
+being transitively merged or counted as independent confirmations. Sharing an
+HTTP page observation alone is not enough to deduplicate different event sets.
 One event does not become multiple independent confirmations.
 
 Normal, idle, empty, no-match and unknown-format responses yield **inconclusive**.
@@ -91,9 +106,9 @@ success, not a healthy verdict. Suggested next checks were not executed.
 
 ## Bounds and failure behavior
 
-Source defaults: 8 queries, 500 lines/page, 2,000 returned lines including replay,
+Source defaults: 8 queries, 500 lines/page, 2,000 returned candidate lines including replay,
 2 MiB/response, 1 hour/window, 10 seconds/query. Configure under `settings.limits`:
-`max_queries` (1–32), `page_size` (1–5000), `max_lines` (1–20000),
+`max_queries` (1–32), `page_size` (1–5000), `max_lines` (1–20000, candidates including replay),
 `max_response_bytes` (1 KiB–8 MiB), `max_window_ms` (1–86400000),
 `timeout_ms` (1–60000). Shared input/output/time budgets and `--max-targets`
 (distinct streams, including container dimensions) also apply. There is no
@@ -110,8 +125,12 @@ budget exceeded 5, partial 6, cancelled 7. Partial observations remain available
 
 Tests include all six profiles, exact/changed formats, normal/idle/no-match,
 wrong scope/time, recovery, unrelated identities, replay, tied timestamps,
-authentication, redirects, limits and cancellation. The isolated real Loki test
-uses the Helm example's 3.5.7 image and only synthetic fixture logs:
+authentication, redirects, limits and cancellation. Regressions cover an actual WP
+text-encoder error body carrying fake IDs, both-ID/request-only peers, exact-set
+association deduplication and partially overlapping sets. The isolated real Loki test
+uses the Helm example's 3.5.7 image and 26 synthetic fixture cases, including
+2,500 ordinary lines before a known error and 12 unsupported-component streams
+with a single-target budget:
 
 ```bash
 go test -race ./diagnostics/loki ./cmd/wpdiag/cli

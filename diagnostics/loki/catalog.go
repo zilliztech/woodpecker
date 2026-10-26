@@ -1,6 +1,10 @@
 package loki
 
-import d "github.com/zilliztech/woodpecker/diagnostics"
+import (
+	"sort"
+
+	d "github.com/zilliztech/woodpecker/diagnostics"
+)
 
 type Module struct{}
 
@@ -48,17 +52,21 @@ func Catalog() []Pattern {
 	}
 }
 
+// Scope selectors come from the same catalog as the evaluator: a component
+// with no applicable patterns must not consume stream/line budgets.
 func components(scope, flow string) []string {
-	if scope == "wp" {
-		if flow == "read" {
-			return []string{"woodpecker", "streamingnode"}
+	set := map[string]bool{}
+	for _, p := range Catalog() {
+		if applicable(p, scope, flow) {
+			set[p.Component] = true
 		}
-		return []string{"woodpecker"}
 	}
-	if scope == "milvus" {
-		return []string{"proxy", "streamingnode", "querynode"}
+	out := []string{}
+	for role := range set {
+		out = append(out, role)
 	}
-	return []string{"woodpecker", "proxy", "streamingnode", "querynode"}
+	sort.Strings(out)
+	return out
 }
 
 func applicable(p Pattern, scope, flow string) bool {

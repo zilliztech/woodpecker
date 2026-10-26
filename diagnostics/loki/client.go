@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,7 +45,16 @@ func expression(s Settings, scope, flow, pod string) string {
 		parts = append(parts, "pod="+strconv.Quote(pod))
 	}
 	sort.Strings(parts)
-	return "{" + strings.Join(parts, ",") + "}"
+	// Filter candidate messages in Loki before its result limit is applied.
+	// Exact structured/text message validation still happens in parseEvent.
+	messages := []string{}
+	for _, p := range Catalog() {
+		if applicable(p, scope, flow) {
+			messages = append(messages, regexp.QuoteMeta(p.Message))
+		}
+	}
+	sort.Strings(messages)
+	return "{" + strings.Join(parts, ",") + "} |~ " + strconv.Quote(strings.Join(messages, "|"))
 }
 
 func (c *client) query(ctx context.Context, expr string, start, end int64, limit int, r d.Request) ([]row, string) {

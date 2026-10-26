@@ -23,10 +23,9 @@ type Event struct {
 }
 
 var (
-	identity     = regexp.MustCompile(`^[a-zA-Z0-9_:.\-]{1,128}$`)
-	trace        = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
-	textPrefix   = regexp.MustCompile(`^\[[^\]]+\] \[(WARN|ERROR|INFO)\] \[[^\]]+\] \[`)
-	bracketField = regexp.MustCompile(`\[(requestID|request_id|traceID|trace_id)=([^\]\r\n]+)\]`)
+	identity   = regexp.MustCompile(`^[a-zA-Z0-9_:.\-]{1,128}$`)
+	trace      = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
+	textPrefix = regexp.MustCompile(`^\[[^\]]+\] \[(WARN|ERROR|INFO)\] \[[^\]]+\] \[`)
 )
 
 func fingerprint(v any) string {
@@ -80,14 +79,7 @@ func parseEvent(line, ts string, labels map[string]string, scope, flow string) *
 				return nil
 			}
 		}
-		for _, m := range bracketField.FindAllStringSubmatch(line, -1) {
-			if strings.HasPrefix(m[1], "request") && identity.MatchString(m[2]) {
-				requestID = m[2]
-			}
-			if strings.HasPrefix(m[1], "trace") && trace.MatchString(m[2]) && strings.Trim(m[2], "0") != "" {
-				traceID = strings.ToLower(m[2])
-			}
-		}
+		requestID, traceID = textIdentities(tail[end+1:])
 	}
 	for _, p := range Catalog() {
 		if applicable(p, scope, flow) && p.Component == labels["component"] && p.Message == msg {
@@ -106,4 +98,78 @@ func parseEvent(line, ts string, labels map[string]string, scope, flow string) *
 func validNS(ts string) (int64, bool) {
 	n, e := strconv.ParseInt(ts, 10, 64)
 	return n, e == nil && n > 0 && strconv.FormatInt(n, 10) == ts
+}
+
+// Read only top-level fields following the message, honoring quoted strings and
+// nested brackets. IDs embedded in error strings, objects or arrays are not
+// event identities. Context fields precede call-site fields; keep the first
+// valid top-level ID rather than allowing a later duplicate to overwrite it.
+func textIdentities(fields string) (requestID, traceID string) {
+	for {
+		field, rest, ok := nextTextField(fields)
+		if !ok {
+			return
+		}
+		fields = rest
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(value, "\"") {
+			var decoded string
+			if json.Unmarshal([]byte(value), &decoded) != nil {
+				continue
+			}
+			value = decoded
+		}
+		switch key {
+		case "requestID", "request_id":
+			if requestID == "" && identity.MatchString(value) {
+				requestID = value
+			}
+		case "traceID", "trace_id":
+			if traceID == "" && trace.MatchString(value) && strings.Trim(value, "0") != "" {
+				traceID = strings.ToLower(value)
+			}
+		}
+	}
+}
+
+func nextTextField(text string) (field, rest string, ok bool) {
+	text = strings.TrimLeft(text, " \t")
+	if text == "" || text[0] != '[' {
+		return "", "", false
+	}
+	depth := 0
+	quoted, escaped := false, false
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if ch == '\n' || ch == '\r' {
+			return "", "", false
+		}
+		if quoted {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				quoted = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			quoted = true
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return text[1:i], text[i+1:], true
+			}
+		}
+	}
+	return "", "", false
 }

@@ -7,8 +7,9 @@ Helm stack. The native adapter (#454) runs the WP evidence collector from #451.
 The independent Prometheus module (#460) queries retained metrics and evaluates
 bounded WP/Milvus/E2E read/write profiles. The independent Milvus query-stage
 command (#466) interprets query-step metric facts. The independent Jaeger module
-(#461) diagnoses retained spans and relationship coverage. Loki and integrated
-E2E assessment remain separate work.
+(#461) diagnoses retained spans and relationship coverage. The independent Loki
+module (#462) diagnoses known log events with bounded candidate queries and
+explicit event/identity lineage. Integrated E2E assessment remains separate work.
 
 ## Build and run
 
@@ -44,7 +45,7 @@ sources:
 
 Save this as `wpdiag.yaml` and substitute your actual paths/context. See
 [wpdiag.example.yaml](wpdiag.example.yaml) for configurable native collection
-limits and disabled placeholders for planned sources. Connection references
+limits and independent Prometheus, Jaeger and Loki settings. Connection references
 are source-local; they are not another Kubernetes or wpcli context.
 
 ```bash
@@ -132,10 +133,10 @@ queue recovery interpretation, source policies and E2E mapping limitations.
 | wpcli | wp / read / wal_read | snapshot, live | node_id, or discovered nodes within budget | Implemented: native read_stall v1 |
 | Prometheus | WP/Milvus/E2E read/write profiles | live, historical | Explicit profile-declared deployment/instance/node filters | [Implemented catalog and limits](../../diagnostics/prometheus/README.md) |
 | Trace (Jaeger) | WP/Milvus/E2E read/write profiles | snapshot with exact ID; live, historical | deployment, trace_id, configured request-ID tag | [Implemented catalog and limits](../../diagnostics/jaeger/README.md) |
-| Loki | Future WP/Milvus/E2E read/write profiles | Not implemented | Not implemented | [#462](https://github.com/zilliztech/woodpecker/issues/462) |
+| Loki | WP/Milvus/E2E read/write profiles | live, historical | deployment, instance (Pod), operation_id (request ID) | [Implemented catalog and limits](../../diagnostics/loki/README.md) |
 
-`capabilities` is authoritative for implemented profiles. The Loki
-`diagnose` command returns `unsupported/module_not_implemented` and exit 3.
+`capabilities` is authoritative for implemented profiles. Invalid or unsupported
+profile/source selections remain explicit; missing evidence is not healthy.
 Historical input is represented by `--mode historical --from RFC3339 --to
 RFC3339`; wpcli rejects it before spawning a process. It never relabels current
 ops or metrics as historical. Log/segment/reader/collection/channel filters
@@ -214,6 +215,7 @@ go test -race ./diagnostics/... ./cmd/wpdiag/...
 make wpcli wpdiag
 python3 cmd/wpdiag/tests/smoke.py
 python3 cmd/wpdiag/tests/jaeger_smoke.py  # Isolated Jaeger 1.53 Docker fixture.
+python3 cmd/wpdiag/tests/loki_smoke.py    # Isolated Loki 3.5.7 Docker fixture.
 ```
 
 The smoke test runs both real binaries against a temporary loopback HTTP

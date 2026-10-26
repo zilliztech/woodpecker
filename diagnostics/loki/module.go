@@ -150,10 +150,10 @@ func (Module) Run(ctx context.Context, r d.Request, connection d.Connection) d.R
 			result.Status = "failed"
 		}
 	}
-	evaluate(&result, events, support, r, s)
+	associations := evaluate(&result, events, support, r, s)
 	gap("collector_retention_unknown", "Query success does not verify collector completeness, rotation, retention or delivery lag; no-match is never healthy")
 	gap("format_coverage_limited", "Only catalogued exact JSON or bracket Zap messages are interpreted; unmatched fields, unsupported versions and raw lines are withheld")
-	result.Metadata, _ = json.Marshal(map[string]any{"source_schema_version": "wpdiag.loki/v1", "catalog_version": 1, "bound_deployment": s.Deployment, "from": from, "to": to, "end_exclusive": true, "queries": queries, "returned_lines": total, "input_bytes": c.bytes, "duplicate_occurrences": duplicates, "pagination_complete": complete, "limits": s.Limits, "raw_lines_withheld": true})
+	result.Metadata, _ = json.Marshal(map[string]any{"source_schema_version": "wpdiag.loki/v1", "catalog_version": 1, "associations": associations, "bound_deployment": s.Deployment, "from": from, "to": to, "end_exclusive": true, "queries": queries, "returned_lines": total, "input_bytes": c.bytes, "duplicate_occurrences": duplicates, "pagination_complete": complete, "limits": s.Limits, "raw_lines_withheld": true})
 	return result
 }
 

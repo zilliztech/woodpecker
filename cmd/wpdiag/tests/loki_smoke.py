@@ -95,6 +95,41 @@ analytics:
                                        "component": "woodpecker", "pod": "woodpecker-1"},
                             "values": [[str(begin + 1_000_000_000), json.dumps({"msg": "add entry failed", "requestID": f"r-{i}"})]
                                        for i in range(5)]})
+            def add_stream(scenario, component, pod, values):
+                streams.append({"stream": {"namespace": name, "cluster": "fixture", "scenario": scenario,
+                                            "component": component, "pod": pod}, "values": values})
+
+            # Known WARN after more ordinary lines than the default line budget.
+            noise = [[str(begin + 1_000_000_000 + i * 100_000),
+                      json.dumps({"msg": f"ordinary INFO progress {i}"})] for i in range(2500)]
+            noise.append([str(begin + 3_000_000_000), json.dumps({"msg": "add entry failed"})])
+            add_stream("noise-before-error", "woodpecker", "woodpecker-1", noise)
+            # These streams even contain candidate text, but no rule applies to
+            # their component. They must not consume the single selected target.
+            for i in range(12):
+                add_stream("unsupported-streams", "querynode", f"querynode-{i}",
+                           [[str(begin + 1_000_000_000 + i), json.dumps({"msg": "append message into wal too slow"})]])
+            add_stream("unsupported-streams", "streamingnode", "sn-1",
+                       [[str(begin + 3_000_000_000), json.dumps({"msg": "append message into wal too slow"})]])
+            real_trace, fake_trace = "a" * 32, "b" * 32
+            text = ('[2026-10-26] [WARN] [logstore.go:295] ["add entry failed"] '
+                    f'[traceID={real_trace}] [requestID=real] '
+                    f'[error="failed [traceID={fake_trace}] [requestID=fake]"]')
+            add_stream("error-body-id", "woodpecker", "wp-1", [[str(begin + 1_000_000_000), text]])
+            add_stream("error-body-id", "streamingnode", "sn-1", [[str(begin + 2_000_000_000),
+                       json.dumps({"msg": "append message into wal too slow", "traceID": fake_trace})]])
+            for scenario in ["request-only-peer", "both-ids", "overlapping-ids"]:
+                add_stream(scenario, "proxy", "proxy-1", [[str(begin + 1_000_000_000),
+                           json.dumps({"msg": "failed to reduce search results", "requestID": "r-1", "traceID": real_trace})]])
+                peer = {"msg": "read entries error"}
+                if scenario != "overlapping-ids":
+                    peer["requestID"] = "r-1"
+                if scenario != "request-only-peer":
+                    peer["traceID"] = real_trace
+                add_stream(scenario, "streamingnode", "sn-1", [[str(begin + 2_000_000_000), json.dumps(peer)]])
+                if scenario == "overlapping-ids":
+                    add_stream(scenario, "woodpecker", "wp-1", [[str(begin + 3_000_000_000),
+                               json.dumps({"msg": "get batch entries failed", "requestID": "r-1"})]])
             req = urllib.request.Request(endpoint + "/loki/api/v1/push", data=json.dumps({"streams": streams}).encode(),
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=5) as response:
@@ -139,7 +174,28 @@ analytics:
             assert any(f["contradicting_observations"] for f in report["results"][0]["findings"])
             invoke("pagination", limits={"page_size": 1}, expected=6)
             invoke("tied boundary", scenario="tied", limits={"page_size": 2}, expected=6)
-            invoke("query budget", limits={"page_size": 2, "max_queries": 1}, expected=5)
+            invoke("query budget", scenario="tied", limits={"page_size": 2, "max_queries": 1}, expected=5)
+            report = invoke("noise does not hide known error", scenario="noise-before-error",
+                            outcome="suspected_operation_problem")
+            assert report["results"][0]["metadata"]["returned_lines"] == 1, report
+            assert " |~ " in report["results"][0]["observations"][0]["query"]["expression"]
+            invoke("unsupported components do not consume targets", scenario="unsupported-streams", scope="e2e",
+                   outcome="suspected_operation_problem", extra=["--max-targets", "1"])
+            report = invoke("error body cannot replace event ID", scenario="error-body-id", scope="e2e")
+            assert not report["results"][0]["metadata"]["associations"], report
+            invoke("error body cannot match operation selector", scenario="error-body-id",
+                   extra=["--operation-id", "fake"], outcome="inconclusive")
+            invoke("real event operation remains selectable", scenario="error-body-id",
+                   extra=["--operation-id", "real"], outcome="suspected_operation_problem")
+            for scenario, count, kinds in [("request-only-peer", 1, ["request"]),
+                                           ("both-ids", 1, ["request", "trace"]),
+                                           ("overlapping-ids", 2, None)]:
+                report = invoke(scenario, scenario=scenario, scope="e2e", flow="read", outcome="related_component_events")
+                associations = report["results"][0]["metadata"]["associations"]
+                assert len(associations) == count, report
+                if kinds:
+                    assert associations[0]["identity_kinds"] == kinds, associations
+                assert all(len(a["event_ids"]) == 2 for a in associations), associations
             print(json.dumps({"checks": checks, "count": len(checks)}, indent=2))
         finally:
             if started:
