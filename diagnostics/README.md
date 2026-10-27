@@ -32,13 +32,14 @@ context. Use only bounded read-only operations and honor the context.
 The first Engine version runs one source, with no fallback to another. A source
 module can assess its own cross-component evidence under scope=e2e; that does
 not grant it evidence from other sources. Multi-source execution and synthesis
-remain #467; Milvus stage rules are separate modules (#463–#466).
+are provided by the integrated runner (#467); Milvus stage rules remain
+separate modules (#463–#466).
 
 ## Selection
 
 | Field | Meaning |
 | --- | --- |
-| sources | wpcli, prometheus, trace, loki; deduplicated, but v1 runner accepts exactly one |
+| sources | wpcli, prometheus, trace, loki; deduplicated; single-module engine accepts exactly one; integrated runner accepts a set |
 | scope | wp, milvus, e2e |
 | flow | write, read |
 | stage | Stable profile-declared stage ID; append/persistence are write, wal_read/consume/query are read |
@@ -153,3 +154,11 @@ Standalone [Loki log diagnosis](loki/README.md) owns its connection, six initial
 `milvusappend.Run` and pure `milvusappend.Assess` provide the independently runnable [append-stage assessment](milvusappend/README.md), reusing source-owned metric rules with explicit WP mapping gaps.
 
 `milvuspersistence.Run` and pure `milvuspersistence.Assess` provide the independently runnable [persistence/flush/checkpoint assessment](milvuspersistence/README.md), preserving source-owned rules and explicit WP parallel-path/mapping gaps.
+
+## Integrated execution
+
+The single-module engine remains independently usable. [`integrated`](integrated/README.md)
+adds the `wpdiag run` planner, bounded concurrent execution and `wpdiag.run/v1`
+envelope. It reuses collectors and pure stage assessors, retains original
+evidence/IDs, and keeps current native context separate from historical
+incidents. It does not add source rules or infer missing Milvus/WP mappings.

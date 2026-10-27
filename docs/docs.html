@@ -7373,7 +7373,7 @@ TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke -x</code></pre></div></div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-wpcli">
 <h1>wpcli Operations in the Stack</h1>
 <p class="page-desc">Connect to the WP service cluster, attach the selected Milvus instance’s WP client metadata, and use both views during an investigation.</p>
-<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-wpcli/prepare">Prepare wpcli and local access</a><a href="#stack-examples-wpcli/scopes">Understand the two connection scopes</a><a href="#stack-examples-wpcli/commands">Inspect nodes and metadata</a><a href="#stack-examples-wpcli/shell">Keep an interactive operational session</a><a href="#stack-examples-wpcli/investigate">Use wpcli with the dashboards</a></nav>
+<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-wpcli/prepare">Prepare wpcli and local access</a><a href="#stack-examples-wpcli/scopes">Understand the two connection scopes</a><a href="#stack-examples-wpcli/commands">Inspect nodes and metadata</a><a href="#stack-examples-wpcli/shell">Keep an interactive operational session</a><a href="#stack-examples-wpcli/integrated">Plan an integrated diagnosis</a><a href="#stack-examples-wpcli/investigate">Use wpcli with the dashboards</a></nav>
 
 <h2 id="stack-examples-wpcli-prepare">Prepare wpcli and local access</h2>
 <p>Install wp using the <a href="#operations-cli-local/start">CLI setup guide</a>, and check <code>wp version</code> and <code>wp --help</code>. The noninteractive examples work with the established operations; interactive <code>wp shell</code> requires a source build containing the shell addition and is not part of v0.1.47.</p>
@@ -7418,6 +7418,22 @@ node list
 meta log list</code></pre></div></div>
 <p><code>status --check</code> verifies Admin and etcd access for the current session. These connection checks establish reachability; use a workload and the relevant log/data checks to establish application progress and readability.</p>
 
+<h2 id="stack-examples-wpcli-integrated">Plan an integrated diagnosis</h2>
+<p><code>wpdiag run</code> selects the existing source modules and stage assessors through one bounded, headless command. Begin with the plan to see module/profile versions, source connections, windows and budgets before collecting evidence. Configure only the sources you need; the example stack is optional. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/integrated">integrated diagnosis guide and supported matrix</a>.</p>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>make wpcli wpdiag
+bin/wpdiag run --list
+bin/wpdiag run --config wpdiag.yaml --scope e2e --flow write --plan
+bin/wpdiag run --config wpdiag.yaml --scope e2e --flow write \
+  --sources prometheus,wpcli --stages append \
+  --window 30s --budget 1m --progress -o json &gt; run.json</code></pre></div></div>
+<p>Write auto plans select append/persistence metrics; read plans select consume/query metrics. Native WP and optional trace/log source overviews keep their own declared coverage. Choose exact sources/modules and source-local connections when needed. Explicitly selected unavailable sources produce partial/error status; completed execution is not a cluster-health verdict. Reports retain original finding IDs, evidence, contradictions, uncertainties and next checks.</p>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Substitute the incident interval and your own named connections.
+bin/wpdiag run --config wpdiag.yaml --scope e2e --flow write \
+  --sources prometheus,wpcli --stages append --current-native \
+  --connections prometheus=metrics,wpcli=native \
+  --mode historical --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z -o json</code></pre></div></div>
+<p>Historical auto plans omit current native state. <code>--current-native</code> adds a separately labeled snapshot, which cannot disprove a historical incident. Matching observed trace IDs, deployment binding and actual event times can associate retained Jaeger/Loki evidence. Missing channel/WP-client metadata mappings remain explicit; same-time anomalies and matching numeric IDs are not joined. The CLI and future WebUI share the runner's run/cancel/progress/report API; this version introduces no WebUI server.</p>
+
 <h2 id="stack-examples-wpcli-investigate">Use wpcli with the dashboards</h2>
 <p>For slow query/search, the independent <code>wpdiag milvus query</code> command uses a Prometheus connection to assess Proxy completion, visibility waiting, scheduling, execution/loading and result return. It preserves source evidence and distinguishes persistent ready backlog from recovery; TSafe or query delay alone does not implicate WP. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvusquery">query-stage guide, metric catalog and evidence limits</a>.</p>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>bin/wpdiag milvus query --list
@@ -7442,7 +7458,7 @@ bin/wpdiag wpcli diagnose --config wpdiag.yaml --connection local \
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Configure sources.trace.connections.stack in wpdiag.yaml; replace the ID.
 bin/wpdiag trace diagnose --config wpdiag.yaml --connection stack \
   --scope e2e --flow write --mode snapshot --trace-id YOUR_TRACE_ID -o json</code></pre></div></div>
-<p>For a retained metric interval, the separate <code>wpdiag prometheus diagnose</code> command works using only a Prometheus connection. It has WP, Milvus and source-only E2E read/write profiles that report observed latency bounds, throughput changes, exported admission pressure and evidence gaps. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/prometheus">Prometheus setup, metric catalog and interpretation guide</a>. These profiles assess component populations independently; full business-stage and cross-source diagnosis remain later modules.</p>
+<p>For a retained metric interval, the separate <code>wpdiag prometheus diagnose</code> command works using only a Prometheus connection. It has WP, Milvus and source-only E2E read/write profiles that report observed latency bounds, throughput changes, exported admission pressure and evidence gaps. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/prometheus">Prometheus setup, metric catalog and interpretation guide</a>. These profiles assess component populations independently; use the stage commands or integrated runner to compose the available stage assessments while retaining their evidence limits.</p>
 <div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Configure a Prometheus connection named stack and use your workload's UTC interval.
 bin/wpdiag prometheus diagnose --config wpdiag.yaml --connection stack \
   --scope e2e --flow write --mode historical \
