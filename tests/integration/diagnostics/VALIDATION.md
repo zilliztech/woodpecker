@@ -119,4 +119,6 @@ these hashes identify this observation, not a portable live connection.
 | `wpdiag` | `68f63e3f2f5c58f67b9534da9681b5d413bb69a9069ec94fedafa08947ec3685` |
 
 WebUI, trace/Loki combinations, other stage/scenario matrices, restart/reset/scrape-gap
-acceptance and full trace propagation remain outside this receipt. #458 stays open.
+acceptance and full trace propagation remain outside this receipt. #458 was subsequently
+closed after this first subset; outstanding validation is tracked through #450 and
+focused follow-ups, including #484. This does not change the recorded test results.

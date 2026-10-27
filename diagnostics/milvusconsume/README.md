@@ -159,12 +159,18 @@ Use `prometheus.ConsumeModule` to collect source facts and
 `milvusconsume.Assess(ctx, report)` to apply these same stage rules without
 I/O, mutation or threshold duplication. Equivalent repeated assessment keeps
 IDs stable; schema/profile/window/identity/reference conflicts fail closed.
-Future [#467](https://github.com/zilliztech/woodpecker/issues/467) can reuse it.
-No integrated runner, WebUI, runtime intervention or client end-to-end latency
-measurement is implemented here. Ordinary cancellation, partial/error status
-and byte/query limits apply.
+The [integrated runner](../integrated/README.md) reuses this owner implementation;
+the WebUI invokes the same runner. This package does not implement runtime
+intervention or client end-to-end latency measurement. Ordinary cancellation,
+partial/error status and byte/query limits apply.
 
 ## Verify
+
+For an explicitly opted-in real deployment, see the
+[scanner-startup / initial visibility acceptance guide](../../tests/integration/diagnostics/CONSUME.md).
+It uses acknowledged data and a native configuration control to corroborate
+retained source observations; the consume command itself remains read-only and
+does not query management settings or infer a per-reader frontier from pause alone.
 
 ```bash
 go test -race -cover ./diagnostics/... ./cmd/wpdiag/cli

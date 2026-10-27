@@ -1,5 +1,11 @@
 # Deployed diagnostic CLI acceptance
 
+The separate [consume startup/visibility scenario](CONSUME.md) tracks #484:
+working and idle controls, an actual new-scanner pause, bounded initial-visibility
+timeouts, exact recovery correctness and retained historical/composed diagnosis.
+It does not require full trace propagation. #458 was closed after the first CLI
+subset; remaining validation is tracked through #450 and focused follow-ups.
+
 This is the first deployed scenario for [#458](https://github.com/zilliztech/woodpecker/issues/458):
 **normal writes and strong queries → controlled admission slowdown → recovery**.
 It tests the existing independent `wpdiag milvus append` / `milvus query` commands
@@ -183,5 +189,5 @@ deployment receipt and its limitations.
 
 This scenario covers a subset of #458. WebUI interaction/cancellation, trace and Loki
 combinations, other stages, identity conflicts and restart/reset/source-gap
-acceptance remain in the parent validation matrix. It does not close #458 or
+acceptance remain in the #450 follow-up validation matrix. The first subset did not complete all of #458 or
 establish complete Milvus-to-WP trace propagation (#459).
