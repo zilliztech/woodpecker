@@ -255,7 +255,7 @@ func (w *worker) verify(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, w.options.timeout)
 	defer cancel()
 	reply, err := w.api.Query(ctx, &milvuspb.QueryRequest{DbName: "default", CollectionName: w.options.collection, Expr: "id >= 0",
-		OutputFields: []string{"id"}, QueryParams: []*commonpb.KeyValuePair{{Key: "limit", Value: strconv.Itoa(w.options.rows)}}, ConsistencyLevel: commonpb.ConsistencyLevel_Strong})
+		OutputFields: []string{"id"}, QueryParams: []*commonpb.KeyValuePair{{Key: "limit", Value: strconv.Itoa(w.options.rows + 1)}}, ConsistencyLevel: commonpb.ConsistencyLevel_Strong})
 	if err != nil || !successful(reply.GetStatus()) {
 		return errors.New("exact-ID verification request failed")
 	}

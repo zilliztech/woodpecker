@@ -42,7 +42,10 @@ isolated nested module. Go 1.25.0 built the diagnostic CLI. Exact binary hashes:
 The executed Python harness hash was
 `027be354727fa50526979fe64261939ee855facde0e5849c4374c0f5157399ef`.
 The later Go EOF-cancellation helper extraction preserves the same behavior and
-has a dedicated blocked-RPC regression; recorded executed-code hashes are retained.
+has a dedicated blocked-RPC regression. The exact-ID verifier was also hardened
+to request one extra row so a query limit cannot hide an unexpected additional ID;
+its positive/extra-row cases have protocol regressions. The recorded deployment
+run predates that additional check; executed-code hashes are retained.
 
 ## Execution and actual results
 
@@ -107,7 +110,7 @@ incidents still require requested-timestamp/frontier and consumption investigati
   exclusive namespace lock was released. No existing collection or shared setting
   was changed. Raw source evidence and private connections remain local.
 
-Six Go protocol/cancellation tests passed with the race detector, including actual
+Seven Go protocol/cancellation tests passed with the race detector, including actual
 serialized custom/Strong RPCs, incorrect successful IDs, transport/deadline errors,
 server-timestamp bounds/precision, parent-pipe EOF cancellation of a blocked RPC,
 offline planning and receipt preservation. The Python evidence/lifecycle suite

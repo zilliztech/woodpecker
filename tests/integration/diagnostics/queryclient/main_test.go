@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,13 +28,14 @@ import (
 // Protocol fixture only: it validates actual serialized RPCs, not Milvus storage.
 type fixture struct {
 	milvuspb.UnimplementedMilvusServiceServer
-	mu      sync.Mutex
-	queries []*milvuspb.QueryRequest
-	search  []*milvuspb.SearchRequest
-	wrong   bool
-	fail    bool
-	block   bool
-	started chan struct{}
+	mu        sync.Mutex
+	queries   []*milvuspb.QueryRequest
+	search    []*milvuspb.SearchRequest
+	wrong     bool
+	fail      bool
+	block     bool
+	started   chan struct{}
+	totalRows int
 }
 
 const serverTS uint64 = 470000000000000123
@@ -57,6 +59,21 @@ func (f *fixture) Query(ctx context.Context, r *milvuspb.QueryRequest) (*milvusp
 	f.mu.Lock()
 	f.queries = append(f.queries, r)
 	f.mu.Unlock()
+	if r.GetExpr() == "id >= 0" && f.totalRows > 0 {
+		limit := 0
+		for _, param := range r.GetQueryParams() {
+			if param.GetKey() == "limit" {
+				limit, _ = strconv.Atoi(param.GetValue())
+			}
+		}
+		ids := make([]int64, min(limit, f.totalRows))
+		for i := range ids {
+			ids[i] = int64(i)
+		}
+		field := fields(0)[0]
+		field.GetScalars().GetLongData().Data = ids
+		return &milvuspb.QueryResults{Status: &commonpb.Status{}, FieldsData: []*schemapb.FieldData{field}}, nil
+	}
 	var id int64
 	_, _ = fmt.Sscanf(r.GetExpr(), "id == %d", &id)
 	if f.wrong {
@@ -143,6 +160,19 @@ func TestIncorrectSuccessfulIDsAndTransportErrorsDoNotPass(t *testing.T) {
 		err := w.read(context.Background(), 5, serverTS, 0, false, true)
 		if err == nil || strings.Contains(err.Error(), "sentinel") || len(w.records) != 1 || w.records[0].OK {
 			t.Fatal("incorrect/private response passed")
+		}
+	}
+}
+
+func TestExactVerificationRejectsAnUnexpectedExtraRow(t *testing.T) {
+	for _, expected := range []int{1, 2} {
+		w := worker{api: client(t, &fixture{totalRows: 2}), options: options{rows: expected, timeout: time.Second}}
+		err := w.verify(context.Background())
+		if expected == 1 && err == nil {
+			t.Fatal("query limit hid an unexpected extra row")
+		}
+		if expected == 2 && err != nil {
+			t.Fatal(err)
 		}
 	}
 }
