@@ -180,3 +180,23 @@ imports OTLP fixture spans, then runs the real diagnostic binary. It does not
 touch an existing stack. See the pinned primary API definitions for
 [Jaeger JSON units/references](https://github.com/jaegertracing/jaeger/blob/v1.53.0/model/json/model.go)
 and [bounded query parameters](https://github.com/jaegertracing/jaeger/blob/v1.53.0/cmd/query/app/query_parser.go).
+
+## Queued WP append compatibility (#459)
+
+The [actual queue/gRPC exporter probe](../../tests/integration/tracing/README.md)
+verifies parent propagation for single entries and independent batch traces
+linked to contributing input spans. The catalog recognizes exact scopes
+`AppendOp`/`BatchAppendOp` with operation `Execute` and qualified WP
+`LogStore/AddEntry`/`LogStore/AddEntries` RPC names. A generic Execute is not a
+recognized stage. Embedded client scopes count as WP work, not evidence of the
+Milvus WAL stage merely because their process is named StreamingNode. Batch
+Execute is asynchronous; it is not a serial timer or proof of all linked
+requests' progress. External traces are not automatically fetched/merged.
+Older Milvus builds can remain partial even with the WP propagation fix.
+
+A qualified WP append **client** RPC with an unambiguous gRPC Cancelled status
+returns `observed_rpc_cancellation` with unknown impact. WP cancels an
+acknowledged stream without reading another EOF; genuine interruption is also
+possible. The raw normalized error flag remains true and no write-success or
+write-failure conclusion is inferred. Server cancellations, other errors and
+ambiguous tags are not downgraded by this compatibility rule.

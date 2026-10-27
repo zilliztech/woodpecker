@@ -87,7 +87,7 @@ func evaluate(ctx context.Context, r d.Request, s Settings, t *Trace, obsID stri
 			case "proxy":
 				mask |= 1
 			case "streamingnode":
-				if span.Scope != "LogWriter" && span.Scope != "LogReader" {
+				if !wpClientScope(span.Scope) {
 					mask |= 2
 				}
 			case "wp_server":
@@ -97,7 +97,7 @@ func evaluate(ctx context.Context, r d.Request, s Settings, t *Trace, obsID stri
 			case "wp_client":
 				mask |= 16
 			}
-			if span.Scope == "LogWriter" || span.Scope == "LogReader" {
+			if wpClientScope(span.Scope) {
 				mask |= 16
 			}
 		}
@@ -155,6 +155,9 @@ func evaluate(ctx context.Context, r d.Request, s Settings, t *Trace, obsID stri
 		rule := "trace.slow_span"
 		if span.Error {
 			rule = "trace.span_error"
+			if d.Has(span.Notes, "append_rpc_cancellation_outcome_unverified") {
+				rule = "trace.rpc_cancellation"
+			}
 		}
 		f := finding(r, *t, obsID, rule+":"+span.ID)
 		f.RuleID = rule
@@ -169,6 +172,11 @@ func evaluate(ctx context.Context, r d.Request, s Settings, t *Trace, obsID stri
 			f.Outcome = "observed_span_error"
 		}
 		f.Summary = fmt.Sprintf("Trace %s span %s: %s/%s (%s), duration %.3fms; threshold %.3fms, error=%t. Span timing/flags identify suspicious observed work, not the cause", t.ID, span.ID, span.Service, span.Operation, span.Phase, ms, s.Policy.SlowSpanMS, span.Error)
+		if rule == "trace.rpc_cancellation" {
+			f.Outcome, f.Severity, f.Strength = "observed_rpc_cancellation", "unknown", "observed_transport_status"
+			f.Unknown = appendUnique(f.Unknown, "synced_ack_not_reconstructed_from_transport_status")
+			f.Summary += "; WP cancels streams after final acknowledgement, but caller/transport interruption is also possible: inspect actual append outcome; this flag alone proves neither failure nor success"
+		}
 		results = append(results, f)
 	}
 	if r.Selection.Flow == "read" && r.Selection.Scope != "wp" {

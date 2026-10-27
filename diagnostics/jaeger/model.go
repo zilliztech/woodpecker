@@ -85,10 +85,20 @@ type Trace struct {
 	Notes []string `json:"coverage_notes"`
 }
 
+func wpClientScope(scope string) bool {
+	return d.Has([]string{"LogWriter", "LogReader", "AppendOp", "BatchAppendOp"}, scope)
+}
+
 func knownOperation(role, scope, op, flow string) (bool, string) {
-	if role == "wp_server" || role == "wp_client" || scope == "LogWriter" || scope == "LogReader" {
+	if role == "wp_server" || role == "wp_client" || wpClientScope(scope) {
 		if flow == "write" {
-			if d.Has([]string{"Write", "WriteAsync", "AddEntry", "AddEntryBatch", "AppendAsync", "Sync", "run_sync", "rollBufferUnsafe", "waitIfFlushingBufferSizeExceededUnsafe"}, op) {
+			if op == "Execute" && d.Has([]string{"AppendOp", "BatchAppendOp"}, scope) {
+				if scope == "BatchAppendOp" {
+					return true, "async"
+				}
+				return true, "append_send"
+			}
+			if d.Has([]string{"Write", "WriteAsync", "AddEntry", "AddEntryBatch", "woodpecker.proto.logstore.LogStore/AddEntry", "woodpecker.proto.logstore.LogStore/AddEntries", "AppendAsync", "Sync", "run_sync", "rollBufferUnsafe", "waitIfFlushingBufferSizeExceededUnsafe"}, op) {
 				phase := "execution"
 				if op == "waitIfFlushingBufferSizeExceededUnsafe" {
 					phase = "buffer_wait"
@@ -119,7 +129,7 @@ func knownOperation(role, scope, op, flow string) (bool, string) {
 }
 
 func selectedSpan(s Span, scope string) bool {
-	wp := s.Role == "wp_client" || s.Role == "wp_server" || s.Scope == "LogWriter" || s.Scope == "LogReader"
+	wp := s.Role == "wp_client" || s.Role == "wp_server" || wpClientScope(s.Scope)
 	return scope == "e2e" || scope == "wp" && wp || scope == "milvus" && !wp && d.Has([]string{"proxy", "streamingnode", "querynode", "segcore"}, s.Role)
 }
 

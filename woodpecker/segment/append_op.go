@@ -64,6 +64,10 @@ var _ Operation = (*AppendOp)(nil)
 // If it is, it sends an acknowledgment back to the application.
 // If a LogStore fails, it retries multiple times.
 type AppendOp struct {
+	// Captured before queue publication. Retain trace identity only: execution
+	// intentionally does not inherit the caller's cancellation or deadline.
+	traceParent trace.SpanContext
+
 	mu         sync.Mutex
 	bucketName string
 	rootPath   string
@@ -178,7 +182,11 @@ func (op *AppendOp) recordReplicaResult(serverIndex int, status string) {
 }
 
 func (op *AppendOp) Execute() {
-	ctx, sp := logger.NewIntentCtx("AppendOp", "Execute")
+	parent := trace.ContextWithSpanContext(context.Background(), op.traceParent)
+	ctx, sp := logger.NewIntentCtxWithOptions(parent, "AppendOp", "Execute",
+		trace.WithAttributes(attribute.String("log_id", strconv.FormatInt(op.logId, 10)),
+			attribute.String("segment_id", strconv.FormatInt(op.segmentId, 10)),
+			attribute.String("entry_id", strconv.FormatInt(op.entryId, 10))))
 	defer sp.End()
 	op.mu.Lock()
 	defer op.mu.Unlock()

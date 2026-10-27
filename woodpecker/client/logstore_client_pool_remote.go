@@ -244,8 +244,10 @@ func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, err
 		),
 		// NOTE: grpc.WithBlock() is not used here because it will block the connection
 		grpc.WithConnectParams(connectParams(p.dial)),
-		grpc.WithChainUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
-		grpc.WithChainStreamInterceptor(otelgrpc.StreamClientInterceptor()),
+		// Stream callers stop after the protocol's Synced frame and cancel rather
+		// than reading a final EOF. The deprecated stream interceptor only
+		// ends its span on RecvMsg error/EOF; stats.End also handles cancellation.
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	}
 	cnx, err := grpc.NewClient(target, options...)
 	if err != nil {

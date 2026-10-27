@@ -84,7 +84,7 @@ func mergedValue(span []tag, process []tag, key string) (string, bool, bool) {
 func scopeName(tags []tag) string {
 	for _, key := range []string{"otel.scope.name", "otel.library.name"} {
 		v, ok, bad := value(tags, key)
-		if ok && !bad && d.Has([]string{"LogWriter", "LogReader", "LogStore", "SegmentProcessor", "StagedFileWriter", "LocalFileWriter", "MinioFileWriter"}, v) {
+		if ok && !bad && d.Has([]string{"LogWriter", "LogReader", "AppendOp", "BatchAppendOp", "LogStore", "SegmentProcessor", "StagedFileWriter", "LocalFileWriter", "MinioFileWriter"}, v) {
 			return v
 		}
 	}
@@ -297,6 +297,16 @@ func decodeTrace(wt wireTrace, id string, r d.Request, s Settings, from, to time
 		known, phase := knownOperation(role, span.Scope, ws.Operation, r.Selection.Flow)
 		if known {
 			span.Operation, span.Phase = ws.Operation, phase
+		}
+		// WP ends acknowledged append streams by cancellation without another
+		// Recv. Retain the error flag, but do not infer application failure from
+		// an exact client RPC cancellation; genuine interruption is also possible.
+		if role == "wp_client" && d.Has([]string{"woodpecker.proto.logstore.LogStore/AddEntry", "woodpecker.proto.logstore.LogStore/AddEntries"}, ws.Operation) {
+			kind, hasKind, badKind := value(ws.Tags, "span.kind")
+			code, hasCode, badCode := value(ws.Tags, "rpc.grpc.status_code")
+			if hasKind && !badKind && kind == "client" && hasCode && !badCode && code == "1" {
+				span.Notes = append(span.Notes, "append_rpc_cancellation_outcome_unverified")
+			}
 		}
 		span.Error, _ = isError(ws.Tags)
 		if _, bad := isError(ws.Tags); bad {

@@ -12,6 +12,7 @@ on:
       - "go.sum"
       - "cmd/wpdiag/**"
       - "diagnostics/**"
+      - "tests/integration/tracing/**"
       - "Makefile"
       - ".github/workflows/unit-test.yaml"
   pull_request:
@@ -24,6 +25,7 @@ on:
       - "go.sum"
       - "cmd/wpdiag/**"
       - "diagnostics/**"
+      - "tests/integration/tracing/**"
       - "Makefile"
       - ".github/workflows/unit-test.yaml"
 
@@ -73,6 +75,18 @@ jobs:
         run: |
           docker pull jaegertracing/all-in-one:1.53.0
           python3 cmd/wpdiag/tests/jaeger_smoke.py
+
+      - name: Verify emitted append trace propagation
+        run: python3 tests/integration/tracing/append_propagation.py --output /tmp/wp-append-trace-evidence
+
+      - name: Upload append trace evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: append-trace-propagation
+          path: /tmp/wp-append-trace-evidence
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run Loki source smoke test
         run: |

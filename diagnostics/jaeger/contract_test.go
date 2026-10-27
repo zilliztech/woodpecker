@@ -241,3 +241,62 @@ func TestTraceSelectorsAreSourceOwnedAndCanonical(t *testing.T) {
 	_, err = d.Normalize(r.Selection)
 	require.Error(t, err)
 }
+
+func TestQueuedAppendScopeDoesNotSupplyMilvusStage(t *testing.T) {
+	for _, scope := range []string{"AppendOp", "BatchAppendOp"} {
+		t.Run(scope, func(t *testing.T) {
+			tr := fixture("write")
+			tr.Spans[1].Operation = "Execute"
+			tr.Spans[1].Tags = []tag{testTag("otel.scope.name", scope)}
+			server := serve(t, []wireTrace{tr})
+			report := run(t, request("e2e", "write"), connection(t, server.URL, nil))
+			require.Equal(t, "completed", report.Status)
+			for _, f := range report.Results[0].Findings {
+				if f.RuleID == "trace.relationship_coverage" {
+					require.Equal(t, "partial_observed_path", f.Outcome)
+					require.Contains(t, f.Unknown, "expected_connected_stages_not_established")
+				}
+			}
+			var normalized Trace
+			require.NoError(t, json.Unmarshal(report.Results[0].Observations[1].Data, &normalized))
+			require.Equal(t, scope, normalized.Spans[1].Scope)
+			require.True(t, selectedSpan(normalized.Spans[1], "wp"))
+			require.False(t, selectedSpan(normalized.Spans[1], "milvus"))
+		})
+	}
+	known, _ := knownOperation("wp_client", "", "Execute", "write")
+	require.False(t, known, "a generic Execute name is not enough to identify a WP append")
+	known, _ = knownOperation("wp_client", "AppendOp", "Execute", "read")
+	require.False(t, known, "write execution is not a read path")
+}
+
+func TestAppendRPCCancellationDoesNotAssertApplicationFailure(t *testing.T) {
+	for _, tc := range []struct{ name, kind, code, outcome string }{
+		{"client cancellation", "client", "1", "observed_rpc_cancellation"},
+		{"server cancellation", "server", "1", "observed_span_error"},
+		{"client unavailable", "client", "14", "observed_span_error"},
+		{"conflicting status", "client", "1", "observed_span_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := fixture("write")
+			tr.Spans[2].Operation = "woodpecker.proto.logstore.LogStore/AddEntry"
+			tr.Spans[2].Tags = []tag{testTag("span.kind", tc.kind), testTag("rpc.grpc.status_code", tc.code), testTag("error", "true")}
+			if tc.name == "conflicting status" {
+				tr.Spans[2].Tags = append(tr.Spans[2].Tags, testTag("rpc.grpc.status_code", "14"))
+			}
+			server := serve(t, []wireTrace{tr})
+			report := run(t, request("wp", "write"), connection(t, server.URL, nil))
+			require.Equal(t, "completed", report.Status)
+			found := false
+			for _, f := range report.Results[0].Findings {
+				if f.Outcome == tc.outcome {
+					found = true
+					if tc.outcome == "observed_rpc_cancellation" {
+						require.Equal(t, "unknown", f.Severity)
+					}
+				}
+			}
+			require.True(t, found)
+		})
+	}
+}
