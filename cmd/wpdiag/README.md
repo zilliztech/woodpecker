@@ -59,6 +59,11 @@ checks normal traffic, a controlled admission slowdown, and recovery against an
 explicitly opted-in disposable stack. It verifies client correctness/latency,
 standalone/composed findings and retained history with current native context.
 This is the first subset of #458; it does not require the WebUI.
+The separate [consume acceptance scenario](../../tests/integration/diagnostics/CONSUME.md)
+checks working/idle traffic, new-scanner startup pause and initial visibility,
+then exact recovery and historical/composed evidence. It does not require
+complete trace propagation or claim an already-loaded reader stall.
+
 The [loaded query/search acceptance guide](../../tests/integration/diagnostics/QUERY.md)
 uses a server-derived Customized guarantee timestamp and paired Strong controls to
 validate TSafe-wait findings, exact results and historical/composed consistency.

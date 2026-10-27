@@ -26,10 +26,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-values", type=Path, default=ROOT / "deployments/milvus-full-stack-helm/values/milvus.yaml")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--profile", choices=("admission", "consume"), default="admission")
     args = parser.parse_args()
     values = yaml.safe_load(args.base_values.read_text())
     user = yaml.safe_load(values.get("extraConfigFiles", {}).get("user.yaml", "")) or {}
-    result = {"extraConfigFiles": {"user.yaml": yaml.safe_dump(merge(user, BASELINE), sort_keys=False)}}
+    baseline = BASELINE if args.profile == "admission" else {"streaming": {"walScanner": {"pauseConsumption": False}}}
+    result = {"extraConfigFiles": {"user.yaml": yaml.safe_dump(merge(user, baseline), sort_keys=False)}}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print("Wrote disposable baseline Helm override: " + str(args.output))

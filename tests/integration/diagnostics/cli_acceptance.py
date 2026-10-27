@@ -18,6 +18,7 @@ from pathlib import Path
 import queue
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -55,6 +56,12 @@ def save(path, value):
     temporary.replace(path)
 
 
+class HTTPRequestError(RuntimeError):
+    def __init__(self, message, kind):
+        super().__init__(message)
+        self.kind = kind
+
+
 def http(base, path, payload=None, timeout=10):
     url = base + path
     request = urllib.request.Request(url, data=None if payload is None else json.dumps(payload).encode(),
@@ -68,9 +75,11 @@ def http(base, path, payload=None, timeout=10):
             data = json.loads(raw)
     except urllib.error.HTTPError as error:
         error.close()
-        raise RuntimeError("HTTP request failed with status " + str(error.code)) from None
+        raise HTTPRequestError("HTTP request failed with status " + str(error.code), "http_status") from None
     except (OSError, ValueError) as error:
-        raise RuntimeError("HTTP request failed at " + path.split("?", 1)[0] + " (" + type(error).__name__ + "); response/connection values withheld") from None
+        reason = error.reason if isinstance(error, urllib.error.URLError) else error
+        kind = "timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "request_failed"
+        raise HTTPRequestError("HTTP request failed at " + path.split("?", 1)[0] + " (" + kind + "); response/connection values withheld", kind) from None
     if isinstance(data, dict) and data.get("code", 0) != 0:
         raise RuntimeError("Milvus returned code " + str(data["code"]))
     return data
@@ -138,16 +147,18 @@ class Forward:
 
 class ConfigFault:
     """Journal before mutation; restore etcd overrides or their original absence."""
-    def __init__(self, endpoint, output):
+    def __init__(self, endpoint, output, controls=None, profile=PROFILE):
         self.endpoint, self.output = endpoint, output
+        self.controls = dict(FAULT if controls is None else controls)
+        self.profile = profile
         self.before = None
         self.changed = False
         self.restored = False
 
     def read(self):
-        data = http(self.endpoint, "/management/config/get?" + urllib.parse.urlencode({"keys": ",".join(FAULT)}))
+        data = http(self.endpoint, "/management/config/get?" + urllib.parse.urlencode({"keys": ",".join(self.controls)}))
         rows = data.get("configs", [])
-        if len(rows) != len(FAULT) or {row.get("key") for row in rows} != set(FAULT):
+        if len(rows) != len(self.controls) or {row.get("key") for row in rows} != set(self.controls):
             raise RuntimeError("Management API did not return all registered fault-control keys")
         for row in rows:
             if row.get("error") or row.get("source") not in ("FileSource", "EtcdSource") or "value" not in row or row["value"] == "[REDACTED]":
@@ -160,11 +171,11 @@ class ConfigFault:
             raise RuntimeError("Fault controls changed since preflight; refusing injection")
         self.before = current
         # This file also supports explicit recovery after SIGKILL/process loss.
-        save(self.output / "restoration.json", {"schema_version": "wpdiag.acceptance.restore/v1", "profile": PROFILE,
-             "before": self.before, "fault": FAULT, "restored": False})
+        save(self.output / "restoration.json", {"schema_version": "wpdiag.acceptance.restore/v1", "profile": self.profile,
+             "before": self.before, "fault": self.controls, "restored": False})
         self.changed = True  # Even an HTTP timeout can have committed the write.
-        http(self.endpoint, "/management/config/alter", {"configs": [{"key": key, "value": value} for key, value in FAULT.items()]})
-        self.wait(lambda rows: all(rows[k]["value"] == v and rows[k]["source"] == "EtcdSource" for k, v in FAULT.items()))
+        http(self.endpoint, "/management/config/alter", {"configs": [{"key": key, "value": value} for key, value in self.controls.items()]})
+        self.wait(lambda rows: all(rows[k]["value"] == v and rows[k]["source"] == "EtcdSource" for k, v in self.controls.items()))
         save(self.output / "fault-applied.json", self.read())
 
     def wait(self, predicate):
@@ -190,8 +201,8 @@ class ConfigFault:
         rows = self.wait(lambda after: all(after[key]["value"] == row["value"] and after[key]["source"] == row["source"]
                                            for key, row in self.before.items()))
         self.restored = True
-        save(self.output / "restoration.json", {"schema_version": "wpdiag.acceptance.restore/v1", "profile": PROFILE,
-             "before": self.before, "fault": FAULT, "restored": True, "after": rows})
+        save(self.output / "restoration.json", {"schema_version": "wpdiag.acceptance.restore/v1", "profile": self.profile,
+             "before": self.before, "fault": self.controls, "restored": True, "after": rows})
 
 
 class Workload(PERF.Benchmark):
@@ -243,7 +254,7 @@ class Acceptance:
         self.lock_id = None
         self.report = {"schema_version": "wpdiag.acceptance/v1", "profile": PROFILE, "started_at": utc(),
                        "passed": False, "failures": [], "phases": {}, "coverage_gaps": [
-                           "CLI admission scenario only; WebUI and full-program validation remain #458",
+                           "CLI admission scenario only; WebUI and full-program validation remain #450 follow-ups",
                            "WP service context does not establish Milvus client-metadata authority",
                            "REST latency includes serialization, transport and port-forward overhead; no durability/crash claim"],
                        "selection": {"context": args.context, "namespace": args.namespace, "release": args.release},
