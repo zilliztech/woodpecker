@@ -2,7 +2,7 @@
 """Write an explicit reproducible baseline override for a disposable Helm stack.
 
 Pure local file transformation. It performs no Kubernetes/Helm operations.
-Requires the same PyYAML dependency as the existing stack planner.
+Requires the same pinned PyYAML dependency as stack connection discovery.
 """
 import argparse
 import json

@@ -176,6 +176,23 @@ class RestorationTests(unittest.TestCase):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_not_ready_inventory_retains_restart_and_termination_evidence(self):
+        pods = []
+        for role in ("mixcoord", "woodpecker"):
+            pods.append({"metadata": {"name": role, "uid": role, "labels": {"component": role}},
+                "status": {"conditions": [{"type": "Ready", "status": "False"}], "containerStatuses": [{"name": role,
+                    "image": "fixture", "restartCount": 1, "lastState": {"terminated": {"reason": "OOMKilled", "exitCode": 137,
+                    "message": "private-sentinel"}}}]}})
+        harness = a.Acceptance(a.arguments(["--context", "test", "--namespace", "owned"]))
+        responses = [json.dumps({"metadata": {"labels": {a.LABEL: a.PROFILE}}}), json.dumps({"items": pods})]
+        with patch.object(a, "command", side_effect=responses):
+            with self.assertRaisesRegex(RuntimeError, "must already be Ready"):
+                harness.inventory()
+        evidence = harness.report["builds"][0]
+        self.assertFalse(evidence["ready"])
+        self.assertEqual(evidence["containers"][0]["last_termination"], {"reason": "OOMKilled", "exitCode": 137})
+        self.assertNotIn("private-sentinel", json.dumps(harness.report))
+
     def test_missing_idle_or_unreferenced_metrics_cannot_pass_traffic_gate(self):
         rule = "milvus.query.proxy_completion"
         for outcome, refs in (("inconclusive", ["o"]), ("idle_or_no_completions", ["o"]),

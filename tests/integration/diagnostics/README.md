@@ -21,13 +21,16 @@ From the repository root:
 
 ```sh
 make wpcli wpdiag
-python3 -m pip install PyYAML  # also required by the existing stack planner
+python3 -m venv tests/integration/diagnostics/.local/venv
+. tests/integration/diagnostics/.local/venv/bin/activate
+python3 -m pip install -r deployments/milvus-full-stack-helm/scripts/requirements-connections.txt
 python3 tests/integration/diagnostics/prepare_values.py \
   --output deployments/milvus-full-stack-helm/.local/admission-baseline.json
 
 deployments/milvus-full-stack-helm/stack.sh install \
   --context YOUR_CONTEXT --namespace diag-acceptance --with prometheus \
-  -f deployments/milvus-full-stack-helm/.local/admission-baseline.json
+  -f deployments/milvus-full-stack-helm/.local/admission-baseline.json \
+  -f tests/integration/diagnostics/values/acceptance.yaml
 # Inspect the native Helm/kubectl plan, then repeat with -x to install.
 ```
 
@@ -40,6 +43,10 @@ are not prerequisites for this metrics/runtime scenario.
 The baseline helper merges explicit original defaults (0.85, 4mb, 256kb, 20m)
 into the example's existing `extraConfigFiles.user.yaml`, preserving its other
 settings. When supplying custom values, pass their file to `--base-values`.
+The separate acceptance fixture gives DataNode a 2 GiB memory limit: repeated
+vector writes can trigger index builds beyond the small example's 768 MiB limit.
+Budget sufficient node memory for the whole deployment. The harness does not
+resize Pods or suppress restart failures to make a run pass.
 Some Milvus builds cannot report the provenance of implicit built-in defaults.
 The harness refuses injection unless all four controls can be read and restored;
 the explicit Helm baseline makes that requirement reproducible.
@@ -81,7 +88,7 @@ IDs and a vector search. This is live correctness, **not crash durability**.
 `--duration`, `--prime-duration`, `--settle`, `--scrape-wait`, `--rps`, `--concurrency`, `--batch-size`,
 `--dimension`, `--max-requests`, `--request-timeout` and `--total-budget` have
 explicit bounds. Logical vector payload is capped at 512 KiB/request and 256 MiB
-across all phases. Default workload/diagnostic budget is 720 seconds; cleanup has
+across all phases including priming. Default workload/diagnostic budget is 720 seconds; cleanup has
 separate bounded calls so an expired workload deadline cannot prevent restoration.
 REST JSON, transport and port-forward overhead are included in client latency.
 The driver is bounded rather than a calibrated capacity benchmark.
@@ -101,6 +108,8 @@ The gates require:
   sampled IDs and vector search in every phase.
 - Positively observed Proxy write/query completions. Missing, idle or
   inconclusive series cannot pass this gate. Other gaps remain in the raw report.
+- Real absent-series and unreachable-backend controls must reject that traffic
+  gate; the unreachable backend also returns a failed diagnostic exit status.
 - A non-slow admission baseline, admission-wait suspicion during the fault, and
   no persisting admission suspicion after exact configuration restoration.
 - Client insert p95 at least 1.5× baseline during the fault; recovered p95 at most
@@ -111,6 +120,8 @@ The gates require:
 - With `--wp`, re-query the fault's historical interval after recovery, alongside
   an explicitly labeled **current snapshot**. The historical suspicion must remain.
   Omit `--wp` for metrics-only acceptance; the receipt records that coverage gap.
+- Selected Pod identities, image IDs and restart counts remain unchanged across
+  this non-restart scenario.
 
 Histograms describe different exporter populations; their quantiles cannot be
 subtracted to allocate an individual request's latency. No time-valid Milvus
@@ -170,7 +181,7 @@ fixtures. The deployed scenario is manual and explicitly opted in; CI does not
 provision a cluster or inject faults. See [VALIDATION.md](VALIDATION.md) for a real
 deployment receipt and its limitations.
 
-This PR is a subset of #458. WebUI interaction/cancellation, trace and Loki
+This scenario covers a subset of #458. WebUI interaction/cancellation, trace and Loki
 combinations, other stages, identity conflicts and restart/reset/source-gap
 acceptance remain in the parent validation matrix. It does not close #458 or
 establish complete Milvus-to-WP trace propagation (#459).

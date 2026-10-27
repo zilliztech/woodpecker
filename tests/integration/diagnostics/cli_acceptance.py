@@ -253,22 +253,24 @@ class Acceptance:
         self.report["finished_at"] = utc()
         save(self.workload.out / "acceptance.json", self.report)
 
-    def inventory(self):
+    def inventory(self, require_ready=True):
         namespace = json.loads(command(self.kube + ["get", "namespace", self.args.namespace, "-o", "json"]))
         if namespace["metadata"].get("labels", {}).get(LABEL) != PROFILE:
             raise RuntimeError("Execution requires the dedicated namespace label " + LABEL + "=" + PROFILE)
         pods = json.loads(command(self.kube + ["get", "pods", "-l", "app.kubernetes.io/instance=" + self.args.release, "-o", "json"]))["items"]
         def ready(p):
             return p["metadata"].get("deletionTimestamp") is None and any(c["type"] == "Ready" and c["status"] == "True" for c in p.get("status", {}).get("conditions", []))
-        if not pods or not all(ready(p) for p in pods):
-            raise RuntimeError("All selected Milvus/WP Pods must already be Ready")
         coordinators = [p for p in pods if p["metadata"].get("labels", {}).get("component") in ("mixcoord", "mixcoordinator")]
         servers = [p for p in pods if p["metadata"].get("labels", {}).get("component") == "woodpecker"]
         if len(coordinators) != 1 or not servers:
             raise RuntimeError("Profile requires one mix coordinator and ready service-mode Woodpecker Pods")
-        self.report["builds"] = [{"pod": p["metadata"]["name"], "uid": p["metadata"]["uid"], "component": p["metadata"].get("labels", {}).get("component"),
-                                   "containers": [{"name": c["name"], "image": c["image"], "image_id": c.get("imageID", ""), "restarts": c.get("restartCount", 0)}
+        self.report["builds"] = [{"pod": p["metadata"]["name"], "uid": p["metadata"]["uid"], "ready": ready(p), "component": p["metadata"].get("labels", {}).get("component"),
+                                   "containers": [{"name": c["name"], "image": c["image"], "image_id": c.get("imageID", ""), "restarts": c.get("restartCount", 0),
+                                                   "last_termination": {key: value for key, value in c.get("lastState", {}).get("terminated", {}).items()
+                                                                        if key in ("reason", "exitCode", "finishedAt")}}
                                                   for c in p["status"].get("containerStatuses", [])]} for p in pods]
+        if require_ready and not all(ready(p) for p in pods):
+            raise RuntimeError("All selected Milvus/WP Pods must already be Ready")
         return coordinators[0]["metadata"]["name"], servers
 
     def setup(self):
@@ -506,14 +508,14 @@ class Acceptance:
                 if SLOW not in self.report["historical_after_recovery"]["quota_outcomes"]:
                     raise RuntimeError("Recovered current context cleared the historical admission suspicion")
             initial_builds = self.report["builds"]
-            self.inventory()
+            self.inventory(require_ready=False)
             final_builds = self.report["builds"]
             self.report.update(builds=initial_builds, final_builds=final_builds)
             def identities(builds):
                 return sorted((p["pod"], p["uid"], c["name"], c["image_id"], c["restarts"])
                               for p in builds for c in p["containers"])
-            if identities(initial_builds) != identities(final_builds):
-                raise RuntimeError("Selected Pods restarted or changed during this non-restart scenario")
+            if identities(initial_builds) != identities(final_builds) or not all(p["ready"] for p in final_builds):
+                raise RuntimeError("Selected Pods restarted, changed or lost readiness during this non-restart scenario; inspect final_builds")
             self.report["passed"] = True
         except (Exception, KeyboardInterrupt) as error:
             self.report["failures"].append(str(error) or "Interrupted")
