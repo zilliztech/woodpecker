@@ -104,6 +104,11 @@ jobs:
       - name: Verify emitted append trace propagation
         run: python3 tests/integration/tracing/append_propagation.py --output /tmp/wp-append-trace-evidence
 
+      - name: Check full-stack trace acceptance contracts (no cluster)
+        run: |
+          go test -race ./tests/integration/tracing/cmd/requests
+          python3 -m unittest discover -s tests/integration/tracing -p 'test_*.py' -v
+
       - name: Upload append trace evidence
         if: always()
         uses: actions/upload-artifact@v4

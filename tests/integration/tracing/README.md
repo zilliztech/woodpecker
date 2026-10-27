@@ -1,10 +1,12 @@
 # Write trace propagation — #459
 
-This first delivery fixes one verified Woodpecker async boundary and supplies a
-real exporter/transport compatibility probe. It **does not complete #459** or
-claim full Milvus Insert coverage. The issue remains open until a supported
-Milvus image using the propagation code and this WP client passes tagged
-Insert plus query/search and slow-path acceptance.
+The first delivery (#479) fixes the Woodpecker queued-append boundary and supplies
+a real exporter/transport compatibility probe. The second delivery adds an
+opted-in [real Milvus/WP acceptance runner](FULL_STACK.md), fixes a verified
+noop-client override of the host's OpenTelemetry provider, and recognizes the
+actual Milvus WAL scopes. It **does not close #459**: the locally validated
+development images are not published supported release images. See the
+[full-stack receipt](FULL_STACK_VALIDATION.md) for actual controls and limits.
 
 ## Verified boundaries and versions
 
@@ -14,13 +16,15 @@ Insert plus query/search and slow-path acceptance.
 | Private stack Milvus `27bd28d20688ab00cdd74232a20e988fb2162aed` / WP v0.1.46 | Retained 2026-10-22 tagged Insert `db840433644b4186b0863ff641213378` contains Proxy/mixture spans without connected SN/WP spans. Independent WP append/flush traces were retained separately. | Historical evidence, not a new reproduction or evidence from the current image. The [public-image acceptance receipt](../../../deployments/milvus-full-stack-helm/VALIDATION.md) likewise records partial Insert coverage. |
 | Current Milvus source containing [milvus-io/milvus#50796](https://github.com/milvus-io/milvus/pull/50796), commit `5eebaa9ad4ee5eadd82071cecc1b839df9cf1441` | Per-message `_tc` serialization/extraction, logical/distributed/adaptor WAL spans and focused tests are already upstream. The WP WAL adaptor forwards the append context to `LogWriter.Write`. | Reuse this upstream implementation; do not duplicate it or claim that v3.0.3 contains it. A verified image/dependency combination is still required. |
 | WP baseline `9cc60d40c9de3907bada2829e44ca891446028ed`, queue → replica RPC | `segmentHandleImpl.createPendingAppendOp` did not retain the caller's trace identity. `AppendOp.Execute` and `BatchAppendOp.Execute` used `logger.NewIntentCtx`, starting from `context.Background()`. | Fixed here. A propagated context reaching WP could still be detached at this independent boundary. |
+| WP client `232633c`, initialization inside Milvus | Default `trace.exporter=noop` still installed a process-global SDK provider without an exporter, replacing Milvus's provider and propagator. Real Insert spans reached WP servers while their SN/client parents were not exported. | Fixed by this delivery (local image built at `e26a7e5` before rebasing): noop initialization leaves the host provider/propagator and the later enabled-initialization opportunity untouched. Both client constructors have regressions. |
 
 Relevant Milvus sources:
 [v3.0.3 producer](https://github.com/milvus-io/milvus/blob/v3.0.3/internal/streamingnode/client/handler/producer/produce_grpc_client.go),
 [v3.0.3 receiver](https://github.com/milvus-io/milvus/blob/v3.0.3/internal/streamingnode/server/service/handler/producer/produce_server.go),
 [upstream propagation implementation](https://github.com/milvus-io/milvus/pull/50796).
-The current local Kubernetes context was unset and both existing minikube
-profiles were stopped; this delivery did not start or alter those environments.
+The first delivery did not start or alter the existing Kubernetes environments.
+The second used an externally provisioned, isolated `wp-trace-459` context; it did
+not change the default context or operate the other profiles.
 
 The real exporter probe also reproduced an independent transport gap: the
 legacy `otelgrpc.StreamClientInterceptor` ends a server-streaming client span
@@ -71,6 +75,12 @@ The backend probe uses actual OTLP export into **Jaeger 1.53.0**. Links appear a
 scopes and qualified AddEntry/AddEntries RPC names from these real spans.
 Embedded client scopes do not count as Milvus StreamingNode work merely because
 the service is named StreamingNode; a generic Execute name remains unsupported.
+For writes only, Proxy/SN spans with the exact `milvus.streaming.wal` scope and
+operations `wal.autocommit`, `wal.txn`, `wal.dist_append`, `wal.append`, or
+`wal.appendimpl` supply their respective logical/distributed/adaptor/backend WAL
+boundaries. They are inclusive scopes, not disk Write/Sync timers. Conflicting
+scope aliases remain unsupported. This does not extend read, consume or DDL
+coverage by analogy.
 The parser retains references and reports
 `async_links_not_serial_children`. It does not fetch/merge external linked
 traces or turn them into serial critical-path evidence. An input trace alone
@@ -116,7 +126,8 @@ retention.
    change and the released WP client fix. Record the actual WP service image
    versions separately; updating server Pods alone does not update the client
    embedded in Milvus.
-2. In an explicitly selected test deployment, run a tagged Insert and Strong
+2. Repeat the [locally validated controls](FULL_STACK_VALIDATION.md) on that
+   released combination. In an explicitly selected test deployment, run a tagged Insert and Strong
    query/search controls. Retain actual spans and response correctness, including
    single-entry and coalesced/slow paths where applicable.
 3. Verify the causal Proxy → WAL/SN → WP relationships through parents or links;
