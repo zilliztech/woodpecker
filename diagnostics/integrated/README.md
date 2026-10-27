@@ -165,11 +165,11 @@ of this runner. Report-file import is currently unsupported and explicitly
 rejected without reading report files. In-process source reports supply the
 validated lineage for this delivery.
 
-## Bounds, API and future UI
+## Bounds, API and local UI
 
 `integrated.Standard().Plan(config, request)` and
 `Run(ctx, config, request, events)` are the public interfaces for the CLI and
-future [#457 WebUI](https://github.com/zilliztech/woodpecker/issues/457).
+[local WebUI](../../cmd/wpdiag/webui/README.md) (#457).
 `New(definitions...)` registers another independent collector and optional pure
 assessor without changing orchestration or putting UI logic into a source.
 Cancel via the parent context (CLI SIGINT/SIGTERM). No HTTP server is introduced.

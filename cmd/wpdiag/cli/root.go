@@ -76,6 +76,7 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 	milvus.AddCommand(diagnosticCommand(engine, "prometheus", &output, &code, out, "consume"))
 	root.AddCommand(milvus)
 	root.AddCommand(runCommand(&output, &code, out, errout))
+	root.AddCommand(serveCommand(&code, out, errout))
 	if root.ExecuteContext(ctx) != nil {
 		fmt.Fprintln(errout, "Invalid command or arguments. Run wpdiag --help or wpdiag <source> diagnose --help.")
 		return 2

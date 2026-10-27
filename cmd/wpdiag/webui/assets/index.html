@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="wpdiag-session" content="SESSION_TOKEN">
+<title>Woodpecker Diagnosis</title>
+<link rel="stylesheet" href="/styles.css">
+<script defer src="/app.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#results">Skip to results</a>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="Woodpecker diagnosis home"><span class="mark" aria-hidden="true">W</span><span>WOODPECKER <small>DIAGNOSIS</small></span></a>
+  <div class="top-actions"><span class="local-label">Local session · read-only collection</span><a class="quiet jump-results" href="#run-panel">Results</a><button id="theme" class="quiet" type="button" aria-label="Switch color theme">Switch theme</button></div>
+</header>
+<div class="workspace">
+<aside class="setup" aria-labelledby="setup-title">
+  <div class="section-title"><span class="eyebrow">INVESTIGATION</span><h1 id="setup-title">Choose what to inspect</h1><p>Start with a symptom and a time window. Preview the checks before collecting evidence.</p></div>
+  <div id="connection-error" class="notice error" hidden role="alert"></div>
+  <form id="selection">
+    <div class="field"><label for="execution">Run selection</label><select id="execution"><option value="integrated">Integrated diagnosis</option><option value="modules">Choose individual modules</option></select></div>
+    <div class="two-col"><div class="field"><label for="scope">Scope</label><select id="scope"><option value="e2e">Milvus + WP (E2E)</option><option value="milvus">Milvus</option><option value="wp">Woodpecker</option></select></div><div class="field"><label for="flow">Flow</label><select id="flow"><option value="write">Write</option><option value="read">Read</option></select></div></div>
+    <fieldset id="source-group"><legend>Evidence sources</legend><label class="check"><input id="auto-sources" type="checkbox" checked> Auto-select configured sources</label><div id="sources" class="check-list"></div><p class="hint">Auto omissions appear in the plan. Explicit source failures stay visible.</p></fieldset>
+    <fieldset id="module-group" hidden><legend>Independent modules</legend><div id="modules" class="check-list"></div><div class="field"><label for="profile">Profile</label><select id="profile"><option value="">Automatic matching profile</option></select></div></fieldset>
+    <fieldset id="stage-group"><legend>Metric stages <span class="optional">optional</span></legend><div id="stages" class="check-list"></div><p class="hint">Leave empty for the runner's default stages. Other sources retain their declared coverage.</p></fieldset>
+    <div class="field"><label for="mode">Observation window</label><select id="mode"><option value="live">Live · collect starting now</option><option value="historical">Historical · retained evidence</option><option value="snapshot">Snapshot · current evidence</option></select></div>
+    <div id="live-fields" class="two-col"><div class="field"><label for="duration">Duration (seconds)</label><input id="duration" type="number" min="0.001" max="86400" step="0.001" value="30" required></div><div class="field"><label for="interval">Interval / gap limit (seconds)</label><input id="interval" type="number" min="0.001" max="86400" step="0.001" placeholder="Source default"></div></div>
+    <div id="historical-fields" hidden><div class="field"><label for="from">From (UTC)</label><input id="from" type="datetime-local" step="1"></div><div class="field"><label for="to">To (UTC)</label><input id="to" type="datetime-local" step="1"></div><label class="check" id="native-context-label"><input id="current-native" type="checkbox"> Include a separate current WP snapshot</label><p class="hint">Current runtime state cannot disprove a historical incident.</p></div>
+    <fieldset><legend>Named connections</legend><div id="connections"></div><p class="hint">Edit private connection settings in the server's <code>--config</code> YAML, then restart. Endpoints and credentials stay on the server.</p></fieldset>
+    <details id="targets-section"><summary>Narrow targets</summary><p class="hint">Fields come from registered profiles. Each source target replaces that source's common target; service context and Milvus client metadata are separate identities.</p><div id="targets"></div></details>
+    <details><summary>Execution limits</summary><div class="field"><label for="budget">Total time budget (seconds)</label><input id="budget" type="number" min="0.001" max="600" step="0.001" value="60" required></div><div class="two-col"><div class="field"><label for="input-limit">Total input (MiB)</label><input id="input-limit" type="number" min="0.0009765625" max="32" step="any" value="8" required></div><div class="field"><label for="output-limit">Report size (MiB)</label><input id="output-limit" type="number" min="0.00390625" max="64" step="any" value="16" required></div></div><div class="field"><label for="target-limit">Targets per module</label><input id="target-limit" type="number" min="1" max="32" step="1" value="8" required></div><p class="hint">The runner shares time, partitions byte allowances, and preserves each module's actual window.</p></details>
+    <div class="form-actions"><button id="preview" type="submit" class="secondary">Preview plan</button><button id="run" type="button" class="primary" disabled>Run diagnosis</button></div>
+    <p id="form-status" class="hint" role="status" aria-live="polite">Loading available modules…</p>
+  </form>
+</aside>
+<main id="results" tabindex="-1">
+  <section class="intro"><span class="eyebrow">EVIDENCE BEFORE CONCLUSIONS</span><h2>Follow the symptom.<br>Keep the evidence.</h2><p>Inspect the stages you need, see what each source actually observed, and identify the next check. Completed execution is not a cluster-health verdict.</p></section>
+  <section class="panel" id="plan-panel" aria-labelledby="plan-title"><div class="panel-heading"><div><span class="eyebrow">BEFORE COLLECTION</span><h2 id="plan-title">Next run plan</h2></div><div class="plan-actions"><span id="plan-state" class="badge">Not previewed</span><button id="run-plan" class="primary" type="button" disabled>Run this plan</button></div></div><div id="plan-content"><p class="empty">Choose a scope and flow, then preview to see profiles, connection names, windows and budgets. Preview makes no backend calls.</p></div></section>
+  <section class="panel" id="run-panel" aria-labelledby="run-title"><div class="panel-heading"><div><span class="eyebrow">LOCAL RUNS</span><h2 id="run-title">Investigation results</h2></div><div class="run-controls"><button id="cancel" class="secondary" type="button" disabled>Cancel run</button><button id="download" class="secondary" type="button" disabled>Export JSON</button></div></div><div class="field"><label for="history">Recent runs · this server session</label><select id="history"><option value="">No runs yet</option></select></div><div id="run-status" role="status" aria-live="polite"></div><div id="progress"></div><div id="report"><div class="empty-state"><span class="empty-symbol" aria-hidden="true">◎</span><h3>Your evidence will appear here</h3><p>Run one source, one stage, or an integrated investigation. Source errors and missing evidence remain visible.</p></div></div></section>
+  <footer>Read-only diagnosis · bounded collection · original evidence IDs<br>History is kept in memory and expires when this server stops or its retention limits are reached.</footer>
+</main>
+</div>
+<dialog id="evidence-dialog" aria-labelledby="evidence-title"><div class="panel-heading"><h2 id="evidence-title">Original observation</h2><button id="close-evidence" type="button" class="secondary">Close</button></div><p id="evidence-context" class="hint"></p><div id="evidence-facts"></div><pre id="evidence-body" tabindex="0"></pre></dialog>
+</body>
+</html>

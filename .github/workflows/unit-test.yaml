@@ -60,6 +60,23 @@ jobs:
 
       # Use the same Prometheus build as the Helm example, isolated from the
       # operator's cluster. Deterministic TSDB fixtures cover retained samples.
+      - name: Setup Node for WebUI browser acceptance
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run local WebUI browser acceptance
+        run: python3 cmd/wpdiag/tests/webui_smoke.py
+
+      - name: Upload WebUI browser evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpdiag-webui-browser
+          path: /tmp/wpdiag-webui-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run Prometheus source smoke test
         run: |
           docker pull quay.io/prometheus/prometheus:v3.0.1
