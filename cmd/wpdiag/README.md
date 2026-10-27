@@ -64,6 +64,11 @@ checks working/idle traffic, new-scanner startup pause and initial visibility,
 then exact recovery and historical/composed evidence. It does not require
 complete trace propagation or claim an already-loaded reader stall.
 
+The [loaded query/search acceptance guide](../../tests/integration/diagnostics/QUERY.md)
+uses a server-derived Customized guarantee timestamp and paired Strong controls to
+validate TSafe-wait findings, exact results and historical/composed consistency.
+It does not change diagnostic thresholds or shared deployment configuration.
+
 ## Build and run
 
 Run from the repository root, using Go 1.25 or later:

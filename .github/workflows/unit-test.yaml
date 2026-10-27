@@ -88,7 +88,9 @@ jobs:
         run: python3 cmd/wpdiag/tests/integrated_smoke.py
 
       - name: Test deployed acceptance lifecycle contracts (no cluster)
-        run: python3 -m unittest discover -s tests/integration/diagnostics -p 'test_*.py' -v
+        run: |
+          go -C tests/integration/diagnostics/queryclient test -race ./...
+          python3 -m unittest discover -s tests/integration/diagnostics -p 'test_*.py' -v
 
       - name: Run Milvus query-stage smoke test
         run: python3 cmd/wpdiag/tests/query_smoke.py
