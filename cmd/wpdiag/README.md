@@ -14,6 +14,22 @@ module (#462) diagnoses known log events with bounded candidate queries and
 explicit event/identity lineage. The integrated runner (#467) composes these
 modules while preserving their independent evidence and coverage limits.
 
+## Local interactive WebUI
+
+```sh
+make wpcli wpdiag
+bin/wpdiag serve --config wpdiag.yaml
+# Open the printed loopback URL, normally http://127.0.0.1:8787.
+```
+
+Choose an independent source/stage or an integrated diagnosis, preview its plan,
+run/cancel collection, and inspect the same findings and original evidence as
+CLI/JSON. Connections are selected from the existing private YAML; restart after
+editing it. The binary embeds its UI assets and needs no separate frontend
+service or npm runtime. Recent reports are bounded and held in memory only.
+See the [WebUI guide](webui/README.md) for the operator workflow, local API,
+limits, evidence interpretation and browser tests.
+
 ## Integrated run
 
 `wpdiag run` combines the independent modules using the same source-owned
@@ -34,7 +50,7 @@ and yield partial/error status. Historical native context requires the explicit
 See the [integrated guide](../../diagnostics/integrated/README.md) for the auto
 plan, supported matrix, connection/target overrides, byte/time budgets,
 `wpdiag.run/v1` lineage, association limits and the reusable run/cancel/progress
-API for the future WebUI. Missing client-metadata mappings are reported;
+API shared with the local WebUI. Missing client-metadata mappings are reported;
 current observations do not clear historical incidents. Raw report import is
 currently unsupported.
 
@@ -191,7 +207,7 @@ persistence is a write-related branch, not another duration to add to an
 append request. A single-source E2E result only assesses evidence from
 that source. The [integrated runner](../../diagnostics/integrated/README.md)
 composes available modules with explicit identity/time and mapping limits.
-No E2E engine or WebUI ships here.
+The local WebUI uses these same module and integration boundaries.
 
 ## Read a result
 
