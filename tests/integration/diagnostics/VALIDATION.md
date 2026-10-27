@@ -120,5 +120,7 @@ these hashes identify this observation, not a portable live connection.
 
 WebUI, trace/Loki combinations, other stage/scenario matrices, restart/reset/scrape-gap
 acceptance and full trace propagation remain outside this receipt. #458 was subsequently
-closed after this first subset; outstanding validation is tracked through #450 and
-focused follow-ups, including #484. This does not change the recorded test results.
+closed after this first subset, then reopened as the acceptance parent. The
+[completion ledger](MATRIX.md) records the accepted subsets and six remaining
+children (#488–#493); full trace release acceptance remains #459. This tracking
+correction does not change the recorded test results or executed-build hashes.

@@ -1,10 +1,15 @@
 # Deployed diagnostic CLI acceptance
 
+The [acceptance plan and completion ledger](MATRIX.md) separates merged features,
+existing fixture tests and remaining deployed evidence. #458 is reopened as the
+acceptance parent; its six remaining children are #488–#493. The next
+implementation is #488 (persistence). Full trace release acceptance stays in #459.
+
 The separate [consume startup/visibility scenario](CONSUME.md) tracks #484:
 working and idle controls, an actual new-scanner pause, bounded initial-visibility
 timeouts, exact recovery correctness and retained historical/composed diagnosis.
-It does not require full trace propagation. #458 was closed after the first CLI
-subset; remaining validation is tracked through #450 and focused follow-ups.
+It does not require full trace propagation. The first CLI subset did not complete
+the original #458 matrix; the ledger above tracks the remaining acceptance.
 
 The independent [loaded query/search consistency scenario](QUERY.md) tracks #486:
 normal and idle requests, a server-derived Customized timestamp fence with paired
@@ -194,5 +199,6 @@ deployment receipt and its limitations.
 
 This scenario covers a subset of #458. WebUI interaction/cancellation, trace and Loki
 combinations, other stages, identity conflicts and restart/reset/source-gap
-acceptance remain in the #450 follow-up validation matrix. The first subset did not complete all of #458 or
+acceptance remain in the [#458 completion ledger](MATRIX.md) under #450.
+The first subset did not complete all of #458 or
 establish complete Milvus-to-WP trace propagation (#459).

@@ -69,6 +69,10 @@ uses a server-derived Customized guarantee timestamp and paired Strong controls 
 validate TSafe-wait findings, exact results and historical/composed consistency.
 It does not change diagnostic thresholds or shared deployment configuration.
 
+The [acceptance ledger](../../tests/integration/diagnostics/MATRIX.md) distinguishes
+merged features and fixture tests from the remaining deployed gates under #458.
+It records the fixed #488–#493 sequence, dependencies and parent closure rules.
+
 ## Build and run
 
 Run from the repository root, using Go 1.25 or later:
