@@ -54,6 +54,12 @@ API shared with the local WebUI. Missing client-metadata mappings are reported;
 current observations do not clear historical incidents. Raw report import is
 currently unsupported.
 
+The [deployed CLI acceptance scenario](../../tests/integration/diagnostics/README.md)
+checks normal traffic, a controlled admission slowdown, and recovery against an
+explicitly opted-in disposable stack. It verifies client correctness/latency,
+standalone/composed findings and retained history with current native context.
+This is the first subset of #458; it does not require the WebUI.
+
 ## Build and run
 
 Run from the repository root, using Go 1.25 or later:

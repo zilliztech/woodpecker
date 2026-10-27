@@ -13,6 +13,7 @@ on:
       - "cmd/wpdiag/**"
       - "diagnostics/**"
       - "tests/integration/tracing/**"
+      - "tests/integration/diagnostics/**"
       - "Makefile"
       - ".github/workflows/unit-test.yaml"
   pull_request:
@@ -26,6 +27,7 @@ on:
       - "cmd/wpdiag/**"
       - "diagnostics/**"
       - "tests/integration/tracing/**"
+      - "tests/integration/diagnostics/**"
       - "Makefile"
       - ".github/workflows/unit-test.yaml"
 
@@ -84,6 +86,9 @@ jobs:
 
       - name: Run integrated diagnosis smoke test
         run: python3 cmd/wpdiag/tests/integrated_smoke.py
+
+      - name: Test deployed acceptance lifecycle contracts (no cluster)
+        run: python3 -m unittest discover -s tests/integration/diagnostics -p 'test_*.py' -v
 
       - name: Run Milvus query-stage smoke test
         run: python3 cmd/wpdiag/tests/query_smoke.py
