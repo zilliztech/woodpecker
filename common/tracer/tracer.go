@@ -48,6 +48,11 @@ func ResetForTesting() {
 }
 
 func InitTracer(cfg *config.Configuration, serviceName string, nodeID int64) error {
+	// A disabled client exporter must not replace its host application's
+	// provider/propagator or consume initialization for a later enabled exporter.
+	if cfg.Trace.Exporter == "noop" {
+		return nil
+	}
 	initOnce.Do(func() {
 		initErr = Init(cfg, serviceName, nodeID)
 	})
@@ -55,6 +60,9 @@ func InitTracer(cfg *config.Configuration, serviceName string, nodeID int64) err
 }
 
 func Init(cfg *config.Configuration, serviceName string, nodeID int64) error {
+	if cfg.Trace.Exporter == "noop" {
+		return nil
+	}
 	exp, err := CreateTracerExporter(cfg)
 	if err != nil {
 		return err
@@ -98,7 +106,8 @@ func CreateTracerExporter(cfg *config.Configuration) (sdk.SpanExporter, error) {
 	switch cfg.Trace.Exporter {
 	case "jaeger":
 		exp, err = jaeger.New(jaeger.WithCollectorEndpoint(
-			jaeger.WithEndpoint(cfg.Trace.Jaeger.URL)))
+			jaeger.WithEndpoint(cfg.Trace.Jaeger.URL),
+		))
 	case "otlp":
 		secure := cfg.Trace.Otlp.Secure
 		switch cfg.Trace.Otlp.Method {

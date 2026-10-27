@@ -21,7 +21,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -164,4 +167,32 @@ func TestInitTracer(t *testing.T) {
 
 	err = InitTracer(cfg, "TestInitTracer", 3001)
 	assert.NoError(t, err)
+}
+
+func TestNoopPreservesHostAndDoesNotConsumeInitialization(t *testing.T) {
+	previous, propagator := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+	host := sdktrace.NewTracerProvider()
+	otel.SetTracerProvider(host)
+	otel.SetTextMapPropagator(propagation.Baggage{})
+	ResetForTesting()
+	t.Cleanup(func() {
+		_ = CloseTracerProvider(context.Background())
+		_ = host.Shutdown(context.Background())
+		otel.SetTracerProvider(previous)
+		otel.SetTextMapPropagator(propagator)
+		ResetForTesting()
+	})
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	cfg.Trace.Exporter = "noop"
+	require.NoError(t, Init(cfg, "disabled-client", 0))
+	require.NoError(t, InitTracer(cfg, "disabled-client", 0))
+	require.Same(t, host, otel.GetTracerProvider())
+	require.Equal(t, []string{"baggage"}, otel.GetTextMapPropagator().Fields())
+	cfg.Trace.Exporter = "stdout"
+	require.NoError(t, InitTracer(cfg, "enabled-service", 1))
+	require.NotSame(t, host, otel.GetTracerProvider(), "noop must leave the once-only initialization available")
+	configured := otel.GetTracerProvider()
+	require.NoError(t, InitTracer(cfg, "second-service", 2))
+	require.Same(t, configured, otel.GetTracerProvider(), "enabled initialization still happens only once")
 }
