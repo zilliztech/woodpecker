@@ -127,11 +127,17 @@ budget error without oversized source data or assessments.
 Reuse `prometheus.QueryModule` for source facts and `milvusquery.Assess(ctx, report)`
 for stage rules. Assess has no connector argument or I/O, preserves its input,
 validates schema/profile/time/identity, deduplicates equivalent lineage and fails
-closed on conflict. Repeated assessment keeps IDs stable. Future integration/UI
-can reuse it without copying rules or querying again; #467 orchestration is not
-implemented here.
+closed on conflict. Repeated assessment keeps IDs stable. The
+[integrated runner](../integrated/README.md) and WebUI reuse this owner implementation
+without copying query rules.
 
 ## Verify
+
+For real loaded-query/search consistency waits, see the separate opted-in
+[deployed acceptance guide](../../tests/integration/diagnostics/QUERY.md) and
+[actual receipt](../../tests/integration/diagnostics/QUERY_VALIDATION.md). The
+request-level future fence and paired Strong controls do not require a broken
+consumer or imply a production Strong-query incident. Diagnosis remains read-only.
 
 ```bash
 go test -race -cover ./diagnostics/... ./cmd/wpdiag/cli

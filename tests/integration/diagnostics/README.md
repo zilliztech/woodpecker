@@ -1,5 +1,10 @@
 # Deployed diagnostic CLI acceptance
 
+The independent [loaded query/search consistency scenario](QUERY.md) tracks #486:
+normal and idle requests, a server-derived Customized timestamp fence with paired
+Strong controls, normal-request recovery and retained historical/composed diagnosis.
+It reuses merged helpers and does not depend on the consume-startup follow-up #485.
+
 This is the first deployed scenario for [#458](https://github.com/zilliztech/woodpecker/issues/458):
 **normal writes and strong queries → controlled admission slowdown → recovery**.
 It tests the existing independent `wpdiag milvus append` / `milvus query` commands

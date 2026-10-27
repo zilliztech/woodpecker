@@ -59,6 +59,10 @@ checks normal traffic, a controlled admission slowdown, and recovery against an
 explicitly opted-in disposable stack. It verifies client correctness/latency,
 standalone/composed findings and retained history with current native context.
 This is the first subset of #458; it does not require the WebUI.
+The [loaded query/search acceptance guide](../../tests/integration/diagnostics/QUERY.md)
+uses a server-derived Customized guarantee timestamp and paired Strong controls to
+validate TSafe-wait findings, exact results and historical/composed consistency.
+It does not change diagnostic thresholds or shared deployment configuration.
 
 ## Build and run
 
