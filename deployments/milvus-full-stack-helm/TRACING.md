@@ -56,12 +56,23 @@ TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke -x
 python3 scripts/check-traces.py --smoke --require-e2e --output .local/tracing-strict.json
 ```
 
-The existing binaries contain async work that creates a fresh root context;
+The supplied historical binaries contain async work that creates a fresh root context;
 for example WP `AppendOp.Execute` uses `logger.NewIntentCtx`, which starts from
 `context.Background()`. The complete write-chain break needs source-level context
 and span-link investigation, including the Milvus producer/SN boundary. Installing
 a collector cannot repair that propagation or add missing instrumentation. Do not
 attribute all unexpanded Proxy time to one downstream operation.
+
+For source builds with the propagation fixes, use the separate
+[real full-stack acceptance guide](../../tests/integration/tracing/FULL_STACK.md)
+and its [versioned local receipt](../../tests/integration/tracing/FULL_STACK_VALIDATION.md).
+It exports an actual request-client span, verifies retained parent/link identities,
+and compares standalone/composed `wpdiag` results. This is a stronger causal check
+than the small smoke test's service coverage. It also checks the embedded WP
+client's provider ownership: a default/noop client must not suppress Milvus spans.
+The temporary validated images do not change the stack's default image tags or
+make an older build's write coverage complete. Async batch links remain partial
+serial coverage even when their exact request association is verified.
 
 ## Follow a slow request
 

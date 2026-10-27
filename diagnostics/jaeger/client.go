@@ -82,11 +82,18 @@ func mergedValue(span []tag, process []tag, key string) (string, bool, bool) {
 }
 
 func scopeName(tags []tag) string {
+	result := ""
 	for _, key := range []string{"otel.scope.name", "otel.library.name"} {
 		v, ok, bad := value(tags, key)
-		if ok && !bad && d.Has([]string{"LogWriter", "LogReader", "AppendOp", "BatchAppendOp", "LogStore", "SegmentProcessor", "StagedFileWriter", "LocalFileWriter", "MinioFileWriter"}, v) {
-			return v
+		if bad || ok && result != "" && result != v {
+			return "" // Contradictory scope aliases cannot establish an emitter.
 		}
+		if ok {
+			result = v
+		}
+	}
+	if d.Has([]string{"milvus.streaming.wal", "LogWriter", "LogReader", "AppendOp", "BatchAppendOp", "LogStore", "SegmentProcessor", "StagedFileWriter", "LocalFileWriter", "MinioFileWriter"}, result) {
+		return result
 	}
 	return ""
 }

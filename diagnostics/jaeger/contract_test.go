@@ -270,6 +270,50 @@ func TestQueuedAppendScopeDoesNotSupplyMilvusStage(t *testing.T) {
 	require.False(t, known, "write execution is not a read path")
 }
 
+func TestMilvusWALScopeRecognizesUpstreamAppendBoundaries(t *testing.T) {
+	for _, op := range []string{"wal.autocommit", "wal.txn", "wal.dist_append", "wal.append", "wal.appendimpl"} {
+		t.Run(op, func(t *testing.T) {
+			tr := fixture("write")
+			tr.Spans[1].Operation = op
+			// Jaeger 1.53 stores the actual exporter scope on process rows.
+			tr.Processes["p2"] = wireProcess{Service: "streamingnode", Tags: []tag{testTag("otel.library.name", "milvus.streaming.wal")}}
+			server := serve(t, []wireTrace{tr})
+			report := run(t, request("e2e", "write"), connection(t, server.URL, nil))
+			require.Equal(t, "completed", report.Status)
+			for _, f := range report.Results[0].Findings {
+				if f.RuleID == "trace.relationship_coverage" {
+					require.Equal(t, "observed_stages_connected", f.Outcome)
+				}
+			}
+			var normalized Trace
+			require.NoError(t, json.Unmarshal(report.Results[0].Observations[1].Data, &normalized))
+			require.Equal(t, op, normalized.Spans[1].Operation)
+			require.Equal(t, "milvus.streaming.wal", normalized.Spans[1].Scope)
+			known, _ := knownOperation("streamingnode", "", op, "write")
+			require.False(t, known, "a matching name without the emitter's scope is not sufficient")
+			known, _ = knownOperation("wp_client", "milvus.streaming.wal", op, "write")
+			require.False(t, known, "a WP client cannot supply a Milvus WAL stage")
+			known, _ = knownOperation("streamingnode", "milvus.streaming.wal", op, "read")
+			require.False(t, known, "append timers are not user query or WAL consume evidence")
+		})
+	}
+}
+
+func TestConflictingWALScopeAliasesCannotEstablishStreamingNode(t *testing.T) {
+	tr := fixture("write")
+	tr.Spans[1].Operation = "wal.appendimpl"
+	tr.Processes["p2"] = wireProcess{Service: "streamingnode", Tags: []tag{testTag("otel.library.name", "milvus.streaming.wal")}}
+	tr.Spans[1].Tags = []tag{testTag("otel.scope.name", "AppendOp")}
+	server := serve(t, []wireTrace{tr})
+	report := run(t, request("e2e", "write"), connection(t, server.URL, nil))
+	require.Equal(t, "completed", report.Status)
+	for _, f := range report.Results[0].Findings {
+		if f.RuleID == "trace.relationship_coverage" {
+			require.Equal(t, "partial_observed_path", f.Outcome)
+		}
+	}
+}
+
 func TestAppendRPCCancellationDoesNotAssertApplicationFailure(t *testing.T) {
 	for _, tc := range []struct{ name, kind, code, outcome string }{
 		{"client cancellation", "client", "1", "observed_rpc_cancellation"},

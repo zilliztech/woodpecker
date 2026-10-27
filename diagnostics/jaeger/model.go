@@ -90,6 +90,20 @@ func wpClientScope(scope string) bool {
 }
 
 func knownOperation(role, scope, op, flow string) (bool, string) {
+	// Milvus #50796 uses this exact instrumentation scope. These timers are
+	// inclusive WAL boundaries, not disk/fsync or an additive critical path.
+	if flow == "write" && scope == "milvus.streaming.wal" && d.Has([]string{"proxy", "streamingnode"}, role) {
+		switch op {
+		case "wal.autocommit", "wal.txn":
+			return true, "logical_wal_write"
+		case "wal.dist_append":
+			return true, "distributed_wal_append"
+		case "wal.append":
+			return true, "wal_adaptor_append"
+		case "wal.appendimpl":
+			return true, "wal_backend_append"
+		}
+	}
 	if role == "wp_server" || role == "wp_client" || wpClientScope(scope) {
 		if flow == "write" {
 			if op == "Execute" && d.Has([]string{"AppendOp", "BatchAppendOp"}, scope) {
