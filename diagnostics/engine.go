@@ -45,7 +45,7 @@ func (e *Engine) Catalog() Catalog {
 	return c
 }
 
-// Run executes one module. Multi-source orchestration belongs to #467.
+// Run executes one source/profile. diagnostics/integrated composes these invocations.
 func (e *Engine) Run(ctx context.Context, config Config, request Request) Report {
 	r := Report{SchemaVersion: ReportSchema, RunID: uuid.NewString(), Selection: request.Selection, Limits: request.Limits, StartedAt: time.Now().UTC(), Results: []Result{}}
 	finish := func(result Result) Report {
@@ -64,7 +64,7 @@ func (e *Engine) Run(ctx context.Context, config Config, request Request) Report
 		return finish(Failure("", "invalid", "invalid_limits", err.Error()))
 	}
 	if len(selection.Sources) != 1 {
-		return finish(Failure("", "unsupported", "multi_source_not_implemented", "Select one source; integrated orchestration is tracked in #467"))
+		return finish(Failure("", "unsupported", "multi_source_not_implemented", "Select one source here; use wpdiag run for integrated orchestration"))
 	}
 	source := selection.Sources[0]
 	module := e.modules[source]

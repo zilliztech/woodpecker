@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	d "github.com/zilliztech/woodpecker/diagnostics"
+	"github.com/zilliztech/woodpecker/diagnostics/integrated"
 	"github.com/zilliztech/woodpecker/diagnostics/jaeger"
 	"github.com/zilliztech/woodpecker/diagnostics/loki"
 	"github.com/zilliztech/woodpecker/diagnostics/milvusappend"
@@ -38,7 +39,10 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 		if output == "json" {
 			catalog := engine.Catalog()
 			catalog.Stages = []d.StageDescriptor{milvusquery.Descriptor(), milvusappend.Descriptor(), milvuspersistence.Descriptor(), milvusconsume.Descriptor()}
-			return json.NewEncoder(out).Encode(catalog)
+			return json.NewEncoder(out).Encode(struct {
+				d.Catalog
+				Integrated []integrated.Definition `json:"integrated_modules"`
+			}{catalog, integrated.Standard().Catalog()})
 		}
 		if output != "text" {
 			return fmt.Errorf("invalid output")
@@ -49,6 +53,7 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 				fmt.Fprintf(out, "  %s v%d: scope=%s flow=%s stage=%s modes=%v targets=%v\n", p.ID, p.Version, p.Scope, p.Flow, p.Stage, p.Modes, p.TargetFields)
 			}
 		}
+		fmt.Fprintln(out, "run: available (#467), inspect run --list / run --plan; schema=wpdiag.run/v1")
 		fmt.Fprintln(out, "milvus append: available (#463), source=prometheus, scopes=milvus|e2e, flow=write, stage=append")
 		fmt.Fprintln(out, "milvus persistence: available (#465), source=prometheus, scopes=milvus|e2e, flow=write, stage=persistence")
 		fmt.Fprintln(out, "milvus consume: available (#464), source=prometheus, scopes=milvus|e2e, flow=read, stage=consume")
@@ -70,6 +75,7 @@ func Execute(ctx context.Context, args []string, out, errout io.Writer) int {
 	milvus.AddCommand(diagnosticCommand(engine, "prometheus", &output, &code, out, "persistence"))
 	milvus.AddCommand(diagnosticCommand(engine, "prometheus", &output, &code, out, "consume"))
 	root.AddCommand(milvus)
+	root.AddCommand(runCommand(&output, &code, out, errout))
 	if root.ExecuteContext(ctx) != nil {
 		fmt.Fprintln(errout, "Invalid command or arguments. Run wpdiag --help or wpdiag <source> diagnose --help.")
 		return 2

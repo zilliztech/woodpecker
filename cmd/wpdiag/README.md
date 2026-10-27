@@ -11,7 +11,32 @@ command (#464) interprets scanner, subscription, processing and visibility
 evidence. The independent Jaeger module
 (#461) diagnoses retained spans and relationship coverage. The independent Loki
 module (#462) diagnoses known log events with bounded candidate queries and
-explicit event/identity lineage. Integrated E2E assessment remains separate work.
+explicit event/identity lineage. The integrated runner (#467) composes these
+modules while preserving their independent evidence and coverage limits.
+
+## Integrated run
+
+`wpdiag run` combines the independent modules using the same source-owned
+connections and rules. It needs no example stack or UI. Start with a local plan:
+
+```sh
+bin/wpdiag run --list
+bin/wpdiag run --config wpdiag.yaml --scope e2e --flow write --plan
+bin/wpdiag run --config wpdiag.yaml --scope e2e --flow write \
+  --sources prometheus,wpcli --stages append --window 30s --progress -o json
+```
+
+Choose read stages with `--flow read --stages consume,query`; select exact modules
+with `--modules milvus.query,trace,loki`. Explicit source failures remain visible
+and yield partial/error status. Historical native context requires the explicit
+`--current-native` option and stays a separately labeled current snapshot.
+
+See the [integrated guide](../../diagnostics/integrated/README.md) for the auto
+plan, supported matrix, connection/target overrides, byte/time budgets,
+`wpdiag.run/v1` lineage, association limits and the reusable run/cancel/progress
+API for the future WebUI. Missing client-metadata mappings are reported;
+current observations do not clear historical incidents. Raw report import is
+currently unsupported.
 
 ## Build and run
 
@@ -164,7 +189,8 @@ native profiles. `--node-id` requires the actual node ID, not an address alias.
 WAL consumption, Milvus visibility and search are distinct steps. Background
 persistence is a write-related branch, not another duration to add to an
 append request. A single-source E2E result only assesses evidence from
-that source; cross-source synthesis is [#467](https://github.com/zilliztech/woodpecker/issues/467).
+that source. The [integrated runner](../../diagnostics/integrated/README.md)
+composes available modules with explicit identity/time and mapping limits.
 No E2E engine or WebUI ships here.
 
 ## Read a result
@@ -232,6 +258,7 @@ their own queries/results before returning them.
 go test -race ./diagnostics/... ./cmd/wpdiag/...
 make wpcli wpdiag
 python3 cmd/wpdiag/tests/smoke.py
+python3 cmd/wpdiag/tests/integrated_smoke.py  # Real Prometheus + wp native fixture.
 python3 cmd/wpdiag/tests/jaeger_smoke.py  # Isolated Jaeger 1.53 Docker fixture.
 python3 cmd/wpdiag/tests/loki_smoke.py    # Isolated Loki 3.5.7 Docker fixture.
 ```
