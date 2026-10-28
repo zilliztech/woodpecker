@@ -1,5 +1,10 @@
 # Deployed diagnostic CLI acceptance
 
+The independent [real source/corroboration scenario](SOURCES.md) tracks #491:
+application-emitted WP events through Alloy/Loki, actual read/write RPC spans,
+independent/composed source parity and strict trace/log identity/time association.
+It uses an owned MinIO-backed WP fixture and keeps Milvus/E2E coverage gaps explicit.
+
 The separate [consume startup/visibility scenario](CONSUME.md) tracks #484:
 working and idle controls, an actual new-scanner pause, bounded initial-visibility
 timeouts, exact recovery correctness and retained historical/composed diagnosis.
