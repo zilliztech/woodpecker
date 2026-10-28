@@ -32,6 +32,8 @@ below. Closing them must not close #458 or imply full trace propagation.
 | Write admission slowdown and recovery | #482, first subset of #458 | [VALIDATION.md](VALIDATION.md) | All write/storage faults, full-source/UI acceptance or crash durability |
 | New-scanner consumption pause and initial visibility recovery | #484 / #485 | [CONSUME_VALIDATION.md](CONSUME_VALIDATION.md) | An already-loaded reader stall or downstream/storage pressure from pause alone |
 | Loaded query/search consistency wait and normal-request recovery | #486 / #487 | [QUERY_VALIDATION.md](QUERY_VALIDATION.md) | A Strong-query production incident, query scheduler saturation or expensive execution |
+| Persistence slowdown, native pending operations, query scheduling/execution and actual source corroboration | #495 / #496 / #497 / #498 (merged) | [Persistence](PERSISTENCE_VALIDATION.md), [native](NATIVE_VALIDATION.md), [query steps](QUERY_STEPS_VALIDATION.md), [sources](SOURCES_VALIDATION.md) | Every fault/profile/version or full Milvus trace propagation |
+| Real-source interactive browser selection, evidence, export and cancellation | #492, this delivery (pending acceptance) | [WEBUI_VALIDATION.md](WEBUI_VALIDATION.md) | A persistent UI database, positive Milvus producer fault in the WP-only fixture, upstream query-computation cancellation |
 | Connected write tracing on local development images | Partial #459, #479/#483 | [FULL_STACK_VALIDATION.md](../tracing/FULL_STACK_VALIDATION.md) | A published supported Milvus/embedded WP client/server release combination |
 
 #458 was closed when the first subset (#482) merged. That closure was premature:
@@ -57,7 +59,13 @@ child below adds the named representative deployed evidence.
 | 5. [#492 Deployed WebUI](https://github.com/zilliztech/woodpecker/issues/492) | Browser investigation against real sources, cancellation, exported evidence and CLI/JSON parity | #481 browser tests use bounded backend HTTP fixtures; actual source semantics have separate tests | Real metrics browser pass can start now; final multi-source browser pass reuses #491. No dependency on persistence/native/query fault harnesses. |
 | 6. [#493 Discontinuities/final audit](https://github.com/zilliztech/woodpecker/issues/493) | Real restart/reset and scrape-gap controls; complete evidence index | Existing source/native reset, identity, missing-data, budget and restoration fixtures | Actual disposable-target restart and missing-scrape interval; final review consumes #488–#492. The independent controls may start before the other children finish. |
 
-Suggested implementation sequence: #488, #489, #490, #491, #492, then #493 final
+As of 2026-10-28, #488–#491 are merged and their receipts are linked above.
+#492's deployed browser delivery is recorded above; #493 is the remaining
+restart/gap and final-audit gate after #492 acceptance. #499 independently split
+core/WPCLI/diagnostics CI; its offline Harness checks do not replace deployed
+acceptance. No additional mandatory child is introduced.
+
+Original implementation sequence: #488, #489, #490, #491, #492, then #493 final
 audit. This is an execution preference, not a dependency chain. #488/#489/#490/
 #491 and #493's independent controls can proceed from merged master; their
 mutating deployments still share an exclusive acceptance lock and must not run

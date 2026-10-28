@@ -17,6 +17,12 @@ application-emitted WP events through Alloy/Loki, actual read/write RPC spans,
 independent/composed source parity and strict trace/log identity/time association.
 It uses an owned MinIO-backed WP fixture and keeps Milvus/E2E coverage gaps explicit.
 
+The [deployed WebUI acceptance](WEBUI.md) tracks #492 and reuses that same fixture.
+A real browser runs modules, inspects original metric/span/log evidence, exports
+exact JSON, cancels live/in-flight collection and exercises explicit budgets.
+The [receipt](WEBUI_VALIDATION.md) separates actual source evidence from controlled
+transport/privacy counterexamples.
+
 The separate [consume startup/visibility scenario](CONSUME.md) tracks #484:
 working and idle controls, an actual new-scanner pause, bounded initial-visibility
 timeouts, exact recovery correctness and retained historical/composed diagnosis.
