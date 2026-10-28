@@ -151,5 +151,8 @@ original evidence navigation/export, conflicting-evidence presentation, safe
 log text, accessible controls and desktop/mobile light/dark layouts. It writes
 bounded fixture screenshots and JSON under `/tmp/wpdiag-webui-evidence` by
 default, then stops its processes. Real retained Prometheus/native integration
-is covered separately by `integrated_smoke.py`. Full deployed workload/incident
-acceptance remains [#458](https://github.com/zilliztech/woodpecker/issues/458).
+is covered separately by `integrated_smoke.py`. The [deployed browser acceptance](../../../tests/integration/diagnostics/WEBUI.md)
+reuses actual WP/Prometheus/Jaeger/Alloy/Loki sources, checks original evidence and
+CLI parity, and verifies cancellation and explicit limits. Its [receipt](../../../tests/integration/diagnostics/WEBUI_VALIDATION.md)
+separates deployed evidence from controlled transport counterexamples. The full
+program remains [#458](https://github.com/zilliztech/woodpecker/issues/458).

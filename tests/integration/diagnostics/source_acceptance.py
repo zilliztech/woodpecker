@@ -269,6 +269,7 @@ class Run:
                 if requested["status"] != "partial":
                     raise RuntimeError("Explicit failed source was hidden")
                 self.diagnose("unselected-unreachable", ["trace"], "write", error_id, config=bad)
+                self.inspect_sources(endpoints)
                 after = self.fixture.command(["get", "pod", self.owner, "-o", "json"])
                 self.receipt["pod_after"] = fixture.pod_identity(after)
                 if self.receipt["pod_after"] != self.receipt["pod_before"]:
@@ -291,6 +292,9 @@ class Run:
             self.checkpoint()
         print(json.dumps({"passed": self.receipt["passed"], "failures": self.receipt["failures"], "output": str(self.out)}), flush=True)
         return 0 if self.receipt["passed"] else 1
+
+    def inspect_sources(self, endpoints):
+        """Optional consumer acceptance while owned sources and lock are alive."""
 
     def cancel_live(self):
         self.remaining(8)
