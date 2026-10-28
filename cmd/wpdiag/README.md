@@ -69,6 +69,12 @@ uses a server-derived Customized guarantee timestamp and paired Strong controls 
 validate TSafe-wait findings, exact results and historical/composed consistency.
 It does not change diagnostic thresholds or shared deployment configuration.
 
+The [native WP service acceptance guide](../../tests/integration/diagnostics/NATIVE.md)
+uses real object-backed append/read stalls, correct EOF/idle controls, unchanged
+native focused rules and exact adapter provenance. It verifies acknowledged
+payloads after recovery and keeps historical completions separate from current
+native snapshots. This representative fixture does not validate staged WAL fsync.
+
 ## Build and run
 
 Run from the repository root, using Go 1.25 or later:

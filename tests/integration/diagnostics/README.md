@@ -1,5 +1,11 @@
 # Deployed diagnostic CLI acceptance
 
+The independent [native WP service acceptance scenario](NATIVE.md) tracks #489:
+real acknowledged append/read work, current native pending-operation diagnosis,
+focused adapter lineage, EOF/idle controls, exact recovery correctness and
+historical/current separation. It creates a run-owned MinIO-backed service fixture;
+it does not mutate an existing Milvus/WP deployment or require full tracing.
+
 The separate [consume startup/visibility scenario](CONSUME.md) tracks #484:
 working and idle controls, an actual new-scanner pause, bounded initial-visibility
 timeouts, exact recovery correctness and retained historical/composed diagnosis.
