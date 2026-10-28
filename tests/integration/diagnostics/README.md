@@ -1,10 +1,10 @@
 # Deployed diagnostic CLI acceptance
 
 The [acceptance plan and completion ledger](MATRIX.md) separates merged features,
-existing fixture tests and remaining deployed evidence. #458 is reopened as the
-acceptance parent; the fixed acceptance children are #488–#493, with their
-execution order and dependencies recorded in the ledger. Full trace release
-acceptance stays in #459.
+fixture tests and actual deployed evidence. #488–#492 are merged; the final #493
+[restart/gap scenario](DISCONTINUITIES.md), [receipt](DISCONTINUITIES_VALIDATION.md)
+and [audit](FINAL_AUDIT.md) complete the agreed delivery pending review/merge.
+Only then may #493/#458 close. Full trace release stays in #459 under #450.
 
 The independent [native WP service acceptance scenario](NATIVE.md) tracks #489:
 real acknowledged append/read work, current native pending-operation diagnosis,

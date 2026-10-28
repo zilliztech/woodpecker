@@ -272,8 +272,7 @@ class Run:
                 self.inspect_sources(endpoints)
                 after = self.fixture.command(["get", "pod", self.owner, "-o", "json"])
                 self.receipt["pod_after"] = fixture.pod_identity(after)
-                if self.receipt["pod_after"] != self.receipt["pod_before"]:
-                    raise RuntimeError("Selected image/settings/process changed during capture")
+                self.verify_fixture_identity()
                 self.receipt["existing_after"] = self.fixture.existing_inventory()
                 if self.receipt["existing_after"] != self.receipt["existing_before"]:
                     raise RuntimeError("Existing workload/configuration identity changed during capture")
@@ -295,6 +294,10 @@ class Run:
 
     def inspect_sources(self, endpoints):
         """Optional consumer acceptance while owned sources and lock are alive."""
+
+    def verify_fixture_identity(self):
+        if self.receipt["pod_after"] != self.receipt["pod_before"]:
+            raise RuntimeError("Selected image/settings/process changed during capture")
 
     def cancel_live(self):
         self.remaining(8)

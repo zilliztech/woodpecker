@@ -17,9 +17,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +33,61 @@ import (
 
 	"github.com/zilliztech/woodpecker/proto"
 )
+
+type verifyServer struct {
+	proto.UnimplementedLogStoreServer
+	writes  atomic.Int32
+	corrupt bool
+	owner   string
+}
+
+func (s *verifyServer) AddEntry(_ *proto.AddEntryRequest, _ grpc.ServerStreamingServer[proto.AddEntryResponse]) error {
+	s.writes.Add(1)
+	return nil
+}
+
+func (s *verifyServer) GetBatchEntriesAdv(_ context.Context, request *proto.GetBatchEntriesAdvRequest) (*proto.GetBatchEntriesAdvResponse, error) {
+	if request.FromEntryId == 2 {
+		return &proto.GetBatchEntriesAdvResponse{Status: &proto.Status{Code: 8102}}, nil
+	}
+	values := []*proto.LogEntry{
+		{EntryId: 0, SegId: 1, Values: []byte(s.owner + "/entry/0")},
+		{EntryId: 1, SegId: 1, Values: []byte(s.owner + "/entry/1")},
+	}
+	if s.corrupt {
+		values[1].Values = []byte("wrong acknowledged value")
+	}
+	return &proto.GetBatchEntriesAdvResponse{Status: &proto.Status{}, Result: &proto.BatchReadResult{Entries: values}}, nil
+}
+
+func TestVerifyOnlyNeverAppendsAndChecksOriginalPayloads(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		server := grpc.NewServer()
+		worker := &verifyServer{owner: "source-20261028t060000z-1234abcd", corrupt: corrupt}
+		proto.RegisterLogStoreServer(server, worker)
+		go func() { _ = server.Serve(listener) }()
+		var output bytes.Buffer
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err = verify(ctx, listener.Addr().String(), worker.owner, &output)
+		cancel()
+		server.Stop()
+		require.Zero(t, worker.writes.Load(), "Verification must not rewrite acknowledged entries")
+		if corrupt {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+			decoder := json.NewDecoder(&output)
+			for _, name := range []string{"read", "eof"} {
+				var r receipt
+				require.NoError(t, decoder.Decode(&r))
+				require.Equal(t, name, r.Case)
+				require.True(t, r.Verified)
+			}
+		}
+	}
+}
 
 // Protocol-only counterexamples; never substituted for a real acceptance run.
 type badServer struct {
