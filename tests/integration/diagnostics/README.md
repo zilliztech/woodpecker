@@ -2,8 +2,15 @@
 
 The [acceptance plan and completion ledger](MATRIX.md) separates merged features,
 existing fixture tests and remaining deployed evidence. #458 is reopened as the
-acceptance parent; its six remaining children are #488–#493. The next
-implementation is #488 (persistence). Full trace release acceptance stays in #459.
+acceptance parent; the fixed acceptance children are #488–#493, with their
+execution order and dependencies recorded in the ledger. Full trace release
+acceptance stays in #459.
+
+The independent [native WP service acceptance scenario](NATIVE.md) tracks #489:
+real acknowledged append/read work, current native pending-operation diagnosis,
+focused adapter lineage, EOF/idle controls, exact recovery correctness and
+historical/current separation. It creates a run-owned MinIO-backed service fixture;
+it does not mutate an existing Milvus/WP deployment or require full tracing.
 
 The separate [consume startup/visibility scenario](CONSUME.md) tracks #484:
 working and idle controls, an actual new-scanner pause, bounded initial-visibility

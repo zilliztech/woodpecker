@@ -73,6 +73,12 @@ The [acceptance ledger](../../tests/integration/diagnostics/MATRIX.md) distingui
 merged features and fixture tests from the remaining deployed gates under #458.
 It records the fixed #488–#493 sequence, dependencies and parent closure rules.
 
+The [native WP service acceptance guide](../../tests/integration/diagnostics/NATIVE.md)
+uses real object-backed append/read stalls, correct EOF/idle controls, unchanged
+native focused rules and exact adapter provenance. It verifies acknowledged
+payloads after recovery and keeps historical completions separate from current
+native snapshots. This representative fixture does not validate staged WAL fsync.
+
 ## Build and run
 
 Run from the repository root, using Go 1.25 or later:
