@@ -1,5 +1,10 @@
 # WP-native diagnosis contract v1
 
+The [deployed native acceptance guide](../../../tests/integration/diagnostics/NATIVE.md)
+exercises real WP append/read operations, focused import provenance, EOF/idle
+controls and recovery with unchanged rules. Its representative MinIO-backed
+service fixture does not claim staged WAL disk or replica-failure coverage.
+
 `wp diagnose` performs bounded, read-only WP service checks using existing
 metrics/Admin APIs. It is part of wpcli. External monitoring, historical incident
 reconstruction, Milvus rules and UI belong to the separate diagnostic tool.
