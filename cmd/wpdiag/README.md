@@ -69,6 +69,11 @@ uses a server-derived Customized guarantee timestamp and paired Strong controls 
 validate TSafe-wait findings, exact results and historical/composed consistency.
 It does not change diagnostic thresholds or shared deployment configuration.
 
+The independent [query steps acceptance guide](../../tests/integration/diagnostics/QUERY_STEPS.md)
+contrasts serial FLAT execution with actual concurrent scheduling pressure on a
+Loaded collection, then checks exact vectors, recovery and historical/composed
+findings. A backlog spike or insufficient completed population cannot pass.
+
 ## Build and run
 
 Run from the repository root, using Go 1.25 or later:

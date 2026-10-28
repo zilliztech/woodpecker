@@ -139,6 +139,12 @@ For real loaded-query/search consistency waits, see the separate opted-in
 request-level future fence and paired Strong controls do not require a broken
 consumer or imply a production Strong-query incident. Diagnosis remains read-only.
 
+For distinct scheduling/execution contrasts, use the independent
+[query steps acceptance guide](../../tests/integration/diagnostics/QUERY_STEPS.md)
+and [deployed receipt](../../tests/integration/diagnostics/QUERY_STEPS_VALIDATION.md).
+It requires successful FLAT/L2 work, matching exporter queue/backlog evidence,
+separate core/TSafe observations and exact acknowledged vector verification.
+
 ```bash
 go test -race -cover ./diagnostics/... ./cmd/wpdiag/cli
 make wpdiag
