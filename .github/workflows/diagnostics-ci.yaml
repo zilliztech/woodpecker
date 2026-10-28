@@ -159,7 +159,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: stable
+          install-dependencies: true
+      - name: Verify the selected browser
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+        run: '"$CHROME_BIN" --version'
       - run: python3 cmd/wpdiag/tests/webui_smoke.py
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

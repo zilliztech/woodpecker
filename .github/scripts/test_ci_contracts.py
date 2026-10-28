@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -100,6 +101,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(diag["jobs"]["backends"]["strategy"]["fail-fast"], "false")
         self.assertNotIn("needs", diag["jobs"]["unit"])
         self.assertNotIn("needs", diag["jobs"]["harness"])
+        browser = diag["jobs"]["webui"]["steps"]
+        self.assertTrue(any(step.get("uses") == "browser-actions/setup-chrome@v2" for step in browser))
+        browser_test = next(step for step in browser if "webui_smoke.py" in step.get("run", ""))
+        self.assertEqual(browser_test["env"]["CHROME_BIN"], "${{ steps.chrome.outputs.chrome-path }}")
         text = (WORKFLOWS / "diagnostics-ci.yaml").read_text()
         for command in ("tests/smoke.py", "tests/webui_smoke.py", "ci_packages.py diagnostic-helpers", "queryclient test -race ./...", "stack_tests.py"):
             self.assertIn(command, text)
@@ -130,6 +135,35 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(command, guide)
         # The privileged controller must continue to use API metadata only.
         self.assertNotIn("actions/checkout", (WORKFLOWS / "pr-ci-label.yaml").read_text())
+
+
+class BrowserStartupTests(unittest.TestCase):
+    def test_failed_spawn_and_early_exit_preserve_diagnostics_and_cleanup(self):
+        driver = ROOT / "cmd/wpdiag/tests/webui_browser.mjs"
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fake = root / "fake-chrome"
+            fake.write_text("#!" + sys.executable + '''
+import os,pathlib,sys
+profile=next(a.split('=',1)[1] for a in sys.argv if a.startswith('--user-data-dir='))
+pathlib.Path(os.environ['CI_CHROME_PROFILE']).write_text(profile)
+sys.stderr.write('fixture browser exited\\n')
+sys.exit(23)
+''')
+            fake.chmod(0o755)
+            for name, binary in (("missing", root / "does-not-exist"), ("early-exit", fake)):
+                with self.subTest(name=name):
+                    output = root / name
+                    output.mkdir()
+                    env = dict(os.environ, CHROME_BIN=str(binary), CI_CHROME_PROFILE=str(root / "profile"))
+                    p = subprocess.run(["node", str(driver), "http://127.0.0.1:1", "1", "2", str(output)], env=env,
+                                       capture_output=True, text=True, timeout=8)
+                    self.assertNotEqual(p.returncode, 0)
+                    self.assertIn("Chrome launch failed" if name == "missing" else "Chrome exited before startup", p.stderr)
+                    self.assertTrue((output / "chrome.stderr").exists())
+                    if name == "early-exit":
+                        self.assertIn("fixture browser exited", (output / "chrome.stderr").read_text())
+                        self.assertFalse(Path((root / "profile").read_text()).exists())
 
 
 class LabelTests(unittest.TestCase):

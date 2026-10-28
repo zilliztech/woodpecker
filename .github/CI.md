@@ -78,6 +78,10 @@ The stack tests use fake command backends; the terminal tests use Unix PTYs.
 Browser evidence is uploaded on failure, trace evidence always, with seven-day
 retention. Linux binaries are shared only between jobs in the same Diagnostics
 run, retained for one day and made executable after download.
+The browser job installs stable Chrome for Testing and passes its exact binary
+path, rather than relying on a runner-image browser wrapper. Startup retains
+bounded Chrome stderr, detects early exit and waits for owned process cleanup;
+the original ten-second startup bound and test assertions remain in force.
 
 ## Rerun and check aggregation
 
@@ -123,6 +127,6 @@ weakened or test skipped to obtain that pass.
 The standalone CLI, nine PTY checks, all eight backend smoke programs, 21 browser
 checks, 102 diagnostics harness and ten tracing Python regressions passed.
 All 99 stack tests executed (one existing chart-cache skip), the support chart
-linted, the ten new CI contract tests passed, and actionlint 1.7.12 accepted
+linted, the eleven new CI contract/startup tests passed, and actionlint 1.7.12 accepted
 the changed workflows. Codecov's official validation endpoint accepted the new
 configuration. This validation does not run the real Kubernetes fault harnesses.

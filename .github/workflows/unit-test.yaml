@@ -90,6 +90,9 @@ jobs:
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint" .github/workflows/unit-test.yaml .github/workflows/wpcli-ci.yaml .github/workflows/diagnostics-ci.yaml .github/workflows/integration-test-components.yaml .github/workflows/pr-ci-label.yaml .github/workflows/rerun-ci.yaml .github/workflows/pr-ci-guide.yaml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
