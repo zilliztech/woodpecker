@@ -69,6 +69,21 @@ uses a server-derived Customized guarantee timestamp and paired Strong controls 
 validate TSafe-wait findings, exact results and historical/composed consistency.
 It does not change diagnostic thresholds or shared deployment configuration.
 
+The [acceptance ledger](../../tests/integration/diagnostics/MATRIX.md) distinguishes
+merged features and fixture tests from the remaining deployed gates under #458.
+It records the fixed #488–#493 sequence, dependencies and parent closure rules.
+
+The [native WP service acceptance guide](../../tests/integration/diagnostics/NATIVE.md)
+uses real object-backed append/read stalls, correct EOF/idle controls, unchanged
+native focused rules and exact adapter provenance. It verifies acknowledged
+payloads after recovery and keeps historical completions separate from current
+native snapshots. This representative fixture does not validate staged WAL fsync.
+
+The independent [query steps acceptance guide](../../tests/integration/diagnostics/QUERY_STEPS.md)
+contrasts serial FLAT execution with actual concurrent scheduling pressure on a
+Loaded collection, then checks exact vectors, recovery and historical/composed
+findings. A backlog spike or insufficient completed population cannot pass.
+
 ## Build and run
 
 Run from the repository root, using Go 1.25 or later:
@@ -341,3 +356,8 @@ upload timing and persisted frontier/checkpoint progress. WP offload remains a
 parallel, unassociated context. Idle checkpoint age, missing lazy metrics and
 flusher-seen TimeTicks are not durability/stall verdicts. See the
 [persistence-stage hypotheses and evidence limits](../../diagnostics/milvuspersistence/README.md).
+
+The separate [deployed persistence acceptance guide](../../tests/integration/diagnostics/PERSISTENCE.md)
+checks a reversible object-store CPU slowdown, actual sync completions, exact results
+and historical/composed findings. Only that explicitly opted-in disposable-target
+harness mutates storage state; the diagnostic commands remain read-only.

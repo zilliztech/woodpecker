@@ -90,6 +90,7 @@ jobs:
       - name: Test deployed acceptance lifecycle contracts (no cluster)
         run: |
           go -C tests/integration/diagnostics/queryclient test -race ./...
+          go test -race ./tests/integration/diagnostics/nativeclient
           go test -race ./tests/integration/diagnostics/sourceclient ./tests/integration/diagnostics/sourcecheck
           python3 -m unittest discover -s tests/integration/diagnostics -p 'test_*.py' -v
 

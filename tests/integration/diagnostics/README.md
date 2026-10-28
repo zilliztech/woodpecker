@@ -1,5 +1,17 @@
 # Deployed diagnostic CLI acceptance
 
+The [acceptance plan and completion ledger](MATRIX.md) separates merged features,
+existing fixture tests and remaining deployed evidence. #458 is reopened as the
+acceptance parent; the fixed acceptance children are #488–#493, with their
+execution order and dependencies recorded in the ledger. Full trace release
+acceptance stays in #459.
+
+The independent [native WP service acceptance scenario](NATIVE.md) tracks #489:
+real acknowledged append/read work, current native pending-operation diagnosis,
+focused adapter lineage, EOF/idle controls, exact recovery correctness and
+historical/current separation. It creates a run-owned MinIO-backed service fixture;
+it does not mutate an existing Milvus/WP deployment or require full tracing.
+
 The independent [real source/corroboration scenario](SOURCES.md) tracks #491:
 application-emitted WP events through Alloy/Loki, actual read/write RPC spans,
 independent/composed source parity and strict trace/log identity/time association.
@@ -8,13 +20,18 @@ It uses an owned MinIO-backed WP fixture and keeps Milvus/E2E coverage gaps expl
 The separate [consume startup/visibility scenario](CONSUME.md) tracks #484:
 working and idle controls, an actual new-scanner pause, bounded initial-visibility
 timeouts, exact recovery correctness and retained historical/composed diagnosis.
-It does not require full trace propagation. #458 was closed after the first CLI
-subset; remaining validation is tracked through #450 and focused follow-ups.
+It does not require full trace propagation. The first CLI subset did not complete
+the original #458 matrix; the ledger above tracks the remaining acceptance.
 
 The independent [loaded query/search consistency scenario](QUERY.md) tracks #486:
 normal and idle requests, a server-derived Customized timestamp fence with paired
 Strong controls, normal-request recovery and retained historical/composed diagnosis.
 It reuses shared helpers without depending on the consume-startup scenario.
+
+The separate [query scheduling/execution scenario](QUERY_STEPS.md) tracks #490:
+an owned Loaded FLAT/L2 dataset, serial expensive execution, concurrent scheduling
+pressure, exact vector correctness, recovery and historical/composed evidence.
+It changes bounded workload requests, with no shared configuration or Pod changes.
 
 This is the first deployed scenario for [#458](https://github.com/zilliztech/woodpecker/issues/458):
 **normal writes and strong queries → controlled admission slowdown → recovery**.
@@ -27,6 +44,11 @@ wrapper into a diagnosis engine. Diagnostics remain read-only. Only this explici
 opted-in harness creates test data and temporarily changes four Milvus controls.
 
 ## Prepare a disposable deployment
+
+For the separate object-store CPU slowdown and persistence-completion case (#488),
+use [PERSISTENCE.md](PERSISTENCE.md). It uses its own explicit namespace opt-in,
+storage restoration journal and workload while sharing the exclusive acceptance
+lock; do not run mutating scenarios concurrently on one target.
 
 Use an existing Kubernetes context and a **dedicated namespace with no other
 workloads or clients**. The fault controls affect the selected Milvus deployment,
@@ -199,5 +221,6 @@ deployment receipt and its limitations.
 
 This scenario covers a subset of #458. WebUI interaction/cancellation, trace and Loki
 combinations, other stages, identity conflicts and restart/reset/source-gap
-acceptance remain in the #450 follow-up validation matrix. The first subset did not complete all of #458 or
+acceptance remain in the [#458 completion ledger](MATRIX.md) under #450.
+The first subset did not complete all of #458 or
 establish complete Milvus-to-WP trace propagation (#459).
