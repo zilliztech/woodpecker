@@ -10,6 +10,9 @@ on:
       - "go.mod"
       - "go.sum"
       - "config/**"
+      - "tests/integration/tracing/**"
+      - "Makefile"
+      - ".github/scripts/ci_packages.py"
       - ".github/workflows/integration-test-components.yaml"
       - ".github/docker-compose-ci.yaml"
   workflow_call:
@@ -84,12 +87,14 @@ jobs:
       - name: Run component integration tests
         run: |
           # Rollover latency is owned by the dedicated embedded-MinIO fallback workflow.
+          packages="$(python3 .github/scripts/ci_packages.py sdk-integration)"
+          mapfile -t test_packages <<< "$packages"
           set +e
           gotestsum --format pkgname-and-test-fails \
             --jsonfile test-output.json \
             -- -race -cover -failfast -timeout=20m \
             -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestDataCorruptionService|TestServiceStability|TestServiceUpgrade|TestClientLogWriter|TestEmbedMinioRolloverConditionWrite)" \
-            ./tests/integration/...
+            "${test_packages[@]}"
           exit_code=$?
           echo ""
           echo "=== Test Results ==="
@@ -109,3 +114,29 @@ jobs:
         if: always()
         run: |
           docker compose -f .github/docker-compose-ci.yaml down -v
+
+  tracing:
+    name: Trace Export Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: make wpdiag
+      - name: Trace request and lifecycle contracts
+        run: |
+          go test -race ./tests/integration/tracing/cmd/requests
+          python3 -m unittest discover -s tests/integration/tracing -p 'test_*.py' -v
+      - run: docker pull jaegertracing/all-in-one:1.53.0
+      - name: Verify actual emitted append spans
+        run: python3 tests/integration/tracing/append_propagation.py --output /tmp/wp-append-trace-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: append-trace-propagation
+          path: /tmp/wp-append-trace-evidence
+          if-no-files-found: ignore
+          retention-days: 7

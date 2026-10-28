@@ -40,6 +40,8 @@ jobs:
           WORKFLOW_MAP["/rerun-lint"]="code-checker.yaml"
           WORKFLOW_MAP["/rerun-mod-tidy"]="code-checker.yaml"
           WORKFLOW_MAP["/rerun-unit-test"]="unit-test.yaml"
+          WORKFLOW_MAP["/rerun-wpcli"]="wpcli-ci.yaml"
+          WORKFLOW_MAP["/rerun-diagnostics"]="diagnostics-ci.yaml"
           WORKFLOW_MAP["/rerun-e2e-local"]="integration-test-e2e-local.yaml"
           WORKFLOW_MAP["/rerun-e2e-objectstorage"]="integration-test-e2e-objectstorage.yaml"
           WORKFLOW_MAP["/rerun-embed-minio-without-conditionwrite"]="integration-test-embed-minio-without-conditionwrite.yaml"
@@ -101,5 +103,5 @@ jobs:
             gh pr comment $PR --repo $REPO --body "Rerunning **${CMD#/rerun-}** workflow. Check the [Actions tab](https://github.com/${REPO}/actions) for progress."
 
           else
-            gh pr comment $PR --repo $REPO --body "Unknown command \`${CMD}\`. Available commands: \`/rerun\`, \`/rerun-lint\`, \`/rerun-mod-tidy\`, \`/rerun-unit-test\`, \`/rerun-e2e-local\`, \`/rerun-e2e-objectstorage\`, \`/rerun-embed-minio-without-conditionwrite\`, \`/rerun-e2e-service\`, \`/rerun-upgrade-local\`, \`/rerun-upgrade-objectstorage\`, \`/rerun-upgrade-service\`, \`/rerun-component-test\`, \`/rerun-chaos\`, \`/rerun-operator\`."
+            gh pr comment $PR --repo $REPO --body "Unknown command \`${CMD}\`. Available commands: \`/rerun\`, \`/rerun-lint\`, \`/rerun-mod-tidy\`, \`/rerun-unit-test\`, \`/rerun-wpcli\`, \`/rerun-diagnostics\`, \`/rerun-e2e-local\`, \`/rerun-e2e-objectstorage\`, \`/rerun-embed-minio-without-conditionwrite\`, \`/rerun-e2e-service\`, \`/rerun-upgrade-local\`, \`/rerun-upgrade-objectstorage\`, \`/rerun-upgrade-service\`, \`/rerun-component-test\`, \`/rerun-chaos\`, \`/rerun-operator\`."
           fi

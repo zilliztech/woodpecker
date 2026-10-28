@@ -1,35 +1,52 @@
-name: Unit Test
+name: Core Unit Test
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - master
-      - dev
+    branches: [master, dev]
     paths:
       - "**.go"
       - "go.mod"
       - "go.sum"
+      - "config/**"
+      - "cmd/wpcli/**"
       - "cmd/wpdiag/**"
       - "diagnostics/**"
-      - "tests/integration/tracing/**"
       - "tests/integration/diagnostics/**"
+      - "tests/integration/tracing/**"
+      - "deployments/milvus-full-stack-helm/**"
+      - "docs/stack-examples/**"
       - "Makefile"
-      - ".github/workflows/unit-test.yaml"
+      - "codecov.yml"
+      - ".github/scripts/ci_*"
+      - ".github/scripts/test_ci_*"
+      - ".github/scripts/stack_tests.py"
+      - ".github/scripts/requirements-ci.txt"
+      - ".github/workflows/**"
   pull_request:
-    branches:
-      - master
-      - dev
+    branches: [master, dev]
     paths:
       - "**.go"
       - "go.mod"
       - "go.sum"
+      - "config/**"
+      - "cmd/wpcli/**"
       - "cmd/wpdiag/**"
       - "diagnostics/**"
-      - "tests/integration/tracing/**"
       - "tests/integration/diagnostics/**"
+      - "tests/integration/tracing/**"
+      - "deployments/milvus-full-stack-helm/**"
+      - "docs/stack-examples/**"
       - "Makefile"
-      - ".github/workflows/unit-test.yaml"
+      - "codecov.yml"
+      - ".github/scripts/ci_*"
+      - ".github/scripts/test_ci_*"
+      - ".github/scripts/stack_tests.py"
+      - ".github/scripts/requirements-ci.txt"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -37,106 +54,44 @@ concurrency:
 
 jobs:
   unit-test:
-    name: Unit Test
+    name: Core Unit Test
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
           cache: true
-
-      - name: Run unit tests
-        run: |
-          go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
-            $(go list ./... | grep -v -E '(tests/)')
-
-      - name: Run standalone diagnostic smoke test
-        run: |
-          make wpcli wpdiag
-          python3 cmd/wpdiag/tests/smoke.py
-
-      # Use the same Prometheus build as the Helm example, isolated from the
-      # operator's cluster. Deterministic TSDB fixtures cover retained samples.
-      - name: Setup Node for WebUI browser acceptance
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Run local WebUI browser acceptance
-        run: python3 cmd/wpdiag/tests/webui_smoke.py
-
-      - name: Upload WebUI browser evidence
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wpdiag-webui-browser
-          path: /tmp/wpdiag-webui-evidence
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Run Prometheus source smoke test
-        run: |
-          docker pull quay.io/prometheus/prometheus:v3.0.1
-          python3 cmd/wpdiag/tests/prometheus_smoke.py
-
-      - name: Run integrated diagnosis smoke test
-        run: python3 cmd/wpdiag/tests/integrated_smoke.py
-
-      - name: Test deployed acceptance lifecycle contracts (no cluster)
-        run: |
-          go -C tests/integration/diagnostics/queryclient test -race ./...
-          go test -race ./tests/integration/diagnostics/nativeclient
-          go test -race ./tests/integration/diagnostics/sourceclient ./tests/integration/diagnostics/sourcecheck
-          python3 -m unittest discover -s tests/integration/diagnostics -p 'test_*.py' -v
-
-      - name: Run Milvus query-stage smoke test
-        run: python3 cmd/wpdiag/tests/query_smoke.py
-
-      - name: Run Milvus consume-stage smoke test
-        run: python3 cmd/wpdiag/tests/consume_smoke.py
-
-      - name: Run Jaeger source smoke test
-        run: |
-          docker pull jaegertracing/all-in-one:1.53.0
-          python3 cmd/wpdiag/tests/jaeger_smoke.py
-
-      - name: Verify emitted append trace propagation
-        run: python3 tests/integration/tracing/append_propagation.py --output /tmp/wp-append-trace-evidence
-
-      - name: Check full-stack trace acceptance contracts (no cluster)
-        run: |
-          go test -race ./tests/integration/tracing/cmd/requests
-          python3 -m unittest discover -s tests/integration/tracing -p 'test_*.py' -v
-
-      - name: Upload append trace evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: append-trace-propagation
-          path: /tmp/wp-append-trace-evidence
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Run Loki source smoke test
-        run: |
-          docker pull grafana/loki:3.5.7
-          python3 cmd/wpdiag/tests/loki_smoke.py
-
-      - name: Run Milvus append-stage smoke test
-        run: python3 cmd/wpdiag/tests/append_smoke.py
-
-      - name: Run Milvus persistence-stage smoke test
-        run: python3 cmd/wpdiag/tests/persistence_smoke.py
-
-      - name: Upload coverage to Codecov
-        if: success()
+      - name: Verify package ownership
+        run: python3 .github/scripts/ci_packages.py verify
+      - name: Run core unit tests
+        run: make unit-test-core
+      - name: Upload core coverage
         uses: codecov/codecov-action@v5
         with:
-          files: coverage.out
+          files: coverage-core.out
+          flags: core
+          name: core-unit
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  contracts:
+    name: CI Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Validate changed workflow syntax and shell commands
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/unit-test.yaml .github/workflows/wpcli-ci.yaml .github/workflows/diagnostics-ci.yaml .github/workflows/integration-test-components.yaml .github/workflows/pr-ci-label.yaml .github/workflows/rerun-ci.yaml .github/workflows/pr-ci-guide.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install -r .github/scripts/requirements-ci.txt
+      - run: python3 -m unittest discover -s .github/scripts -p "test_ci_*.py" -v

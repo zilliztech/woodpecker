@@ -1,0 +1,214 @@
+name: Diagnostics CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, dev]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "cmd/wpcli/**"
+      - "cmd/wpdiag/**"
+      - "diagnostics/**"
+      - "tests/integration/diagnostics/**"
+      - "tests/integration/tracing/**"
+      - "deployments/milvus-full-stack-helm/**"
+      - "docs/stack-examples/**"
+      - "Makefile"
+      - "codecov.yml"
+      - ".github/scripts/ci_*"
+      - ".github/scripts/test_ci_*"
+      - ".github/scripts/stack_tests.py"
+      - ".github/scripts/requirements-ci.txt"
+      - ".github/workflows/**"
+  pull_request:
+    branches: [master, dev]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "cmd/wpcli/**"
+      - "cmd/wpdiag/**"
+      - "diagnostics/**"
+      - "tests/integration/diagnostics/**"
+      - "tests/integration/tracing/**"
+      - "deployments/milvus-full-stack-helm/**"
+      - "docs/stack-examples/**"
+      - "Makefile"
+      - "codecov.yml"
+      - ".github/scripts/ci_*"
+      - ".github/scripts/test_ci_*"
+      - ".github/scripts/stack_tests.py"
+      - ".github/scripts/requirements-ci.txt"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Diagnostics Unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Verify package ownership
+        run: python3 .github/scripts/ci_packages.py verify
+      - name: Run diagnostics unit tests
+        run: make unit-test-diagnostics
+      - name: Upload diagnostics coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage-diagnostics.out
+          flags: diagnostics
+          name: diagnostics-unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  build:
+    name: Diagnostics Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: make wpcli wpdiag
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-binaries
+          path: |
+            bin/wp
+            bin/wpdiag
+          retention-days: 1
+
+  cli:
+    name: Diagnostics CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: diagnostics-binaries
+          path: bin
+      - run: chmod +x bin/wp bin/wpdiag
+      - run: python3 cmd/wpdiag/tests/smoke.py
+
+  backends:
+    name: Diagnostics Smoke (${{ matrix.fixture }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - fixture: prometheus
+            image: quay.io/prometheus/prometheus:v3.0.1
+          - fixture: integrated
+            image: quay.io/prometheus/prometheus:v3.0.1
+          - fixture: append
+            image: quay.io/prometheus/prometheus:v3.0.1
+          - fixture: persistence
+            image: quay.io/prometheus/prometheus:v3.0.1
+          - fixture: consume
+            image: quay.io/prometheus/prometheus:v3.0.1
+          - fixture: query
+            image: quay.io/prometheus/prometheus:v3.0.1
+          - fixture: jaeger
+            image: jaegertracing/all-in-one:1.53.0
+          - fixture: loki
+            image: grafana/loki:3.5.7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: diagnostics-binaries
+          path: bin
+      - run: chmod +x bin/wp bin/wpdiag
+      - run: docker pull "${{ matrix.image }}"
+      - run: python3 cmd/wpdiag/tests/${{ matrix.fixture }}_smoke.py
+
+  webui:
+    name: Diagnostics WebUI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: diagnostics-binaries
+          path: bin
+      - run: chmod +x bin/wp bin/wpdiag
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python3 cmd/wpdiag/tests/webui_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: wpdiag-webui-browser
+          path: /tmp/wpdiag-webui-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
+  harness:
+    name: Diagnostics Harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Test nested protocol module
+        run: |
+          go -C tests/integration/diagnostics/queryclient test -race ./...
+          (cd tests/integration/diagnostics/queryclient && go mod tidy && git diff --exit-code -- go.mod go.sum)
+      - name: Test root-module diagnostic helpers
+        run: |
+          packages="$(python3 .github/scripts/ci_packages.py diagnostic-helpers)"
+          mapfile -t test_packages <<< "$packages"
+          go test -race "${test_packages[@]}"
+      - run: python3 -m unittest discover -s tests/integration/diagnostics -p "test_*.py" -v
+
+  stack:
+    name: Stack Examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install -r .github/scripts/requirements-ci.txt
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+      - run: python3 .github/scripts/stack_tests.py
+      - name: Lint the support chart with optional observability enabled
+        run: >-
+          helm lint deployments/milvus-full-stack-helm/charts/full-stack-support
+          --set components.prometheus=true,components.grafana=true,components.alertmanager=true
+          --set loki.enabled=true,jaeger.enabled=true
+      - name: Verify generated website
+        run: |
+          python3 docs/stack-examples/generate.py
+          git diff --exit-code -- docs/docs.html
