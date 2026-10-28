@@ -79,6 +79,11 @@ native focused rules and exact adapter provenance. It verifies acknowledged
 payloads after recovery and keeps historical completions separate from current
 native snapshots. This representative fixture does not validate staged WAL fsync.
 
+The independent [query steps acceptance guide](../../tests/integration/diagnostics/QUERY_STEPS.md)
+contrasts serial FLAT execution with actual concurrent scheduling pressure on a
+Loaded collection, then checks exact vectors, recovery and historical/composed
+findings. A backlog spike or insufficient completed population cannot pass.
+
 ## Build and run
 
 Run from the repository root, using Go 1.25 or later:
