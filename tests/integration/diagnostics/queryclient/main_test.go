@@ -36,13 +36,35 @@ type fixture struct {
 	block     bool
 	started   chan struct{}
 	totalRows int
+	flushes   []*milvuspb.FlushRequest
+	badFlush  bool
+}
+
+func (f *fixture) Flush(ctx context.Context, r *milvuspb.FlushRequest) (*milvuspb.FlushResponse, error) {
+	if f.block {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	if f.fail {
+		return nil, status.Error(codes.Unavailable, "sentinel-private-reason")
+	}
+	f.mu.Lock()
+	f.flushes = append(f.flushes, r)
+	id := int64(9007199254740993 + len(f.flushes))
+	f.mu.Unlock()
+	ts := serverTS + 1
+	if f.badFlush {
+		ts = serverTS - 1
+	}
+	name := r.GetCollectionNames()[0]
+	return &milvuspb.FlushResponse{Status: &commonpb.Status{}, CollSegIDs: map[string]*schemapb.LongArray{name: {Data: []int64{id}}}, CollFlushTs: map[string]uint64{name: ts}}, nil
 }
 
 const serverTS uint64 = 470000000000000123
 
 func (f *fixture) Insert(_ context.Context, r *milvuspb.InsertRequest) (*milvuspb.MutationResult, error) {
-	id := r.GetFieldsData()[0].GetScalars().GetLongData().GetData()[0]
-	return &milvuspb.MutationResult{Status: &commonpb.Status{}, Timestamp: serverTS, InsertCnt: 1, IDs: &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{id}}}}}, nil
+	ids := r.GetFieldsData()[0].GetScalars().GetLongData().GetData()
+	return &milvuspb.MutationResult{Status: &commonpb.Status{}, Timestamp: serverTS, InsertCnt: int64(len(ids)), IDs: &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: ids}}}}, nil
 }
 
 func (f *fixture) Query(ctx context.Context, r *milvuspb.QueryRequest) (*milvuspb.QueryResults, error) {

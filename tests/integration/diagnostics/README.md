@@ -23,6 +23,11 @@ opted-in harness creates test data and temporarily changes four Milvus controls.
 
 ## Prepare a disposable deployment
 
+For the separate object-store CPU slowdown and persistence-completion case (#488),
+use [PERSISTENCE.md](PERSISTENCE.md). It uses its own explicit namespace opt-in,
+storage restoration journal and workload while sharing the exclusive acceptance
+lock; do not run mutating scenarios concurrently on one target.
+
 Use an existing Kubernetes context and a **dedicated namespace with no other
 workloads or clients**. The fault controls affect the selected Milvus deployment,
 not just the test collection. The scripts never create/start/stop/delete a

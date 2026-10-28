@@ -341,3 +341,8 @@ upload timing and persisted frontier/checkpoint progress. WP offload remains a
 parallel, unassociated context. Idle checkpoint age, missing lazy metrics and
 flusher-seen TimeTicks are not durability/stall verdicts. See the
 [persistence-stage hypotheses and evidence limits](../../diagnostics/milvuspersistence/README.md).
+
+The separate [deployed persistence acceptance guide](../../tests/integration/diagnostics/PERSISTENCE.md)
+checks a reversible object-store CPU slowdown, actual sync completions, exact results
+and historical/composed findings. Only that explicitly opted-in disposable-target
+harness mutates storage state; the diagnostic commands remain read-only.
