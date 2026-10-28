@@ -8,6 +8,12 @@ actual Milvus WAL scopes. It **does not close #459**: the locally validated
 development images are not published supported release images. See the
 [full-stack receipt](FULL_STACK_VALIDATION.md) for actual controls and limits.
 
+The next delivery adds [read-only source/image prerequisites](RELEASE_COMPATIBILITY.md)
+and a [dated published-version snapshot](RELEASE_CHECK_VALIDATION.md). It records
+both Milvus module declarations, separate client/server requirements and exact
+platform digests without operating a cluster or downloading layers. The checked
+public candidates remain unqualified; metadata inspection does not complete #459.
+
 ## Verified boundaries and versions
 
 | Boundary / version | Evidence | Ownership / result |
