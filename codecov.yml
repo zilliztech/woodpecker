@@ -1,5 +1,8 @@
 codecov:
   require_ci_to_pass: false
+  notify:
+    # All three primary workflows share triggers and upload disjoint profiles.
+    after_n_builds: 3
 
 coverage:
   status:
@@ -55,3 +58,14 @@ component_management:
       name: Common
       paths:
         - common/**
+
+    - component_id: wpcli
+      name: WPCLI
+      paths:
+        - cmd/wpcli/**
+
+    - component_id: diagnostics
+      name: Diagnostics
+      paths:
+        - diagnostics/**
+        - cmd/wpdiag/**

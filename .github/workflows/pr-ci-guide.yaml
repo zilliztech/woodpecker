@@ -37,12 +37,14 @@ jobs:
           | `/rerun` | every failed workflow on the latest commit |
           | `/rerun-lint` | Lint |
           | `/rerun-mod-tidy` | Go Mod Tidy Check |
-          | `/rerun-unit-test` | Unit Test |
+          | `/rerun-unit-test` | Core Unit Test and CI Contracts |
+          | `/rerun-wpcli` | WPCLI CI: units and terminal interaction |
+          | `/rerun-diagnostics` | Diagnostics CI: units, CLI, backend smoke, WebUI, harness and stack examples |
           | `/rerun-e2e-local` | E2E Local |
           | `/rerun-e2e-objectstorage` | E2E Object Storage |
           | `/rerun-embed-minio-without-conditionwrite` | Embed MinIO Without ConditionWrite |
           | `/rerun-e2e-service` | E2E Service |
-          | `/rerun-component-test` | Component Integration Test |
+          | `/rerun-component-test` | Component Integration Test and Trace Export Integration |
           | `/rerun-chaos` | Chaos Test |
           | `/rerun-service-stability-process` | Service Stability (Process) |
           | `/rerun-service-stability-docker` | Service Stability (Docker) |

@@ -1,0 +1,90 @@
+name: WPCLI CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, dev]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "cmd/wpcli/**"
+      - "cmd/wpdiag/**"
+      - "diagnostics/**"
+      - "tests/integration/diagnostics/**"
+      - "tests/integration/tracing/**"
+      - "deployments/milvus-full-stack-helm/**"
+      - "docs/stack-examples/**"
+      - "Makefile"
+      - "codecov.yml"
+      - ".github/scripts/ci_*"
+      - ".github/scripts/test_ci_*"
+      - ".github/scripts/stack_tests.py"
+      - ".github/scripts/requirements-ci.txt"
+      - ".github/workflows/**"
+  pull_request:
+    branches: [master, dev]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "cmd/wpcli/**"
+      - "cmd/wpdiag/**"
+      - "diagnostics/**"
+      - "tests/integration/diagnostics/**"
+      - "tests/integration/tracing/**"
+      - "deployments/milvus-full-stack-helm/**"
+      - "docs/stack-examples/**"
+      - "Makefile"
+      - "codecov.yml"
+      - ".github/scripts/ci_*"
+      - ".github/scripts/test_ci_*"
+      - ".github/scripts/stack_tests.py"
+      - ".github/scripts/requirements-ci.txt"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: WPCLI Unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Verify package ownership
+        run: python3 .github/scripts/ci_packages.py verify
+      - name: Run wpcli unit tests
+        run: make unit-test-wpcli
+      - name: Upload wpcli coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage-wpcli.out
+          flags: wpcli
+          name: wpcli-unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  terminal:
+    name: WPCLI Terminal
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: make wpcli
+      - run: python3 cmd/wpcli/tests/shell_terminal_test.py --binary ./bin/wp

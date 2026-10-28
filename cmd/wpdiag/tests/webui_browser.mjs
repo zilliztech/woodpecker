@@ -10,14 +10,22 @@ assert(url&&output,'Usage: webui_browser.mjs URL FROM_SECONDS TO_SECONDS OUTPUT'
 const chromePath=process.env.CHROME_BIN||['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(existsSync);
 assert(chromePath,'Chrome is required; set CHROME_BIN');
 const profile=await mkdtemp('/tmp/wpdiag-webui-chrome-');
-const chrome=spawn(chromePath,['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--no-sandbox','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore'});
+const chrome=spawn(chromePath,['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--no-sandbox','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:['ignore','ignore','pipe']});
+let chromeStderr='',chromeError;
+chrome.stderr.on('data',data=>{chromeStderr=(chromeStderr+data.toString()).slice(-32768);});
+chrome.on('error',error=>{chromeError=error;});
+const chromeClosed=new Promise(resolve=>chrome.once('close',resolve));
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let ws,call,evaluate;
 const errors=[],checks=[];
 try{
  let port;
- for(let i=0;i<100;i++){try{port=(await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];break;}catch{await pause(100);}}
- assert(port,'Chrome did not start');
+ for(let i=0;i<100;i++){
+  if(chromeError)throw Error('Chrome launch failed: '+chromeError.message);
+  if(chrome.exitCode!==null||chrome.signalCode!==null)throw Error('Chrome exited before startup: '+chromeStderr);
+  try{port=(await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];break;}catch{await pause(100);}
+ }
+ assert(port,'Chrome did not start within 10 seconds: '+chromeStderr);
  const target=await(await fetch('http://127.0.0.1:'+port+'/json/new?about:blank',{method:'PUT'})).json();
  ws=new WebSocket(target.webSocketDebuggerUrl);await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
  let seq=0;const pending=new Map();
@@ -126,5 +134,10 @@ try{
  if(call){try{const screen=await call('Page.captureScreenshot',{format:'png'});await writeFile(join(output,'failure.png'),Buffer.from(screen.data,'base64'));await writeFile(join(output,'failure.txt'),await evaluate('document.body.innerText'));await writeFile(join(output,'failure-report.json'),await evaluate("typeof state!=='undefined' && state.raw ? state.raw : '{}'"));}catch{}}
  throw error;
 }finally{
- if(ws)ws.close();chrome.kill('SIGTERM');await pause(200);await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:100});
+ if(ws)ws.close();
+ if(chrome.exitCode===null&&chrome.signalCode===null)chrome.kill('SIGTERM');
+ await Promise.race([chromeClosed,pause(2000)]);
+ if(chrome.exitCode===null&&chrome.signalCode===null){chrome.kill('SIGKILL');await Promise.race([chromeClosed,pause(1000)]);}
+ await writeFile(join(output,'chrome.stderr'),chromeStderr);
+ await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:100});
 }

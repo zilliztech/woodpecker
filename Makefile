@@ -126,12 +126,19 @@ fmt-check: ## Check code formatting (CI)
 
 .PHONY: unit-test
 unit-test: ## Run unit tests only (excludes integration/benchmark/stability/docker/k8s)
-	go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
-		$$(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker|tests/k8s)')
+	@set -e; packages="$$(python3 .github/scripts/ci_packages.py all)"; \
+		go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m $$packages
+
+.PHONY: unit-test-core unit-test-wpcli unit-test-diagnostics
+unit-test-core unit-test-wpcli unit-test-diagnostics: ## Run one CI-owned unit suite with its own coverage profile
+	@set -e; scope="$(@:unit-test-%=%)"; \
+		packages="$$(python3 .github/scripts/ci_packages.py $$scope)"; \
+		go test -race -short -cover -coverprofile=coverage-$$scope.out -covermode=atomic -failfast -timeout=20m $$packages
 
 .PHONY: integration-test
-integration-test: ## Run all integration tests (requires etcd + MinIO)
-	go test -race -cover -failfast -timeout=45m -v ./tests/integration/...
+integration-test: ## Run SDK integration tests (requires etcd + MinIO)
+	@set -e; packages="$$(python3 .github/scripts/ci_packages.py sdk-integration)"; \
+		go test -race -cover -failfast -timeout=45m -v $$packages
 
 .PHONY: integration-test-e2e-local
 integration-test-e2e-local: ## Run e2e tests with local filesystem storage

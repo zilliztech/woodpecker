@@ -19,7 +19,9 @@ on:
   workflow_run:
     workflows:
       - Code Checker
-      - Unit Test
+      - Core Unit Test
+      - WPCLI CI
+      - Diagnostics CI
       - E2E Local
       - E2E Object Storage
       - Embed MinIO Without ConditionWrite
@@ -74,6 +76,12 @@ jobs:
           fi
           echo "Resolved PR #${PR} for ${HEAD_SHA} (triggering run ${RUN_ID}, ${RUN_CONCLUSION})."
 
+          CURRENT_SHA=$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q .headRefOid)
+          if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
+            echo "Ignoring a completed run for an older PR head."
+            exit 0
+          fi
+
           # Job results of the run that triggered us. These are authoritative:
           # the checks API may not have caught up with this run yet.
           JOBS=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" --paginate \
@@ -82,8 +90,30 @@ jobs:
           # Recompute ci-passed from the full set of required checks. Every
           # workflow completion re-runs this, so a run that finishes while others
           # are still pending simply does nothing and the last one settles it.
-          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "Embed MinIO Without ConditionWrite" "E2E Service" "Component Integration Test" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
+          ROOT_CHECKS=(
+            "Core Unit Test" "CI Contracts" "WPCLI Unit" "WPCLI Terminal"
+            "Diagnostics Unit" "Diagnostics Build" "Diagnostics CLI"
+            "Diagnostics WebUI" "Diagnostics Harness" "Stack Examples"
+            "Diagnostics Smoke (prometheus)" "Diagnostics Smoke (integrated)"
+            "Diagnostics Smoke (append)" "Diagnostics Smoke (persistence)"
+            "Diagnostics Smoke (consume)" "Diagnostics Smoke (query)"
+            "Diagnostics Smoke (jaeger)" "Diagnostics Smoke (loki)"
+          )
+          REQUIRED_CHECKS=("${ROOT_CHECKS[@]}" "Lint" "Go Mod Tidy Check" "E2E Local" "E2E Object Storage" "Embed MinIO Without ConditionWrite" "E2E Service" "Component Integration Test" "Trace Export Integration" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
           CHECKS=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket 2>/dev/null || echo "[]")
+
+          # Match the identical paths in the three primary workflows. Missing
+          # expected checks are pending, not a successful filtered-out suite.
+          # This privileged workflow consumes API data only; it never checks out
+          # or executes the PR head, including CI package-selection scripts.
+          CHANGED_FILES=$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)')
+          ROOT_EXPECTED=false
+          while IFS= read -r path; do
+            case "$path" in
+              *.go|go.mod|go.sum|config/*|cmd/wpcli/*|cmd/wpdiag/*|diagnostics/*|tests/integration/diagnostics/*|tests/integration/tracing/*|deployments/milvus-full-stack-helm/*|docs/stack-examples/*|Makefile|codecov.yml|.github/scripts/ci_*|.github/scripts/test_ci_*|.github/scripts/stack_tests.py|.github/scripts/requirements-ci.txt|.github/workflows/*)
+                ROOT_EXPECTED=true ;;
+            esac
+          done <<< "$CHANGED_FILES"
 
           ALL_PASSED=true
           for check in "${REQUIRED_CHECKS[@]}"; do
@@ -100,7 +130,19 @@ jobs:
             bucket=$(echo "$CHECKS" | jq -r --arg n "$check" '.[] | select(.name == $n) | .bucket' | head -1)
             # Skip checks not triggered for this PR (filtered out by `paths`);
             # only block on checks that actually ran.
-            [ -z "$bucket" ] && continue
+            if [ -z "$bucket" ]; then
+              if [ "$ROOT_EXPECTED" = true ]; then
+                for root_check in "${ROOT_CHECKS[@]}"; do
+                  if [ "$check" = "$root_check" ]; then
+                    echo "expected check '${check}' has not reported yet"
+                    ALL_PASSED=false
+                    break
+                  fi
+                done
+              fi
+              [ "$ALL_PASSED" = true ] && continue
+              break
+            fi
             if [ "$bucket" != "pass" ]; then
               echo "required check '${check}' is '${bucket}'"
               ALL_PASSED=false
