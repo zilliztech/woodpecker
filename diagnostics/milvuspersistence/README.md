@@ -144,3 +144,11 @@ contradictions, duplicate/conflicting lineage, unsupported selections, credentia
 redaction, cancellation and immutable repeated assessment. To intentionally
 update the versioned example, run `go test ./diagnostics/milvuspersistence -run
 TestVersionedExample -update-persistence-fixture`.
+
+For real traffic, retained default-policy sync completion findings and reversible
+object-store slowdown, use the separate opted-in
+[deployed acceptance guide](../../tests/integration/diagnostics/PERSISTENCE.md)
+and [actual receipt](../../tests/integration/diagnostics/PERSISTENCE_VALIDATION.md).
+Only that disposable-target harness mutates workload/storage state; diagnosis
+remains read-only. Other persistence hypotheses retain their documented fixture
+coverage; this representative case does not prove physical disk or crash durability.
