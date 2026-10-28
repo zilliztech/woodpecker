@@ -174,6 +174,18 @@ func read(ctx context.Context, c proto.LogStoreClient, owner string, eof bool, r
 }
 
 func run(ctx context.Context, endpoint, owner string, output io.Writer) error {
+	cases := []string{"baseline"}
+	for i := 0; i < 10; i++ {
+		cases = append(cases, fmt.Sprintf("rejected_empty_append_%d", i))
+	}
+	return runCases(ctx, endpoint, owner, output, append(cases, "recovery", "read", "eof"))
+}
+
+func verify(ctx context.Context, endpoint, owner string, output io.Writer) error {
+	return runCases(ctx, endpoint, owner, output, []string{"read", "eof"})
+}
+
+func runCases(ctx context.Context, endpoint, owner string, output io.Writer, cases []string) error {
 	if !selection(endpoint, owner) {
 		return errors.New("require explicit localhost endpoint and owned source fixture")
 	}
@@ -184,11 +196,6 @@ func run(ctx context.Context, endpoint, owner string, output io.Writer) error {
 	}
 	defer c.Close()
 	client := proto.NewLogStoreClient(c)
-	cases := []string{"baseline"}
-	for i := 0; i < 10; i++ {
-		cases = append(cases, fmt.Sprintf("rejected_empty_append_%d", i))
-	}
-	cases = append(cases, "recovery", "read", "eof")
 	for _, name := range cases {
 		requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		requestCtx, id, traceErr := traced(requestCtx)
@@ -224,9 +231,10 @@ func cli() int {
 	owner := flag.String("owner", "", "Run-owned fixture root")
 	otlp := flag.String("otlp", "", "Explicit loopback OTLP HTTP host:port")
 	execute := flag.Bool("execute", false, "Opt in to two acknowledged entries and ten rejected empty-entry attempts")
+	verifyOnly := flag.Bool("verify-only", false, "Only verify the two previously acknowledged values and EOF; never append")
 	idle := flag.Bool("idle", false, "Keep the isolated fixture worker ready for explicit exec")
 	flag.Parse()
-	if *idle && !*execute && *endpoint == "" && *owner == "" && *otlp == "" && flag.NArg() == 0 {
+	if *idle && !*verifyOnly && !*execute && *endpoint == "" && *owner == "" && *otlp == "" && flag.NArg() == 0 {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 		<-ctx.Done()
@@ -254,7 +262,11 @@ func cli() int {
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	if err := run(ctx, *endpoint, *owner, os.Stdout); err != nil {
+	work := run
+	if *verifyOnly {
+		work = verify
+	}
+	if err := work(ctx, *endpoint, *owner, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
