@@ -193,7 +193,7 @@ class Fixture:
                             "data": {"run-id": owner, "profile": PROFILE}})
         self.receipt["lock_uid"] = lock["metadata"]["uid"]
         self.checkpoint()
-        for obj in manifests(owner, self.namespace, images):
+        for obj in self.objects(images):
             obj["metadata"]["ownerReferences"] = [{"apiVersion": "v1", "kind": "ConfigMap", "name": LOCK, "uid": self.receipt["lock_uid"]}]
             self.create(obj)
         deadline = min(time.monotonic() + 180, self.deadline or float("inf"))
@@ -206,6 +206,9 @@ class Fixture:
                 return
             time.sleep(1)
         raise RuntimeError("Real source fixture readiness deadline exceeded")
+
+    def objects(self, images=None):
+        return manifests(self.receipt["run_id"], self.namespace, images)
 
     def original(self, key, current):
         saved = self.receipt["resources"][key]
