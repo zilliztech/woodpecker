@@ -14,6 +14,11 @@ Issue #459 remains open for released, usable image/dependency combinations.
 
 ## Image prerequisites
 
+First review the [read-only source/image prerequisites](RELEASE_COMPATIBILITY.md)
+and [dated published-version snapshot](RELEASE_CHECK_VALIDATION.md). A GitHub
+release may lack a public image, a server upgrade does not update the client
+compiled into Milvus, and commit ancestry alone is not runtime certification.
+
 Three independently versioned parts must agree:
 
 1. Milvus must contain the per-message context propagation and WAL instrumentation

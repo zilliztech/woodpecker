@@ -74,6 +74,12 @@ The temporary validated images do not change the stack's default image tags or
 make an older build's write coverage complete. Async batch links remain partial
 serial coverage even when their exact request association is verified.
 
+Before selecting new tracing images, use the [read-only source/image check](../../tests/integration/tracing/RELEASE_COMPATIBILITY.md).
+Its [dated snapshot](../../tests/integration/tracing/RELEASE_CHECK_VALIDATION.md)
+separates Milvus's embedded WP client from the WP server and records exact
+registry platform digests. Metadata availability is not complete trace coverage;
+the actual parent/link workload controls remain the #459 gate.
+
 ## Follow a slow request
 
 1. Select the matching workload window in the E2E metrics dashboard.
