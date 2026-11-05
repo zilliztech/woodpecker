@@ -349,6 +349,12 @@ func TestMinioFileWriter_WriteDataAsync_RechecksStateAfterLock(t *testing.T) {
 			reset:     func(writer *MinioFileWriter) { writer.storageWritable.Store(true) },
 			wantError: werr.ErrStorageNotWritable,
 		},
+		{
+			name:      "recovery_mode",
+			setState:  func(writer *MinioFileWriter) { writer.inRecoveryMode.Store(true) },
+			reset:     func(writer *MinioFileWriter) { writer.inRecoveryMode.Store(false) },
+			wantError: werr.ErrFileWriterInRecoveryMode,
+		},
 	}
 
 	for _, tt := range tests {
@@ -2085,7 +2091,8 @@ func TestNewMinioFileWriter_NormalMode_LockFails(t *testing.T) {
 }
 
 func TestNewMinioFileWriterWithMode_RecoveryMode_NoExistingData(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	mockClient := mocks_objectstorage.NewObjectStorage(t)
 	cfg := newTestConfig()
 
@@ -2105,19 +2112,22 @@ func TestNewMinioFileWriterWithMode_RecoveryMode_NoExistingData(t *testing.T) {
 	require.NotNil(t, writer)
 
 	w := writer.(*MinioFileWriter)
+	require.True(t, w.inRecoveryMode.Load())
 	// No data recovered → lastEntryID stays -1, buffer starts from 0
 	assert.Equal(t, int64(-1), w.lastEntryID.Load())
+	_, err = w.WriteDataAsync(ctx, 0, []byte("not allowed"), newMockResultChannel())
+	require.True(t, werr.ErrFileWriterInRecoveryMode.Is(err))
+	require.Zero(t, w.buffer.Load().DataSize.Load())
+	require.Zero(t, w.buffer.Load().GetExpectedNextEntryId())
 
-	// Clean up
-	w.closed.Store(true)
-	w.fileClose <- struct{}{}
-	close(w.flushingTaskList)
-	time.Sleep(50 * time.Millisecond)
-	w.pool.Release()
+	require.NoError(t, w.Close(ctx))
+	assert.True(t, w.allUploadingTaskDone.Load())
+	mockClient.AssertNumberOfCalls(t, "PutObjectIfNoneMatch", 0)
 }
 
 func TestNewMinioFileWriterWithMode_RecoveryMode_WithExistingData(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	mockClient := mocks_objectstorage.NewObjectStorage(t)
 	cfg := newTestConfig()
 
@@ -2147,6 +2157,7 @@ func TestNewMinioFileWriterWithMode_RecoveryMode_WithExistingData(t *testing.T) 
 	require.NotNil(t, writer)
 
 	w := writer.(*MinioFileWriter)
+	require.True(t, w.inRecoveryMode.Load())
 	// Recovered data: lastEntryID should be 1 (entries 0 and 1)
 	assert.Equal(t, int64(1), w.lastEntryID.Load())
 	assert.Equal(t, int64(0), w.firstEntryID.Load())
@@ -2154,13 +2165,21 @@ func TestNewMinioFileWriterWithMode_RecoveryMode_WithExistingData(t *testing.T) 
 	// Buffer should start from lastEntryID + 1 = 2
 	buf := w.buffer.Load()
 	assert.Equal(t, int64(2), buf.FirstEntryId)
+	_, err = w.WriteDataAsync(ctx, 2, []byte("not allowed"), newMockResultChannel())
+	require.True(t, werr.ErrFileWriterInRecoveryMode.Is(err))
+	require.NoError(t, w.Sync(ctx), "recovery has no appended data to sync")
+	require.Zero(t, buf.DataSize.Load())
+	require.Equal(t, buf.FirstEntryId, buf.GetExpectedNextEntryId())
 
-	// Clean up
-	w.closed.Store(true)
-	w.fileClose <- struct{}{}
-	close(w.flushingTaskList)
-	time.Sleep(50 * time.Millisecond)
-	w.pool.Release()
+	require.NoError(t, w.Close(ctx))
+	mockClient.AssertNumberOfCalls(t, "PutObjectIfNoneMatch", 0)
+	// Recovery still permits finalizing the recovered indexes after Close.
+	mockClient.EXPECT().PutObjectIfNoneMatch(mock.Anything, w.bucket, getFooterBlockKey(w.segmentFileKey),
+		mock.Anything, mock.Anything, w.logNs, w.logIdStr).Return(nil).Once()
+	lastID, err := w.Finalize(ctx, -1)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, lastID)
+	require.EqualValues(t, 1, w.footerRecord.TotalBlocks)
 }
 
 func TestNewMinioFileWriterWithMode_RecoveryMode_RecoverError(t *testing.T) {
@@ -2308,6 +2327,7 @@ func TestMinioFileWriter_ParseBlockHeaderRecord_NoBlockHeader(t *testing.T) {
 func TestMinioFileWriter_AwaitAllFlushTasks_NoRunningTasks(t *testing.T) {
 	ctx := context.Background()
 	w := newTestMinioFileWriter()
+	require.NoError(t, w.Sync(ctx))
 
 	// Start ack goroutine to consume the termination signal
 	go func() {
@@ -2328,8 +2348,8 @@ func TestMinioFileWriter_AwaitAllFlushTasks_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	w := newTestMinioFileWriter()
 
-	// Cancel immediately - no ack goroutine running, so pool check passes (0 running)
-	// but sending termination signal will block, then ctx cancelled
+	// Cancel immediately with no ACK consumer; the full queue cannot accept
+	// a termination marker.
 	cancel()
 
 	// Block flushingTaskList so termination signal can't be sent
@@ -2593,8 +2613,11 @@ func TestMinioFileWriter_WriteDataAsync_BufferFullSyncError(t *testing.T) {
 // ===== rollBufferUnsafe - empty buffer =====
 
 func TestMinioFileWriter_RollBufferUnsafe_EmptyBuffer(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 	w := newTestMinioFileWriter()
+	t.Cleanup(w.pool.Release)
+	w.flushingBufferSize.Store(w.maxBufferSize) // Idle Sync must not wait for upload quota.
 
 	// buffer is empty by default (no entries written)
 	w.mu.Lock()
@@ -2610,8 +2633,11 @@ func TestMinioFileWriter_RollBufferUnsafe_EmptyBuffer(t *testing.T) {
 // ===== rollBufferUnsafe - ExpectedNextEntryId == FirstEntryId =====
 
 func TestMinioFileWriter_RollBufferUnsafe_ExpectedNextEqFirst(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 	w := newTestMinioFileWriter()
+	t.Cleanup(w.pool.Release)
+	w.flushingBufferSize.Store(w.maxBufferSize) // No sequential data needs upload quota.
 
 	// Write an entry with a gap: put entry at position 1 (but FirstEntryId=0)
 	// so that ExpectedNextEntryId stays at 0 (no contiguous entries from start)
@@ -2672,12 +2698,11 @@ func TestMinioFileWriter_Finalize_SyncError(t *testing.T) {
 	w.client = mockClient
 	w.allUploadingTaskDone.Store(true) // No pending upload tasks
 
-	// Make Sync fail by setting storageWritable=false
+	// A drained writer may still be finalized after a storage error.
 	w.storageWritable.Store(false)
 
-	// The Sync error is logged but Finalize continues.
-	// awaitAllFlushTasks succeeds (allUploadingTaskDone=true).
-	// PutObjectIfNoneMatch for footer is called.
+	// Sync and awaitAllFlushTasks skip the already completed upload queue.
+	// PutObjectIfNoneMatch for footer is still called.
 	mockClient.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
@@ -2717,11 +2742,11 @@ func TestMinioFileWriter_Close_SyncError(t *testing.T) {
 	w.client = mockClient
 	w.allUploadingTaskDone.Store(true)
 
-	// Make Sync fail
+	// Uploads are already drained, so Sync skips this storage error.
 	w.storageWritable.Store(false)
 
 	// releaseSegmentLock: lockObjectKey is empty so it returns nil immediately
-	// Close should still succeed (Sync error is only logged)
+	// Close should still succeed.
 
 	err := w.Close(ctx)
 	assert.NoError(t, err)
@@ -3099,20 +3124,12 @@ func TestMinioFileWriter_FlushingBufferSize_AccountingAccuracy(t *testing.T) {
 	err := w.Sync(ctx)
 	require.NoError(t, err)
 
-	// Wait for all pool tasks to complete and ack goroutine to process them
-	require.Eventually(t, func() bool {
-		return w.pool.Running() == 0
-	}, 5*time.Second, 50*time.Millisecond, "pool tasks should complete")
-
-	// Send termination signal to ack goroutine and wait for it to finish
-	w.flushingTaskList <- &blockUploadTask{
-		flushData:             nil,
-		flushDataFirstEntryId: 0,
-		flushFuture:           nil,
-	}
-	require.Eventually(t, func() bool {
-		return w.allUploadingTaskDone.Load()
-	}, 5*time.Second, 50*time.Millisecond, "ack goroutine should finish")
+	// Drain uploads and ACK bookkeeping without waiting for idle workers.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	require.NoError(t, w.Sync(ctx))
+	require.NoError(t, w.awaitAllFlushTasks(ctx))
+	t.Cleanup(w.pool.Release)
 
 	// The key assertion: flushingBufferSize must return to exactly 0
 	// Before the fix, this would be negative due to serialization overhead mismatch
