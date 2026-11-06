@@ -418,7 +418,25 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatchAdv")
 	defer sp.End()
 	lastReadState := lastReadBatchInfo
-	// apply adv options if possible
+	// Footer discovery takes the write lock, so do it before acquiring RLock.
+	if lastReadState == nil {
+		if err := f.tryReadFooterAndIndex(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	// read lock
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	if f.closed.Load() {
+		logger.Ctx(ctx).Info("ReadNextBatchAdv closed", zap.Int64("logId", f.logId), zap.Int64("segId", f.segmentId), zap.Int64("startEntryID", opt.StartEntryID), zap.Int64("maxBatchEntries", opt.MaxBatchEntries))
+		return nil, werr.ErrFileReaderAlreadyClosed
+	}
+
+	// Validate the physical resume cursor against the same locked layout used
+	// below. An async compaction update can replace the flags, footer and block
+	// index while this call waits for RLock, invalidating an earlier check.
 	if lastReadState != nil {
 		isCompactedLast := codec.IsCompacted(uint16(lastReadState.Flags))
 		isCompactedNow := codec.IsCompacted(uint16(f.flags.Load()))
@@ -433,21 +451,6 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 			// reset lastReadState, will try to read from merged blocks
 			lastReadState = nil
 		}
-	} else {
-		// try read footer and extract block index infos
-		err := f.tryReadFooterAndIndex(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// read lock
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	if f.closed.Load() {
-		logger.Ctx(ctx).Info("ReadNextBatchAdv closed", zap.Int64("logId", f.logId), zap.Int64("segId", f.segmentId), zap.Int64("startEntryID", opt.StartEntryID), zap.Int64("maxBatchEntries", opt.MaxBatchEntries))
-		return nil, werr.ErrFileReaderAlreadyClosed
 	}
 
 	// start to read batch from a certain point
