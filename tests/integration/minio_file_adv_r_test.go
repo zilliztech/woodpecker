@@ -55,20 +55,18 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 	segmentId := int64(1000)
 	baseDir := fmt.Sprintf("test-recovery-%d", time.Now().Unix())
 	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
+	testData := [][]byte{
+		[]byte("Entry 0: Initial data"),
+		[]byte("Entry 1: More data"),
+		generateTestData(1024),
+		[]byte("Entry 3: Final entry before interruption"),
+	}
 
 	t.Run("AdvWriteDataAndInterrupt", func(t *testing.T) {
 		// Create first writer and write some data
 		writer1, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 		require.NotNil(t, writer1)
-
-		// Write test data
-		testData := [][]byte{
-			[]byte("Entry 0: Initial data"),
-			[]byte("Entry 1: More data"),
-			generateTestData(1024), // 1KB
-			[]byte("Entry 3: Final entry before interruption"),
-		}
 
 		for i, data := range testData {
 			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-recovery-write-%d", i))
@@ -92,12 +90,9 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		assert.Equal(t, int64(0), writer1.GetFirstEntryId(ctx))
 		assert.Equal(t, int64(3), writer1.GetLastEntryId(ctx))
 
-		// Simulate interruption by closing the writer without finalize
-		// Note: Close may trigger Complete() which calls Finalize(), but this simulates a real-world scenario
+		// Preserve an incomplete segment by closing without Finalize.
 		err = writer1.Close(ctx)
-		if err != nil {
-			t.Logf("Expected error during close (simulating interruption): %v", err)
-		}
+		require.NoError(t, err)
 
 		// Verify objects were created in object storage
 		var objectCount int
@@ -121,108 +116,39 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		require.NoError(t, err)
 		assert.Greater(t, objectCount, 0, "Should have created at least one data object")
 
-		// Check if footer exists to determine test path
-		if hasFooter {
-			t.Log("Footer found - segment was completed during close, testing recovery from completed segment")
-		} else {
-			t.Log("No footer found - segment was interrupted, testing recovery from incomplete segment")
-		}
+		require.False(t, hasFooter, "Close must leave the segment unfinalized for recovery")
 	})
 
-	var recoverySegmentFileKey string
-	t.Run("AdvRecoverAndContinueWriting", func(t *testing.T) {
-		// Use the same segment key to test true recovery
-		recoverySegmentFileKey = baseDir
-
-		// Check if segment has footer first
-		var hasFooter bool
-		err := minioHdl.WalkWithObjects(ctx, testBucket, baseDir+"/", true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-			if strings.HasSuffix(objInfo.FilePath, "footer.blk") {
-				hasFooter = true
-				return false // stop walking
-			}
-			return true // continue walking
-		}, "test-ns", "0")
+	t.Run("AdvRecoverRejectsWritesAndFinalizes", func(t *testing.T) {
+		writer2, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
 		require.NoError(t, err)
+		defer writer2.Close(ctx)
+		require.EqualValues(t, 0, writer2.GetFirstEntryId(ctx))
+		require.EqualValues(t, len(testData)-1, writer2.GetLastEntryId(ctx))
 
-		if hasFooter {
-			// Segment is completed - test that we cannot write to it
-			t.Log("Testing recovery from completed segment (should not be writable)")
+		resultCh := channel.NewLocalResultChannel("test-recovery-reject")
+		_, err = writer2.WriteDataAsync(ctx, int64(len(testData)), []byte("Should fail"), resultCh)
+		require.True(t, werr.ErrFileWriterInRecoveryMode.Is(err), "Recovery must reject appends to an incomplete segment")
+		require.NoError(t, writer2.Sync(ctx))
+		require.EqualValues(t, len(testData)-1, writer2.GetLastEntryId(ctx))
 
-			// Create a new writer for the completed segment
-			writer2, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl, cfg, true)
-			require.NoError(t, err)
-			require.NotNil(t, writer2)
+		// Close must preserve recovered indexes for a subsequent Finalize.
+		require.NoError(t, writer2.Close(ctx))
+		lastEntryId, err := writer2.Finalize(ctx, -1)
+		require.NoError(t, err)
+		require.EqualValues(t, len(testData)-1, lastEntryId)
+		lastEntryId, err = writer2.Finalize(ctx, -1)
+		require.NoError(t, err)
+		require.EqualValues(t, len(testData)-1, lastEntryId)
+	})
 
-			// Check recovered state
-			recoveredFirstEntryId := writer2.GetFirstEntryId(ctx)
-			recoveredLastEntryId := writer2.GetLastEntryId(ctx)
-			t.Logf("Recovered state: firstEntryId=%d, lastEntryId=%d", recoveredFirstEntryId, recoveredLastEntryId)
-
-			// Verify we cannot write to a completed segment
-			resultCh := channel.NewLocalResultChannel("test-recovery-fail")
-			_, err = writer2.WriteDataAsync(ctx, recoveredLastEntryId+1, []byte("Should fail"), resultCh)
-			assert.Error(t, err, "Should not be able to write to a completed segment")
-			assert.Contains(t, err.Error(), "not writable", "Error should indicate segment is not writable")
-
-			// Close the writer
-			err = writer2.Close(ctx)
-			require.NoError(t, err)
-		} else {
-			// Segment is incomplete - test normal recovery
-			t.Log("Testing recovery from incomplete segment (should be writable)")
-
-			// Create a new writer for continuation (recovery scenario)
-			writer2, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl, cfg, true)
-			require.NoError(t, err)
-			require.NotNil(t, writer2)
-
-			// Check recovered state
-			recoveredFirstEntryId := writer2.GetFirstEntryId(ctx)
-			recoveredLastEntryId := writer2.GetLastEntryId(ctx)
-			t.Logf("Recovered state: firstEntryId=%d, lastEntryId=%d", recoveredFirstEntryId, recoveredLastEntryId)
-
-			// Continue writing additional data from where we left off
-			nextEntryId := recoveredLastEntryId + 1
-			additionalData := [][]byte{
-				[]byte("Recovery data 1"),
-				[]byte("Recovery data 2"),
-				generateTestData(512), // 512B
-			}
-
-			for i, data := range additionalData {
-				entryId := nextEntryId + int64(i)
-				resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-recovery-continue-%d", entryId))
-				_, err := writer2.WriteDataAsync(ctx, entryId, data, resultCh)
-				require.NoError(t, err)
-
-				// Wait for result
-				result, err := resultCh.ReadResult(ctx)
-				require.NoError(t, err)
-				require.NoError(t, result.Err)
-			}
-
-			// Force sync
-			err = writer2.Sync(ctx)
-			require.NoError(t, err)
-
-			// Wait a bit for async operations to complete
-			time.Sleep(100 * time.Millisecond)
-
-			// Verify final state before finalize
-			expectedLastEntryId := nextEntryId + int64(len(additionalData)) - 1
-			assert.Equal(t, recoveredFirstEntryId, writer2.GetFirstEntryId(ctx))
-			assert.Equal(t, expectedLastEntryId, writer2.GetLastEntryId(ctx))
-
-			// Finalize the segment with footer and index
-			lastEntryId, err := writer2.Finalize(ctx, -1)
-			require.NoError(t, err)
-			assert.Equal(t, expectedLastEntryId, lastEntryId)
-
-			// Close the writer
-			err = writer2.Close(ctx)
-			require.NoError(t, err)
-		}
+	t.Run("AdvRecoverFinalizedSegmentRejectsWrites", func(t *testing.T) {
+		writer, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
+		require.NoError(t, err)
+		defer writer.Close(ctx)
+		_, err = writer.WriteDataAsync(ctx, int64(len(testData)), []byte("Should fail"), channel.NewLocalResultChannel("test-finalized-recovery"))
+		require.True(t, werr.ErrFileWriterFinalized.Is(err))
+		require.EqualValues(t, len(testData)-1, writer.GetLastEntryId(ctx))
 	})
 
 	t.Run("AdvVerifyOriginalSegmentObjects", func(t *testing.T) {
@@ -249,7 +175,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 	t.Run("AdvVerifyFinalSegmentState", func(t *testing.T) {
 		// Create reader to verify the final segment state
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 
@@ -266,6 +192,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		// Verify we can read all entries
 		lastEntryId, err := reader.GetLastEntryID(ctx)
 		require.NoError(t, err)
+		require.EqualValues(t, len(testData)-1, lastEntryId)
 		t.Logf("Reader last entry ID: %d", lastEntryId)
 
 		// Verify we can read data from the beginning
@@ -276,17 +203,10 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("Read %d entries", len(batch.Entries))
 
-		// We should have at least the original 4 entries
-		assert.GreaterOrEqual(t, len(batch.Entries), 4, "Should have at least the original 4 entries")
-
-		// Verify some entry content (at least the first few)
-		if len(batch.Entries) > 0 {
-			assert.Equal(t, int64(0), batch.Entries[0].EntryId)
-			assert.Equal(t, []byte("Entry 0: Initial data"), batch.Entries[0].Values)
-		}
-		if len(batch.Entries) > 1 {
-			assert.Equal(t, int64(1), batch.Entries[1].EntryId)
-			assert.Equal(t, []byte("Entry 1: More data"), batch.Entries[1].Values)
+		require.Len(t, batch.Entries, len(testData), "Recovery must preserve exactly the original entries")
+		for i, data := range testData {
+			assert.EqualValues(t, i, batch.Entries[i].EntryId)
+			assert.Equal(t, data, batch.Entries[i].Values)
 		}
 
 		err = reader.Close(ctx)

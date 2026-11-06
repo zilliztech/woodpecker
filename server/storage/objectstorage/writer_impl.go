@@ -100,13 +100,14 @@ type MinioFileWriter struct {
 	allUploadingTaskDone          atomic.Bool
 
 	// writing state
-	fileClose     chan struct{} // Close signal
-	closed        atomic.Bool
-	finalizeMu    sync.Mutex // Ensures that the finalize operation is done in a single thread
-	finalized     atomic.Bool
-	finalizing    atomic.Bool
-	fenced        atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage for a fence flag object.
-	lockObjectKey string      // Segment lock object key
+	fileClose      chan struct{} // Close signal
+	closed         atomic.Bool
+	finalizeMu     sync.Mutex // Serializes Finalize and Close, including ACK drain and cleanup
+	finalized      atomic.Bool
+	finalizing     atomic.Bool
+	inRecoveryMode atomic.Bool
+	fenced         atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage for a fence flag object.
+	lockObjectKey  string      // Segment lock object key
 }
 
 // NewMinioFileWriter is used to create a new Segment File Writer, which is used to write data to object storage
@@ -114,6 +115,9 @@ func NewMinioFileWriter(ctx context.Context, bucket string, baseDir string, logI
 	return NewMinioFileWriterWithMode(ctx, bucket, baseDir, logId, segId, objectCli, cfg, false)
 }
 
+// NewMinioFileWriterWithMode creates a writer and optionally restores its
+// persisted state. Recovery writers reject appends and support fencing,
+// finalization, and compaction of the existing segment.
 func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli storageclient.ObjectStorage, cfg *config.Configuration, recoveryMode bool) (storage.Writer, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "NewWriter")
 	defer sp.End()
@@ -155,6 +159,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 	segmentFileWriter.flushingBufferSize.Store(0)
 	segmentFileWriter.finalized.Store(false)
 	segmentFileWriter.finalizing.Store(false)
+	segmentFileWriter.inRecoveryMode.Store(recoveryMode)
 	segmentFileWriter.fenced.Store(false)
 	segmentFileWriter.headerWritten.Store(false)
 	segmentFileWriter.lastSyncTimestamp.Store(time.Now().UnixMilli())
@@ -783,6 +788,10 @@ func (f *MinioFileWriter) checkWritableForWriteDataAsync(ctx context.Context, en
 		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment storage not writable due to flush errors, search keyword 'flush error encountered' for detail", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return -1, werr.ErrStorageNotWritable
 	}
+	if f.inRecoveryMode.Load() {
+		logger.Ctx(ctx).Debug("AppendAsync: writer in recovery mode", zap.String("segmentFileKey", f.segmentFileKey))
+		return entryId, werr.ErrFileWriterInRecoveryMode
+	}
 	return entryId, nil
 }
 
@@ -999,7 +1008,11 @@ func (f *MinioFileWriter) Compact(ctx context.Context, _ int64) (_ int64, retErr
 }
 
 // Sync Implement sync logic, e.g., flush to persistent storage
-func (f *MinioFileWriter) Sync(ctx context.Context) (retErr error) {
+func (f *MinioFileWriter) Sync(ctx context.Context) error {
+	return f.sync(ctx, false)
+}
+
+func (f *MinioFileWriter) sync(ctx context.Context, allowClosed bool) (retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Sync")
 	defer sp.End()
 	startTime := time.Now()
@@ -1018,6 +1031,13 @@ func (f *MinioFileWriter) Sync(ctx context.Context) (retErr error) {
 	}()
 	syncLockWaitFinishTime := time.Now()
 	sp.AddEvent("wait syncMu lock", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
+
+	if f.allUploadingTaskDone.Load() {
+		return nil
+	}
+	if f.closed.Load() && !allowClosed {
+		return werr.ErrFileWriterAlreadyClosed
+	}
 
 	if !f.storageWritable.Load() {
 		return f.quickSyncFailUnsafe(ctx, werr.ErrStorageNotWritable)
@@ -1066,13 +1086,6 @@ func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.Sequenti
 	defer sp.End()
 	startTime := time.Now()
 
-	// wait available buffer size
-	waitBuffErr := f.waitIfFlushingBufferSizeExceededUnsafe(ctx)
-	if waitBuffErr != nil {
-		return nil, nil, -1, waitBuffErr
-	}
-	sp.AddEvent("wait available flushing buff quota", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
-
 	// get current buffer
 	currentBuffer := f.buffer.Load()
 
@@ -1089,6 +1102,13 @@ func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.Sequenti
 		// idle path: no new sequentially-ready entries to flush — return silently (issue #189).
 		return currentBuffer, make([]*cache.BufferEntry, 0), -1, nil
 	}
+	// Only wait for upload quota when there is data to flush.
+	waitBuffErr := f.waitIfFlushingBufferSizeExceededUnsafe(ctx)
+	if waitBuffErr != nil {
+		return nil, nil, -1, waitBuffErr
+	}
+	sp.AddEvent("wait available flushing buff quota", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
+
 	// get flush data
 	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
 	if err != nil {
@@ -1254,93 +1274,58 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 	return flushResultFutures
 }
 
-func (f *MinioFileWriter) awaitAllFlushTasks(ctx context.Context) error {
-	logger.Ctx(ctx).Info("wait for all blocks to be flushed", zap.String("segmentFileKey", f.segmentFileKey))
-
-	// First, wait for all upload tasks to complete
-	maxWaitTime := 10 * time.Second
+// awaitAllFlushTasks is called after write admission stops and the final Sync
+// has enqueued the buffered data. The ACK consumer awaits every upload future
+// and updates blockIndexes before processing the termination marker.
+func (f *MinioFileWriter) awaitAllFlushTasks(ctx context.Context) (retErr error) {
 	startTime := time.Now()
+	logger.Ctx(ctx).Info("wait for all blocks to be flushed", zap.String("segmentFileKey", f.segmentFileKey))
+	defer func() {
+		if retErr != nil {
+			logger.Ctx(ctx).Warn("failed waiting for all block flush tasks",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Error(retErr),
+				zap.Bool("allUploadingTaskDone", f.allUploadingTaskDone.Load()),
+				zap.Int("queuedFlushTasks", len(f.flushingTaskList)),
+				zap.Int64("flushingBufferSize", f.flushingBufferSize.Load()),
+				zap.Duration("elapsed", time.Since(startTime)))
+		}
+	}()
 
 	if f.allUploadingTaskDone.Load() {
-		// already done & closed
 		return nil
 	}
 
-	for {
-		runningTasks := f.pool.Running()
+	// Retain the previous upload (10s) and ACK (15s) budgets for the ordered
+	// drain, including waiting for space to enqueue the termination marker.
+	waitCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
 
-		logger.Ctx(ctx).Info("checking upload task status",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Int("runningTasks", runningTasks),
-			zap.Duration("elapsed", time.Since(startTime)))
-
-		// If no tasks are running, all uploads are done
-		if runningTasks == 0 {
-			logger.Ctx(ctx).Info("all upload tasks completed", zap.String("segmentFileKey", f.segmentFileKey))
-			break
-		}
-
-		// Check timeout
-		if time.Since(startTime) > maxWaitTime {
-			logger.Ctx(ctx).Warn("timeout waiting for upload tasks to complete",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int("runningTasks", runningTasks),
-				zap.Duration("elapsed", time.Since(startTime)))
-			return errors.New("timeout waiting for upload tasks to complete")
-		}
-
-		// Short sleep to avoid busy waiting
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
-			continue
-		}
+	if err := waitCtx.Err(); err != nil {
+		return err
 	}
-
-	// Now wait for the ack goroutine to process all completed tasks
-	// This ensures that blockIndexes are properly populated
-	logger.Ctx(ctx).Info("waiting for ack goroutine to process completed tasks", zap.String("segmentFileKey", f.segmentFileKey))
-
-	// Send termination signal to ack goroutine
 	select {
-	case f.flushingTaskList <- &blockUploadTask{
-		flushData:             nil,
-		flushDataFirstEntryId: 0,
-		flushFuture:           nil,
-	}:
-		logger.Ctx(ctx).Info("termination signal sent to ack goroutine", zap.String("segmentFileKey", f.segmentFileKey))
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(1 * time.Second):
-		return errors.New("timeout sending termination signal")
+	case f.flushingTaskList <- &blockUploadTask{flushData: nil}:
+		logger.Ctx(ctx).Info("termination signal sent to ack goroutine",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Duration("elapsed", time.Since(startTime)))
+	case <-waitCtx.Done():
+		return waitCtx.Err()
 	}
 
-	// Wait for ack goroutine to set the done flag
-	ackWaitTime := 15 * time.Second
-	ackStartTime := time.Now()
-
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		if f.allUploadingTaskDone.Load() {
-			logger.Ctx(ctx).Info("ack goroutine completed processing all tasks", zap.String("segmentFileKey", f.segmentFileKey))
+			logger.Ctx(ctx).Info("ack goroutine completed processing all tasks",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Duration("elapsed", time.Since(startTime)))
 			return nil
 		}
-
-		// Check timeout
-		if time.Since(ackStartTime) > ackWaitTime {
-			logger.Ctx(ctx).Warn("timeout waiting for ack goroutine to complete",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Bool("allUploadingTaskDone", f.allUploadingTaskDone.Load()),
-				zap.Duration("elapsed", time.Since(ackStartTime)))
-			return errors.New("timeout waiting for ack goroutine to complete")
-		}
-
-		// Short sleep to avoid busy waiting
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(25 * time.Millisecond):
-			continue
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		case <-ticker.C:
 		}
 	}
 }
@@ -1375,23 +1360,23 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 		return f.lastEntryID.Load(), nil
 	}
 
-	f.finalizing.Store(true)
-	flushDrained := false
-	defer func() {
-		if retErr != nil {
-			if flushDrained {
-				f.storageWritable.Store(false)
-			} else {
-				f.finalizing.Store(false)
-			}
-		}
-	}()
+	// A successful Close may still be followed by Finalize. A failed Close
+	// has already destroyed the task queue, so it cannot be drained again.
+	if f.closed.Load() && !f.allUploadingTaskDone.Load() {
+		return -1, werr.ErrFileWriterAlreadyClosed
+	}
 
-	err := f.Sync(ctx) // manual sync all pending append operation
+	// Keep write admission closed across failures; only success clears this.
+	f.finalizing.Store(true)
+
+	err := f.Sync(ctx) // manual sync all pending append operations
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Error(err))
+		if !werr.ErrStorageNotWritable.Is(err) {
+			return -1, err
+		}
 	}
 	// wait all flush
 	waitErr := f.awaitAllFlushTasks(ctx)
@@ -1401,7 +1386,6 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 			zap.Error(waitErr))
 		return -1, waitErr
 	}
-	flushDrained = true
 
 	// finalize with footer.blk name
 	footerBlockKey := getFooterBlockKey(f.segmentFileKey)
@@ -1440,6 +1424,8 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Close")
 	defer sp.End()
 	startTime := time.Now()
+	f.finalizeMu.Lock()
+	defer f.finalizeMu.Unlock()
 	if !f.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return nil
@@ -1454,18 +1440,21 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 		}
 		f.fileClose <- struct{}{}
 		close(f.fileClose)
+		// Recovery writers reject appends. Normal writers serialized with
+		// in-flight producers through the final Sync before closing the queue.
 		close(f.flushingTaskList)
 		if f.pool != nil {
 			f.pool.Release()
 		}
 	}()
 
-	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-	err := f.Sync(ctx) // manual sync all pending append operation
-	if err != nil {
-		logger.Ctx(ctx).Warn("sync error before close",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Error(err))
+	if !f.inRecoveryMode.Load() {
+		logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		if err := f.sync(ctx, true); err != nil { // flush pending appends even though closed is set
+			logger.Ctx(ctx).Warn("sync error before close",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Error(err))
+		}
 	}
 
 	// wait all flush
