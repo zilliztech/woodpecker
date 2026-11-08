@@ -230,14 +230,24 @@ func (q *QuorumConfig) SetBufferPoolSeeds(idx int, seeds []string) {
 type GRPCConfig struct {
 	ServerMaxSendSize ByteSize `yaml:"serverMaxSendSize"` // Maximum size of each RPC request that the server can send
 	ServerMaxRecvSize ByteSize `yaml:"serverMaxRecvSize"` // Maximum size of each RPC request that the server can receive
-	ClientMaxSendSize ByteSize `yaml:"clientMaxSendSize"` // Maximum size of each RPC request that the client can send
-	ClientMaxRecvSize ByteSize `yaml:"clientMaxRecvSize"` // Maximum size of each RPC request that the client can receive
+	// ClientMaxSendSize is the deprecated legacy location for the client's send limit.
+	// Deprecated: set client.grpc.clientMaxSendSize instead.
+	ClientMaxSendSize ByteSize `yaml:"clientMaxSendSize"`
+	// ClientMaxRecvSize is the deprecated legacy location for the client's receive limit.
+	// Deprecated: set client.grpc.clientMaxRecvSize instead.
+	ClientMaxRecvSize ByteSize `yaml:"clientMaxRecvSize"`
 }
 
 // GRPCClientConfig configures how a client dials logstores. DialTimeout has the
 // meaning of Milvus's grpc.client.dialTimeout, so an embedding Milvus can pass
 // its own value down.
 type GRPCClientConfig struct {
+	// ClientMaxSendSize is the maximum size of each RPC request the client can send.
+	// Zero uses the default, 256 MiB.
+	ClientMaxSendSize ByteSize `yaml:"clientMaxSendSize"`
+	// ClientMaxRecvSize is the maximum size of each RPC request the client can receive.
+	// Zero uses the default, 512 MiB.
+	ClientMaxRecvSize ByteSize `yaml:"clientMaxRecvSize"`
 	// DialTimeout bounds one attempt to establish a connection (gRPC's
 	// MinConnectTimeout, 20s when left unset). A call on a connection that is
 	// still connecting waits for the attempt, even a fail-fast one, so this is
@@ -312,13 +322,23 @@ func (g *GRPCConfig) GetServerMaxRecvSize() int {
 	return int(g.ServerMaxRecvSize)
 }
 
-// GetClientMaxSendSize returns the client max send size in bytes as int.
+// GetClientMaxSendSize returns the legacy client max send size in bytes as int.
+//
+// Deprecated: use WoodpeckerConfig.ResolveClientGRPCMessageSizes.
 func (g *GRPCConfig) GetClientMaxSendSize() int {
+	if g.ClientMaxSendSize == 0 {
+		return defaultClientMaxSendSize
+	}
 	return int(g.ClientMaxSendSize)
 }
 
-// GetClientMaxRecvSize returns the client max receive size in bytes as int.
+// GetClientMaxRecvSize returns the legacy client max receive size in bytes as int.
+//
+// Deprecated: use WoodpeckerConfig.ResolveClientGRPCMessageSizes.
 func (g *GRPCConfig) GetClientMaxRecvSize() int {
+	if g.ClientMaxRecvSize == 0 {
+		return defaultClientMaxRecvSize
+	}
 	return int(g.ClientMaxRecvSize)
 }
 
@@ -624,6 +644,36 @@ type WoodpeckerConfig struct {
 	Storage  StorageConfig  `yaml:"storage"`
 	Runtime  RuntimeConfig  `yaml:"runtime"`
 }
+
+// ResolveClientGRPCMessageSizes returns the effective client gRPC message limits.
+// The new client.grpc values take precedence over the deprecated logstore.grpc
+// values; the built-in defaults are applied only when neither value is set.
+// The boolean results indicate whether the corresponding legacy value was used.
+func (w *WoodpeckerConfig) ResolveClientGRPCMessageSizes() (send, recv int, legacySend, legacyRecv bool) {
+	switch {
+	case w.Client.GRPC.ClientMaxSendSize != 0:
+		send = int(w.Client.GRPC.ClientMaxSendSize)
+	case w.Logstore.GRPCConfig.ClientMaxSendSize != 0:
+		send, legacySend = int(w.Logstore.GRPCConfig.ClientMaxSendSize), true
+	default:
+		send = defaultClientMaxSendSize
+	}
+
+	switch {
+	case w.Client.GRPC.ClientMaxRecvSize != 0:
+		recv = int(w.Client.GRPC.ClientMaxRecvSize)
+	case w.Logstore.GRPCConfig.ClientMaxRecvSize != 0:
+		recv, legacyRecv = int(w.Logstore.GRPCConfig.ClientMaxRecvSize), true
+	default:
+		recv = defaultClientMaxRecvSize
+	}
+	return send, recv, legacySend, legacyRecv
+}
+
+const (
+	defaultClientMaxSendSize = 256 * 1024 * 1024
+	defaultClientMaxRecvSize = 512 * 1024 * 1024
+)
 
 type Configuration struct {
 	Woodpecker WoodpeckerConfig `yaml:"woodpecker"`
@@ -1185,8 +1235,6 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			GRPCConfig: GRPCConfig{
 				ServerMaxSendSize: ByteSize(512 * 1024 * 1024), // 512 MB
 				ServerMaxRecvSize: ByteSize(256 * 1024 * 1024), // 256 MB
-				ClientMaxSendSize: ByteSize(256 * 1024 * 1024), // 256 MB
-				ClientMaxRecvSize: ByteSize(512 * 1024 * 1024), // 512 MB
 			},
 			ProcessorCleanupPolicy: ProcessorCleanupPolicyConfig{
 				CleanupInterval: DurationSeconds{Duration: Duration{duration: 60 * time.Second}},  // 1 min

@@ -139,7 +139,18 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
 	}
 	reportClientPlacement(ctx)
-	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize(),
+	maxSendSize, maxRecvSize, legacySendSize, legacyRecvSize := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
+	if legacySendSize {
+		logger.Ctx(ctx).Warn("using deprecated client gRPC message size configuration; move this key to woodpecker.client.grpc.clientMaxSendSize",
+			zap.String("legacyKey", "woodpecker.logstore.grpc.clientMaxSendSize"),
+			zap.Int("valueBytes", maxSendSize))
+	}
+	if legacyRecvSize {
+		logger.Ctx(ctx).Warn("using deprecated client gRPC message size configuration; move this key to woodpecker.client.grpc.clientMaxRecvSize",
+			zap.String("legacyKey", "woodpecker.logstore.grpc.clientMaxRecvSize"),
+			zap.Int("valueBytes", maxRecvSize))
+	}
+	clientPool := client.NewLogStoreClientPool(maxSendSize, maxRecvSize,
 		client.WithGRPCClientConfig(cfg.Woodpecker.Client.GRPC),
 		client.WithCallTimeouts(client.CallTimeouts{
 			AppendSend:  cfg.Woodpecker.Client.SegmentAppend.SendTimeout.Duration.Duration(),

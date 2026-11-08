@@ -252,9 +252,10 @@ func TestStagedStorageService_ConcurrentAuditorsCompaction(t *testing.T) {
 				entered: make(chan string, 2), start: make(chan struct{}),
 				published: make(chan struct{}), otherDone: make(chan struct{}), release: make(chan struct{}),
 			}
+			maxSendSize, maxRecvSize, _, _ := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
 			newHandle := func(role, compactTarget string) (log.LogHandle, *auditorCompactionPool, *auditorCompactionMetadata) {
 				pool := &auditorCompactionPool{
-					LogStoreClientPool: client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize()),
+					LogStoreClientPool: client.NewLogStoreClientPool(maxSendSize, maxRecvSize),
 					role:               role, barrier: barrier, compactTarget: compactTarget, loseResponses: loseResponses,
 				}
 				t.Cleanup(func() { _ = pool.Close(context.Background()) })

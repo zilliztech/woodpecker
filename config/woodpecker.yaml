@@ -55,6 +55,8 @@ woodpecker:
       maxFetchThreads: 4 # Maximum number of concurrent fetch threads for service-mode direct read, default is 4
     # How this client dials logStores. The logStore's own gRPC settings are under logstore.grpc.
     grpc:
+      clientMaxSendSize: 268435456 # Maximum RPC request size the client can send, in bytes. Default 256 MiB.
+      clientMaxRecvSize: 536870912 # Maximum RPC request size the client can receive, in bytes. Default 512 MiB.
       dialTimeout: 1000 # Milliseconds allowed for one attempt to establish a connection (gRPC's MinConnectTimeout, 20s if unset). A call on a connection that is still connecting waits for the attempt, so this also bounds a call to an address that never answers, such as a replaced pod's reclaimed IP. Same meaning as Milvus's grpc.client.dialTimeout. Default 1000.
       connectBackoff: # Delay before the next connection attempt after a failed one: starts at baseDelay, grows by multiplier with jitter, up to maxDelay. Not a call retry backoff.
         baseDelay: 100 # Milliseconds, default 100
@@ -165,8 +167,7 @@ woodpecker:
     grpc:
       serverMaxSendSize: 536870912 # The maximum size of each RPC request that the logStore can send, unit: byte
       serverMaxRecvSize: 268435456 # The maximum size of each RPC request that the logStore can receive, unit: byte
-      clientMaxSendSize: 268435456 # The maximum size of each RPC request that the clients on logStore can send, unit: byte
-      clientMaxRecvSize: 536870912 # The maximum size of each RPC request that the clients on logStore can receive, unit: byte
+      # Deprecated: client message size limits are configured under client.grpc.
     processorCleanupPolicy:
       cleanupInterval: 60 # How often to scan for idle segment processors in seconds, default is 60 seconds
       maxIdleTime: 300 # How long a processor can be idle before cleanup in seconds, default is 300 seconds

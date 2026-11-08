@@ -63,6 +63,13 @@ func TestNewConfiguration(t *testing.T) {
 	assert.True(t, config.Woodpecker.Client.DirectRead.Enabled)
 	assert.Equal(t, int64(16777216), config.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Client.DirectRead.MaxFetchThreads)
+	assert.Equal(t, int64(268435456), config.Woodpecker.Client.GRPC.ClientMaxSendSize.Int64())
+	assert.Equal(t, int64(536870912), config.Woodpecker.Client.GRPC.ClientMaxRecvSize.Int64())
+	sendSize, recvSize, legacySend, legacyRecv := config.Woodpecker.ResolveClientGRPCMessageSizes()
+	assert.Equal(t, 268435456, sendSize)
+	assert.Equal(t, 536870912, recvSize)
+	assert.False(t, legacySend)
+	assert.False(t, legacyRecv)
 	// Test the getter methods for backward compatibility
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetWriteQuorumSize())
@@ -148,6 +155,16 @@ func TestNewConfiguration(t *testing.T) {
 
 	defaultConfig, err := NewConfiguration()
 	assert.NoError(t, err)
+
+	sendSize, recvSize, legacySend, legacyRecv = defaultConfig.Woodpecker.ResolveClientGRPCMessageSizes()
+	assert.Equal(t, defaultClientMaxSendSize, sendSize)
+	assert.Equal(t, defaultClientMaxRecvSize, recvSize)
+	assert.False(t, legacySend)
+	assert.False(t, legacyRecv)
+	assert.Zero(t, defaultConfig.Woodpecker.Client.GRPC.ClientMaxSendSize)
+	assert.Zero(t, defaultConfig.Woodpecker.Client.GRPC.ClientMaxRecvSize)
+	assert.Zero(t, defaultConfig.Woodpecker.Logstore.GRPCConfig.ClientMaxSendSize)
+	assert.Zero(t, defaultConfig.Woodpecker.Logstore.GRPCConfig.ClientMaxRecvSize)
 
 	// test default configuration
 	assert.Equal(t, "etcd", defaultConfig.Woodpecker.Meta.Type)
@@ -256,6 +273,100 @@ func TestNewConfiguration(t *testing.T) {
 	assert.False(t, defaultConfig.Minio.UseVirtualHost)
 	assert.Equal(t, 1000, defaultConfig.Minio.RequestTimeoutMs.Milliseconds())
 	assert.Equal(t, 0, defaultConfig.Minio.ListObjectsMaxKeys)
+}
+
+func TestResolveClientGRPCMessageSizes(t *testing.T) {
+	tests := []struct {
+		name           string
+		clientSend     ByteSize
+		clientRecv     ByteSize
+		legacySend     ByteSize
+		legacyRecv     ByteSize
+		wantSend       int
+		wantRecv       int
+		wantLegacySend bool
+		wantLegacyRecv bool
+	}{
+		{
+			name:     "defaults when unset",
+			wantSend: defaultClientMaxSendSize,
+			wantRecv: defaultClientMaxRecvSize,
+		},
+		{
+			name:           "legacy values are used when new values are unset",
+			legacySend:     ByteSize(100),
+			legacyRecv:     ByteSize(200),
+			wantSend:       100,
+			wantRecv:       200,
+			wantLegacySend: true,
+			wantLegacyRecv: true,
+		},
+		{
+			name:           "new values override legacy values independently",
+			clientSend:     ByteSize(300),
+			legacySend:     ByteSize(100),
+			legacyRecv:     ByteSize(200),
+			wantSend:       300,
+			wantRecv:       200,
+			wantLegacyRecv: true,
+		},
+		{
+			name:       "new values override both legacy values",
+			clientSend: ByteSize(300),
+			clientRecv: ByteSize(400),
+			legacySend: ByteSize(100),
+			legacyRecv: ByteSize(200),
+			wantSend:   300,
+			wantRecv:   400,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &WoodpeckerConfig{
+				Client: ClientConfig{
+					GRPC: GRPCClientConfig{
+						ClientMaxSendSize: tt.clientSend,
+						ClientMaxRecvSize: tt.clientRecv,
+					},
+				},
+				Logstore: LogstoreConfig{
+					GRPCConfig: GRPCConfig{
+						ClientMaxSendSize: tt.legacySend,
+						ClientMaxRecvSize: tt.legacyRecv,
+					},
+				},
+			}
+			send, recv, legacySend, legacyRecv := cfg.ResolveClientGRPCMessageSizes()
+			assert.Equal(t, tt.wantSend, send)
+			assert.Equal(t, tt.wantRecv, recv)
+			assert.Equal(t, tt.wantLegacySend, legacySend)
+			assert.Equal(t, tt.wantLegacyRecv, legacyRecv)
+		})
+	}
+}
+
+func TestResolveClientGRPCMessageSizesFromYAML(t *testing.T) {
+	configFile := filepath.Join(t.TempDir(), "woodpecker.yaml")
+	yamlConfig := []byte(`woodpecker:
+  client:
+    grpc:
+      clientMaxSendSize: 300
+  logstore:
+    grpc:
+      clientMaxSendSize: 100
+      clientMaxRecvSize: 200
+`)
+	require.NoError(t, os.WriteFile(configFile, yamlConfig, 0o600))
+
+	cfg, err := NewConfiguration(configFile)
+	require.NoError(t, err)
+
+	send, recv, legacySend, legacyRecv := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
+	assert.Equal(t, 300, send)
+	assert.Equal(t, 200, recv)
+	assert.False(t, legacySend)
+	assert.True(t, legacyRecv)
 }
 
 func TestConfigurationOverwrite(t *testing.T) {
