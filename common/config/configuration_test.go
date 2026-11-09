@@ -63,8 +63,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.True(t, config.Woodpecker.Client.DirectRead.Enabled)
 	assert.Equal(t, int64(16777216), config.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Client.DirectRead.MaxFetchThreads)
-	assert.Equal(t, int64(268435456), config.Woodpecker.Client.GRPC.ClientMaxSendSize.Int64())
-	assert.Equal(t, int64(536870912), config.Woodpecker.Client.GRPC.ClientMaxRecvSize.Int64())
+	assert.Zero(t, config.Woodpecker.Client.GRPC.ClientMaxSendSize)
+	assert.Zero(t, config.Woodpecker.Client.GRPC.ClientMaxRecvSize)
 	sendSize, recvSize, legacySend, legacyRecv := config.Woodpecker.ResolveClientGRPCMessageSizes()
 	assert.Equal(t, 268435456, sendSize)
 	assert.Equal(t, 536870912, recvSize)
@@ -366,6 +366,26 @@ func TestResolveClientGRPCMessageSizesFromYAML(t *testing.T) {
 	assert.Equal(t, 300, send)
 	assert.Equal(t, 200, recv)
 	assert.False(t, legacySend)
+	assert.True(t, legacyRecv)
+}
+
+func TestResolveClientGRPCMessageSizesFromLayeredLegacyYAML(t *testing.T) {
+	legacyConfigFile := filepath.Join(t.TempDir(), "legacy.yaml")
+	legacyConfig := []byte(`woodpecker:
+  logstore:
+    grpc:
+      clientMaxSendSize: 1073741824
+      clientMaxRecvSize: 1073741824
+`)
+	require.NoError(t, os.WriteFile(legacyConfigFile, legacyConfig, 0o600))
+
+	cfg, err := NewConfiguration("../../config/woodpecker.yaml", legacyConfigFile)
+	require.NoError(t, err)
+
+	send, recv, legacySend, legacyRecv := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
+	assert.Equal(t, 1073741824, send)
+	assert.Equal(t, 1073741824, recv)
+	assert.True(t, legacySend)
 	assert.True(t, legacyRecv)
 }
 

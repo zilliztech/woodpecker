@@ -55,8 +55,9 @@ woodpecker:
       maxFetchThreads: 4 # Maximum number of concurrent fetch threads for service-mode direct read, default is 4
     # How this client dials logStores. The logStore's own gRPC settings are under logstore.grpc.
     grpc:
-      clientMaxSendSize: 268435456 # Maximum RPC request size the client can send, in bytes. Default 256 MiB.
-      clientMaxRecvSize: 536870912 # Maximum RPC request size the client can receive, in bytes. Default 512 MiB.
+      # Set these keys here to override legacy logstore.grpc or default values.
+      # clientMaxSendSize: 268435456 # Default 256 MiB.
+      # clientMaxRecvSize: 536870912 # Default 512 MiB.
       dialTimeout: 1000 # Milliseconds allowed for one attempt to establish a connection (gRPC's MinConnectTimeout, 20s if unset). A call on a connection that is still connecting waits for the attempt, so this also bounds a call to an address that never answers, such as a replaced pod's reclaimed IP. Same meaning as Milvus's grpc.client.dialTimeout. Default 1000.
       connectBackoff: # Delay before the next connection attempt after a failed one: starts at baseDelay, grows by multiplier with jitter, up to maxDelay. Not a call retry backoff.
         baseDelay: 100 # Milliseconds, default 100
