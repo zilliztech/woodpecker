@@ -94,10 +94,7 @@ jobs:
             "Core Unit Test" "CI Contracts" "WPCLI Unit" "WPCLI Terminal"
             "Diagnostics Unit" "Diagnostics Build" "Diagnostics CLI"
             "Diagnostics WebUI" "Diagnostics Harness" "Stack Examples"
-            "Diagnostics Smoke (prometheus)" "Diagnostics Smoke (integrated)"
-            "Diagnostics Smoke (append)" "Diagnostics Smoke (persistence)"
-            "Diagnostics Smoke (consume)" "Diagnostics Smoke (query)"
-            "Diagnostics Smoke (jaeger)" "Diagnostics Smoke (loki)"
+            "Diagnostics Smoke (prometheus)" "Diagnostics Smoke (jaeger)"
           )
           REQUIRED_CHECKS=("${ROOT_CHECKS[@]}" "Lint" "Go Mod Tidy Check" "E2E Local" "E2E Object Storage" "Embed MinIO Without ConditionWrite" "E2E Service" "Component Integration Test" "Trace Export Integration" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
           CHECKS=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket 2>/dev/null || echo "[]")

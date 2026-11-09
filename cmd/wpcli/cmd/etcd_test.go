@@ -112,7 +112,7 @@ func TestEtcdCommandsUseContextWithoutAdmin(t *testing.T) {
 			var out, diagnostic bytes.Buffer
 			root.SetOut(&out)
 			root.SetErr(&diagnostic)
-			root.SetArgs(append(tc.args, "--timeout", "2s"))
+			root.SetArgs(append(tc.args, "--timeout", "2s", "--etcd", endpoint, "--meta-prefix", "explicit/wp"))
 			require.NoError(t, root.Execute(), diagnostic.String())
 			require.Contains(t, out.String(), tc.want)
 			if tc.name == "cat" {

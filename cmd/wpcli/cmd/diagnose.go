@@ -39,7 +39,7 @@ Focused stuck-write/stuck-read retain their original v1 contracts. Snapshot mode
 captures current evidence but cannot establish a sustained stall or buildup.
 Reader progress needs the 30s client-profile reporting cadence and an explicit
 read expectation. --window starts sampling now;
-historical Prometheus, trace and Loki queries belong to the separate tool.
+historical Prometheus, trace and Loki queries are available under wp diag.
 
 Exit 0 means evaluation completed, including inconclusive/conflicting findings;
 it is not a health assertion. --fail-on-findings returns 8 for warning/critical findings.

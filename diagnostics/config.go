@@ -17,6 +17,16 @@ type SourceConfig struct {
 type Config struct {
 	SchemaVersion string                  `yaml:"schema_version" json:"-"`
 	Sources       map[string]SourceConfig `yaml:"sources" json:"-"`
+	Workbench     yaml.Node               `yaml:"workbench,omitempty" json:"-"`
+	Targets       yaml.Node               `yaml:"targets,omitempty" json:"-"`
+	Clients       yaml.Node               `yaml:"clients,omitempty" json:"-"`
+	Servers       yaml.Node               `yaml:"servers,omitempty" json:"-"`
+	Policy        yaml.Node               `yaml:"policy,omitempty" json:"-"`
+	Agent         yaml.Node               `yaml:"agent,omitempty" json:"-"`
+	// Frontend metadata is supplied by a local entry point, never read from YAML.
+	Frontend      string            `yaml:"-" json:"-"`
+	DefaultTarget string            `yaml:"-" json:"-"`
+	RulePaths     map[string]string `yaml:"-" json:"-"`
 }
 
 // LoadConfig reads only wpdiag's envelope. Module settings remain private and
@@ -51,6 +61,13 @@ func ParseConfig(data []byte, baseDir string) (Config, error) {
 	}
 	if c.SchemaVersion != ConfigSchema {
 		return Config{}, fmt.Errorf("unsupported wpdiag configuration schema")
+	}
+	if group, ok := c.Sources["metrics"]; ok {
+		if _, exists := c.Sources["prometheus"]; exists {
+			return c, fmt.Errorf("configure metrics or prometheus connections, not both")
+		}
+		c.Sources["prometheus"] = group
+		delete(c.Sources, "metrics")
 	}
 	for source, group := range c.Sources {
 		if !Has(knownSources, source) {

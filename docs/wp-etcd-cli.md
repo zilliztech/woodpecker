@@ -34,28 +34,21 @@ not schema-decoded fields. Typed metadata inspection/repair is tracked separatel
 in [issue #254](https://github.com/zilliztech/woodpecker/issues/254).
 These raw commands do not modify etcd.
 
-## Configure an etcd-only context
+## Supply explicit etcd parameters
 
-```yaml
-current-context: raw-etcd
-contexts:
-  raw-etcd:
-    etcd:
-      endpoints: [127.0.0.1:32379]
-```
+Current source builds require an explicit `--etcd` endpoint or an explicitly
+selected `--client-parameters-file`. Raw commands do not use server-context etcd
+settings or Admin discovery. They do not require a metadata prefix and never
+prepend one. Authentication/TLS paths are host-local request settings.
 
 ```bash
-wp --context raw-etcd etcd list
+wp etcd list --etcd http://127.0.0.1:32379
+wp etcd get /tenant/example --etcd http://127.0.0.1:32379
 ```
 
-CLI connection flags override context settings. Context etcd settings also
-support `username`, `password`, `tls_enabled`, `cacert`, `cert`, `key`, and
-`tls_min_version`. TLS defaults to a minimum version of 1.2. CA-only server-auth
-TLS works without a client certificate; mutual TLS needs cert and key together.
-When no CA file is configured, TLS uses system roots. Use a reachable endpoint or port-forward when running outside
-Kubernetes. Raw commands do not discover endpoints through the admin API.
-`wp ctx view` displays configured etcd endpoints, namespace, TLS mode and username
-without printing the password.
+See the [connection guide](admin-guides/wpcli/configuration.md#etcd-connections)
+for private parameter files and authentication. Named client-meta profiles and
+implicit context metadata authority are retired in the current source build.
 
 ## Read additional pages
 

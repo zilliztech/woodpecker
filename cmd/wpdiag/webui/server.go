@@ -20,7 +20,9 @@ import (
 	"github.com/google/uuid"
 
 	d "github.com/zilliztech/woodpecker/diagnostics"
+	"github.com/zilliztech/woodpecker/diagnostics/checks"
 	"github.com/zilliztech/woodpecker/diagnostics/integrated"
+	"github.com/zilliztech/woodpecker/diagnostics/wal"
 )
 
 //go:embed assets/*
@@ -34,21 +36,41 @@ const (
 )
 
 type connectionView struct {
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
+	Name          string            `json:"name"`
+	Enabled       bool              `json:"enabled"`
+	Endpoint      string            `json:"endpoint,omitempty"`
+	Deployment    string            `json:"deployment,omitempty"`
+	MetricLabels  map[string]string `json:"metric_labels,omitempty"`
+	TraceServices map[string]string `json:"trace_services,omitempty"`
+	TraceService  string            `json:"trace_service,omitempty"`
+	IdentityTags  map[string]string `json:"identity_tags,omitempty"`
+	RequestIDTag  string            `json:"request_id_tag,omitempty"`
 }
 
 type jobView struct {
-	ID          string             `json:"id"`
-	Status      string             `json:"status"`
-	CreatedAt   time.Time          `json:"created_at"`
-	FinishedAt  *time.Time         `json:"finished_at,omitempty"`
-	Plan        integrated.Plan    `json:"plan"`
-	Events      []integrated.Event `json:"events"`
-	ReportReady bool               `json:"report_ready"`
+	Command            *commandResult     `json:"command,omitempty"`
+	ID                 string             `json:"id"`
+	Status             string             `json:"status"`
+	CreatedAt          time.Time          `json:"created_at"`
+	FinishedAt         *time.Time         `json:"finished_at,omitempty"`
+	Plan               integrated.Plan    `json:"plan"`
+	Events             []integrated.Event `json:"events"`
+	ReportReady        bool               `json:"report_ready"`
+	Kind               string             `json:"kind,omitempty"`
+	ParentID           string             `json:"parent_id,omitempty"`
+	WALRequest         *wal.Request       `json:"wal_request,omitempty"`
+	WALEvents          []wal.Event        `json:"wal_events,omitempty"`
+	WALChecks          []string           `json:"wal_checks,omitempty"`
+	DiagRequest        *checks.Request    `json:"request,omitempty"`
+	DiagSummary        *checks.Summary    `json:"summary,omitempty"`
+	DiagTarget         string             `json:"target_label,omitempty"`
+	PreviousAnalysisID string             `json:"previous_analysis_id,omitempty"`
+	DiagEvents         []checks.Event     `json:"check_events,omitempty"`
 }
 
 type job struct {
+	stdin  io.WriteCloser
+	owner  string
 	view   jobView
 	cancel context.CancelFunc
 	body   []byte // Immutable, exact bytes from integrated.Encode, including its output bound.
@@ -57,19 +79,20 @@ type job struct {
 // Server keeps private configuration in memory and retains bounded run history.
 // Its context owns runs; an HTTP disconnect does not cancel a diagnostic run.
 type Server struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	config   d.Config
-	runner   *integrated.Runner
-	token    string
-	mux      *http.ServeMux
-	mu       sync.Mutex
-	jobs     map[string]*job
-	order    []string
-	active   int
-	retained int
-	closed   bool
-	wg       sync.WaitGroup
+	workspace *workspace
+	ctx       context.Context
+	cancel    context.CancelFunc
+	config    d.Config
+	runner    *integrated.Runner
+	token     string
+	mux       *http.ServeMux
+	mu        sync.Mutex
+	jobs      map[string]*job
+	order     []string
+	active    int
+	retained  int
+	closed    bool
+	wg        sync.WaitGroup
 }
 
 func New(ctx context.Context, config d.Config, runner *integrated.Runner) *Server {
@@ -83,6 +106,12 @@ func New(ctx context.Context, config d.Config, runner *integrated.Runner) *Serve
 	s.mux.HandleFunc("POST /api/runs/{id}/cancel", s.stop)
 	s.mux.HandleFunc("GET /api/runs/{id}/report", s.report)
 	s.mux.HandleFunc("GET /api/runs/{id}/evidence", s.evidence)
+	s.mux.HandleFunc("GET /api/wal/catalog", s.walCatalog)
+	s.mux.HandleFunc("GET /api/wal/runs/{id}/inspect/{evidence}", s.walInspect)
+	s.mux.HandleFunc("POST /api/wal/runs", s.walStart)
+	s.mux.HandleFunc("GET /api/wal/runs/{id}/packet", s.walPacket)
+	s.mux.HandleFunc("GET /api/wal/runs/{id}/observation/{observation}", s.walObservation)
+	s.mux.HandleFunc("POST /api/wal/runs/{id}/analyze", s.walAnalyze)
 	s.mux.HandleFunc("GET /", s.asset)
 	return s
 }
@@ -114,6 +143,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && r.Header.Get("X-WPDiag-Session") != s.token {
 		fail(w, http.StatusForbidden, "session_required", "Reload the local page before starting or cancelling a run")
 		return
+	}
+	if s.workspace != nil {
+		var ok bool
+		r, ok = s.workspace.requestSession(w, r)
+		if !ok {
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") && !workspaceRoute(r.URL.Path, r.Method) {
+			fail(w, 404, "workspace_route_unavailable", "Use the workspace APIs or the independent legacy wpdiag frontend")
+			return
+		}
 	}
 	s.mux.ServeHTTP(w, r)
 }
@@ -243,9 +283,17 @@ func (s *Server) execute(ctx context.Context, q integrated.Request, j *job) {
 // Only completed reports are evictable; active collection is never evicted.
 func (s *Server) evictLocked(count, bytes int, keep string) {
 	for len(s.order) > count || s.retained > bytes {
+		protected := map[string]bool{keep: true}
+		// Retained analyses remain attached to their original evidence report.
+		// Old analysis versions are evicted before their diagnostic parent.
+		for _, j := range s.jobs {
+			if j.view.ParentID != "" {
+				protected[j.view.ParentID] = true
+			}
+		}
 		index := -1
 		for i, id := range s.order {
-			if id != keep && s.jobs[id].view.ReportReady {
+			if !protected[id] && s.jobs[id].view.ReportReady {
 				index = i
 				break
 			}
@@ -260,17 +308,27 @@ func (s *Server) evictLocked(count, bytes int, keep string) {
 	}
 }
 
-func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	type brief struct {
-		ID        string    `json:"id"`
-		Status    string    `json:"status"`
-		CreatedAt time.Time `json:"created_at"`
+		ID                 string          `json:"id"`
+		Status             string          `json:"status"`
+		CreatedAt          time.Time       `json:"created_at"`
+		Kind               string          `json:"kind,omitempty"`
+		ParentID           string          `json:"parent_id,omitempty"`
+		PreviousAnalysisID string          `json:"previous_analysis_id,omitempty"`
+		ReportReady        bool            `json:"report_ready"`
+		Request            *checks.Request `json:"request,omitempty"`
+		Summary            *checks.Summary `json:"summary,omitempty"`
+		TargetLabel        string          `json:"target_label,omitempty"`
 	}
 	s.mu.Lock()
 	rows := []brief{}
 	for i := len(s.order) - 1; i >= 0; i-- {
 		j := s.jobs[s.order[i]]
-		rows = append(rows, brief{ID: j.view.ID, Status: j.view.Status, CreatedAt: j.view.CreatedAt})
+		if !s.owns(r, j) {
+			continue
+		}
+		rows = append(rows, brief{ID: j.view.ID, Status: j.view.Status, CreatedAt: j.view.CreatedAt, Kind: j.view.Kind, ParentID: j.view.ParentID, PreviousAnalysisID: j.view.PreviousAnalysisID, ReportReady: j.view.ReportReady, Request: j.view.DiagRequest, Summary: j.view.DiagSummary, TargetLabel: j.view.DiagTarget})
 	}
 	s.mu.Unlock()
 	send(w, http.StatusOK, rows)
@@ -279,10 +337,15 @@ func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	j, ok := s.jobs[r.PathValue("id")]
+	if ok && !s.owns(r, j) {
+		ok = false
+	}
 	var v jobView
 	if ok {
 		v = j.view
 		v.Events = append([]integrated.Event{}, j.view.Events...)
+		v.WALEvents = append([]wal.Event{}, j.view.WALEvents...)
+		v.DiagEvents = append([]checks.Event{}, j.view.DiagEvents...)
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -295,6 +358,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	j, ok := s.jobs[r.PathValue("id")]
+	if ok && !s.owns(r, j) {
+		ok = false
+	}
 	if ok && !j.view.ReportReady {
 		j.view.Status = "cancelling"
 		j.cancel()
@@ -310,6 +376,9 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 func (s *Server) reportBody(w http.ResponseWriter, r *http.Request) []byte {
 	s.mu.Lock()
 	j, ok := s.jobs[r.PathValue("id")]
+	if ok && !s.owns(r, j) {
+		ok = false
+	}
 	var body []byte
 	if ok {
 		body = j.body
@@ -369,11 +438,73 @@ func (s *Server) evidence(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
+	if s.workspace != nil {
+		switch r.URL.Path {
+		case "/advanced", "/advanced/", "/wal.js", "/app.js", "/styles.css":
+			http.NotFound(w, r)
+			return
+		}
+	}
+
 	name, ctype := "", ""
 	switch r.URL.Path {
 	case "/":
+		name = "workbench.html"
+		if s.workspace != nil {
+			name = "workspace.html"
+		}
+		ctype = "text/html; charset=utf-8"
+	case "/advanced", "/advanced/":
 		name = "index.html"
 		ctype = "text/html; charset=utf-8"
+	case "/wal.js":
+		name = "wal.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/wal.css":
+		name = "wal.css"
+		ctype = "text/css; charset=utf-8"
+	case "/curves.js":
+		name = "curves.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/workspace-help.js":
+		name = "workspace-help.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/workspace.js":
+		name = "workspace.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/form-controls.js":
+		name = "form-controls.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/workspace-bindings.js":
+		name = "workspace-bindings.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/workspace-command-console.js":
+		name = "workspace-command-console.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/workspace-history.js":
+		name = "workspace-history.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/workspace-diagnostics.js":
+		name = "workspace-diagnostics.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/ops-console.css":
+		name = "ops-console.css"
+		ctype = "text/css; charset=utf-8"
+	case "/workflow.css":
+		name = "workflow.css"
+		ctype = "text/css; charset=utf-8"
+	case "/fonts/geist-latin.woff2", "/fonts/geist-mono-latin.woff2":
+		name = strings.TrimPrefix(r.URL.Path, "/")
+		ctype = "font/woff2"
+	case "/workspace-operations.js":
+		name = "workspace-operations.js"
+		ctype = "text/javascript; charset=utf-8"
+	case "/commands.json":
+		name = "commands.json"
+		ctype = "application/json"
+	case "/workspace.css":
+		name = "workspace.css"
+		ctype = "text/css; charset=utf-8"
 	case "/app.js":
 		name = "app.js"
 		ctype = "text/javascript; charset=utf-8"
@@ -389,7 +520,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "UI asset unavailable", http.StatusInternalServerError)
 		return
 	}
-	if name == "index.html" {
+	if name == "index.html" || name == "workbench.html" || name == "workspace.html" {
 		data = []byte(strings.ReplaceAll(string(data), "SESSION_TOKEN", s.token))
 	}
 	w.Header().Set("Content-Type", ctype)
@@ -399,6 +530,10 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 // Serve binds only a loopback address. Configuration is fixed for this session;
 // source settings are edited through the existing private YAML file, not HTTP.
 func Serve(ctx context.Context, address string, config d.Config, out io.Writer) error {
+	return serve(ctx, address, config, out, nil)
+}
+
+func serve(ctx context.Context, address string, config d.Config, out io.Writer, setup func(*Server) error) error {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || !loopbackHost(host) {
 		return fmt.Errorf("--listen must be a loopback host:port, for example 127.0.0.1:8787")
@@ -415,6 +550,13 @@ func Serve(ctx context.Context, address string, config d.Config, out io.Writer) 
 		return fmt.Errorf("cannot listen on the requested local address; check the port")
 	}
 	app := New(ctx, config, integrated.Standard())
+	if setup != nil {
+		if err := setup(app); err != nil {
+			_ = listener.Close()
+			app.Close()
+			return err
+		}
+	}
 	defer app.Close()
 	server := &http.Server{Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
 	fmt.Fprintf(out, "WP diagnosis WebUI: http://%s\nConnections are loaded from --config; Ctrl+C stops the server and active runs.\n", listener.Addr())

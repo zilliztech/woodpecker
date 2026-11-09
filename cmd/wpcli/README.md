@@ -20,6 +20,14 @@ targets visible. See the [interactive shell walkthrough](../../docs/admin-guides
 The native [Interactive shell handbook](../../docs/docs.html#operations-cli-shell)
 provides connection parameters, command prerequisites and output interpretation.
 
+For retained WAL evidence, use `wp diag metrics check <name>`,
+`wp diag trace check <name>` and `wp diag scenario slow-writes` (or `all`).
+Metrics/Trace connections live in cli.yaml. Text is the readable default;
+`--output json` exposes the same result contract. `wp webui` opens the operations
+workspace with separate context, client-metadata and diagnostic selections.
+See the [diagnostic walkthrough](../../docs/admin-guides/wpcli/diagnostics.md) and
+[configuration example](cli.diagnostics.example.yaml).
+
 ## In-pod usage (zero-config)
 
 `wp` is bundled in all server images and is on `PATH`, so you can operate a
@@ -83,6 +91,9 @@ contexts:
       endpoints: [127.0.0.1:32379]
       meta_prefix: milvus-prod/woodpecker
 ```
+
+Use `--standalone --etcd <endpoints> --meta-prefix <prefix>` for an explicit metadata
+authority independent of WP context defaults and Admin discovery.
 
 Command flags override context settings; metadata commands use admin discovery
 only for missing endpoints/prefix. Optional context fields include username,

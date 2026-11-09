@@ -1,0 +1,91 @@
+# Evidence assessment rules. Copy beside cli.yaml as diag-trace.yaml.
+# Keys match the WebUI selector and CLI check name exactly.
+# Numeric values use the native unit shown below.
+# observe: measurements only; no universal workload baseline.
+# runtime_watermarks: use the same node's exported protection watermarks.
+# sustained_growth: use Metrics defaults.sustain_ms.
+schema_version: wp.diag.rules/v1
+source: trace
+defaults:
+  latency_ms: 1000
+evidence:
+  # writer operation duration
+  writer-operation-duration:
+    mode: threshold
+    threshold: 1000
+    unit: ms
+  # writer operation errors
+  writer-operation-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # client append duration
+  client-append-duration:
+    mode: threshold
+    threshold: 1000
+    unit: ms
+  # client append errors
+  client-append-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # server append duration
+  server-append-duration:
+    mode: threshold
+    threshold: 1000
+    unit: ms
+  # server append errors
+  server-append-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # server flush duration
+  server-flush-duration:
+    mode: threshold
+    threshold: 1000
+    unit: ms
+  # server flush errors
+  server-flush-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # reader operation duration
+  reader-operation-duration:
+    mode: threshold
+    threshold: 1000
+    unit: ms
+  # reader operation errors
+  reader-operation-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # server read duration
+  server-read-duration:
+    mode: threshold
+    threshold: 1000
+    unit: ms
+  # server read errors
+  server-read-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # open reader duration
+  open-reader-duration:
+    mode: threshold
+    threshold: 1000
+    unit: ms
+  # open reader errors
+  open-reader-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # open writer duration
+  open-writer-duration:
+    mode: threshold
+    threshold: 1000
+    unit: ms
+  # open writer errors
+  open-writer-errors:
+    mode: threshold
+    threshold: 0
+    unit: count

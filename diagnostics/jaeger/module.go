@@ -59,7 +59,10 @@ func (Module) Run(ctx context.Context, r d.Request, connection d.Connection) d.R
 		case <-timer.C:
 		}
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport, err := d.HTTPTransport(s.TLS, connection.BaseDir)
+	if err != nil {
+		return d.Failure("trace", "invalid", "tls_configuration_unavailable", err.Error())
+	}
 	defer transport.CloseIdleConnections()
 	c := client{http: &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, settings: s, token: token, user: user, password: password}
 	b := &budget{targets: map[string]bool{}}

@@ -35,3 +35,7 @@ deployments/operator/bin/*
 
 # superpowers (Claude Code) design/plan docs — not for the repo
 docs/superpowers/
+
+# Python fixture/documentation caches
+__pycache__/
+*.pyc

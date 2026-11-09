@@ -389,7 +389,7 @@ func TestLogTruncateUsesEtcdContextWithoutAdminAccess(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(new(bytes.Buffer))
-	root.SetArgs([]string{"--context", "truncate-test", "log", "truncate", "a", "--segment", "0", "--entry", "11"})
+	root.SetArgs([]string{"--context", "truncate-test", "log", "truncate", "a", "--segment", "0", "--entry", "11", "--etcd", endpoint, "--meta-prefix", kb.Prefix()})
 	require.NoError(t, root.Execute())
 	require.Contains(t, out.String(), `"applied": false`)
 	require.Contains(t, out.String(), `"truncated_entry_id": "11"`)

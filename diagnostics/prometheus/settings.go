@@ -21,6 +21,7 @@ type Settings struct {
 	BasicAuth      *BasicAuth        `yaml:"basic_auth,omitempty"`
 	Limits         Limits            `yaml:"limits,omitempty"`
 	Policy         Policy            `yaml:"policy,omitempty"`
+	TLS            d.TLSConfig       `yaml:"tls,omitempty"`
 }
 
 type BasicAuth struct {
@@ -67,6 +68,9 @@ func settingsFor(c d.Connection, planKind queryPlanKind) (Settings, error) {
 			s.Policy.LatencyMS[k] = v
 		}
 	}
+	if planKind == atomicPlan {
+		s.Limits.MaxQueries = 96
+	}
 
 	if d.DecodeSettings(c, &s) != nil {
 		return s, fmt.Errorf("invalid Prometheus connection settings (values withheld)")
@@ -81,7 +85,11 @@ func settingsFor(c d.Connection, planKind queryPlanKind) (Settings, error) {
 		}
 	}
 	l, p := s.Limits, s.Policy
-	if l.MaxQueries < 1 || l.MaxQueries > 32 || l.MaxSeries < 1 || l.MaxSeries > 5000 || l.MaxSamples < 2 || l.MaxSamples > 200000 || l.MaxResponseBytes < 1024 || l.MaxResponseBytes > 8<<20 || l.MaxWindowMS < 1000 || l.MaxWindowMS > 86400000 || l.TimeoutMS < 1 || l.TimeoutMS > 60000 || p.MaxGapMS < 1 || p.MaxGapMS > 600000 || p.MinObservations < 1 || p.MinObservations > 1000000 || math.IsNaN(p.ThroughputDropRatio) || p.ThroughputDropRatio <= 0 || p.ThroughputDropRatio >= 1 {
+	maxQueries := 32
+	if planKind == atomicPlan {
+		maxQueries = 128
+	}
+	if l.MaxQueries < 1 || l.MaxQueries > maxQueries || l.MaxSeries < 1 || l.MaxSeries > 5000 || l.MaxSamples < 2 || l.MaxSamples > 200000 || l.MaxResponseBytes < 1024 || l.MaxResponseBytes > 8<<20 || l.MaxWindowMS < 1000 || l.MaxWindowMS > 86400000 || l.TimeoutMS < 1 || l.TimeoutMS > 60000 || p.MaxGapMS < 1 || p.MaxGapMS > 600000 || p.MinObservations < 1 || p.MinObservations > 1000000 || math.IsNaN(p.ThroughputDropRatio) || p.ThroughputDropRatio <= 0 || p.ThroughputDropRatio >= 1 {
 		return s, fmt.Errorf("invalid Prometheus query/data/policy budgets")
 	}
 	allowed := queryThresholds()

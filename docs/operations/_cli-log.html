@@ -7,7 +7,28 @@
 <code>wp log readers &lt;logName&gt; [flags]</code>
 </pre>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table>
 <p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <pre>
@@ -35,15 +56,17 @@ Usage:
   wp log readers &lt;logName&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for readers
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for readers
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code>
 </pre>
 </details>
 </article>
@@ -70,6 +93,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--from-segment int</code>
 </td>
 <td>First segment to scan</td>
@@ -85,6 +114,12 @@ Flags:
 <code>--root-path string</code>
 </td>
 <td>Storage instance root path; pair with --bucket</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 <tr>
 <td>
@@ -121,20 +156,22 @@ Usage:
   wp log scan &lt;logName&gt; [flags]
 
 Flags:
-      --bucket string                 Storage bucket; pair with --root-path to locate unloaded or empty segments
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --from-segment int              First segment to scan
-  -h, --help                          help for scan
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --mode string                   quick reads only structure and metadata; raw reads the data through the real checksums (default &quot;quick&quot;)
-      --root-path string              Storage instance root path; pair with --bucket
-      --to-segment int                Last segment to scan (default: the newest) (default -1)</code>
+      --bucket string                   Storage bucket; pair with --root-path to locate unloaded or empty segments
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --from-segment int                First segment to scan
+  -h, --help                            help for scan
+      --meta-prefix string              Required full client metadata prefix
+      --mode string                     quick reads only structure and metadata; raw reads the data through the real checksums (default &quot;quick&quot;)
+      --root-path string                Storage instance root path; pair with --bucket
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery
+      --to-segment int                  Last segment to scan (default: the newest) (default -1)</code>
 </pre>
 </details>
 </article>
@@ -155,6 +192,12 @@ Flags:
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--force</code>
 </td>
 <td>Declare the range even though a replica can still read part of it</td>
@@ -170,6 +213,12 @@ Flags:
 <code>--reason string</code>
 </td>
 <td>Why these entries are being given up (required)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 <tr>
 <td>
@@ -215,20 +264,22 @@ Usage:
   wp log skip-range add &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --force                         Declare the range even though a replica can still read part of it
-      --from-entry int                First entry to skip (inclusive) (default -1)
-  -h, --help                          help for add
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --reason string                 Why these entries are being given up (required)
-      --to-entry int                  Last entry to skip (inclusive) (default -1)
-  -y, --yes                           Proceed without the confirmation prompt</code>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --force                           Declare the range even though a replica can still read part of it
+      --from-entry int                  First entry to skip (inclusive) (default -1)
+  -h, --help                            help for add
+      --meta-prefix string              Required full client metadata prefix
+      --reason string                   Why these entries are being given up (required)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery
+      --to-entry int                    Last entry to skip (inclusive) (default -1)
+  -y, --yes                             Proceed without the confirmation prompt</code>
 </pre>
 </details>
 </article>
@@ -239,7 +290,28 @@ Flags:
 <code>wp log skip-range list [logName] [flags]</code>
 </pre>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table>
 <p class="small">Etcd connection flags: see <a href="cli.html#etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <pre>
@@ -270,15 +342,17 @@ Usage:
   wp log skip-range list [logName] [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for list
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for list
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code>
 </pre>
 </details>
 </article>
@@ -299,6 +373,12 @@ Flags:
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--from-entry int</code>
 </td>
 <td>First entry of the range to withdraw (inclusive) (default -1)</td>
@@ -308,6 +388,12 @@ Flags:
 <code>--log-id int</code>
 </td>
 <td>Withdraw by log id instead of name, for a range whose log has been deleted (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 <tr>
 <td>
@@ -348,18 +434,20 @@ Usage:
   wp log skip-range remove &lt;logName&gt; &lt;segmentId&gt; | --log-id N &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --from-entry int                First entry of the range to withdraw (inclusive) (default -1)
-  -h, --help                          help for remove
-      --log-id int                    Withdraw by log id instead of name, for a range whose log has been deleted (default -1)
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --to-entry int                  Last entry of the range to withdraw (inclusive) (default -1)</code>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --from-entry int                  First entry of the range to withdraw (inclusive) (default -1)
+  -h, --help                            help for remove
+      --log-id int                      Withdraw by log id instead of name, for a range whose log has been deleted (default -1)
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery
+      --to-entry int                    Last entry of the range to withdraw (inclusive) (default -1)</code>
 </pre>
 </details>
 </article>
@@ -392,6 +480,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--entry int</code>
 </td>
 <td>Target entry ID (required) (default -1)</td>
@@ -413,6 +507,12 @@ Flags:
 <code>--segment int</code>
 </td>
 <td>Target segment ID (required) (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table>
@@ -462,21 +562,23 @@ Usage:
   wp log truncate &lt;logName&gt; [flags]
 
 Flags:
-      --apply                         Advance the frontier (default: preview only)
-      --backup string                 New pre-change backup file; never overwritten
-      --entry int                     Target entry ID (required) (default -1)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --expected-revision int         Log record ModRevision from preview
-  -h, --help                          help for truncate
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --reason string                 Operator reason recorded in audit
-      --segment int                   Target segment ID (required) (default -1)</code>
+      --apply                           Advance the frontier (default: preview only)
+      --backup string                   New pre-change backup file; never overwritten
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --entry int                       Target entry ID (required) (default -1)
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --expected-revision int           Log record ModRevision from preview
+  -h, --help                            help for truncate
+      --meta-prefix string              Required full client metadata prefix
+      --reason string                   Operator reason recorded in audit
+      --segment int                     Target segment ID (required) (default -1)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code>
 </pre>
 </details>
 </article>

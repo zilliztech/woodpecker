@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -78,6 +79,16 @@ func newCtxUseCommand() *cobra.Command {
 			if err != nil {
 				return wperrors.NewConfigError(fmt.Sprintf("marshal cli.yaml: %v", err))
 			}
+			// Preserve the original before canonicalizing older mixed config files.
+			original, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			backup := fmt.Sprintf("%s.backup-%d", path, time.Now().UnixNano())
+			//nolint:gosec // G703: the operator-selected backup stays beside the local cli.yaml.
+			if err := os.WriteFile(backup, original, 0o600); err != nil {
+				return wperrors.NewConfigError("cannot preserve previous cli.yaml")
+			}
 			if err := os.WriteFile(path, data, 0o600); err != nil {
 				return wperrors.NewConfigError(fmt.Sprintf("write cli.yaml: %v", err))
 			}
@@ -107,18 +118,16 @@ func newCtxViewCommand() *cobra.Command {
 			fmt.Fprintf(out, "  timeout:      %s\n", active.Timeout)
 			fmt.Fprintf(out, "  concurrency:  %d\n", active.Concurrency)
 			fmt.Fprintf(out, "  strict:       %v\n", active.Strict)
-			if len(active.Etcd.Endpoints) > 0 {
-				fmt.Fprintf(out, "  etcd.endpoints:   %v\n", active.Etcd.Endpoints)
-				fmt.Fprintf(out, "  etcd.meta_prefix: %s\n", active.Etcd.MetaPrefix)
-				tlsMode := "auto (certificate settings)"
-				if active.Etcd.TLSEnabled != nil {
-					tlsMode = fmt.Sprint(*active.Etcd.TLSEnabled)
-				}
-				fmt.Fprintf(out, "  etcd.tls_enabled: %s\n", tlsMode)
-				if active.Etcd.Username != "" {
-					fmt.Fprintf(out, "  etcd.username:    %s\n", active.Etcd.Username)
-				}
+			if active.Observability.MetricsReference() != "" {
+				fmt.Fprintf(out, "  prometheus:   %s\n", active.Observability.MetricsReference())
 			}
+			if active.Observability.Trace != "" {
+				fmt.Fprintf(out, "  trace:        %s\n", active.Observability.Trace)
+			}
+			if active.Observability.Grafana != "" {
+				fmt.Fprintf(out, "  grafana:      %s\n", active.Observability.Grafana)
+			}
+
 			return nil
 		},
 	}

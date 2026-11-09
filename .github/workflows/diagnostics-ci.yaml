@@ -120,20 +120,8 @@ jobs:
         include:
           - fixture: prometheus
             image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: integrated
-            image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: append
-            image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: persistence
-            image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: consume
-            image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: query
-            image: quay.io/prometheus/prometheus:v3.0.1
           - fixture: jaeger
             image: jaegertracing/all-in-one:1.53.0
-          - fixture: loki
-            image: grafana/loki:3.5.7
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -168,7 +156,8 @@ jobs:
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
         run: '"$CHROME_BIN" --version'
-      - run: python3 cmd/wpdiag/tests/webui_smoke.py
+      - run: |
+          python3 cmd/wpdiag/tests/webui_smoke.py
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
       - uses: actions/upload-artifact@v4

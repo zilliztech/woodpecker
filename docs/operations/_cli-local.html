@@ -65,11 +65,6 @@ contexts:
       namespace: milvus
       kubeconfig: /path/to/your/kubeconfig
     # v0.1.47 and later; v0.1.46 uses explicit etcd flags instead.
-    etcd:
-      endpoints:
-        - 127.0.0.1:32379
-      meta_prefix: milvus-prod/woodpecker</code>
-</pre>
 <p>
 <code>endpoint</code> is the admin seed. <code>node_admin_urls</code> maps discovered node IDs or advertised service addresses to reachable admin origins. <code>current-context</code> selects milvus-prod when --context is omitted:</p>
 <pre>
@@ -117,10 +112,7 @@ w cluster health</code>
 <p>source defines the functions in the current shell. w forwards arguments to wp and selects milvus-prod for each invocation; it does not change current-context in the file.</p>
 </details>
 <h2 id="etcd-connection">4. Configure etcd for metadata queries</h2>
-<p>
-<strong>Released v0.1.47 supports the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
-<p>
-<strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Use the explicit flags below on that release, or to override a context for one invocation:</p>
+<p>Current source builds keep client metadata authority outside <code>cli.yaml</code>. Supply reachable etcd endpoints and the full client metadata prefix explicitly, or use a private <code>--client-parameters-file</code>. Older context-etcd/client-profile fields are not selected; there is no Admin-config discovery fallback.</p>
 <table>
 <tr>
 <th>Parameters</th>
@@ -164,10 +156,10 @@ w cluster health</code>
 </tr>
 <tr>
 <td>meta; log readers/scan/skip-range/truncate; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td>
-<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery. meta and truncate need no admin connection when both etcd settings are supplied.</td>
+<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through explicit flags or a private client parameter file. meta and truncate need no admin connection when both etcd settings are supplied.</td>
 </tr>
 <tr>
-<td>etcd list/get/cat (v0.1.47 and later)</td>
+<td>etcd list/get/cat</td>
 <td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="cli.html#etcd">Raw etcd exploration</a>.</td>
 </tr>
 <tr>
@@ -189,9 +181,11 @@ w cluster health</code>
   --etcd-cert /path/to/client.crt --etcd-key /path/to/client.key \
   --etcd-tls-min-version 1.2</code>
 </pre>
-<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. v0.1.47 also supports these optional context fields under <code>etcd</code>:</p>
+<p>Certificate paths must exist on the workstation. An explicitly selected private client parameter file can contain these fields, independently of server contexts:</p>
 <pre>
-<code>username: operator
+<code>endpoints: [http://127.0.0.1:32379]
+meta_prefix: tenant/woodpecker
+username: operator
 password: YOUR_PASSWORD
 tls_enabled: true
 cacert: /path/to/ca.crt
@@ -200,7 +194,7 @@ cert: /path/to/client.crt
 key: /path/to/client.key
 tls_min_version: "1.2"</code>
 </pre>
-<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit certificate flags enable TLS even if the context disables it. <code>ctx view</code> shows configured etcd endpoints, prefix, TLS mode and username when endpoints are configured; it does not print the password or test the connection.</p>
+<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit flags override the private parameter file. <code>ctx view</code> shows server connection settings; client metadata parameters are supplied separately.</p>
 </details>
 <h2 id="first-run">5. Check the connection and interpret the result</h2>
 <pre>
@@ -225,7 +219,7 @@ Cluster Health: YELLOW
   active: 3  decommissioning: 0  unreachable: 0
   - zero redundancy (active == N)</code>
 </pre>
-<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on v0.1.47 and later, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
+<p>The star marks the saved default context; ctx view shows resolved server settings; client metadata is a separate request scope. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
 <h2 id="interactive-session">Interactive shell</h2>
 <p>For context selection, tenant connection parameters and command availability, open the dedicated <a href="cli.html#shell">Interactive shell handbook</a>.</p>
@@ -608,6 +602,130 @@ Flags:
 </pre>
 </details>
 </article>
+<article class="command" id="report-analyze">
+<h2>wp report analyze</h2>
+<p>Explicitly ask the configured Agent to explain supplied findings</p>
+<pre>
+<code>wp report analyze &lt;report.json|-&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp --context local report analyze diagnosis.json --config /path/to/cli.yaml</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>The explicitly configured backend-local Agent explains abnormal findings.</code>
+</pre>
+<p>This explicitly invokes a model with supplied evidence. It cannot automatically query sources, run commands or repair the cluster.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>No Agent configuration, no findings or a model failure leaves the original report unchanged.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Explicitly ask the configured Agent to explain supplied findings
+
+Usage:
+  wp report analyze &lt;report.json|-&gt; [flags]
+
+Flags:
+  -h, --help   help for analyze</code>
+</pre>
+</details>
+</article>
+<article class="command" id="report-export">
+<h2>wp report export</h2>
+<p>Copy original JSON or derive a compact findings packet</p>
+<pre>
+<code>wp report export &lt;report.json|-&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--packet</code>
+</td>
+<td>Export findings, supporting context, gaps and provenance; no model call</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp report export diagnosis.json --packet &gt; findings.json</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Exports a bounded findings packet with original report provenance.</code>
+</pre>
+<p>Without --packet, copies the original report. It does not rerun checks.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Malformed or oversized reports are rejected.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Copy original JSON or derive a compact findings packet
+
+Usage:
+  wp report export &lt;report.json|-&gt; [flags]
+
+Flags:
+  -h, --help     help for export
+      --packet   Export findings, supporting context, gaps and provenance; no model call</code>
+</pre>
+</details>
+</article>
+<article class="command" id="report-inspect">
+<h2>wp report inspect</h2>
+<p>Show recorded evidence detail without querying sources</p>
+<pre>
+<code>wp report inspect &lt;report.json|-&gt; &lt;check&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp report inspect diagnosis.json server-disk-watermark</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Shows the recorded calculation, measurements and available curves.</code>
+</pre>
+<p>Consumes saved JSON without a source query or model call.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Detail omitted during collection cannot be reconstructed without another check.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show recorded evidence detail without querying sources
+
+Usage:
+  wp report inspect &lt;report.json|-&gt; &lt;check&gt; [flags]
+
+Flags:
+  -h, --help   help for inspect</code>
+</pre>
+</details>
+</article>
 <article class="command" id="version">
 <h2>wp version</h2>
 <p>Show wp CLI version and build info</p>
@@ -642,6 +760,79 @@ Usage:
 
 Flags:
   -h, --help   help for version</code>
+</pre>
+</details>
+</article>
+<article class="command" id="webui">
+<h2>wp webui</h2>
+<p>Open a local operations and diagnosis workspace using cli.yaml</p>
+<pre>
+<code>wp webui [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--config string</code>
+</td>
+<td>Shared cli.yaml (default: normal wp configuration discovery)</td>
+</tr>
+<tr>
+<td>
+<code>--listen string</code>
+</td>
+<td>Loopback host:port (default &quot;127.0.0.1:8794&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--metrics-rules string</code>
+</td>
+<td>Metrics rules file beside cli.yaml by default</td>
+</tr>
+<tr>
+<td>
+<code>--trace-rules string</code>
+</td>
+<td>Trace rules file beside cli.yaml by default</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp webui --config /path/to/cli.yaml --listen 127.0.0.1:8795</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Open the printed local URL.</code>
+</pre>
+<p>Diagnostics finds issues; Operations confirms and handles them; Command Explorer exposes native commands. No diagnostic action automatically repairs the cluster.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>A missing or invalid cli.yaml prevents startup.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Open a local operations and diagnosis workspace using cli.yaml
+
+Usage:
+  wp webui [flags]
+
+Flags:
+      --config string          Shared cli.yaml (default: normal wp configuration discovery)
+  -h, --help                   help for webui
+      --listen string          Loopback host:port (default &quot;127.0.0.1:8794&quot;)
+      --metrics-rules string   Metrics rules file beside cli.yaml by default
+      --trace-rules string     Trace rules file beside cli.yaml by default</code>
 </pre>
 </details>
 </article>

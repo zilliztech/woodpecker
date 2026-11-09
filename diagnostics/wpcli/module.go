@@ -39,12 +39,16 @@ func (Module) Descriptor() d.Descriptor {
 }
 
 func settings(c d.Connection) (Settings, error) {
+	return connectionSettings(c, true)
+}
+
+func connectionSettings(c d.Connection, requireContext bool) (Settings, error) {
 	s := Settings{NativeLimits: NativeLimits{MaxSamples: 121, MaxOps: 100, MaxSeries: 500, ResponseBytes: 2 << 20, Concurrency: 8, TimeoutMS: 30000}}
 	if err := d.DecodeSettings(c, &s); err != nil {
 		return s, err
 	}
 	l := s.NativeLimits
-	if s.Executable == "" || s.Context == "" || len(s.Context) > 256 || strings.ContainsAny(s.Context+s.Executable+s.CLIConfig, "\x00\r\n") || l.MaxSamples < 2 || l.MaxSamples > 121 || l.MaxOps < 1 || l.MaxOps > 1000 || l.MaxSeries < 1 || l.MaxSeries > 5000 || l.ResponseBytes < 1024 || l.ResponseBytes > 8<<20 || l.Concurrency < 1 || l.Concurrency > 32 || l.TimeoutMS < 1 || l.TimeoutMS > 600000 {
+	if s.Executable == "" || requireContext && s.Context == "" || len(s.Context) > 256 || strings.ContainsAny(s.Context+s.Executable+s.CLIConfig, "\x00\r\n") || l.MaxSamples < 2 || l.MaxSamples > 121 || l.MaxOps < 1 || l.MaxOps > 1000 || l.MaxSeries < 1 || l.MaxSeries > 5000 || l.ResponseBytes < 1024 || l.ResponseBytes > 8<<20 || l.Concurrency < 1 || l.Concurrency > 32 || l.TimeoutMS < 1 || l.TimeoutMS > 600000 {
 		return s, fmt.Errorf("invalid native connection settings")
 	}
 	if strings.ContainsAny(s.Executable, "/\\") && !filepath.IsAbs(s.Executable) {

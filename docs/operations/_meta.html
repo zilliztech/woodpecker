@@ -1,5 +1,5 @@
 <h2 id="metadata-start">1. Read the record before choosing a repair</h2>
-<p>Use a current source build containing <code>wp meta</code> and <code>wp log truncate</code>; these additions are not in v0.1.46. Complete <a href="cli.html#cli-yaml">CLI setup</a> first. The commands below assume the milvus-prod context has reachable etcd endpoints and the complete metadata prefix. With both configured, no node admin connection or bucket/root-path is needed.</p>
+<p>Use a current source build containing <code>wp meta</code> and <code>wp log truncate</code>; these additions are not in v0.1.46. Complete <a href="cli.html#cli-yaml">CLI setup</a> first. Supply explicit reachable etcd endpoints and the complete client metadata prefix for these commands, or select a private client parameter file. Server contexts do not select metadata authority. Pure metadata views need no node Admin connection or bucket/root path.</p>
 <pre><code>wp --context milvus-prod meta log list
 wp --context milvus-prod meta log show my-channel
 wp --context milvus-prod meta segment list my-channel

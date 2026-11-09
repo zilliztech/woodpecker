@@ -4,9 +4,11 @@
     "groups": [
       "ctx",
       "completion",
-      "version"
+      "version",
+      "webui",
+      "report"
     ],
-    "purpose": "Select the local CLI context, load shell completion and identify the CLI build."
+    "purpose": "Select CLI contexts, identify the build, open the local workspace and consume saved diagnostic reports."
   },
   "shell": {
     "title": "Interactive shell",
@@ -77,7 +79,7 @@
     "groups": [
       "diagnose"
     ],
-    "purpose": "Diagnose WP append/flush/disk/replica pressure, read activity, reader progress and scoped quorum visibility. Native evidence is bounded and current; external monitoring and Milvus diagnosis are separate tools."
+    "purpose": "Inspect current WP Metrics/Admin evidence through bounded snapshot or live sampling. Use wp diag for retained historical evidence."
   },
   "logstore": {
     "title": "Writer runtime",
@@ -127,5 +129,12 @@
       "etcd"
     ],
     "purpose": "Discover namespaces and inspect exact raw keys, revisions and values without writing etcd."
+  },
+  "telemetry": {
+    "title": "Historical WAL diagnosis",
+    "groups": [
+      "diag"
+    ],
+    "purpose": "Run Woodpecker-only atomic Metrics/Trace checks or summarize a fixed scenario over an incident window."
   }
 }

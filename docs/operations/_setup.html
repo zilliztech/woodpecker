@@ -50,10 +50,6 @@ contexts:
       namespace: milvus
       kubeconfig: /path/to/your/kubeconfig
     # v0.1.47 and later; v0.1.46 uses explicit etcd flags instead.
-    etcd:
-      endpoints:
-        - 127.0.0.1:32379
-      meta_prefix: milvus-prod/woodpecker</code></pre>
 <p><code>endpoint</code> is the admin seed. <code>node_admin_urls</code> maps discovered node IDs or advertised service addresses to reachable admin origins. <code>current-context</code> selects milvus-prod when --context is omitted:</p>
 <pre><code>wp node list
 wp --context milvus-prod node list</code></pre>
@@ -86,8 +82,7 @@ w cluster health</code></pre>
 <p>source defines the functions in the current shell. w forwards arguments to wp and selects milvus-prod for each invocation; it does not change current-context in the file.</p></details>
 
 <h2 id="etcd-connection">4. Configure etcd for metadata queries</h2>
-<p><strong>Released v0.1.47 supports the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
-<p><strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Use the explicit flags below on that release, or to override a context for one invocation:</p>
+<p>Current source builds keep client metadata authority outside <code>cli.yaml</code>. Supply reachable etcd endpoints and the full client metadata prefix explicitly, or use a private <code>--client-parameters-file</code>. Older context-etcd/client-profile fields are not selected; there is no Admin-config discovery fallback.</p>
 <table><tr><th>Parameters</th><th>Use</th></tr>
 <tr><td>--etcd</td><td>Reachable etcd endpoints; use commas for multiple addresses.</td></tr>
 <tr><td>--meta-prefix</td><td>Complete Woodpecker metadata prefix configured by the Milvus client. The example below uses milvus-prod/woodpecker; use the actual prefix, not an assumed Helm release name.</td></tr>
@@ -100,8 +95,8 @@ w cluster health</code></pre>
   --etcd 127.0.0.1:32379 \
   --meta-prefix milvus-prod/woodpecker</code></pre>
 <table><tr><th>Commands</th><th>Need etcd settings?</th></tr>
-<tr><td>meta; log readers/scan/skip-range/truncate; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td><td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery. meta and truncate need no admin connection when both etcd settings are supplied.</td></tr>
-<tr><td>etcd list/get/cat (v0.1.47 and later)</td><td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="cli.html#etcd">Raw etcd exploration</a>.</td></tr>
+<tr><td>meta; log readers/scan/skip-range/truncate; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td><td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through explicit flags or a private client parameter file. meta and truncate need no admin connection when both etcd settings are supplied.</td></tr>
+<tr><td>etcd list/get/cat</td><td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="cli.html#etcd">Raw etcd exploration</a>.</td></tr>
 <tr><td>cluster, node, config, env, logging, profile, ops, metrics, instance; other node-local logstore commands</td><td>No etcd parameters: these use node admin endpoints. Do not append --etcd to commands that do not accept it.</td></tr>
 <tr><td>ctx, completion, version; k8s helpers</td><td>No etcd connection. These use local config/build information or kubectl.</td></tr></table>
 <details class="ops-help"><summary>Authentication/TLS example</summary>
@@ -111,8 +106,10 @@ w cluster health</code></pre>
   --etcd-cacert /path/to/ca.crt \
   --etcd-cert /path/to/client.crt --etcd-key /path/to/client.key \
   --etcd-tls-min-version 1.2</code></pre>
-<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. v0.1.47 also supports these optional context fields under <code>etcd</code>:</p>
-<pre><code>username: operator
+<p>Certificate paths must exist on the workstation. An explicitly selected private client parameter file can contain these fields, independently of server contexts:</p>
+<pre><code>endpoints: [http://127.0.0.1:32379]
+meta_prefix: tenant/woodpecker
+username: operator
 password: YOUR_PASSWORD
 tls_enabled: true
 cacert: /path/to/ca.crt
@@ -120,7 +117,7 @@ cacert: /path/to/ca.crt
 cert: /path/to/client.crt
 key: /path/to/client.key
 tls_min_version: "1.2"</code></pre>
-<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit certificate flags enable TLS even if the context disables it. <code>ctx view</code> shows configured etcd endpoints, prefix, TLS mode and username when endpoints are configured; it does not print the password or test the connection.</p></details>
+<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit flags override the private parameter file. <code>ctx view</code> shows server connection settings; client metadata parameters are supplied separately.</p></details>
 
 <h2 id="first-run">5. Check the connection and interpret the result</h2>
 <pre><code>wp ctx list
@@ -141,7 +138,7 @@ milvus-woodpecker-2    active  OK
 Cluster Health: YELLOW
   active: 3  decommissioning: 0  unreachable: 0
   - zero redundancy (active == N)</code></pre>
-<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on v0.1.47 and later, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
+<p>The star marks the saved default context; ctx view shows resolved server settings; client metadata is a separate request scope. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
 
 <h2 id="interactive-session">Interactive shell</h2>

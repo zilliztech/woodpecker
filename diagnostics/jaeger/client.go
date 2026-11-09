@@ -21,6 +21,7 @@ type budget struct {
 	bytes                  int64
 	spans, traces, queries int
 	targets                map[string]bool
+	returnedTraces         int
 }
 type client struct {
 	http                  *http.Client
@@ -92,7 +93,7 @@ func scopeName(tags []tag) string {
 			result = v
 		}
 	}
-	if d.Has([]string{"milvus.streaming.wal", "LogWriter", "LogReader", "AppendOp", "BatchAppendOp", "LogStore", "SegmentProcessor", "StagedFileWriter", "LocalFileWriter", "MinioFileWriter"}, result) {
+	if d.Has([]string{"milvus.streaming.wal", "LogWriter", "LogReader", "LogHandle", "AppendOp", "BatchAppendOp", "LogStore", "SegmentProcessor", "StagedFileWriter", "LocalFileWriter", "MinioFileWriter"}, result) {
 		return result
 	}
 	return ""
@@ -150,12 +151,21 @@ func (c client) query(ctx context.Context, r d.Request, from, to time.Time, b *b
 		q.Set("start", strconv.FormatInt(from.UnixMicro(), 10))
 		q.Set("end", strconv.FormatInt(to.UnixMicro(), 10))
 		q.Set("limit", strconv.Itoa(c.settings.Limits.MaxTraces+1))
+		if c.settings.candidateMinDuration > 0 {
+			q.Set("minDuration", c.settings.candidateMinDuration.String())
+		}
 		tags := map[string]string{}
 		for k, v := range c.settings.MatchTags {
 			tags[k] = v
 		}
 		if r.Selection.Target.OperationID != "" {
 			tags[c.settings.RequestIDTag] = r.Selection.Target.OperationID
+		}
+		for key, value := range c.settings.candidateTags {
+			if previous, exists := tags[key]; exists && previous != value {
+				return nil, "candidate_selector_conflict", expr
+			}
+			tags[key] = value
 		}
 		if len(tags) > 0 {
 			raw, _ := json.Marshal(tags)
@@ -212,6 +222,7 @@ func (c client) query(ctx context.Context, r d.Request, from, to time.Time, b *b
 	if json.Unmarshal(wire.Data, &traces) != nil {
 		return nil, "invalid_jaeger_response", expr
 	}
+	b.returnedTraces = len(traces)
 	if len(traces)+b.traces > c.settings.Limits.MaxTraces {
 		return nil, "trace_budget_exceeded", expr
 	}
@@ -302,6 +313,10 @@ func decodeTrace(wt wireTrace, id string, r d.Request, s Settings, from, to time
 		tags := append(append([]tag{}, ws.Tags...), process.Tags...)
 		span.Scope = scopeName(tags)
 		known, phase := knownOperation(role, span.Scope, ws.Operation, r.Selection.Flow)
+		if s.atomicOperations[ws.Operation] && (role == "wp_server" || role == "wp_client" || wpClientScope(span.Scope) || span.Scope == "LogHandle") {
+			known = true
+			phase = "operation"
+		}
 		if known {
 			span.Operation, span.Phase = ws.Operation, phase
 		}

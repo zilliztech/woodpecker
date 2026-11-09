@@ -1,0 +1,335 @@
+/* Local, offline typography. Same font families as the Milvus documentation. */
+@font-face{font-family:Geist;font-style:normal;font-weight:100 900;font-display:swap;src:url('/fonts/geist-latin.woff2') format('woff2')}
+@font-face{font-family:'Geist Mono';font-style:normal;font-weight:100 900;font-display:swap;src:url('/fonts/geist-mono-latin.woff2') format('woff2')}
+:root{
+ --ops-font:Geist,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+ --ops-sidebar-width:208px;
+ --ops-mono:'Geist Mono',ui-monospace,SFMono-Regular,monospace;
+ --wp-text:#1e293b;--wp-secondary:#40516a;--wp-muted:#5d6d82;--wp-border:#d2dae6;
+ --ops-accent:#315acb;--ops-soft:#edf2ff;--wp-accent:#315acb;
+}
+body{font-family:var(--ops-font);font-size:15px;font-weight:450;line-height:1.6;background:#f1f3f7;color:var(--wp-text)}
+button,input,select,textarea{font-family:var(--ops-font);font-size:14px;line-height:1.5;border-radius:5px}
+button{padding:8px 12px;font-weight:550}
+input,select,textarea{padding:8px 10px;color:#25344b;border-color:#bdc9da}
+input::placeholder,textarea::placeholder{color:#6b788b;opacity:1}
+button:disabled{cursor:not-allowed}
+.primary{background:var(--ops-accent);border-color:var(--ops-accent);box-shadow:none;color:white;font-weight:650}
+.primary:hover:not(:disabled){background:#293fc1;border-color:#293fc1;color:white}
+.text-link,.ghost{font-size:13px;font-weight:550;color:#344fbb}
+.surface{border:1px solid var(--wp-border);border-radius:4px;box-shadow:none}
+.nav{height:56px;min-height:56px;position:sticky;top:0;z-index:40;background:white;border-bottom:1px solid #d2dbe7}
+.nav-inner{min-height:56px;max-width:none;padding:0;gap:0}
+.brand{font-size:17px;font-weight:650;letter-spacing:-.3px;color:#f0f5ff}
+.nav-sub{font-size:13px;color:#5b6c84;border:0;padding:0;margin:0}.workspace-readonly{font-size:12px;color:#50617a;background:#f4f6fa;border:1px solid #d5deea;border-radius:4px;padding:3px 8px;margin-right:22px}
+.app{max-width:none;min-height:calc(100vh - 56px);grid-template-columns:var(--ops-sidebar-width) minmax(0,1fr)}
+/* Fixed rail; only its menu can scroll when the viewport is unusually short. */
+.rail{display:flex;flex-direction:column;min-height:0;padding:18px 10px 14px;background:#17263d;border-right:1px solid #26374f;position:sticky;top:56px;height:calc(100vh - 56px);height:calc(100dvh - 56px);overflow:hidden;align-self:start}
+.rail-caption{flex-shrink:0;font-size:10px;line-height:16px;letter-spacing:1.1px;font-weight:600;color:#8fa4c0;padding:0 12px;margin:0 0 12px}
+.workspace-tabs{display:flex;flex-direction:column;flex:0 1 auto;min-height:0;gap:4px;margin:0;padding:2px;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.workspace-tabs:hover,.workspace-tabs:focus-within{scrollbar-color:#526785 transparent}
+.workspace-tabs::-webkit-scrollbar{width:4px;height:4px}
+.workspace-tabs::-webkit-scrollbar-track{background:transparent}
+.workspace-tabs::-webkit-scrollbar-thumb{border-radius:4px;background:transparent}
+.workspace-tabs:hover::-webkit-scrollbar-thumb,.workspace-tabs:focus-within::-webkit-scrollbar-thumb{background:#526785}
+.workspace-tabs .problem{position:relative;display:grid;grid-template-columns:18px minmax(0,1fr);align-items:center;flex:0 0 42px;width:100%;min-width:0;height:42px;min-height:42px;margin:0;padding:0 12px;gap:10px;border:1px solid transparent;border-radius:5px;box-shadow:none;transition:none;overflow:visible}
+.workspace-tabs .problem strong{display:block;font-size:14px;font-weight:550;line-height:20px;white-space:nowrap;transition:none;letter-spacing:0}
+.workspace-tabs .problem:not(.active){color:#c8d6e9;background:transparent;border-color:transparent}
+.workspace-tabs .problem:not(.active) strong{color:#c8d6e9;background:transparent}
+.workspace-tabs .problem:not(.active):hover:not(:disabled){background:#22344e;border-color:transparent;color:#fff}
+.workspace-tabs .problem:not(.active):hover:not(:disabled) strong{color:#fff}
+.workspace-tabs .problem.active{background:#263f61;color:#fff;border-color:transparent;box-shadow:none}
+.workspace-tabs .problem.active::before{content:'';position:absolute;left:-1px;top:11px;width:2px;height:18px;background:#82adff;border-radius:0 2px 2px 0}
+.workspace-tabs .problem.active strong{background:transparent;color:#fff;font-weight:600}
+.workspace-tabs .problem.active:hover:not(:disabled){background:#2c476c;border-color:transparent;color:#fff;box-shadow:none}
+.workspace-tabs .problem.active:hover:not(:disabled) strong{background:transparent;color:#fff}
+.workspace-tabs .problem:focus-visible{outline:2px solid #8bb4ff;outline-offset:-2px}
+.rail-bottom{flex-shrink:0;font-size:11px;line-height:1.6;color:#9bafc9;margin:auto 12px 0;padding-top:14px;border-top:1px solid #34445c}
+.rail-bottom b{font-size:11px;font-weight:600;color:#c9d7eb}
+.rail-bottom p{margin-top:5px}
+.content{padding:20px 24px 36px;min-width:0}
+.question-header{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #d8e0eb;gap:18px;align-items:center}
+.problem-eyebrow{font-size:11px;letter-spacing:1.2px;font-weight:650;color:#556b8b}
+.question-header h1{font-size:25px;font-weight:650;letter-spacing:-.5px;line-height:1.25;margin:5px 0 8px;color:#1d2b40}
+.question-header p{font-size:14px;line-height:1.65;color:#52637b;margin-top:0;max-width:850px}
+.question-header p strong{color:#2e4567;font-weight:650}
+.question-header button{font-size:14px;min-width:0}
+.question-header .primary{background:var(--ops-accent);border-color:var(--ops-accent);box-shadow:none;color:white}
+.question-header .primary:hover:not(:disabled){background:#293fc1;border-color:#293fc1;box-shadow:none;color:white}
+.panel-head{padding:11px 16px;min-height:44px;background:#f5f7fa;border-radius:4px 4px 0 0;gap:12px;border-bottom:1px solid #d8e0eb}
+.panel-title{font-size:15px;font-weight:650;color:#2a3c56}
+.context-fields{padding:13px 16px;gap:11px 16px}
+.context .field label,.field label{font-size:13px;font-weight:550;color:#4b5e78}
+.context .field select,.context .field input{font-size:14px;font-family:var(--ops-font)}
+.context-source label,.source-state,.source-state button{font-size:13px}
+.requirement{padding:0 16px 13px;font-size:13px;line-height:1.6;color:#5d6d82}
+.field-hint,.context-source,.context-source label{font-size:13px;line-height:1.6;color:#586a84}
+.section-label{margin-top:22px;font-size:13px}
+.section-label b{font-size:16px;font-weight:650;color:#2c4160}
+.section-label>span,.step-counts{font-size:12px;color:#536b89}
+.single-choice{font-size:15px;font-weight:600}
+.ops-result{padding:18px;font-size:14px}
+.ops-result th,.ops-result td{padding:12px}
+.ops-result pre,.report,pre.code{font-family:var(--ops-mono);font-size:13px;line-height:1.7}
+
+.console-brand{display:flex;align-items:center;gap:10px;width:var(--ops-sidebar-width);flex-shrink:0;min-height:56px;padding:0 20px;background:#17263d;border-right:1px solid #26374f}
+.console-brand .logo{width:28px;height:28px;flex-shrink:0;border-radius:5px;background:#4267de;color:white;font-size:21px}
+.console-breadcrumb{display:flex;align-items:center;gap:12px;margin:0 20px;font-size:13px;color:#3c506d;min-width:0}
+.breadcrumb-divider{color:#a0afc3}#workspace-page{font-weight:600}
+.nav-icon{display:grid;place-items:center;width:18px;height:18px;color:#9db5d6}.nav-icon svg{display:block;width:18px;height:18px}.nav-label{min-width:0;text-align:left}
+.workspace-tabs .problem.active .nav-icon{color:#99bfff}.workspace-tabs .problem:not(.active):hover .nav-icon{color:#c8dcff}
+#connections{margin-top:17px}#connections::after{content:'';position:absolute;left:10px;right:10px;top:-11px;height:1px;background:#34445c}
+.module-heading{display:flex;align-items:center;gap:10px;min-width:0}
+.capability-icon{width:30px;height:30px;display:grid;place-items:center;flex-shrink:0;color:#3f61b5;background:#eef2fb;border:1px solid #dce4f3;border-radius:5px}
+.run-area{display:flex;flex-direction:row;gap:9px;align-items:center;flex-wrap:wrap}.run-area .ghost{background:white;border:1px solid #c8d3e3;min-height:36px;padding:7px 11px}
+.context{margin-bottom:14px;border-radius:4px;box-shadow:none}.context>.panel-head{background:#f5f7fa}
+.diagnostic-setup-grid{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.5fr);gap:14px;margin-bottom:16px;align-items:stretch}
+.diagnostic-setup-grid>.context{min-width:0;margin:0}.diagnostic-setup-grid .selection-panel{margin-top:0}
+.diagnostic-setup-grid .context-fields>.field.instance{min-width:0;width:100%}.diagnostic-setup-grid .context .field{min-width:0;flex:1 1 140px}
+.diagnostic-setup-grid .context-source{width:100%;margin-top:0}.diagnostic-setup-grid .context-fields{align-items:flex-start}
+.result-banner,.checks,.investigation,.support .aside-card{border-radius:4px;box-shadow:none}
+.result-banner h2,.result-content h2{font-size:22px}.result-content{padding:16px 18px}
+.result-head,.console-heading,.console-output-head{background:#f2f5fa}.console-heading{padding:13px 16px}
+.body-grid{grid-template-columns:minmax(0,1fr) 285px;gap:16px}.action-card-head{background:#f5f7fa}
+.ops-result th{background:#f4f6fa;color:#425a7c;font-size:13px}.ops-result td{font-size:14px}
+
+/* Three equal-height capabilities. The primary actions share the bottom edge. */
+.overview-legend{font-size:13px;line-height:1.6;color:#536680;margin-bottom:16px;padding:9px 12px;border:1px solid #d5dfed;border-radius:4px;background:#eaf0f8}
+.overview-modules{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:stretch}
+.module-card,.module-card[data-module='diagnostics']{grid-column:auto;min-width:0;min-height:278px;padding:18px;border-top:1px solid #cdd7e5;display:flex;flex-direction:column}
+.module-head{flex-direction:column;align-items:flex-start;gap:10px;min-height:62px}
+.module-head h2{font-size:18px;font-weight:650;letter-spacing:-.4px;line-height:1.3;margin:0}
+.module-status{font-size:12px;font-weight:550;padding:3px 8px;border-radius:4px;white-space:normal}
+.module-status.configured{background:#eef2ff;color:#3f53b4}
+.module-status.missing{background:#edf0f5;color:#596a7e}
+.module-purpose{font-size:16px;font-weight:600;line-height:1.5;color:#2d4565;border:0;padding:0;margin:14px 0 10px;min-height:48px}
+.module-requirement{font-size:14px;line-height:1.65;color:#52647e;margin:0 0 16px}
+.module-actions{margin-top:auto;padding-top:14px;border-top:1px solid #e0e6ef;gap:10px}
+.module-actions button{font-size:14px;padding:7px 12px;min-height:36px}
+.module-actions .text-link{font-size:13px;padding-left:0;padding-right:0;white-space:normal}
+.overview-help{padding:16px 0;font-size:13px;gap:10px}
+
+/* Command directory, parameters and native process output. */
+.command-toolbar{display:flex;align-items:flex-end;gap:14px;padding:13px 16px;margin-bottom:14px;flex-wrap:wrap}
+.command-filter{display:grid;gap:6px}
+.command-filter:first-child{flex:1;min-width:180px}
+.command-filter label{font-size:13px;font-weight:600;color:#4c607c}
+.command-filter select{max-width:250px}
+#command-search{font-size:14px}
+.visual-shortcuts{margin:0;gap:10px;align-self:center}
+.visual-shortcuts button{font-size:13px;padding:8px 10px}
+.command-browser{grid-template-columns:280px minmax(0,1fr);gap:14px;align-items:start}
+.command-directory{min-width:0;position:sticky;top:72px}
+.command-directory .panel-head{padding:12px 15px;min-height:43px}
+#command-list{max-height:calc(100vh - 270px);overflow:auto;scrollbar-gutter:stable}
+.command-row{padding:13px 14px;gap:8px;flex-direction:row;align-items:flex-start}
+.command-row code{font-family:var(--ops-mono);font-size:13px;line-height:1.6;font-weight:550;color:#2f486e}
+.command-row p{font-size:13px;line-height:1.6;color:#566c89;margin:5px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.command-row.selected{border-left:3px solid #4265c9;padding-left:11px;background:#edf2ff}
+.command-availability{font-size:11px;font-weight:550;padding:2px 5px;border-radius:4px}
+.command-availability.executable{color:#34578f;background:#e9f0fc}
+.command-console{min-width:0;overflow:hidden}
+.console-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;border-bottom:1px solid #d4ddea;background:#edf1f7}
+.console-heading h2{font:600 17px/1.5 var(--ops-mono);margin:0;color:#233c61;overflow-wrap:anywhere}
+.console-heading .field-hint{font-size:13px;margin-top:5px;color:#526783}
+.console-effect{font-size:12px;border:1px solid #c4cfdf;background:#fff;border-radius:4px;padding:4px 7px;white-space:nowrap;color:#51627a;font-weight:550}
+.console-form{padding:14px 16px}
+.console-bindings{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;padding-bottom:13px;border-bottom:1px solid #dae2ee;margin-bottom:13px}
+.console-bindings label{display:grid;gap:6px;min-width:0;font-size:13px;font-weight:550;color:#4e627e}
+.console-bindings select{max-width:330px;font-size:14px}
+.console-bindings>button{font-size:13px;align-self:center}
+.console-connection-name{font-size:14px;line-height:1.7;color:#2b466f;font-weight:600;overflow-wrap:anywhere;max-width:330px}
+.console-shared{padding:13px;background:#f5f7fc;border:1px solid #ccdaee;border-radius:5px;margin-bottom:16px}
+.console-shared h3{font-size:14px;font-weight:650;color:#304f7a;margin:0 0 13px}
+.console-shared h3 span{display:block;font-size:12px;font-weight:450;margin:3px 0 0;color:#5b7190}
+.console-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.console-fields label{display:grid;gap:6px;min-width:0;font-size:13px;color:#4d6280}
+.console-fields input,.console-fields select{width:100%;max-width:100%;min-width:0;font-size:14px;padding:8px 10px}
+.console-checkbox{display:flex!important;align-items:center}
+.console-checkbox input{width:auto}
+.command-specific:empty{display:none}
+.command-specific{margin-bottom:14px}
+.command-console .command-options,.console-runtime,.console-preview{font-size:14px;margin:13px 0;color:#4f6483}
+.command-console summary{cursor:pointer;font-size:14px;font-weight:600;padding:6px 0}
+.command-console .command-options>div{gap:12px}
+.command-console .command-options label{font-size:13px;grid-template-columns:minmax(0,1fr) 180px;gap:14px}
+.command-console .command-options small{font-size:12px;line-height:1.6;color:#5d708c}
+.console-runtime .console-fields{padding:10px 0}
+.console-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-top:15px;border-top:1px solid #d5dfed;margin-top:16px}
+.console-actions button{font-size:14px;min-height:36px}
+.console-actions a{font-size:13px;color:#3f5e9c}
+.console-actions>span{font-size:12px;color:#526985;margin-left:auto}
+.console-preview .report{font-size:12px;max-height:175px;margin:8px 0}
+.console-output-head{display:flex;align-items:center;gap:15px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid #ccd8e9;border-bottom:1px solid #ccd8e9;background:#edf2f9}
+.console-output-head b{font-size:14px;font-weight:650}
+.console-output-head>div{display:flex;gap:4px}
+.console-output-head button{padding:5px 8px;border:0;border-radius:4px;background:transparent;font-size:13px;color:#4f6583}
+.console-output-head button.selected{background:#dbe5f6;color:#2d4d85}
+.console-output-head>span{font-size:12px;font-family:var(--ops-mono);margin-left:auto;color:#496682}
+.console-output-head>span.command-failed{color:#a34425}
+.console-no-result{min-height:160px;display:flex;align-items:center;justify-content:center;padding:26px;color:#61748e;font-size:14px;text-align:center}
+#command-result{max-height:560px;overflow:auto}
+.command-terminal{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.75 var(--ops-mono);background:#172537;color:#e0e8f4;margin:0;padding:18px;min-height:120px}
+.command-terminal.stderr{color:#ecd2ae;background:#202b37;min-height:0}
+.console-stderr{margin:0;background:#f1f4f8;padding:9px 13px;font-size:13px;color:#526580}
+.console-table-wrap{overflow:auto;max-width:100%;padding:0 14px}
+.console-table-wrap table{width:100%;font-size:13px;border-collapse:collapse;text-align:left}
+.console-table-wrap th,.console-table-wrap td{padding:11px 9px;border-bottom:1px solid #dce4ee;vertical-align:top;overflow-wrap:anywhere;max-width:300px}
+.console-table-wrap th{color:#405a7c;font-weight:600;background:#f4f7fc}
+.console-run-info{padding:11px 16px;font-size:12px;line-height:1.8;color:#5d718e;overflow-wrap:anywhere}
+#command-result>.field-hint{padding:7px 16px}
+.console-input{display:flex;align-items:center;gap:10px;padding:12px 16px;border-top:1px solid #d3deed;background:#f1f5fc}
+.console-input label{font-size:13px;white-space:nowrap}
+.console-input input{min-width:0;flex:1;font-size:14px}
+.console-input button{font-size:14px}
+
+/* Evidence, scenario steps and settings share the same readable type scale. */
+.source-summary-card b{font-size:18px}
+.source-summary-card p,.check-rule,.scope-message{font-size:13px;color:#526782}
+.group-heading{font-size:13px;font-weight:600;color:#425d80;padding:10px 16px}
+.check-row{padding:14px 16px;min-height:84px}
+.check-title{font-size:15px;font-weight:600;color:#273d59;line-height:1.5}
+.check-desc{font-size:13px;color:#586d88;line-height:1.6}
+.check-id,.evidence-id{font:12px/1.6 var(--ops-mono)}
+.reading-value{font-size:23px;font-weight:650}
+.check-reading{max-width:190px;min-width:90px}
+.status{font-size:11px!important;font-weight:600;letter-spacing:.2px}
+.filters button{font-size:13px;padding:7px 11px}
+.filter-count{font-size:12px;padding:1px 5px}
+.result-head .panel-title{font-size:15px}
+.result-banner h2,.result-content h2{font-size:25px;font-weight:650}
+.result-banner p{font-size:14px;line-height:1.6}
+.signal-pill>b{font-size:28px;font-weight:650}
+.signal-pill>span,.outcome-label{font-size:12px}
+.result-content{padding:20px}
+.support .aside-card h3,.action-card-head h3{font-size:16px;font-weight:650}
+.support .aside-card p,.action-card-body p{font-size:14px;line-height:1.65;color:#526783}
+.support .action,.support .action-link,.action-card-body .action{font-size:14px}
+.action-card-body .proof-note,#analysis-requirement{font-size:12px;color:#5b6f8a}
+.drawer-top h2{font-size:24px;line-height:1.4}
+.drawer-body p{font-size:14px;line-height:1.7;color:#455c78}
+.inspection-section h3,.inspection-result h3{font-size:15px;font-weight:650}
+.inspection-metrics code,.inspection-formula,.inspection-criterion{font:13px/1.7 var(--ops-mono);overflow-wrap:anywhere}
+.inspection-value-label,.inspection-criterion,.inspection-section-heading>span{font-size:13px}
+.inspection-result>strong{font-size:29px;font-weight:650}
+.span-table{font-size:13px}
+.runbook-picker{gap:16px;margin-bottom:20px}
+.runbook-choice{padding:16px;border-top:1px solid #cdd7e5;border-left:3px solid transparent;border-radius:4px}.runbook-choice.selected{border-left-color:#4266cb;background:#eff3fc}
+.runbook-choice b{font-size:16px;font-weight:650}
+.runbook-choice span{font-size:12px}
+.runbook-choice p{font-size:14px;color:#526783}
+.runbook-step{padding:18px 0}
+.runbook-step h3{font-size:17px;font-weight:650}
+.runbook-step p{font-size:14px;line-height:1.7}
+.runbook-step .step-review{font-size:13px;color:#526783}
+.runbook-step code{font-family:var(--ops-mono);font-size:13px}
+.runbook-step-actions button{font-size:13px}
+.guidance-return{font-size:14px}
+.settings-panel{margin-bottom:18px}
+.settings-body{padding:18px;font-size:14px}
+.connection-group h3{font-size:15px;font-weight:650}
+.requirements-table{font-size:14px}
+.requirements-table th{font-size:13px}
+.history-connection p,.page-notice{font-size:14px}
+
+/* History and analysis belong to Diagnostics, separate from collection setup. */
+.diagnostic-history{margin-bottom:14px;overflow:hidden;scroll-margin-top:18px}
+.diagnostic-history>summary{padding:11px 16px;background:#f5f7fa;font-size:15px;font-weight:650;color:#2a3c56;cursor:pointer}
+.diagnostic-history>summary span{font-size:12px;font-weight:500;color:#5b6f8a;margin-left:12px}
+.run-history-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 18px;border-bottom:1px solid #d8e1ee}
+.run-history-heading p{font-size:12px;line-height:1.6;color:#5d708b}
+.diagnostic-history .error-box{margin:12px 18px}
+.run-history-empty{padding:20px 18px;color:#5b708d;font-size:14px}
+.diagnostic-run{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:13px 16px;border-bottom:1px solid #dce4ee}
+.diagnostic-run:last-child{border-bottom:0}
+.diagnostic-run.selected{background:#f3f6ff;box-shadow:inset 3px 0 #5368df}
+.diagnostic-run-main{min-width:0;overflow-wrap:anywhere}
+.diagnostic-run-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.diagnostic-run-title>b{font-size:15px;font-weight:650}
+.run-execution{font-size:12px;padding:2px 7px;background:#e8edf6;border:1px solid #d3ddec;border-radius:4px;color:#4d6486}
+.diagnostic-run-main p{font-size:13px;color:#4f6686;margin-top:5px;line-height:1.6}
+.diagnostic-run-main .run-interval{font-size:12px;color:#5c708b}
+.run-record-summary{display:flex;gap:7px 16px;flex-wrap:wrap;font-size:12px;color:#526c8e;margin-top:9px}
+.run-record-summary .run-abnormal{color:#98540f;font-weight:650}
+.diagnostic-run-actions{display:flex;flex-direction:column;gap:10px;align-items:flex-end;justify-content:center}
+.diagnostic-run-actions button{font-size:13px}
+.diagnostic-run-actions .text-link:disabled{color:#7a899f;opacity:1}
+.analysis-question-label{display:block;font-size:13px;font-weight:600;color:#425e80;margin:18px 0 7px}
+#analysis-question{width:100%;resize:vertical;min-height:90px;background:white;color:#293e5e;box-sizing:border-box}
+.analysis-report-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid #d6e0ed;background:#f6f8fc}
+.analysis-report-toolbar label{font-size:13px;font-weight:600;color:#405d81}
+.analysis-report-toolbar select{min-width:0;flex:1;font-size:13px}
+.analysis-report-toolbar button{font-size:13px}
+.analysis-progress{padding:16px 18px;border-bottom:1px solid #d6e0ed;font-size:14px;color:#4c6489;display:flex;align-items:center;gap:10px}
+.analysis-report-meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#5c718e;font-size:12px;margin-bottom:17px}
+.agent-answer .analysis-question,.agent-answer .analysis-context{padding:11px 13px;border-left:3px solid #7891d4;background:#edf2fc;font-size:13px;line-height:1.6;color:#456080;margin-bottom:16px}
+.result-banner,#investigation,.diagnostic-history{scroll-margin-top:72px}
+
+@media(max-width:1200px){
+ .app{grid-template-columns:var(--ops-sidebar-width) minmax(0,1fr)}
+ .content{padding:20px 18px 32px}
+ .overview-modules{grid-template-columns:1fr}
+ .module-card,.module-card[data-module='diagnostics']{min-height:0}
+ .module-head{flex-direction:row;justify-content:space-between;align-items:center;min-height:0;flex-wrap:wrap}
+ .module-purpose{min-height:0;margin-top:16px}
+ .command-browser{grid-template-columns:245px minmax(0,1fr)}
+ .console-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .console-bindings select{max-width:260px}
+ .console-heading{align-items:flex-start;flex-wrap:wrap}
+}
+@media(max-width:1100px){.diagnostic-setup-grid{grid-template-columns:1fr}.body-grid{grid-template-columns:1fr}}
+@media(max-width:1000px){
+ .command-browser{grid-template-columns:1fr}
+ .command-directory{position:static}
+ #command-list{max-height:260px}
+ .body-grid{grid-template-columns:1fr}
+ .support{display:block}
+ .question-header{flex-wrap:wrap}
+ .console-fields{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .command-console .command-options label{grid-template-columns:minmax(0,1fr) 180px}
+}
+@media(max-width:700px){
+ .app{display:block}
+ .nav,.nav-inner{min-height:54px;height:auto}
+ .nav-inner{padding:0;flex-wrap:nowrap}.console-brand{width:auto;min-width:0;padding:0 14px;min-height:54px}.console-breadcrumb{display:none}
+ .nav-sub{display:none}.workspace-readonly{display:block;margin-right:12px;font-size:11px}
+ .rail{position:static;top:auto;height:auto;overflow:visible;padding:8px;border-right:0;border-bottom:1px solid #26374f}
+ .rail-caption,.rail-bottom{display:none}
+ .workspace-tabs{display:flex;flex-direction:row;overflow-x:auto;overflow-y:hidden;gap:4px;margin:0;padding:2px}
+ .workspace-tabs .problem{grid-template-columns:18px minmax(0,1fr);align-items:center;flex:0 0 auto;min-height:40px;height:40px;min-width:max-content;width:auto;padding:0 10px;gap:8px}
+ .workspace-tabs .problem strong{font-size:13px}
+ #connections{margin-top:0}#connections::after{display:none}
+ .content{padding:20px 14px 32px}
+ .question-header h1{font-size:25px}
+ .question-header p{font-size:14px}
+ .overview-modules{gap:14px}
+ .module-card,.module-card[data-module='diagnostics']{padding:18px}
+ .module-head h2{font-size:20px}
+ .command-toolbar{padding:14px;gap:12px}
+ .command-filter{flex:1;min-width:0}
+ .command-filter:first-child{flex-basis:100%}
+ .command-filter select{max-width:100%;width:100%}
+ .console-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .console-bindings select{max-width:100%}
+ .console-form,.console-heading{padding:14px}
+ .console-heading h2{font-size:16px}
+ .command-console .command-options label{grid-template-columns:1fr}
+ .console-input{flex-wrap:wrap}
+ .console-output-head{gap:9px;padding:12px}
+ .console-output-head>span{margin-left:0}
+ .context-fields{padding:14px}
+ .requirement{padding-left:14px;padding-right:14px}
+ .check-row{padding:15px 12px;align-items:flex-start}
+ .check-title{font-size:14px}
+ .check-desc{font-size:13px}
+ .check-reading{max-width:112px;min-width:72px}
+ .reading-value{font-size:20px}
+ .filters button{font-size:12px;padding:7px 6px}
+ .filter-count{font-size:11px}
+ .runbook-picker{grid-template-columns:1fr}
+ .runbook-step{gap:12px}
+ .diagnostic-run{grid-template-columns:1fr;padding:14px}
+ .diagnostic-run-actions{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start}
+ .analysis-report-toolbar{padding:14px}
+ .analysis-report-toolbar select{flex-basis:100%}
+}

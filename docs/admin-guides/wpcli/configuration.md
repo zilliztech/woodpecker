@@ -77,7 +77,7 @@ defaults:
 `wp shell` lists configured contexts when `--context` is omitted, even when
 `current-context` is set. The current context is the Enter default; choosing a
 context affects only the shell session. Tenant metadata is explicitly attached
-with `connect`, independently of stored service context etcd settings. See the
+with `connect`, independently of the server context. See the
 [shell guide](shell.md) for its session-specific connection behavior.
 
 | Field | Type | Default | Description |
@@ -131,72 +131,55 @@ Values are resolved in this order (highest priority first):
 
 ## Etcd connections
 
-Store etcd settings under the selected context. Use host-reachable endpoints and
-certificate files local to the machine running wp:
+Current source builds keep **server context** and **client metadata authority**
+separate. `cli.yaml` contains server endpoints/maps, Kubernetes and evidence
+connections. Client etcd endpoints, the full metadata prefix, authentication and
+storage locations are explicit request inputs. Older context-etcd/client-profile
+fields are not selected by current metadata commands; named `--client-meta`
+profiles are retired. An explicit `ctx use` rewrite preserves the old file in a
+private backup before canonicalizing its contexts.
 
-```yaml
-current-context: external
-contexts:
-  external:
-    endpoint: http://127.0.0.1:19091
-    etcd:
-      endpoints: [127.0.0.1:32379]
-      meta_prefix: milvus-prod/woodpecker
-      # Add username/password if the deployed etcd requires authentication.
-      # username: operator
-      # password: YOUR_PASSWORD
-      # For TLS, set these to actual local files; cert/key are needed only for mTLS.
-      # tls_enabled: true
-      # cacert: /path/to/ca.pem
-      # cert: /path/to/client.pem
-      # key: /path/to/client-key.pem
-      # tls_min_version: "1.3"
+```bash
+wp meta log list --etcd http://127.0.0.1:32379 --meta-prefix tenant/woodpecker
+wp log readers my-channel --etcd http://127.0.0.1:32379 --meta-prefix tenant/woodpecker
+wp etcd list --etcd http://127.0.0.1:32379
 ```
 
-The metadata prefix is the full deployed namespace, for example a Milvus root
-path followed by `woodpecker`; it is independent of the data bucket/root path.
+A full metadata prefix identifies the WP client's namespace. It is independent
+of the server context and the data bucket/root path. Pure metadata commands need
+no Admin connection. Commands that inspect quorum replicas still need reachable
+Admin origins and node maps. Raw `etcd list/get/cat` commands use literal keys and
+need no metadata prefix; no prefix is prepended.
 
-| Context field | CLI override | Meaning |
-|---|---|---|
-| `etcd.endpoints` | `--etcd` | YAML list of endpoints; flag accepts a comma-separated list |
-| `etcd.meta_prefix` | `--meta-prefix` | Full Woodpecker metadata namespace |
-| `etcd.username` / `etcd.password` | `--etcd-username` / `--etcd-password` | Etcd authentication |
-| `etcd.cacert` | `--etcd-cacert` | Local PEM trust bundle; omitted uses system roots for TLS |
-| `etcd.cert` / `etcd.key` | `--etcd-cert` / `--etcd-key` | Local client certificate/private key pair for mutual TLS |
-| `etcd.tls_min_version` | `--etcd-tls-min-version` | Minimum TLS version; default 1.2 |
-| `etcd.tls_enabled` | — | Explicit TLS configuration switch; absent infers TLS from certificate settings |
-
-Connection fields resolve as **flags → context → admin discovery**. Explicit
-empty flags can clear optional settings, for example `--etcd-password=`. A
-certificate flag enables TLS even when the context's tls_enabled is false.
-Cert/key must be supplied together; unreadable or invalid local TLS files are
-configuration errors. An invalid context name is an error.
-
-These settings apply to `marking`, `log readers/skip-range/scan`, `segment
-inspect/probe`, and `logstore lac/fence-quorum`. With both endpoints and
-meta_prefix supplied by flags/context, the metadata connection does not need
-admin-config discovery. Commands that also query quorum members still need
-their reachable admin endpoints and mappings.
-
-`wp etcd list/get/cat` use the same connection fields but **always skip admin
-discovery** and do not require meta_prefix. Input keys/prefixes are literal;
-meta_prefix is never prepended. An etcd-only context can therefore omit the
-admin endpoint entirely:
+For repeated authenticated requests, use an explicitly selected private
+`--client-parameters-file`, outside `cli.yaml` and outside the recent-input cache:
 
 ```yaml
-current-context: raw-etcd
-contexts:
-  raw-etcd:
-    etcd:
-      endpoints: [127.0.0.1:32379]
+# /path/to/client-parameters.yaml; restrict access to this private file.
+endpoints: [http://127.0.0.1:32379]
+meta_prefix: tenant/woodpecker
+# username: operator
+# password: YOUR_PASSWORD
+# cacert: /path/to/ca.pem
+# cert: /path/to/client.pem
+# key: /path/to/client-key.pem
+# tls_min_version: "1.2"
 ```
 
 ```bash
-wp --context raw-etcd etcd list
+wp meta log list --client-parameters-file /path/to/client-parameters.yaml
 ```
 
-See the [raw etcd guide](../../wp-etcd-cli.md) for value encodings and
-revision-pinned pagination.
+Fields resolve as **explicit flags → explicit parameter file**. Missing authority
+is an error; there is no server-context or Admin-config discovery fallback.
+Certificate files must exist locally; cert/key must be supplied together.
+Use `--etcd-username`, `--etcd-password`, `--etcd-cacert`, `--etcd-cert`,
+`--etcd-key` and `--etcd-tls-min-version` for explicit overrides.
+
+Recent successful inputs are separate independent key/value suggestions, not
+named tenant profiles. The [diagnostics guide](diagnostics.md) describes context
+observability, per-request scope, assessment files and the WebUI candidate cache.
+See the [raw etcd guide](../../wp-etcd-cli.md) for value encodings and pagination.
 
 ## Examples
 
@@ -308,7 +291,7 @@ not an assumed server default. LogStore nodes do not connect to etcd, so their c
 etcd section is not validated for this purpose. An incorrect prefix can successfully
 connect while showing an empty keyspace.
 
-Giving both `--etcd` and `--meta-prefix` skips admin-config discovery. Pure metadata
+Metadata commands require explicit etcd settings; Admin discovery is not used. Pure metadata
 commands (`log readers`, skip-range `list`/`remove`, and `marking`) then need no seed;
 quorum operations still need a reachable seed and individually reachable replica admin
 origins. TLS and authentication overrides are `--etcd-cert`, `--etcd-key`,

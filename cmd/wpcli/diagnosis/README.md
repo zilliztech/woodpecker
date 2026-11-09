@@ -6,8 +6,8 @@ controls and recovery with unchanged rules. Its representative MinIO-backed
 service fixture does not claim staged WAL disk or replica-failure coverage.
 
 `wp diagnose` performs bounded, read-only WP service checks using existing
-metrics/Admin APIs. It is part of wpcli. External monitoring, historical incident
-reconstruction, Milvus rules and UI belong to the separate diagnostic tool.
+metrics/Admin APIs. It is part of wpcli. Retained Prometheus/Jaeger checks use `wp diag`; `wp webui` presents the same
+CLI capabilities. Milvus-owned and Loki diagnosis are outside the product.
 
 This capability requires a binary built from this source revision. It does not
 change existing commands or require deploying new server APIs.
@@ -277,5 +277,5 @@ conflict handling rather than silently changing that older output contract.
 
 The legacy catalog's twelve names are not twelve completed diagnostic algorithms.
 `diagnose` exposes the focused native stall rules and expanded read/write scenarios.
-Prometheus, trace, Loki, Milvus stages, integration
-and WebUI remain separate program children under #450.
+The original #450 foundation is closed. The current WP-only CLI/WebUI workflow
+is owned by #503, with retained checks in `wp diag` and reports in `wp report`.

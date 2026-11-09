@@ -157,7 +157,7 @@ async function preview(event){
  finally{$('preview').disabled=false;}
 }
 async function refreshHistory(){
- const {value:rows}=await api('/api/runs');const select=clear('history');select.append(el('option','Select a recent run',{value:''}));
+ const {value:allRows}=await api('/api/runs');const rows=allRows.filter(row=>!row.kind);const select=clear('history');select.append(el('option','Select a recent run',{value:''}));
  for(const row of rows)select.append(el('option',time(row.created_at)+' · '+row.status+' · '+row.id.slice(0,8),{value:row.id}));
  if(rows.some(r=>r.id===state.selected))select.value=state.selected;
  return rows;

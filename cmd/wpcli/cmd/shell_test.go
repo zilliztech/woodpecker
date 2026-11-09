@@ -211,11 +211,11 @@ func TestShellPrerequisitesAndStorageInheritance(t *testing.T) {
 		require.NoError(t, err)
 		c, err := file.ResolveContext("")
 		require.NoError(t, err)
-		if s.tenant == nil {
-			require.Empty(t, c.Etcd.Endpoints)
-		} else {
-			require.Equal(t, s.tenant.etcd, c.Etcd)
+		require.Empty(t, c.Etcd.Endpoints, "temporary cli.yaml remains environment-only")
+		if s.tenant != nil && strings.Contains(strings.Join(args, " "), "--client-parameters-file=") {
+			require.Contains(t, strings.Join(args, " "), "--etcd=localhost:2379")
 		}
+
 		stat, err := os.Stat(path)
 		require.NoError(t, err)
 		require.Equal(t, os.FileMode(0o600), stat.Mode().Perm())

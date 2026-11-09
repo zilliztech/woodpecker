@@ -1,0 +1,202 @@
+<section id="topic-telemetry">
+<h2>Historical WAL diagnosis</h2>
+<article class="command" id="diag-catalog">
+<h2>wp diag catalog</h2>
+<p>List implemented checks, formulas, references and scenario manifests; no source/model queries</p>
+<pre>
+<code>wp diag catalog [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--check string</code>
+</td>
+<td>Check name or stable ID</td>
+</tr>
+<tr>
+<td>
+<code>--source string</code>
+</td>
+<td>metrics|trace</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp diag catalog --source metrics --check writer-latency</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Lists the metric, formula, rule and required inputs without querying a source.</code>
+</pre>
+<p>The CLI, rules and WebUI share the same canonical check keys.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>An unknown key is rejected.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>List implemented checks, formulas, references and scenario manifests; no source/model queries
+
+Usage:
+  wp diag catalog [flags]
+
+Flags:
+      --check string    Check name or stable ID
+  -h, --help            help for catalog
+      --source string   metrics|trace</code>
+</pre>
+</details>
+</article>
+<article class="command" id="diag-metrics-check">
+<h2>wp diag metrics check</h2>
+<p>Run one check; no implicit execution of other checks</p>
+<pre>
+<code>wp diag metrics check &lt;name&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--threshold float</code>
+</td>
+<td>Override this check threshold in native units (Trace durations use ms; error counts allow zero)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp --context local diag metrics check writer-latency --window 15m --details all -o json &gt; writes.json</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>A wp.diag/v1 report for the selected Writer timer.</code>
+</pre>
+<p>This checks recorded WP client Writer operations. It does not infer application end-to-end latency.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Missing source configuration, failed queries and insufficient coverage remain explicit.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Run one check; no implicit execution of other checks
+
+Usage:
+  wp diag metrics check &lt;name&gt; [flags]
+
+Flags:
+  -h, --help              help for check
+      --threshold float   Override this check threshold in native units (Trace durations use ms; error counts allow zero)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="diag-scenario">
+<h2>wp diag scenario</h2>
+<p>Run related Metrics/Trace checks and summarize their unchanged results by WAL step</p>
+<pre>
+<code>wp diag scenario &lt;name|all&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp --context local diag scenario slow-writes --window 15m --node-id woodpecker-0 --details all -o json &gt; diagnosis.json</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Independent Metrics/Trace findings summarized by WAL step.</code>
+</pre>
+<p>A scenario aggregates check results without a second root-cause engine or automatic cross-source association.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Configure at least one required source; checks without a source are skipped.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Run related Metrics/Trace checks and summarize their unchanged results by WAL step
+
+Usage:
+  wp diag scenario &lt;name|all&gt; [flags]
+
+Flags:
+  -h, --help   help for scenario</code>
+</pre>
+</details>
+</article>
+<article class="command" id="diag-trace-check">
+<h2>wp diag trace check</h2>
+<p>Run one check; no implicit execution of other checks</p>
+<pre>
+<code>wp diag trace check &lt;name&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--threshold float</code>
+</td>
+<td>Override this check threshold in native units (Trace durations use ms; error counts allow zero)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp --context local diag trace check server-append-duration --window 15m --details all -o json &gt; spans.json</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>A source-local report for selected retained append spans.</code>
+</pre>
+<p>Sampling, retention and emitted tags bound the evidence. No spans does not imply zero operation latency.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Missing spans or a query budget prevent a full assessment.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Run one check; no implicit execution of other checks
+
+Usage:
+  wp diag trace check &lt;name&gt; [flags]
+
+Flags:
+  -h, --help              help for check
+      --threshold float   Override this check threshold in native units (Trace durations use ms; error counts allow zero)</code>
+</pre>
+</details>
+</article>
+</section>
