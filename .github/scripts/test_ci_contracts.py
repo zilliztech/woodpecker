@@ -136,6 +136,41 @@ class WorkflowTests(unittest.TestCase):
         # The privileged controller must continue to use API metadata only.
         self.assertNotIn("actions/checkout", (WORKFLOWS / "pr-ci-label.yaml").read_text())
 
+    def test_current_workflows_do_not_execute_the_retired_binary(self):
+        diag = workflow("diagnostics-ci.yaml")["jobs"]
+        build = next(s for s in diag["build"]["steps"] if s.get("run", "").startswith("make "))
+        self.assertEqual(build["run"], "make wpcli")
+        artifact = next(s for s in diag["build"]["steps"] if s.get("uses", "").startswith("actions/upload-artifact"))
+        self.assertEqual(artifact["with"]["path"], "bin/wp")
+        for name in ("diagnostics-ci.yaml", "integration-test-components.yaml"):
+            for job in workflow(name)["jobs"].values():
+                for step in job["steps"]:
+                    self.assertNotIn("make wpdiag", step.get("run", ""))
+                    self.assertNotIn("bin/wpdiag", step.get("run", ""))
+
+    def test_all_pr_test_workflows_are_listened_to_and_aggregated(self):
+        label = workflow("pr-ci-label.yaml")
+        script = label["jobs"]["Label"]["steps"][0]["run"]
+        listened = label["on"]["workflow_run"]["workflows"]
+        for path in WORKFLOWS.glob("*.yaml"):
+            config = workflow(path.name)
+            if "pull_request" not in config["on"]:
+                continue
+            self.assertIn(config["name"], listened, path.name)
+            for job in config["jobs"].values():
+                if "strategy" not in job:
+                    self.assertIn('"' + job["name"] + '"', script, path.name)
+
+    def test_rerun_mapping_names_exist_and_match_the_public_guide(self):
+        rerun = (WORKFLOWS / "rerun-ci.yaml").read_text()
+        guide = (WORKFLOWS / "pr-ci-guide.yaml").read_text()
+        mappings = re.findall(r'WORKFLOW_MAP\["([^"]+)"\]="([^"]+)"', rerun)
+        self.assertTrue(mappings)
+        for command, filename in mappings:
+            self.assertTrue((WORKFLOWS / filename).is_file(), filename)
+            self.assertIn(command, guide)
+        self.assertIn('${!WORKFLOW_MAP[@]}', rerun)
+
 
 class BrowserStartupTests(unittest.TestCase):
     def test_failed_spawn_and_early_exit_preserve_diagnostics_and_cleanup(self):
@@ -210,6 +245,12 @@ else: sys.exit('Unexpected gh command')
                 self.assertEqual(self.label(checks[:-1] + [{"name": self.names[-1], "bucket": bucket}]), "remove")
         self.assertEqual(self.label(checks, api_error=True), "remove")
         self.assertEqual(self.label(checks, jobs=[{"name": self.names[0], "conclusion": "failure"}]), "remove")
+
+    def test_corruption_stability_and_issue_command_failures_cannot_pass(self):
+        checks = [{"name": n, "bucket": "pass"} for n in self.names]
+        for name in ("E2E Service Data Corruption", "Service Stability (Process)", "Service Stability (Docker)", "Issue Command Tests"):
+            with self.subTest(name=name):
+                self.assertEqual(self.label(checks + [{"name": name, "bucket": "fail"}]), "remove")
 
     def test_path_policy_matches_workflow_filters_and_stale_head_is_ignored(self):
         paths = workflow(PRIMARY[0])["on"]["pull_request"]["paths"]

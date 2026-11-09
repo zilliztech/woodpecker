@@ -1,10 +1,15 @@
-# Write trace propagation — #459
+# Write trace propagation — runtime regression
+
+Scope decision: #459 is closed as not planned for the remaining Milvus release
+gate. The cross-application discussion below is historical. Current CI validates
+WP runtime export directly; `wp diag` owns WP-only evidence assessment separately.
+
 
 The first delivery (#479) fixes the Woodpecker queued-append boundary and supplies
 a real exporter/transport compatibility probe. The second delivery adds an
 opted-in [real Milvus/WP acceptance runner](FULL_STACK.md), fixes a verified
 noop-client override of the host's OpenTelemetry provider, and recognizes the
-actual Milvus WAL scopes. It **does not close #459**: the locally validated
+actual Milvus WAL scopes. At the time it **did not close #459**: the locally validated
 development images are not published supported release images. See the
 [full-stack receipt](FULL_STACK_VALIDATION.md) for actual controls and limits.
 
@@ -100,10 +105,9 @@ cancelled/ended caller contexts, delayed success/error acknowledgements,
 multi-request batching, link identity/deduplication, absent context, sampling
 and SDK link limits. Normal runtime correctness/race suites still apply.
 
-To verify actual export, retained links and independent-tool compatibility:
+To verify actual export and retained runtime links:
 
 ```bash
-make wpdiag
 docker pull jaegertracing/all-in-one:1.53.0
 python3 tests/integration/tracing/append_propagation.py \
   --output /tmp/wp-append-trace-evidence
@@ -112,15 +116,15 @@ python3 tests/integration/tracing/append_propagation.py \
 The harness starts only a temporary Jaeger bound to random loopback ports, runs
 the actual Go queue/client/executor against a local generated-gRPC protocol
 fixture, checks successful/error single-entry and mixed-request batch spans in
-Jaeger, then diagnoses those exact IDs using wpdiag. It does not import fabricated
-OTLP spans. The protocol fixture acknowledges frames **without storing data**;
+Jaeger directly, without a diagnostic binary. It does not import fabricated
+OTLP spans. Current diagnostic CLI behavior is tested separately by Diagnostics CI. The protocol fixture acknowledges frames **without storing data**;
 passing does not verify Milvus, file writes/fsync, crash durability or production
-sampling/export reliability. Raw traces, fixture receipts, diagnostic JSON and
+sampling/export reliability. Raw traces, fixture receipts, propagation validation and
 the Go test log are retained only when `--output` is supplied. The temporary
 Jaeger is stopped on success/failure. Its ephemeral storage is not production
 retention.
 
-## Remaining #459 acceptance
+## Historical #459 acceptance (retired release gate)
 
 1. Record an available Milvus build/image containing the upstream propagation
    change and the released WP client fix. Record the actual WP service image
@@ -138,5 +142,5 @@ retention.
    storage-timer scope. No missing-span-as-zero, lossless-export claim, quantile
    addition/subtraction or disk Write/Sync claim from aggregate flush spans.
 
-This PR references #459 and #450. It must not close #459 based only on the
-isolated protocol acceptance.
+The original deliveries referenced #459 and #450. Their historical release
+acceptance is not a requirement or diagnostic feature of the current WP-only tool.

@@ -44,8 +44,14 @@ jobs:
           cd tests/docker/chaos
           SCRIPT_DIR="$(pwd)"
           source ../common.sh
+          # Read by the functions sourced from ../common.sh.
+          # shellcheck disable=SC2034
           OVERRIDE_FILE="$SCRIPT_DIR/docker-compose.chaos.yaml"
+          # Read by the functions sourced from ../common.sh.
+          # shellcheck disable=SC2034
           PROJECT_NAME="woodpecker-chaos"
+          # Read by the functions sourced from ../common.sh.
+          # shellcheck disable=SC2034
           CONTAINERS="etcd minio woodpecker-node1 woodpecker-node2 woodpecker-node3 woodpecker-node4"
           compose_cmd up -d
           echo "Waiting for containers..."

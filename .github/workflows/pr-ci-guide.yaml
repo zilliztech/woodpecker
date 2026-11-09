@@ -35,15 +35,17 @@ jobs:
           | Command | Reruns |
           | --- | --- |
           | `/rerun` | every failed workflow on the latest commit |
-          | `/rerun-lint` | Lint |
-          | `/rerun-mod-tidy` | Go Mod Tidy Check |
+          | `/rerun-lint` | Code Checker: Lint and Go Mod Tidy Check |
+          | `/rerun-mod-tidy` | Code Checker: Lint and Go Mod Tidy Check |
           | `/rerun-unit-test` | Core Unit Test and CI Contracts |
-          | `/rerun-wpcli` | WPCLI CI: units and terminal interaction |
-          | `/rerun-diagnostics` | Diagnostics CI: units, CLI, backend smoke, WebUI, harness and stack examples |
+          | `/rerun-wpcli` | WPCLI CI: native commands including `wp diagnose`, configuration and shell interaction |
+          | `/rerun-diagnostics` | Diagnostics CI: `wp diag`, reports, operations WebUI, Prometheus/Jaeger, fixtures and stack examples |
           | `/rerun-e2e-local` | E2E Local |
           | `/rerun-e2e-objectstorage` | E2E Object Storage |
           | `/rerun-embed-minio-without-conditionwrite` | Embed MinIO Without ConditionWrite |
           | `/rerun-e2e-service` | E2E Service |
+          | `/rerun-e2e-service-corruption` | E2E Service Data Corruption |
+          | `/rerun-issue-commands` | Issue Command Tests |
           | `/rerun-component-test` | Component Integration Test and Trace Export Integration |
           | `/rerun-chaos` | Chaos Test |
           | `/rerun-service-stability-process` | Service Stability (Process) |

@@ -26,6 +26,10 @@ on:
       - E2E Object Storage
       - Embed MinIO Without ConditionWrite
       - E2E Service
+      - E2E Service Data Corruption
+      - Service Stability (Process)
+      - Service Stability (Docker)
+      - Issue Command Tests
       - Component Integration Test
       - Chaos Test
       - Operator Test
@@ -96,7 +100,7 @@ jobs:
             "Diagnostics WebUI" "Diagnostics Harness" "Stack Examples"
             "Diagnostics Smoke (prometheus)" "Diagnostics Smoke (jaeger)"
           )
-          REQUIRED_CHECKS=("${ROOT_CHECKS[@]}" "Lint" "Go Mod Tidy Check" "E2E Local" "E2E Object Storage" "Embed MinIO Without ConditionWrite" "E2E Service" "Component Integration Test" "Trace Export Integration" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
+          REQUIRED_CHECKS=("${ROOT_CHECKS[@]}" "Lint" "Go Mod Tidy Check" "E2E Local" "E2E Object Storage" "Embed MinIO Without ConditionWrite" "E2E Service" "E2E Service Data Corruption" "Service Stability (Process)" "Service Stability (Docker)" "Issue Command Tests" "Component Integration Test" "Trace Export Integration" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
           CHECKS=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket 2>/dev/null || echo "[]")
 
           # Match the identical paths in the three primary workflows. Missing

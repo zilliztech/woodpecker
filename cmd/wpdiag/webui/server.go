@@ -493,8 +493,11 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	case "/workflow.css":
 		name = "workflow.css"
 		ctype = "text/css; charset=utf-8"
-	case "/fonts/geist-latin.woff2", "/fonts/geist-mono-latin.woff2":
-		name = strings.TrimPrefix(r.URL.Path, "/")
+	case "/fonts/geist-latin.woff2":
+		name = "fonts/geist-latin.woff2"
+		ctype = "font/woff2"
+	case "/fonts/geist-mono-latin.woff2":
+		name = "fonts/geist-mono-latin.woff2"
 		ctype = "font/woff2"
 	case "/workspace-operations.js":
 		name = "workspace-operations.js"

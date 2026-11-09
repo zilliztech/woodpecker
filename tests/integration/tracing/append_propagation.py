@@ -48,14 +48,56 @@ def retained(query, trace_id, minimum):
         time.sleep(.1)
 
 
+def validate_trace(receipt, trace):
+    """Validate emitted transport identity without a diagnostic CLI dependency."""
+    trace_id = receipt["execution_trace_id"]
+    assert receipt["case"] in {"single", "single-error", "batch"}
+    assert trace["traceID"].lower().zfill(32) == trace_id
+    spans = trace["spans"]
+    span_ids = {s["spanID"] for s in spans}
+    assert len(span_ids) == len(spans), "Duplicate retained span identities"
+    for span in spans:
+        assert span["traceID"].lower().zfill(32) == trace_id
+        for ref in span.get("references", []):
+            if ref["refType"] == "CHILD_OF":
+                assert ref["traceID"].lower().zfill(32) == trace_id and ref["spanID"] in span_ids
+    services = {p["serviceName"] for p in trace["processes"].values()}
+    assert services == {"wp-client-trace-fixture", "wp-server-trace-fixture"}, services
+    execution = [s for s in spans if s["operationName"] == "Execute"]
+    assert len(execution) == 1
+    refs = execution[0].get("references", [])
+    if receipt["case"] == "batch":
+        assert not any(r["refType"] == "CHILD_OF" for r in refs)
+        actual = {(r["traceID"].lower().zfill(32), r["spanID"].lower().zfill(16)) for r in refs if r["refType"] == "FOLLOWS_FROM"}
+        expected = {(s["trace_id"], s["span_id"]) for s in receipt["input_spans"]}
+        assert actual == expected, (actual, expected)
+        assert trace_id not in receipt["input_trace_ids"]
+    else:
+        assert receipt["input_trace_ids"] == [trace_id]
+        expected = receipt["input_spans"][0]
+        assert any(r["refType"] == "CHILD_OF" and r["traceID"].lower().zfill(32) == trace_id
+                   and r["spanID"].lower().zfill(16) == expected["span_id"] for r in refs)
+    # Exported server spans must retain their actual client parent, including
+    # streams closed after their final acknowledgement. Transport cancellation
+    # by itself is not a conclusion about application success or durability.
+    servers = [s for s in spans if any(t["key"] == "span.kind" and t["value"] == "server" for t in s.get("tags", []))]
+    assert servers, "No exported gRPC server span"
+    for server in servers:
+        assert trace["processes"][server["processID"]]["serviceName"] == "wp-server-trace-fixture"
+        parents = [r["spanID"] for r in server.get("references", []) if r["refType"] == "CHILD_OF"]
+        assert parents, "No retained server parent"
+        assert any(s["spanID"] in parents and any(t["key"] == "span.kind" and t["value"] == "client" for t in s.get("tags", []))
+                   and trace["processes"][s["processID"]]["serviceName"] == "wp-client-trace-fixture" for s in spans)
+    return {"case": receipt["case"], "trace_id": trace_id, "spans": len(spans),
+            "services": sorted(services), "references": refs, "propagation_status": "passed"}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--wpdiag", default="bin/wpdiag")
     parser.add_argument("--image", default="jaegertracing/all-in-one:1.53.0")
-    parser.add_argument("--output", type=Path, help="Retain fixture receipts, raw spans and diagnostic reports")
+    parser.add_argument("--output", type=Path, help="Retain fixture receipts, raw spans and propagation validation")
     args = parser.parse_args()
-    binary = str((ROOT / args.wpdiag).resolve())
-    name = "wp-trace-459-" + uuid.uuid4().hex[:10]
+    name = "wp-trace-export-" + uuid.uuid4().hex[:10]
     started = False
     try:
         command("docker", "run", "-d", "--rm", "--name", name,
@@ -73,7 +115,7 @@ def main():
                 time.sleep(.1)
         else:
             raise RuntimeError("Fixture Jaeger did not become ready")
-        with tempfile.TemporaryDirectory(prefix="wp-trace-459-") as folder:
+        with tempfile.TemporaryDirectory(prefix="wp-trace-export-") as folder:
             root = Path(folder)
             receipts = root / "receipts"
             env = dict(os.environ, WP_TRACE_TEST_OTLP=ingest, WP_TRACE_TEST_RECEIPTS=str(receipts))
@@ -82,10 +124,6 @@ def main():
             if args.output:
                 args.output.mkdir(parents=True, exist_ok=True)
                 (args.output / "go-test.log").write_text(go_output + "\n")
-            config = root / "wpdiag.json"
-            config.write_text(json.dumps({"schema_version": "wpdiag.config/v1", "sources": {"trace": {
-                "connections": {"fixture": {"settings": {"endpoint": query, "deployment": "trace-protocol-fixture",
-                    "services": {"wp-client-trace-fixture": "wp_client", "wp-server-trace-fixture": "wp_server"}}}}}}}))
             checks = []
             files = sorted(receipts.glob("*.json"))
             assert len(files) == 3, "Expected success, error and mixed-request batch receipts"
@@ -93,53 +131,17 @@ def main():
                 receipt = json.loads(file.read_text())
                 trace_id = receipt["execution_trace_id"]
                 trace = retained(query, trace_id, 3)
-                span_ids = {s["spanID"] for s in trace["spans"]}
-                for span in trace["spans"]:
-                    for ref in span.get("references", []):
-                        if ref["refType"] == "CHILD_OF":
-                            assert ref["traceID"].lower().zfill(32) == trace_id and ref["spanID"] in span_ids
-                services = {p["serviceName"] for p in trace["processes"].values()}
-                assert services == {"wp-client-trace-fixture", "wp-server-trace-fixture"}, services
-                execution = [s for s in trace["spans"] if s["operationName"] == "Execute"]
-                assert len(execution) == 1
-                refs = execution[0].get("references", [])
-                if receipt["case"] == "batch":
-                    assert not any(r["refType"] == "CHILD_OF" for r in refs)
-                    actual = {(r["traceID"].lower().zfill(32), r["spanID"].lower().zfill(16)) for r in refs if r["refType"] == "FOLLOWS_FROM"}
-                    expected = {(s["trace_id"], s["span_id"]) for s in receipt["input_spans"]}
-                    assert actual == expected, (actual, expected)
-                    assert trace_id not in receipt["input_trace_ids"]
-                else:
-                    assert receipt["input_trace_ids"] == [trace_id]
-                    expected = receipt["input_spans"][0]
-                    assert any(r["refType"] == "CHILD_OF" and r["traceID"].lower().zfill(32) == trace_id
-                               and r["spanID"].lower().zfill(16) == expected["span_id"] for r in refs)
-                report = json.loads(command(binary, "trace", "diagnose", "--config", str(config),
-                    "--connection", "fixture", "--scope", "wp", "--flow", "write", "--mode", "snapshot",
-                    "--trace-id", trace_id, "-o", "json", timeout=20))
-                assert report["status"] == "completed"
-                unknown = {u for result in report["results"] for f in result["findings"] for u in f["unknown"]}
-                assert "parent_not_retained" not in unknown
-                assert "supported_span_evidence_absent" not in unknown
-                # A cleanup cancellation alone cannot establish write failure.
-                cancelled = any(any(t["key"] == "rpc.grpc.status_code" and str(t["value"]) == "1" for t in s.get("tags", []))
-                                and any(t["key"] == "span.kind" and t["value"] == "client" for t in s.get("tags", []))
-                                for s in trace["spans"])
-                if cancelled:
-                    assert any(f["outcome"] == "observed_rpc_cancellation" and f["severity"] == "unknown"
-                               for result in report["results"] for f in result["findings"])
-                if receipt["case"] == "batch":
-                    assert "async_links_not_serial_children" in unknown
+                check = validate_trace(receipt, trace)
                 if args.output:
                     args.output.mkdir(parents=True, exist_ok=True)
-                    for suffix, value in [("receipt", receipt), ("trace", trace), ("diagnosis", report)]:
+                    for suffix, value in [("receipt", receipt), ("trace", trace)]:
                         (args.output / (receipt["case"] + "-" + suffix + ".json")).write_text(json.dumps(value, indent=2) + "\n")
-                checks.append({"case": receipt["case"], "trace_id": trace_id, "spans": len(trace["spans"]),
-                               "services": sorted(services), "references": refs, "diagnostic_status": report["status"]})
+                checks.append(check)
             result = {"schema_version": "wp.trace.propagation.validation/v1", "passed": True, "checks": checks,
                 "limits": ["Protocol fixture only; no actual Milvus Insert, disk I/O or durability claim",
-                           "Batch links connect independent traces; wpdiag does not fetch or merge linked traces",
-                           "Always-sampled fixture does not establish lossless export or production sampling coverage"]}
+                           "Batch links connect independent traces; linked input traces are not fetched or merged",
+                           "Always-sampled fixture does not establish lossless export or production sampling coverage",
+                           "Raw propagation validation only; diagnostic CLI assessment is owned by Diagnostics CI"]}
             if args.output:
                 (args.output / "validation.json").write_text(json.dumps(result, indent=2) + "\n")
             print(json.dumps(result, indent=2))
