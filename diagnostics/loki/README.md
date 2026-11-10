@@ -1,3 +1,8 @@
+> Historical module contract. The current WP-only product does not expose this
+> legacy execution surface. `wpdiag` is retired; use `wp diag`, `wp report` and
+> `wp webui`. Retained code/receipts support history and reuse, not additional
+> supported Milvus/Loki diagnostic capabilities. See [the current guide](../../docs/admin-guides/wpcli/diagnostics.md).
+
 # Standalone Loki diagnosis (catalog v1)
 
 `wpdiag loki diagnose` reads Loki directly. It needs no Grafana, Prometheus,

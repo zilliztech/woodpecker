@@ -9,21 +9,27 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	d "github.com/zilliztech/woodpecker/diagnostics"
 )
 
 type Settings struct {
-	Endpoint       string            `yaml:"endpoint"`
-	Deployment     string            `yaml:"deployment"`
-	Services       map[string]string `yaml:"services"` // Exact service name -> component role.
-	MatchTags      map[string]string `yaml:"match_tags,omitempty"`
-	Search         Search            `yaml:"search,omitempty"`
-	RequestIDTag   string            `yaml:"request_id_tag,omitempty"`
-	BearerTokenEnv string            `yaml:"bearer_token_env,omitempty"`
-	BasicAuth      *BasicAuth        `yaml:"basic_auth,omitempty"`
-	Limits         Limits            `yaml:"limits,omitempty"`
-	Policy         Policy            `yaml:"policy,omitempty"`
+	Endpoint             string            `yaml:"endpoint"`
+	Deployment           string            `yaml:"deployment"`
+	Services             map[string]string `yaml:"services"` // Exact service name -> component role.
+	MatchTags            map[string]string `yaml:"match_tags,omitempty"`
+	Search               Search            `yaml:"search,omitempty"`
+	RequestIDTag         string            `yaml:"request_id_tag,omitempty"`
+	BearerTokenEnv       string            `yaml:"bearer_token_env,omitempty"`
+	BasicAuth            *BasicAuth        `yaml:"basic_auth,omitempty"`
+	Limits               Limits            `yaml:"limits,omitempty"`
+	Policy               Policy            `yaml:"policy,omitempty"`
+	TLS                  d.TLSConfig       `yaml:"tls,omitempty"`
+	IdentityTags         map[string]string `yaml:"identity_tags,omitempty"`
+	candidateMinDuration time.Duration
+	candidateTags        map[string]string
+	atomicOperations     map[string]bool
 }
 
 type Search struct {
@@ -72,6 +78,11 @@ func settings(c d.Connection) (Settings, error) {
 	for key, value := range s.MatchTags {
 		if !d.Has([]string{"service.namespace", "deployment.environment", "deployment.environment.name", "cluster", "namespace", "woodpecker_id"}, key) || value == "" || !bounded(value) {
 			return s, fmt.Errorf("invalid bounded deployment tag selector")
+		}
+	}
+	for logical, key := range s.IdentityTags {
+		if !d.Has([]string{"log_ns", "log_id", "node_id", "reader_name"}, logical) || !tagName.MatchString(key) {
+			return s, fmt.Errorf("identity_tags must map supported target identities to literal tag names")
 		}
 	}
 	if s.Search.Service != "" && s.Services[s.Search.Service] == "" || !bounded(s.Search.Operation) || s.RequestIDTag != "" && !tagName.MatchString(s.RequestIDTag) {

@@ -1,0 +1,193 @@
+// Operations interaction acceptance. Native execution is intercepted with a fixture; no cluster operations or model calls.
+import {spawn} from 'node:child_process';
+import {mkdtemp,readFile,writeFile,rm,readdir} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
+import assert from 'node:assert/strict';
+import {join} from 'node:path';
+
+const [url,output]=process.argv.slice(2);
+assert(url&&output,'Usage: wal_browser.mjs URL OUTPUT');
+const chromePath=process.env.CHROME_BIN||['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].find(existsSync);
+assert(chromePath,'Chrome is required; set CHROME_BIN');
+const profile=await mkdtemp('/tmp/wpdiag-webui-chrome-');
+const chrome=spawn(chromePath,['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--no-sandbox','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:['ignore','ignore','pipe']});
+let chromeStderr='',chromeError;
+chrome.stderr.on('data',data=>{chromeStderr=(chromeStderr+data.toString()).slice(-32768);});
+chrome.on('error',error=>{chromeError=error;});
+const chromeClosed=new Promise(resolve=>chrome.once('close',resolve));
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+let ws,call,evaluate;
+const errors=[],checks=[];
+try{
+ let port;
+ for(let i=0;i<100;i++){
+  if(chromeError)throw Error('Chrome launch failed: '+chromeError.message);
+  if(chrome.exitCode!==null||chrome.signalCode!==null)throw Error('Chrome exited before startup: '+chromeStderr);
+  try{port=(await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];break;}catch{await pause(100);}
+ }
+ assert(port,'Chrome did not start within 10 seconds: '+chromeStderr);
+ const target=await(await fetch('http://127.0.0.1:'+port+'/json/new?about:blank',{method:'PUT'})).json();
+ ws=new WebSocket(target.webSocketDebuggerUrl);await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
+ let seq=0;const pending=new Map();
+ ws.onmessage=event=>{const m=JSON.parse(event.data);if(m.id){const p=pending.get(m.id);if(p){pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result);}}else if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text);};
+ call=(method,params={})=>new Promise((resolve,reject)=>{const id=++seq;const timer=setTimeout(()=>{pending.delete(id);reject(Error('Timeout '+method));},20000);pending.set(id,{resolve,reject,timer});ws.send(JSON.stringify({id,method,params}));});
+ evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true,userGesture:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+ const wait=async(expression,message,timeout=10000)=>{const deadline=Date.now()+timeout;while(Date.now()<deadline){if(await evaluate(expression))return;await pause(80);}throw Error(message+'\n'+await evaluate('document.body.innerText.slice(-5000)'));};
+
+ const click=sel=>evaluate(`(()=>{const selector=${JSON.stringify(sel)},scoped=selector.startsWith('[data-operation-command=')||selector==='[data-operation-help]'?'#operation-step-editor-'+(operationSteps[state.runbook]||0)+' '+selector:selector;document.querySelector(scoped).click();})()`);
+ const shot=async name=>{const s=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,name+'.png'),Buffer.from(s.data,'base64'));};
+ const set=async(sel,value)=>evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(sel)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+ await call('Page.enable');await call('Runtime.enable');await call('Network.enable');
+ await call('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:output});
+ await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1050,deviceScaleFactor:1,mobile:false});
+ await call('Page.navigate',{url});
+
+ await wait('typeof state!=="undefined"&&state.info!==null&&state.catalog!==null','workspace ready');
+
+
+
+
+
+ // All execution requests are intercepted in-browser. No native command reaches a cluster.
+ await evaluate(`(()=>{window.operationCalls=[];window.fixturePolls={};window.realApi=api;api=async(path,body)=>{if(path==='/api/ops/commands'){operationCalls.push(body);if(window.failNextOperation){window.failNextOperation=false;throw Error('Fixture: request transport failed');}const id='operation-fixture-'+operationCalls.length;fixturePolls[id]=0;return {id,command:{status:'running',name:body.name,stdout:'',stderr:''}};}if(path.startsWith('/api/runs/operation-fixture-')){const id=path.split('/').at(-1),n=Number(id.split('-').at(-1)),q=operationCalls[n-1],done=++fixturePolls[id]>=3;return {report_ready:done,command:{status:done?'completed':'running',name:q.name,context:q.context,stdout:done?JSON.stringify({fixture:id,confirmation:'42:7',node:'fixture-node'}):'',stderr:'',exit_code:done?0:undefined,started_at:new Date().toISOString(),finished_at:done?new Date().toISOString():undefined,working_directory:'/tmp/presentation-only'}};}return realApi(path,body);};})()`);
+ await click('.workspace-tabs [data-tab="runbooks"]');
+ assert.equal(await evaluate('document.querySelectorAll("#operation-scenario-select option").length'),3);
+ assert.equal(await evaluate('state.commandName'),'node list');
+ assert.equal(await evaluate('operationCalls.length'),0,'opening Operations must not execute commands');
+ assert(await evaluate('!!document.querySelector("#operation-step-editor-0 #command-config")'));
+ assert(await evaluate('!!document.querySelector("#operation-output-mount #command-console")'));
+ assert.equal(await evaluate('document.querySelectorAll("#runbook-content [data-operation-command],#runbook-content .operation-step-guide,#runbook-content [data-reviewed-step],#runbook-content [data-review-step]").length'),0,'right side contains output, not workflow or commands');
+ assert(await evaluate('!!document.querySelector("#operation-step-editor-0 #execute-command")'));
+ assert(await evaluate('!!document.querySelector("#operation-step-editor-0 #command-input-row")'),'CLI replies stay with inputs');
+ // Folding is independent of selection, other steps and command execution.
+ await evaluate('window.foldEditor=document.querySelector("#command-config")');
+ await click('[data-toggle-operation-step="0"]');
+ assert(await evaluate('document.querySelector("#operation-step-editor-0").hidden'));
+ assert.equal(await evaluate('operationSteps[state.runbook]||0'),0);
+ assert.equal(await evaluate('document.querySelector("#operation-result-state").textContent'),'Not run');
+ await click('[data-toggle-operation-step="1"]');
+ assert(!await evaluate('document.querySelector("#operation-step-editor-1").hidden'));
+ assert(await evaluate('document.querySelector("#operation-step-editor-0").hidden'));
+ assert.equal(await evaluate('operationSteps[state.runbook]||0'),0,'opening a step does not switch the selected result');
+ await click('[data-toggle-operation-step="0"]');
+ assert(!await evaluate('document.querySelector("#operation-step-editor-0").hidden'));
+ assert(!await evaluate('document.querySelector("#operation-step-editor-1").hidden'),'multiple steps stay expanded');
+ assert(await evaluate('foldEditor===document.querySelector("#command-config")'),'folding preserves the editor DOM');
+ await click('[data-toggle-operation-step="1"]');
+ assert(!await evaluate('document.querySelector("#operation-step-editor-0").hidden'),'collapsing another step leaves the current one open');
+ await shot('operations-write');
+ await click('#execute-command');
+ await wait('document.querySelector("#operation-result-state").textContent.includes("Running")','live execution status');
+ assert(await evaluate(`document.querySelector('[data-operation-step-state="0"]').textContent.includes("Running")`));
+ await click('[data-toggle-operation-step="0"]');
+ assert(await evaluate('document.querySelector("#operation-step-editor-0").hidden'));
+ assert(await evaluate('document.querySelector("#operation-result-state").textContent.includes("Running")'),'collapse does not cancel or clear execution');
+ await click('[data-toggle-operation-step="0"]');
+ await shot('operations-running');
+ await wait('document.querySelector("#command-exit").textContent.includes("exit 0")','fixture completes');
+ assert.equal(await evaluate('operationCalls.length'),1);
+ assert(await evaluate('document.querySelector("#operation-history-mount").textContent.includes("node list")'));
+ assert(await evaluate(`document.querySelector('[data-operation-step-state="0"]').textContent.includes("executed")`));
+ await shot('operations-result');
+ await click('[data-toggle-operation-step="1"]');
+ await click('#operation-step-editor-1 [data-operation-command="ops list"]');
+ assert(!await evaluate('document.querySelector("#operation-step-editor-0").hidden'),'selecting another operation preserves the previous expansion');
+ assert.equal(await evaluate('state.commandName'),'ops list');
+ assert(await evaluate('document.querySelector("#command-history-list").textContent.includes("No completed runs for this step")'),'history is step-specific');
+ assert(!await evaluate('document.querySelector("#command-result").textContent.includes("operation-fixture-1")'),'another step’s output is not shown');
+ await set('[data-shared-key="node"]','fixture-node');
+ await evaluate('window.foldNode=document.querySelector("[data-shared-key=node]")');
+ await click('[data-toggle-operation-step="1"]');await click('[data-toggle-operation-step="1"]');
+ assert(await evaluate('foldNode===document.querySelector("[data-shared-key=node]")&&foldNode.value==="fixture-node"'),'folding preserves typed parameters');
+ await set('[data-shared-key="logID"]','42');
+ await set('[data-shared-key="segmentID"]','7');
+ await click('[data-operation-command="ops show"]');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=node]").value'),'fixture-node');
+ await set('[data-command-flag="op-id"]','example-op');
+ await click('[data-review-step="2"]');
+ await click('[data-operation-command="logstore segment-show"]');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=node]").value'),'fixture-node');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=logID]").value'),'42');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=segmentID]").value'),'7');
+ await shot('operations-writer-parameters');
+ await click('[data-operation-help]');
+ assert.equal(await evaluate('document.querySelector("#overlay").hidden'),false);
+ assert(await evaluate('document.querySelector("#drawer-body").textContent.includes("occupancies")'));
+ await evaluate('closeDialog()');
+ await click('[data-operation-diagnostics]');
+ assert.equal(await evaluate('state.tab'),'diagnostics');assert.equal(await evaluate('state.scenario'),'stuck-writes');
+ assert(await evaluate('!!document.querySelector("#commands-view #command-config")'),'console returned to Explorer');
+ await click('[data-return-runbook]');
+ assert.equal(await evaluate('operationSteps[state.runbook]'),2);
+ await click('[data-review-step="0"]');
+ assert(await evaluate('document.querySelector("#command-result").textContent.includes("operation-fixture-1")'),'returning restores this step’s result');
+ await evaluate('for(let i=0;i<runbooks[0].steps.length;i++){expandedOperationSteps(state.runbook)[i]=false;}updateOperationExpansions()');
+ assert.equal(await evaluate('document.querySelectorAll("[data-toggle-operation-step][aria-expanded=true]").length'),0,'all steps can be collapsed');
+ assert(await evaluate('document.querySelector("#command-result").textContent.includes("operation-fixture-1")'),'collapsing every step preserves the output');
+ await click('[data-toggle-operation-step="0"]');
+ await set('#operation-scenario-select','read-stall');
+ assert.equal(await evaluate('state.commandName'),'log readers');
+ assert.equal(await evaluate('document.querySelectorAll("#command-config [data-shared-key=bucket]").length'),0,'reader positions do not require storage');
+ await shot('operations-read');
+ await click('[data-review-step="2"]');
+ assert.equal(await evaluate('state.commandName'),'segment probe');
+ assert.equal(await evaluate('document.querySelectorAll("#command-config [data-shared-key=bucket]").length'),1,'physical probe requires storage');
+ await set('[data-binding-key="metadata.etcd"]','http://127.0.0.1:12379');
+ await set('[data-binding-key="metadata.prefix"]','fixture/woodpecker');
+ await set('[data-shared-key="logName"]','fixture-log');
+ await set('[data-shared-key="segmentID"]','7');
+ await set('[data-shared-key="bucket"]','fixture-bucket');
+ await set('[data-shared-key="rootPath"]','fixture/wp');
+ assert(!await evaluate('document.querySelector("#execute-command").disabled'),'physical parameters complete');
+ await shot('operations-probe');
+ await set('#operation-scenario-select','write-stall');
+ await click('[data-review-step="3"]');
+ await click('#execute-command');
+ await wait('document.querySelector("#command-exit").textContent.includes("exit 0")','first LAC execution');
+ assert(await evaluate('document.querySelector("#command-result").textContent.includes("operation-fixture-2")'));
+ await click('[data-review-step="5"]');
+ await click('[data-operation-command="logstore lac"]');
+ assert.equal(await evaluate('document.querySelector("#command-exit").textContent'),'Not run','same command in verification step does not reuse an earlier step’s result');
+ await click('#execute-command');
+ await wait('document.querySelector("#command-exit").textContent.includes("exit 0")','verification LAC execution');
+ assert(await evaluate('document.querySelector("#command-result").textContent.includes("operation-fixture-3")'));
+ await click('[data-review-step="3"]');
+ assert(await evaluate('document.querySelector("#command-result").textContent.includes("operation-fixture-2")'),'original step output remains intact');
+ await set('#operation-scenario-select','segment-review');
+ await click('[data-review-step="3"]');
+ await click('[data-operation-command="log skip-range add"]');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=logName]").value'),'fixture-log');
+ assert(await evaluate('document.querySelector("#operation-action-notice").textContent.includes("loss")'));
+ assert.equal(await evaluate('document.querySelector("#operation-action-notice").closest(".workspace-input")!==null'),true,'impact stays with the action inputs');
+ assert.equal(await evaluate('document.querySelector("[data-command-flag=yes]").checked'),false,'no automatic acceptance');
+ await set('[data-command-flag="from-entry"]','50');
+ await set('[data-command-flag="to-entry"]','50');
+ await set('[data-command-flag="reason"]','Fixture only: explicit accepted loss');
+ assert.equal(await evaluate('commandPayload(commandDefinitionByName(state.commandName)).flags.yes'),undefined,'preview has no --yes');
+ await shot('operations-skip-preview');
+ await evaluate('document.querySelector("[data-command-flag=yes]").checked=true');
+ await click('[data-review-step="4"]');await click('[data-review-step="3"]');
+ await click('[data-operation-command="log skip-range add"]');
+ assert.equal(await evaluate('document.querySelector("[data-command-flag=yes]").checked'),false,'acceptance is never reused across steps');
+ await click('.workspace-tabs [data-tab="commands"]');
+ assert(await evaluate('!!document.querySelector("#command-controls #command-config")'));
+ await evaluate("showCommand('logstore segment-show')");
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=node]").value'),'fixture-node');
+ assert(await evaluate('document.querySelector("#command-history-list").textContent.includes("node list")'),'Explorer retains combined command history');
+ await shot('explorer-after-operations');
+ await click('.workspace-tabs [data-tab="runbooks"]');
+ // Every command can render in its step without submitting an operation.
+ const counts=await evaluate(`(()=>{let steps=0,commands=0;for(const book of runbooks){state.runbook=book.id;for(let i=0;i<book.steps.length;i++){operationSteps[book.id]=i;for(const cmd of book.steps[i].commands){operationCommands[book.id+'|'+i]=cmd;state.commandEditorKey='';render();if(!document.querySelector('#operation-output-mount #command-console')||!document.querySelector('#operation-step-editor-'+i+' #execute-command'))throw Error('missing runner '+cmd);commands++;}steps++;}}return {steps,commands};})()`);
+ assert.equal(counts.steps,17);
+ await set('#operation-scenario-select','write-stall');await click('[data-review-step="0"]');await click('[data-operation-command="node list"]');
+ const contrast=await evaluate(`(()=>{const rgb=s=>(s.match(/[0-9.]+/g)||[]).map(Number),lum=a=>a.slice(0,3).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((v,x,i)=>v+x*[.2126,.7152,.0722][i],0),bg=e=>{while(e){const c=rgb(getComputedStyle(e).backgroundColor);if(c.length>=3&&(c.length<4||c[3]===1))return c;e=e.parentElement;}return [255,255,255]};return [...document.querySelectorAll('.operation-result-heading h2,.operation-phase,.operation-result-state,.operation-command,.operation-step-nav b,.operation-step-nav small,#operation-command-needs')].filter(e=>e.getClientRects().length).map(e=>{const f=lum(rgb(getComputedStyle(e).color)),b=lum(bg(e));return {text:e.textContent.slice(0,40),ratio:(Math.max(f,b)+.05)/(Math.min(f,b)+.05)};});})()`);
+ assert.deepEqual(contrast.filter(r=>r.ratio<4.5),[],'contrast');
+ for(const width of [1440,900,390]){await call('Emulation.setDeviceMetricsOverride',{width,height:1050,deviceScaleFactor:1,mobile:false});await pause(80);assert(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'),'overflow '+width);await shot('operations-'+width);}
+ await evaluate('window.failNextOperation=true');await click('#execute-command');
+ await wait('document.querySelector("#operation-result-state").textContent==="Request failed"','collection failure stays visible in output');
+ assert(await evaluate('document.querySelector("#command-result").textContent.includes("request transport failed")'));
+ assert(await evaluate(`document.querySelector('[data-operation-step-state="0"]').textContent.includes("Review output")`));
+ assert.equal(await evaluate('operationCalls.length'),4,'only explicit fixture requests');
+ console.log(JSON.stringify({passed:true,scenarios:3,steps:counts.steps,commands:counts.commands,fixture_commands:3,fixture_submission_failures:1,cluster_operations:0,model_calls:0,independent_expansion:true,viewports:[1440,900,390],min_contrast:Math.min(...contrast.map(r=>r.ratio))}));
+ assert.equal(errors.length,0,JSON.stringify(errors));
+}finally{ws?.close();chrome.kill();await chromeClosed;await rm(profile,{recursive:true,force:true});}

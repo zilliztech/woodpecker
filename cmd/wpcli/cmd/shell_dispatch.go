@@ -125,6 +125,15 @@ func (s *shellSession) applyPrerequisites(cmd *cobra.Command, args *[]string) er
 			}
 		}
 	}
+	if metadata {
+		defaults := []string{}
+		for name, value := range map[string]string{"etcd": strings.Join(s.tenant.etcd.Endpoints, ","), "meta-prefix": s.tenant.etcd.MetaPrefix} {
+			if cmd.Flags().Lookup(name) != nil && !cmd.Flags().Changed(name) {
+				defaults = append(defaults, "--"+name+"="+value)
+			}
+		}
+		*args = append(defaults, (*args)...)
+	}
 	rootFlag := "root-path"
 	if cmd.Flags().Lookup(rootFlag) == nil {
 		rootFlag = "root"
@@ -167,9 +176,6 @@ func (s *shellSession) dispatch(ctx context.Context, leaf *cobra.Command, args [
 	}
 	defer os.RemoveAll(dir)
 	c := s.service
-	if s.tenant != nil {
-		c.Etcd = s.tenant.etcd
-	}
 	f := config.File{CurrentContext: s.contextName, Contexts: map[string]config.Context{s.contextName: c}, Defaults: s.file.Defaults}
 	data, err := yaml.Marshal(f)
 	if err != nil {
@@ -179,6 +185,19 @@ func (s *shellSession) dispatch(ctx context.Context, leaf *cobra.Command, args [
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
+	if s.tenant != nil && leaf.Flags().Lookup("client-parameters-file") != nil {
+		//nolint:gosec // G117: credentials go only to a private 0600 temporary parameter file, removed after execution.
+		params, err := yaml.Marshal(s.tenant.etcd)
+		if err != nil {
+			return err
+		}
+		paramsPath := filepath.Join(dir, "client-parameters.yaml")
+		if err = os.WriteFile(paramsPath, params, 0o600); err != nil {
+			return err
+		}
+		args = append([]string{"--client-parameters-file=" + paramsPath}, args...)
+	}
+
 	// ctx is the existing persistent configuration interface. Keep its original
 	// destination distinct from the session-local use command.
 	for c := leaf; c != nil; c = c.Parent() {

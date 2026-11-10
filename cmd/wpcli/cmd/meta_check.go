@@ -179,6 +179,8 @@ func newMetaCheckCommand() *cobra.Command {
 			return err
 		}
 		if len(issues) > 0 {
+			// A valid query with constraint findings is still a successful use of these inputs.
+			rememberCommandInputs(cmd, args)
 			return wperrors.NewRedFindingError(fmt.Sprintf("%d metadata constraint violations", len(issues)))
 		}
 		return nil

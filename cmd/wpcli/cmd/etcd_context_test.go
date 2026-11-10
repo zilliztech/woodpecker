@@ -15,6 +15,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestStandaloneMetadataDoesNotResolveOrInheritWPContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cli.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("current-context: missing\ncontexts: {}\n"), 0o600))
+	t.Setenv("WOODPECKER_CLI_CONFIG", path)
+	old := Globals
+	t.Cleanup(func() { Globals = old })
+	Globals = GlobalFlags{Context: "also-missing"}
+	conn, err := resolveMetaEtcd(&metaEtcdFlags{standalone: true, etcdEndpoints: "http://client-etcd:2379", metaPrefix: "client/woodpecker"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"http://client-etcd:2379"}, conn.endpoints)
+	require.Empty(t, conn.username)
+	require.Empty(t, conn.password)
+	_, err = resolveMetaEtcd(&metaEtcdFlags{standalone: true, etcdEndpoints: "http://client-etcd:2379"})
+	require.ErrorContains(t, err, "--meta-prefix")
+}
+
 func TestMetaEtcdContextResolution(t *testing.T) {
 	original := Globals
 	t.Cleanup(func() { Globals = original })
@@ -35,13 +51,9 @@ contexts:
 	f := metaEtcdFlags{}
 	cmd := &cobra.Command{}
 	f.register(cmd)
-	conn, err := resolveMetaEtcd(&f)
-	require.NoError(t, err)
-	require.Equal(t, []string{"127.0.0.1:32379"}, conn.endpoints)
-	require.True(t, conn.useSSL)
-	require.Equal(t, "/local/ca.pem", conn.tlsCACert)
-	require.Equal(t, "1.3", conn.tlsMinVer)
-	require.Equal(t, "context-user", conn.username)
+	_, err := resolveMetaEtcd(&f)
+	require.ErrorContains(t, err, "--etcd")
+	var conn *metaEtcdConn
 	require.NoError(t, cmd.Flags().Parse([]string{"--etcd", " localhost:1234 , localhost:5678 ", "--etcd-username", "flag-user", "--etcd-password=", "--etcd-cacert", "/flag/ca.pem", "--meta-prefix", "override/woodpecker"}))
 	conn, err = resolveMetaEtcd(&f)
 	require.NoError(t, err)
@@ -54,7 +66,8 @@ contexts:
 	require.Equal(t, expected.kb, conn.kb)
 	Globals.Context = "missing"
 	_, err = resolveMetaEtcd(&f)
-	require.ErrorContains(t, err, "context")
+	require.NoError(t, err)
+	require.Empty(t, conn.password)
 }
 
 func TestEtcdTLSConfig_ServerAuthentication(t *testing.T) {
@@ -118,9 +131,9 @@ contexts:
 	root.SetOut(&out)
 	root.SetArgs([]string{"ctx", "view"})
 	require.NoError(t, root.Execute())
-	require.Contains(t, out.String(), "127.0.0.1:32379")
-	require.Contains(t, out.String(), "lab/woodpecker")
-	require.Contains(t, out.String(), "context-user")
+	require.NotContains(t, out.String(), "127.0.0.1:32379")
+	require.NotContains(t, out.String(), "lab/woodpecker")
+	require.NotContains(t, out.String(), "context-user")
 	require.NotContains(t, out.String(), "do-not-print-this-test-password")
 }
 
@@ -142,6 +155,7 @@ contexts:
 	f := metaEtcdFlags{}
 	command := &cobra.Command{}
 	f.register(command)
+	require.NoError(t, command.Flags().Parse([]string{"--etcd", "http://explicit:2379", "--meta-prefix", "explicit/wp"}))
 	conn, err := resolveMetaEtcd(&f)
 	require.NoError(t, err)
 	require.False(t, conn.useSSL)
@@ -150,4 +164,45 @@ contexts:
 	require.NoError(t, err)
 	require.True(t, conn.useSSL)
 	require.Equal(t, "/flag/ca.pem", conn.tlsCACert)
+}
+
+func TestStandaloneRawEtcdNeedsEndpointsButNoMetadataPrefix(t *testing.T) {
+	old := Globals
+	t.Cleanup(func() { Globals = old })
+	Globals = GlobalFlags{Context: "missing"}
+	t.Setenv("WOODPECKER_CLI_CONFIG", filepath.Join(t.TempDir(), "absent.yaml"))
+	conn, err := resolveEtcd(&metaEtcdFlags{standalone: true, etcdEndpoints: "http://raw:2379"}, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"http://raw:2379"}, conn.endpoints)
+	require.Empty(t, conn.password)
+	_, err = resolveEtcd(&metaEtcdFlags{standalone: true}, false)
+	require.ErrorContains(t, err, "--etcd")
+	_, err = resolveEtcd(&metaEtcdFlags{standalone: true, etcdEndpoints: "http://raw:2379"}, true)
+	require.ErrorContains(t, err, "--meta-prefix")
+}
+
+func TestNamedClientMetaIsIndependentOfServerContext(t *testing.T) {
+	old := Globals
+	t.Cleanup(func() { Globals = old })
+	Globals = GlobalFlags{Context: "unrelated-server"}
+	path := filepath.Join(t.TempDir(), "cli.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`current-context: server-b
+contexts:
+  server-b:
+    endpoint: http://server-b:9091
+    etcd: {endpoints: [http://server-etcd:2379], username: server-user, password: server-secret}
+client_metas:
+  tenant-a:
+    etcd: {endpoints: [http://tenant-etcd:2379], meta_prefix: tenant-a/wp, username: tenant-user, password: tenant-secret}
+    bucket: tenant-bucket
+    root_path: tenant-root
+`), 0o600))
+	t.Setenv("WOODPECKER_CLI_CONFIG", path)
+	_, err := resolveEtcd(&metaEtcdFlags{clientMeta: "tenant-a"}, true)
+	require.ErrorContains(t, err, "--client-meta profiles are no longer used")
+	conn, err := resolveEtcd(&metaEtcdFlags{etcdEndpoints: "http://form-etcd:2379", metaPrefix: "form/wp"}, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"http://form-etcd:2379"}, conn.endpoints)
+	require.Empty(t, conn.username)
+	require.Empty(t, conn.password)
 }

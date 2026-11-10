@@ -1,14 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
-	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"gopkg.in/yaml.v3"
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
@@ -55,11 +55,13 @@ pull reconcile; nodes that never held the segment only lose a read optimization.
 
 // metaEtcdFlags are shared connection overrides for metadata and raw etcd commands.
 type metaEtcdFlags struct {
-	command       *cobra.Command
-	etcdEndpoints string // comma-separated override; with --meta-prefix, skips /admin/config discovery
-	metaPrefix    string // full meta prefix override (e.g. "woodpecker" or "by-dev/woodpecker")
-	// TLS/auth overrides. Defaults are discovered from a node's /admin/config (its cert PATHS
-	// are server-side paths — valid when wp runs in-pod; override from a remote machine).
+	parametersFile string
+	clientMeta     string
+	command        *cobra.Command
+	etcdEndpoints  string // comma-separated override; with --meta-prefix, skips /admin/config discovery
+	metaPrefix     string // full meta prefix override (e.g. "woodpecker" or "by-dev/woodpecker")
+	standalone     bool   // explicit authority, independent of WP context/discovery
+	// TLS/auth values are explicit local settings or come from the private parameter file.
 	etcdCert          string
 	etcdKey           string
 	etcdCACert        string
@@ -70,44 +72,22 @@ type metaEtcdFlags struct {
 
 func (f *metaEtcdFlags) register(cmd *cobra.Command) {
 	f.command = cmd
-	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery")
-	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "Full metadata prefix; overrides context etcd.meta_prefix and admin discovery")
-	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "Local etcd TLS client cert file; overrides context and discovery")
-	cmd.Flags().StringVar(&f.etcdKey, "etcd-key", "", "Local etcd TLS client key file; overrides context and discovery")
-	cmd.Flags().StringVar(&f.etcdCACert, "etcd-cacert", "", "Local etcd TLS CA cert file; overrides context and discovery")
-	cmd.Flags().StringVar(&f.etcdTLSMinVersion, "etcd-tls-min-version", "", "Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery")
-	cmd.Flags().StringVar(&f.etcdUsername, "etcd-username", "", "Etcd auth username; overrides context and discovery")
-	cmd.Flags().StringVar(&f.etcdPassword, "etcd-password", "", "Etcd auth password; overrides context and discovery")
-}
-
-// adminConfigSnapshot is the minimal shape of GET /admin/config we need. The server
-// encodes the Go config struct without json tags, so field names match Go's.
-type adminConfigSnapshot struct {
-	Etcd struct {
-		Endpoints []string
-		RootPath  string
-		Ssl       struct {
-			Enabled       bool
-			TlsCert       string
-			TlsKey        string
-			TlsCACert     string
-			TlsMinVersion string
-		}
-		Auth struct {
-			Enabled  bool
-			UserName string
-			Password string
-		}
-	}
-	Woodpecker struct {
-		Meta struct {
-			Prefix string
-		}
-	}
+	cmd.Flags().StringVar(&f.parametersFile, "client-parameters-file", "", "Private temporary etcd parameters file; not cli.yaml or a candidate profile")
+	cmd.Flags().StringVar(&f.clientMeta, "client-meta", "", "Deprecated; pass explicit --etcd and --meta-prefix")
+	_ = cmd.Flags().MarkHidden("client-meta")
+	cmd.Flags().BoolVar(&f.standalone, "standalone", false, "Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery")
+	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "Required client etcd endpoints (comma-separated); independent of server context")
+	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "Required full client metadata prefix")
+	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "Local etcd TLS client cert file; explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdKey, "etcd-key", "", "Local etcd TLS client key file; explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdCACert, "etcd-cacert", "", "Local etcd TLS CA cert file; explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdTLSMinVersion, "etcd-tls-min-version", "", "Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdUsername, "etcd-username", "", "Etcd auth username; explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdPassword, "etcd-password", "", "Etcd auth password; explicit per-run setting")
 }
 
 // metaEtcdConn is the fully resolved etcd connection spec for the marking commands:
-// endpoints + key prefix + the TLS/auth material the cluster's own nodes use.
+// endpoints + key prefix + explicit host-local TLS/auth material.
 type metaEtcdConn struct {
 	endpoints                             []string
 	kb                                    *meta.KeyBuilder
@@ -121,92 +101,50 @@ func (f *metaEtcdFlags) isSet(name, value string) bool {
 	return value != "" || (f.command != nil && f.command.Flags().Changed(name))
 }
 
-// resolveMetaEtcdContext loads metadata settings without requiring an admin endpoint.
-func resolveMetaEtcdContext() (config.EtcdConfig, error) {
-	for _, p := range config.DefaultConfigPaths() {
-		file, err := config.Load(p)
-		if err != nil {
-			continue
-		}
-		ctx, err := file.ResolveContext(Globals.Context)
-		if err != nil {
-			return config.EtcdConfig{}, wperrors.NewConfigError(err.Error())
-		}
-		return ctx.Etcd, nil
-	}
-	return config.EtcdConfig{}, nil
-}
-
-// resolveMetaEtcd resolves flags over context settings. Missing endpoints/prefix are discovered
-// from a reachable node's /admin/config, whose TLS/auth material is the lowest-priority fallback.
+// resolveMetaEtcd requires an explicit client metadata authority.
 func resolveMetaEtcd(f *metaEtcdFlags) (*metaEtcdConn, error) {
 	return resolveEtcd(f, true)
 }
 
 func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
-	ctx, err := resolveMetaEtcdContext()
-	if err != nil {
-		return nil, err
+	// Client metadata is an explicit per-request authority. A server context
+	// cannot identify the tenant which owns this log.
+	if f.clientMeta != "" {
+		return nil, wperrors.NewConfigError("--client-meta profiles are no longer used; pass --etcd and --meta-prefix explicitly")
 	}
-	conn := &metaEtcdConn{}
-	prefix := ctx.MetaPrefix
-	conn.endpoints = append([]string(nil), ctx.Endpoints...)
-	if f.isSet("etcd", f.etcdEndpoints) {
-		conn.endpoints = strings.Split(f.etcdEndpoints, ",")
-	}
-	if f.isSet("meta-prefix", f.metaPrefix) {
-		prefix = f.metaPrefix
-	}
-
-	if discover && (len(conn.endpoints) == 0 || prefix == "") {
-		res, err := resolveAndDiscover()
+	ctx := config.EtcdConfig{}
+	if f.parametersFile != "" {
+		info, err := os.Stat(f.parametersFile)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<10 {
+			return nil, wperrors.NewConfigError("invalid client parameters file")
+		}
+		body, err := os.ReadFile(f.parametersFile)
 		if err != nil {
 			return nil, err
 		}
-		var snap *adminConfigSnapshot
-		var lastErr error
-		for _, m := range res.Members.Members {
-			body, fetchErr := fetchAdminJSON(res.Client.PeerAdminURL(m), "/admin/config")
-			if fetchErr != nil {
-				lastErr = fetchErr
-				continue
-			}
-			s := &adminConfigSnapshot{}
-			if jsonErr := json.Unmarshal(body, s); jsonErr != nil {
-				lastErr = jsonErr
-				continue
-			}
-			snap = s
-			break
-		}
-		if snap == nil {
-			return nil, wperrors.NewNetworkError(fmt.Sprintf("could not fetch /admin/config from any node: %v", lastErr))
-		}
-		if len(conn.endpoints) == 0 {
-			if err := rejectUnusableDiscoveredEtcd(snap.Etcd.Endpoints); err != nil {
-				return nil, err
-			}
-			conn.endpoints = snap.Etcd.Endpoints
-		}
-		if prefix == "" {
-			prefix = path.Join(snap.Etcd.RootPath, snap.Woodpecker.Meta.Prefix)
-		}
-		// Adopt the cluster's own TLS/auth settings (the admin config endpoint is unredacted by
-		// design; the admin plane is an internal network per the wpcli security model).
-		if snap.Etcd.Ssl.Enabled {
-			conn.useSSL = true
-			conn.tlsCert = snap.Etcd.Ssl.TlsCert
-			conn.tlsKey = snap.Etcd.Ssl.TlsKey
-			conn.tlsCACert = snap.Etcd.Ssl.TlsCACert
-			conn.tlsMinVer = snap.Etcd.Ssl.TlsMinVersion
-		}
-		if snap.Etcd.Auth.Enabled {
-			conn.username = snap.Etcd.Auth.UserName
-			conn.password = snap.Etcd.Auth.Password
+		decoder := yaml.NewDecoder(bytes.NewReader(body))
+		decoder.KnownFields(true)
+		if decoder.Decode(&ctx) != nil {
+			return nil, wperrors.NewConfigError("invalid client parameters file")
 		}
 	}
+	prefix := ctx.MetaPrefix
+	if f.isSet("meta-prefix", f.metaPrefix) {
+		prefix = f.metaPrefix
+	}
+	endpoints := ctx.Endpoints
+	if f.isSet("etcd", f.etcdEndpoints) {
+		endpoints = strings.Split(f.etcdEndpoints, ",")
+	}
+	if len(endpoints) == 0 {
+		return nil, wperrors.NewConfigError("client metadata requires --etcd; server contexts do not select client metadata")
+	}
+	if discover && strings.TrimSpace(prefix) == "" {
+		return nil, wperrors.NewConfigError("client metadata requires --meta-prefix")
+	}
+	conn := &metaEtcdConn{endpoints: endpoints}
 
-	// Context settings override discovery; flags override context, including explicitly empty flags.
+	// Explicit flags override the private parameter file, including empty flags.
 	if ctx.TLSEnabled != nil {
 		conn.useSSL = *ctx.TLSEnabled
 	}
@@ -224,7 +162,7 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 	apply(&conn.tlsMinVer, ctx.TLSMinVersion, f.etcdTLSMinVersion, "etcd-tls-min-version")
 	apply(&conn.username, ctx.Username, f.etcdUsername, "etcd-username")
 	apply(&conn.password, ctx.Password, f.etcdPassword, "etcd-password")
-	// An explicit context TLS switch overrides discovered/context certificate paths.
+	// The private parameter file's TLS switch controls its certificate settings.
 	// Explicit certificate flags still take precedence and enable TLS.
 	inferredTLS := conn.tlsCert != "" || conn.tlsKey != "" || conn.tlsCACert != ""
 	flagTLS := f.etcdCert != "" || f.etcdKey != "" || f.etcdCACert != ""
@@ -239,7 +177,7 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 	}
 
 	if len(conn.endpoints) == 0 {
-		return nil, wperrors.NewUsageError("no etcd endpoints (set context etcd.endpoints or pass --etcd)")
+		return nil, wperrors.NewUsageError("no etcd endpoints; pass --etcd")
 	}
 	conn.kb = meta.NewKeyBuilder(prefix)
 	return conn, nil

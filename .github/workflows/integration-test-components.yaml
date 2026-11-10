@@ -125,7 +125,6 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-      - run: make wpdiag
       - name: Trace request and lifecycle contracts
         run: |
           go test -race ./tests/integration/tracing/cmd/requests

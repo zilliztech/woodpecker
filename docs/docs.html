@@ -595,6 +595,7 @@
 <a class="sidebar-link" data-page="operations-cli-meta" href="#operations-cli-meta" onclick="showPage('operations-cli-meta',this)">Metadata inspection &amp; repair</a>
 <a class="sidebar-link" data-page="operations-cli-marking" href="#operations-cli-marking" onclick="showPage('operations-cli-marking',this)">Compacted-mark distribution</a>
 <a class="sidebar-link" data-page="operations-cli-etcd" href="#operations-cli-etcd" onclick="showPage('operations-cli-etcd',this)">Raw etcd exploration</a>
+<a class="sidebar-link" data-page="operations-cli-telemetry" href="#operations-cli-telemetry" onclick="showPage('operations-cli-telemetry',this)">Historical WAL diagnosis</a>
 </div>
         <a class="sidebar-link" data-page="operations-scenarios" href="#operations-scenarios" onclick="showPage('operations-scenarios',this)">Troubleshooting</a>
 <!-- INCIDENT SCENARIO NAV --><div class="sidebar-subitems" aria-label="Troubleshooting scenarios"><a class="sidebar-link" data-page="operations-scenarios-read" href="#operations-scenarios-read" onclick="showPage('operations-scenarios-read',this)">Read Stalls</a>
@@ -625,12 +626,12 @@
 
 <!-- BEGIN OPERATIONS CONTENT -->
 <div class="doc-page ops-page" id="page-operations-cli">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-shell">Interactive shell</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-diagnosis">Native diagnosis</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & retention</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-meta">Metadata inspection & repair</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/repair-format">Patch format</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli/overview">Overview</a><a href="#operations-cli/command-lookup">Quick lookup</a><a href="#operations-cli/quick-local">CLI setup</a><a href="#operations-cli/quick-shell">Interactive shell</a><a href="#operations-cli/quick-env">Process environment</a><a href="#operations-cli/quick-cluster">Cluster & node status</a><a href="#operations-cli/quick-k8s">Kubernetes helpers</a><a href="#operations-cli/quick-config">Server configuration</a><a href="#operations-cli/quick-logging">Runtime log levels</a><a href="#operations-cli/quick-profile">Profiles & trace</a><a href="#operations-cli/quick-ops">In-flight operations</a><a href="#operations-cli/quick-metrics">Metrics & scenarios</a><a href="#operations-cli/quick-diagnosis">Native diagnosis</a><a href="#operations-cli/quick-logstore">Writer runtime</a><a href="#operations-cli/quick-instance">Local data inventory</a><a href="#operations-cli/quick-log">Log progress & retention</a><a href="#operations-cli/quick-segment">Segment diagnosis</a><a href="#operations-cli/quick-meta">Metadata inspection & repair</a><a href="#operations-cli/quick-marking">Compacted-mark distribution</a><a href="#operations-cli/quick-etcd">Raw etcd exploration</a><a href="#operations-cli/quick-telemetry">Historical WAL diagnosis</a><a href="#operations-cli/setup">Connection & naming</a><a href="#operations-cli/shared">Shared parameters</a><a href="#operations-cli/repair-format">Patch format</a><a href="#operations-cli/metrics-limits">Metrics limits</a><a href="#operations-cli/exit-codes">Exit codes</a></nav></details></aside>
 <section id="ops-cli-overview">
 <h1>CLI Handbook · Overview</h1>
 <p class="intro">Find an operation by its command group, understand its parameters, and interpret its output.</p>
 <p>
-<span class="badge">21 top-level commands/groups · 73 executable operations</span>
+<span class="badge">24 top-level commands/groups · 81 executable operations</span>
 </p>
 <p>
 <a href="#operations-cli-local/start">New to wp? Start with installation, connection setup and your first commands →</a>
@@ -640,7 +641,7 @@
 <nav class="ops-topic-grid" aria-label="CLI topics">
 <a href="#operations-cli-local">
 <strong>CLI setup</strong>
-<span>ctx / completion / version</span>
+<span>ctx / completion / version / webui / report</span>
 </a>
 <a href="#operations-cli-shell">
 <strong>Interactive shell</strong>
@@ -709,6 +710,10 @@
 <a href="#operations-cli-etcd">
 <strong>Raw etcd exploration</strong>
 <span>etcd</span>
+</a>
+<a href="#operations-cli-telemetry">
+<strong>Historical WAL diagnosis</strong>
+<span>diag</span>
 </a>
 </nav>
 </section>
@@ -802,6 +807,37 @@
 <td>No required command-specific arguments; uses selected context/defaults.</td>
 </tr>
 <tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp report</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-local/report-analyze">
+<code>wp report analyze</code>
+</a>
+</td>
+<td>Explicitly ask the configured Agent to explain supplied findings</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-local/report-export">
+<code>wp report export</code>
+</a>
+</td>
+<td>Copy original JSON or derive a compact findings packet</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-local/report-inspect">
+<code>wp report inspect</code>
+</a>
+</td>
+<td>Show recorded evidence detail without querying sources</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-group-heading">
 <th colspan="3">Command: <code>wp version</code>
 </th>
 </tr>
@@ -812,6 +848,19 @@
 </a>
 </td>
 <td>Show wp CLI version and build info</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-group-heading">
+<th colspan="3">Command: <code>wp webui</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-local/webui">
+<code>wp webui</code>
+</a>
+</td>
+<td>Open a local operations and diagnosis workspace using cli.yaml</td>
 <td>No required command-specific arguments; uses selected context/defaults.</td>
 </tr>
 </tbody>
@@ -1793,6 +1842,62 @@
 </tbody>
 </table></div>
 </section>
+<section class="ops-quick-section" id="ops-cli-quick-telemetry">
+<h2>Historical WAL diagnosis · quick lookup</h2>
+<div class="ops-table-wrap"><table class="doc-table ops-quick-table">
+<thead>
+<tr>
+<th>Operation</th>
+<th>Purpose</th>
+<th>Required / important parameters</th>
+</tr>
+</thead>
+<tbody>
+<tr class="ops-group-heading">
+<th colspan="3">Command group: <code>wp diag</code>
+</th>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-telemetry/diag-catalog">
+<code>wp diag catalog</code>
+</a>
+</td>
+<td>List implemented checks, formulas, references and scenario manifests; no source/model queries</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-telemetry/diag-metrics-check">
+<code>wp diag metrics check</code>
+</a>
+</td>
+<td>Run one check; no implicit execution of other checks</td>
+<td>
+<code>&lt;name&gt;</code>: Local CLI context name</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-telemetry/diag-scenario">
+<code>wp diag scenario</code>
+</a>
+</td>
+<td>Run related Metrics/Trace checks and summarize their unchanged results by WAL step</td>
+<td>No required command-specific arguments; uses selected context/defaults.</td>
+</tr>
+<tr class="ops-quick-row">
+<td>
+<a href="#operations-cli-telemetry/diag-trace-check">
+<code>wp diag trace check</code>
+</a>
+</td>
+<td>Run one check; no implicit execution of other checks</td>
+<td>
+<code>&lt;name&gt;</code>: Local CLI context name</td>
+</tr>
+</tbody>
+</table></div>
+</section>
 <section id="ops-cli-setup">
 <h2>Connection and naming</h2>
 <p>Follow <a href="#operations-cli-local/start">CLI setup</a> for a Helm-installed Milvus/Woodpecker deployment, including access from outside Kubernetes.</p>
@@ -1922,7 +2027,7 @@
 <p>Output formats vary by operation. Profile downloads binary data, and some diagnostic operations return findings with a nonzero exit code. Read the specific command's help and interpretation rather than treating every successful request as a health check.</p>
 </section>
 <section id="ops-cli-metrics-limits">
-<p>The source-build <a href="#operations-cli-diagnosis">wp diagnose</a> entry point provides versioned native WP findings with explicit snapshot/live-window coverage, counter reset checks, registry limits and conflicting same-log progress. It has two implemented stall rules; exit 0 means evaluation completed, including inconclusive outcomes. Use its JSON evidence and original context/node mappings for follow-up. Historical metrics, trace/log backends and Milvus E2E diagnosis belong to the separate diagnostic tool.</p>
+<p>The source-build <a href="#operations-cli-diagnosis">wp diagnose</a> entry point provides versioned native WP findings with explicit snapshot/live-window coverage, counter reset checks, registry limits and conflicting same-log progress. It has two implemented stall rules; exit 0 means evaluation completed, including inconclusive outcomes. Use its JSON evidence and original context/node mappings for follow-up. Use <code>wp diag</code> for retained Prometheus/Jaeger checks and <code>wp webui</code> for the local operations workspace. These inspect Woodpecker itself; Milvus-owned and Loki diagnosis are outside the tool.</p>
 <h2>Metrics scenario limits</h2>
 <p>stuck-read and stuck-write require persistent matching operations as well as zero successful completion progress during the window. An idle cluster alone is not a stall. Latency rules currently use window-average histogram latency rather than the advertised p99/baseline model. Several scenario names have only partial evaluators; use counters, operation IDs, reader positions and replica evidence together. A scenario reporting no findings is not proof that the whole cluster is healthy.</p>
 </section>
@@ -1963,7 +2068,7 @@
 
 </div>
 <div class="doc-page ops-page" id="page-operations-cli-local">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-local/start">0. Install wp</a><a href="#operations-cli-local/external-access">1. Connect to the Helm deployment</a><a href="#operations-cli-local/cli-yaml">2. Save the connection in cli.yaml</a><a href="#operations-cli-local/shell-functions">3. Run without cli.yaml, or add shortcuts</a><a href="#operations-cli-local/etcd-connection">4. Configure etcd for metadata queries</a><a href="#operations-cli-local/first-run">5. Check the connection and interpret the result</a><a href="#operations-cli-local/interactive-session">Interactive shell</a><a href="#operations-cli-local/completion-bash">wp completion bash</a><a href="#operations-cli-local/completion-fish">wp completion fish</a><a href="#operations-cli-local/completion-powershell">wp completion powershell</a><a href="#operations-cli-local/completion-zsh">wp completion zsh</a><a href="#operations-cli-local/ctx-list">wp ctx list</a><a href="#operations-cli-local/ctx-use">wp ctx use</a><a href="#operations-cli-local/ctx-view">wp ctx view</a><a href="#operations-cli-local/version">wp version</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-local/start">0. Install wp</a><a href="#operations-cli-local/external-access">1. Connect to the Helm deployment</a><a href="#operations-cli-local/cli-yaml">2. Save the connection in cli.yaml</a><a href="#operations-cli-local/shell-functions">3. Run without cli.yaml, or add shortcuts</a><a href="#operations-cli-local/etcd-connection">4. Configure etcd for metadata queries</a><a href="#operations-cli-local/first-run">5. Check the connection and interpret the result</a><a href="#operations-cli-local/interactive-session">Interactive shell</a><a href="#operations-cli-local/completion-bash">wp completion bash</a><a href="#operations-cli-local/completion-fish">wp completion fish</a><a href="#operations-cli-local/completion-powershell">wp completion powershell</a><a href="#operations-cli-local/completion-zsh">wp completion zsh</a><a href="#operations-cli-local/ctx-list">wp ctx list</a><a href="#operations-cli-local/ctx-use">wp ctx use</a><a href="#operations-cli-local/ctx-view">wp ctx view</a><a href="#operations-cli-local/report-analyze">wp report analyze</a><a href="#operations-cli-local/report-export">wp report export</a><a href="#operations-cli-local/report-inspect">wp report inspect</a><a href="#operations-cli-local/version">wp version</a><a href="#operations-cli-local/webui">wp webui</a></nav></details></aside>
 <p class="small"><a href="#operations-cli">CLI Handbook overview</a> / CLI setup</p><h1>CLI setup</h1><p class="page-desc">Configure wp and run your first commands from outside Kubernetes.</p><section id="ops-cli-local-topic-local">
 
 <h2 id="ops-cli-local-start">0. Install wp</h2>
@@ -2018,13 +2123,10 @@ contexts:
       namespace: milvus
       kubeconfig: /path/to/your/kubeconfig
     # v0.1.47 and later; v0.1.46 uses explicit etcd flags instead.
-    etcd:
-      endpoints:
-        - 127.0.0.1:32379
-      meta_prefix: milvus-prod/woodpecker</code></pre></div></div>
 <p>
 <code>endpoint</code> is the admin seed. <code>node_admin_urls</code> maps discovered node IDs or advertised service addresses to reachable admin origins. <code>current-context</code> selects milvus-prod when --context is omitted:</p>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp node list
+<pre>
+<code>wp node list
 wp --context milvus-prod node list</code></pre></div></div>
 <p>To keep cli.yaml in another directory, select it explicitly:</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>export WOODPECKER_CLI_CONFIG=/path/to/your/cli.yaml
@@ -2059,10 +2161,7 @@ w cluster health</code></pre></div></div>
 <p>source defines the functions in the current shell. w forwards arguments to wp and selects milvus-prod for each invocation; it does not change current-context in the file.</p>
 </details>
 <h2 id="ops-cli-local-etcd-connection">4. Configure etcd for metadata queries</h2>
-<p>
-<strong>Released v0.1.47 supports the context's etcd block shown above.</strong> Set reachable endpoints and the complete metadata prefix, then run <code>wp --context milvus-prod log readers my-channel</code> without repeating those flags. Explicit etcd flags override the matching context fields. Metadata commands can discover missing endpoints/prefix through a reachable node's admin config; discovered in-cluster addresses or certificate paths may not work on a workstation, so set local equivalents.</p>
-<p>
-<strong>Released v0.1.46 does not read etcd connection settings from cli.yaml.</strong> See the <a href="https://github.com/zilliztech/woodpecker/blob/v0.1.46/cmd/wpcli/config/cli_config.go">released config schema</a>. Use the explicit flags below on that release, or to override a context for one invocation:</p>
+<p>Current source builds keep client metadata authority outside <code>cli.yaml</code>. Supply reachable etcd endpoints and the full client metadata prefix explicitly, or use a private <code>--client-parameters-file</code>. Older context-etcd/client-profile fields are not selected; there is no Admin-config discovery fallback.</p>
 <div class="ops-table-wrap"><table class="doc-table ">
 <tr>
 <th>Parameters</th>
@@ -2104,10 +2203,10 @@ w cluster health</code></pre></div></div>
 </tr>
 <tr>
 <td>meta; log readers/scan/skip-range/truncate; segment probe/inspect; logstore lac/fence-quorum; marking list/confirm</td>
-<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through context, flags or admin discovery. meta and truncate need no admin connection when both etcd settings are supplied.</td>
+<td>Yes: they look up log/segment/quorum or operational metadata. Supply endpoint and complete prefix through explicit flags or a private client parameter file. meta and truncate need no admin connection when both etcd settings are supplied.</td>
 </tr>
 <tr>
-<td>etcd list/get/cat (v0.1.47 and later)</td>
+<td>etcd list/get/cat</td>
 <td>Etcd endpoints and any required TLS/auth settings only. No admin discovery or metadata prefix: keys/prefixes are literal. See <a href="#operations-cli-etcd">Raw etcd exploration</a>.</td>
 </tr>
 <tr>
@@ -2127,8 +2226,10 @@ w cluster health</code></pre></div></div>
   --etcd-cacert /path/to/ca.crt \
   --etcd-cert /path/to/client.crt --etcd-key /path/to/client.key \
   --etcd-tls-min-version 1.2</code></pre></div></div>
-<p>Certificate paths must exist on the workstation; paths returned by a server may be in-container paths. v0.1.47 also supports these optional context fields under <code>etcd</code>:</p>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>username: operator
+<p>Certificate paths must exist on the workstation. An explicitly selected private client parameter file can contain these fields, independently of server contexts:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>endpoints: [http://127.0.0.1:32379]
+meta_prefix: tenant/woodpecker
+username: operator
 password: YOUR_PASSWORD
 tls_enabled: true
 cacert: /path/to/ca.crt
@@ -2136,7 +2237,7 @@ cacert: /path/to/ca.crt
 cert: /path/to/client.crt
 key: /path/to/client.key
 tls_min_version: "1.2"</code></pre></div></div>
-<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit certificate flags enable TLS even if the context disables it. <code>ctx view</code> shows configured etcd endpoints, prefix, TLS mode and username when endpoints are configured; it does not print the password or test the connection.</p>
+<p>Use a CA alone for server-authenticated TLS, or <code>tls_enabled: true</code> with system trust roots. Supplying cert/key enables mutual TLS; they must be supplied together. The current source default minimum TLS version is 1.2. Explicit flags override the private parameter file. <code>ctx view</code> shows server connection settings; client metadata parameters are supplied separately.</p>
 </details>
 <h2 id="ops-cli-local-first-run">5. Check the connection and interpret the result</h2>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp ctx list
@@ -2157,7 +2258,7 @@ milvus-woodpecker-2    active  OK
 Cluster Health: YELLOW
   active: 3  decommissioning: 0  unreachable: 0
   - zero redundancy (active == N)</code></pre></div></div>
-<p>The star marks the saved default context; ctx view shows resolved basic admin settings and, on v0.1.47 and later, configured etcd fields. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
+<p>The star marks the saved default context; ctx view shows resolved server settings; client metadata is a separate request scope. Three OK node responses confirm all three admin origins are reachable. YELLOW with active=3 and expected-replicas=3 means no spare capacity, not a connection failure.</p>
 <p>If the seed refuses the connection, check its port-forward. If only one peer fails, check that peer's forward and mapping. If a metadata target is absent, check the actual prefix and log name. Use node IDs from node list and log/segment IDs reported by the application or log scan.</p>
 <h2 id="ops-cli-local-interactive-session">Interactive shell</h2>
 <p>For context selection, tenant connection parameters and command availability, open the dedicated <a href="#operations-cli-shell">Interactive shell handbook</a>.</p>
@@ -2470,6 +2571,100 @@ Flags:
   -h, --help   help for view</code></pre></div></div>
 </details>
 </article>
+<article class="command" data-command-anchor="report-analyze" id="ops-cli-local-report-analyze">
+<h2>wp report analyze</h2>
+<p>Explicitly ask the configured Agent to explain supplied findings</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp report analyze &lt;report.json|-&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context local report analyze diagnosis.json --config /path/to/cli.yaml</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>The explicitly configured backend-local Agent explains abnormal findings.</code></pre></div></div>
+<p>This explicitly invokes a model with supplied evidence. It cannot automatically query sources, run commands or repair the cluster.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>No Agent configuration, no findings or a model failure leaves the original report unchanged.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Explicitly ask the configured Agent to explain supplied findings
+
+Usage:
+  wp report analyze &lt;report.json|-&gt; [flags]
+
+Flags:
+  -h, --help   help for analyze</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="report-export" id="ops-cli-local-report-export">
+<h2>wp report export</h2>
+<p>Copy original JSON or derive a compact findings packet</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp report export &lt;report.json|-&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--packet</code>
+</td>
+<td>Export findings, supporting context, gaps and provenance; no model call</td>
+</tr>
+</tbody>
+</table></div>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp report export diagnosis.json --packet &gt; findings.json</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Exports a bounded findings packet with original report provenance.</code></pre></div></div>
+<p>Without --packet, copies the original report. It does not rerun checks.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Malformed or oversized reports are rejected.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Copy original JSON or derive a compact findings packet
+
+Usage:
+  wp report export &lt;report.json|-&gt; [flags]
+
+Flags:
+  -h, --help     help for export
+      --packet   Export findings, supporting context, gaps and provenance; no model call</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="report-inspect" id="ops-cli-local-report-inspect">
+<h2>wp report inspect</h2>
+<p>Show recorded evidence detail without querying sources</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp report inspect &lt;report.json|-&gt; &lt;check&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp report inspect diagnosis.json server-disk-watermark</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Shows the recorded calculation, measurements and available curves.</code></pre></div></div>
+<p>Consumes saved JSON without a source query or model call.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Detail omitted during collection cannot be reconstructed without another check.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Show recorded evidence detail without querying sources
+
+Usage:
+  wp report inspect &lt;report.json|-&gt; &lt;check&gt; [flags]
+
+Flags:
+  -h, --help   help for inspect</code></pre></div></div>
+</details>
+</article>
 <article class="command" data-command-anchor="version" id="ops-cli-local-version">
 <h2>wp version</h2>
 <p>Show wp CLI version and build info</p>
@@ -2495,6 +2690,69 @@ Usage:
 
 Flags:
   -h, --help   help for version</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="webui" id="ops-cli-local-webui">
+<h2>wp webui</h2>
+<p>Open a local operations and diagnosis workspace using cli.yaml</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp webui [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--config string</code>
+</td>
+<td>Shared cli.yaml (default: normal wp configuration discovery)</td>
+</tr>
+<tr>
+<td>
+<code>--listen string</code>
+</td>
+<td>Loopback host:port (default &quot;127.0.0.1:8794&quot;)</td>
+</tr>
+<tr>
+<td>
+<code>--metrics-rules string</code>
+</td>
+<td>Metrics rules file beside cli.yaml by default</td>
+</tr>
+<tr>
+<td>
+<code>--trace-rules string</code>
+</td>
+<td>Trace rules file beside cli.yaml by default</td>
+</tr>
+</tbody>
+</table></div>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp webui --config /path/to/cli.yaml --listen 127.0.0.1:8795</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Open the printed local URL.</code></pre></div></div>
+<p>Diagnostics finds issues; Operations confirms and handles them; Command Explorer exposes native commands. No diagnostic action automatically repairs the cluster.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>A missing or invalid cli.yaml prevents startup.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Open a local operations and diagnosis workspace using cli.yaml
+
+Usage:
+  wp webui [flags]
+
+Flags:
+      --config string          Shared cli.yaml (default: normal wp configuration discovery)
+  -h, --help                   help for webui
+      --listen string          Loopback host:port (default &quot;127.0.0.1:8794&quot;)
+      --metrics-rules string   Metrics rules file beside cli.yaml by default
+      --trace-rules string     Trace rules file beside cli.yaml by default</code></pre></div></div>
 </details>
 </article>
 </section>
@@ -4340,7 +4598,7 @@ Flags:
 </div>
 <div class="doc-page ops-page" id="page-operations-cli-diagnosis">
 <aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-diagnosis/diagnose">wp diagnose</a></nav></details></aside>
-<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Native diagnosis</p><h1>Native diagnosis</h1><p class="page-desc">Diagnose WP append/flush/disk/replica pressure, read activity, reader progress and scoped quorum visibility. Native evidence is bounded and current; external monitoring and Milvus diagnosis are separate tools.</p><section id="ops-cli-diagnosis-topic-diagnosis">
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Native diagnosis</p><h1>Native diagnosis</h1><p class="page-desc">Inspect current WP Metrics/Admin evidence through bounded snapshot or live sampling. Use wp diag for retained historical evidence.</p><section id="ops-cli-diagnosis-topic-diagnosis">
 
 <article class="command" data-command-anchor="diagnose" id="ops-cli-diagnosis-diagnose">
 <h2>wp diagnose</h2>
@@ -4360,6 +4618,12 @@ Flags:
 <code>--budget duration</code>
 </td>
 <td>Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)</td>
+</tr>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
 </tr>
 <tr>
 <td>
@@ -4459,6 +4723,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+<tr>
+<td>
 <code>--window duration</code>
 </td>
 <td>Live observation window starting now (max 5m) (default 30s)</td>
@@ -4501,7 +4771,7 @@ Focused stuck-write/stuck-read retain their original v1 contracts. Snapshot mode
 captures current evidence but cannot establish a sustained stall or buildup.
 Reader progress needs the 30s client-profile reporting cadence and an explicit
 read expectation. --window starts sampling now;
-historical Prometheus, trace and Loki queries belong to the separate tool.
+historical Prometheus, trace and Loki queries are available under wp diag.
 
 Exit 0 means evaluation completed, including inconclusive/conflicting findings;
 it is not a health assertion. --fail-on-findings returns 8 for warning/critical findings.
@@ -4512,33 +4782,35 @@ Usage:
   wp diagnose [node] [flags]
 
 Flags:
-      --budget duration               Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --fail-on-findings              Return exit 8 for warning/critical findings after rendering the report
-  -h, --help                          help for diagnose
-      --interval duration             Interval between live sampling rounds (default 1s)
-      --list                          List the implemented typed rule contracts without connecting
-      --log-name string               Explicit WP-client metadata log; requires --segment, --etcd and --meta-prefix
-      --max-nodes int                 Maximum discovered targets; select a node if exceeded (default 8)
-      --max-ops int                   Maximum ops per node per sample (1..1000) (default 100)
-      --max-readers int               Maximum reader records and lease checks per metadata sample (1..64) (default 16)
-      --max-response-bytes int        Maximum bytes per discovery/source response (default 2097152)
-      --max-samples int               Maximum sampling rounds per node (2..121) (default 31)
-      --max-series int                Maximum retained completion-counter series per sample (default 500)
-      --max-writers int               Maximum writer detail requests per node per sample (1..64; write/all) (default 16)
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --mode string                   Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)
-      --read-mode string              Expected reader use: unknown|tail|catch-up; not historical metrics retrieval (default &quot;unknown&quot;)
-      --reader string                 Select one reader by exact name; otherwise inspect up to --max-readers
-      --scenario string               Native scenario: all|write|read|stuck-write|stuck-read (default &quot;all&quot;)
-      --segment int                   Explicit metadata segment ID for replica/reader checks
-      --window duration               Live observation window starting now (max 5m) (default 30s)</code></pre></div></div>
+      --budget duration                 Whole-command wall-clock budget including discovery (max 10m) (default 1m0s)
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --fail-on-findings                Return exit 8 for warning/critical findings after rendering the report
+  -h, --help                            help for diagnose
+      --interval duration               Interval between live sampling rounds (default 1s)
+      --list                            List the implemented typed rule contracts without connecting
+      --log-name string                 Explicit WP-client metadata log; requires --segment, --etcd and --meta-prefix
+      --max-nodes int                   Maximum discovered targets; select a node if exceeded (default 8)
+      --max-ops int                     Maximum ops per node per sample (1..1000) (default 100)
+      --max-readers int                 Maximum reader records and lease checks per metadata sample (1..64) (default 16)
+      --max-response-bytes int          Maximum bytes per discovery/source response (default 2097152)
+      --max-samples int                 Maximum sampling rounds per node (2..121) (default 31)
+      --max-series int                  Maximum retained completion-counter series per sample (default 500)
+      --max-writers int                 Maximum writer detail requests per node per sample (1..64; write/all) (default 16)
+      --meta-prefix string              Required full client metadata prefix
+      --mode string                     Observation mode: live|snapshot; no historical retrieval (default &quot;live&quot;)
+      --read-mode string                Expected reader use: unknown|tail|catch-up; not historical metrics retrieval (default &quot;unknown&quot;)
+      --reader string                   Select one reader by exact name; otherwise inspect up to --max-readers
+      --scenario string                 Native scenario: all|write|read|stuck-write|stuck-read (default &quot;all&quot;)
+      --segment int                     Explicit metadata segment ID for replica/reader checks
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery
+      --window duration                 Live observation window starting now (max 5m) (default 30s)</code></pre></div></div>
 </details>
 </article>
 </section>
@@ -4729,6 +5001,12 @@ Flags:
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--nodes strings</code>
 </td>
 <td>Fence only these quorum members (default: every node in the quorum)</td>
@@ -4738,6 +5016,12 @@ Flags:
 <code>--reason string</code>
 </td>
 <td>Reason for fencing (required)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 <tr>
 <td>
@@ -4766,18 +5050,20 @@ Usage:
   wp logstore fence-quorum &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for fence-quorum
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --nodes strings                 Fence only these quorum members (default: every node in the quorum)
-      --reason string                 Reason for fencing (required)
-  -y, --yes                           Skip confirmation</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for fence-quorum
+      --meta-prefix string              Required full client metadata prefix
+      --nodes strings                   Fence only these quorum members (default: every node in the quorum)
+      --reason string                   Reason for fencing (required)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery
+  -y, --yes                             Skip confirmation</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="logstore-flush-queue" id="ops-cli-logstore-logstore-flush-queue">
@@ -4878,7 +5164,28 @@ Flags:
 <p>Show how far a segment is confirmed readable across its quorum</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp logstore lac &lt;logName&gt; &lt;segmentId&gt; [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp logstore lac my-channel 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -4897,15 +5204,17 @@ Usage:
   wp logstore lac &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for lac
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for lac
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="logstore-segment-show" id="ops-cli-logstore-logstore-segment-show">
@@ -5093,7 +5402,28 @@ Flags:
 <p>Show where each of a log&#x27;s readers has read to</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp log readers &lt;logName&gt; [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp log readers my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -5114,15 +5444,17 @@ Usage:
   wp log readers &lt;logName&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for readers
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for readers
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="log-scan" id="ops-cli-log-log-scan">
@@ -5146,6 +5478,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--from-segment int</code>
 </td>
 <td>First segment to scan</td>
@@ -5161,6 +5499,12 @@ Flags:
 <code>--root-path string</code>
 </td>
 <td>Storage instance root path; pair with --bucket</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 <tr>
 <td>
@@ -5190,20 +5534,22 @@ Usage:
   wp log scan &lt;logName&gt; [flags]
 
 Flags:
-      --bucket string                 Storage bucket; pair with --root-path to locate unloaded or empty segments
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --from-segment int              First segment to scan
-  -h, --help                          help for scan
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --mode string                   quick reads only structure and metadata; raw reads the data through the real checksums (default &quot;quick&quot;)
-      --root-path string              Storage instance root path; pair with --bucket
-      --to-segment int                Last segment to scan (default: the newest) (default -1)</code></pre></div></div>
+      --bucket string                   Storage bucket; pair with --root-path to locate unloaded or empty segments
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --from-segment int                First segment to scan
+  -h, --help                            help for scan
+      --meta-prefix string              Required full client metadata prefix
+      --mode string                     quick reads only structure and metadata; raw reads the data through the real checksums (default &quot;quick&quot;)
+      --root-path string                Storage instance root path; pair with --bucket
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery
+      --to-segment int                  Last segment to scan (default: the newest) (default -1)</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="log-skip-range-add" id="ops-cli-log-log-skip-range-add">
@@ -5221,6 +5567,12 @@ Flags:
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--force</code>
 </td>
 <td>Declare the range even though a replica can still read part of it</td>
@@ -5236,6 +5588,12 @@ Flags:
 <code>--reason string</code>
 </td>
 <td>Why these entries are being given up (required)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 <tr>
 <td>
@@ -5274,20 +5632,22 @@ Usage:
   wp log skip-range add &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --force                         Declare the range even though a replica can still read part of it
-      --from-entry int                First entry to skip (inclusive) (default -1)
-  -h, --help                          help for add
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --reason string                 Why these entries are being given up (required)
-      --to-entry int                  Last entry to skip (inclusive) (default -1)
-  -y, --yes                           Proceed without the confirmation prompt</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --force                           Declare the range even though a replica can still read part of it
+      --from-entry int                  First entry to skip (inclusive) (default -1)
+  -h, --help                            help for add
+      --meta-prefix string              Required full client metadata prefix
+      --reason string                   Why these entries are being given up (required)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery
+      --to-entry int                    Last entry to skip (inclusive) (default -1)
+  -y, --yes                             Proceed without the confirmation prompt</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="log-skip-range-list" id="ops-cli-log-log-skip-range-list">
@@ -5295,7 +5655,28 @@ Flags:
 <p>Show the declared skip ranges.</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp log skip-range list [logName] [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp log skip-range list my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -5319,15 +5700,17 @@ Usage:
   wp log skip-range list [logName] [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for list
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for list
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="log-skip-range-remove" id="ops-cli-log-log-skip-range-remove">
@@ -5345,6 +5728,12 @@ Flags:
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--from-entry int</code>
 </td>
 <td>First entry of the range to withdraw (inclusive) (default -1)</td>
@@ -5354,6 +5743,12 @@ Flags:
 <code>--log-id int</code>
 </td>
 <td>Withdraw by log id instead of name, for a range whose log has been deleted (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 <tr>
 <td>
@@ -5387,18 +5782,20 @@ Usage:
   wp log skip-range remove &lt;logName&gt; &lt;segmentId&gt; | --log-id N &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --from-entry int                First entry of the range to withdraw (inclusive) (default -1)
-  -h, --help                          help for remove
-      --log-id int                    Withdraw by log id instead of name, for a range whose log has been deleted (default -1)
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --to-entry int                  Last entry of the range to withdraw (inclusive) (default -1)</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --from-entry int                  First entry of the range to withdraw (inclusive) (default -1)
+  -h, --help                            help for remove
+      --log-id int                      Withdraw by log id instead of name, for a range whose log has been deleted (default -1)
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery
+      --to-entry int                    Last entry of the range to withdraw (inclusive) (default -1)</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="log-truncate" id="ops-cli-log-log-truncate">
@@ -5428,6 +5825,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--entry int</code>
 </td>
 <td>Target entry ID (required) (default -1)</td>
@@ -5449,6 +5852,12 @@ Flags:
 <code>--segment int</code>
 </td>
 <td>Target segment ID (required) (default -1)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -5491,21 +5900,23 @@ Usage:
   wp log truncate &lt;logName&gt; [flags]
 
 Flags:
-      --apply                         Advance the frontier (default: preview only)
-      --backup string                 New pre-change backup file; never overwritten
-      --entry int                     Target entry ID (required) (default -1)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --expected-revision int         Log record ModRevision from preview
-  -h, --help                          help for truncate
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --reason string                 Operator reason recorded in audit
-      --segment int                   Target segment ID (required) (default -1)</code></pre></div></div>
+      --apply                           Advance the frontier (default: preview only)
+      --backup string                   New pre-change backup file; never overwritten
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --entry int                       Target entry ID (required) (default -1)
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --expected-revision int           Log record ModRevision from preview
+  -h, --help                            help for truncate
+      --meta-prefix string              Required full client metadata prefix
+      --reason string                   Operator reason recorded in audit
+      --segment int                     Target segment ID (required) (default -1)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 </section>
@@ -5536,6 +5947,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--from-block int</code>
 </td>
 <td>First block to walk (default: the start of the segment)</td>
@@ -5551,6 +5968,12 @@ Flags:
 <code>--root-path string</code>
 </td>
 <td>Storage instance root path; pair with --bucket</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -5573,19 +5996,21 @@ Usage:
   wp segment inspect &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --bucket string                 Storage bucket; pair with --root-path (otherwise discovered on each node)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --from-block int                First block to walk (default: the start of the segment)
-  -h, --help                          help for inspect
-      --max-blocks int                Stop after this many blocks per node (default: the node&#x27;s own bound)
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --root-path string              Storage instance root path; pair with --bucket</code></pre></div></div>
+      --bucket string                   Storage bucket; pair with --root-path (otherwise discovered on each node)
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --from-block int                  First block to walk (default: the start of the segment)
+  -h, --help                            help for inspect
+      --max-blocks int                  Stop after this many blocks per node (default: the node&#x27;s own bound)
+      --meta-prefix string              Required full client metadata prefix
+      --root-path string                Storage instance root path; pair with --bucket
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="segment-probe" id="ops-cli-segment-segment-probe">
@@ -5609,6 +6034,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--from-entry int</code>
 </td>
 <td>Entry to read from (default: the start of the segment)</td>
@@ -5624,6 +6055,12 @@ Flags:
 <code>--root-path string</code>
 </td>
 <td>Storage instance root path; pair with --bucket</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -5645,19 +6082,21 @@ Usage:
   wp segment probe &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --bucket string                 Storage bucket; pair with --root-path (otherwise discovered on each node)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --from-entry int                Entry to read from (default: the start of the segment)
-  -h, --help                          help for probe
-      --max-entries int               Stop after this many entries per node (default: the node&#x27;s own bound)
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --root-path string              Storage instance root path; pair with --bucket</code></pre></div></div>
+      --bucket string                   Storage bucket; pair with --root-path (otherwise discovered on each node)
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --from-entry int                  Entry to read from (default: the start of the segment)
+  -h, --help                            help for probe
+      --max-entries int                 Stop after this many entries per node (default: the node&#x27;s own bound)
+      --meta-prefix string              Required full client metadata prefix
+      --root-path string                Storage instance root path; pair with --bucket
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 </section>
@@ -5668,7 +6107,7 @@ Flags:
 <p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Metadata inspection & repair</p><h1>Metadata inspection & repair</h1><p class="page-desc">Read decoded coordinator records, check metadata constraints, export snapshots and apply reviewed corrections.</p><section id="ops-cli-meta-topic-meta">
 
 <h2 id="ops-cli-meta-metadata-start">1. Read the record before choosing a repair</h2>
-<p>Use a current source build containing <code>wp meta</code> and <code>wp log truncate</code>; these additions are not in v0.1.46. Complete <a href="#operations-cli-local/cli-yaml">CLI setup</a> first. The commands below assume the milvus-prod context has reachable etcd endpoints and the complete metadata prefix. With both configured, no node admin connection or bucket/root-path is needed.</p>
+<p>Use a current source build containing <code>wp meta</code> and <code>wp log truncate</code>; these additions are not in v0.1.46. Complete <a href="#operations-cli-local/cli-yaml">CLI setup</a> first. Supply explicit reachable etcd endpoints and the complete client metadata prefix for these commands, or select a private client parameter file. Server contexts do not select metadata authority. Pure metadata views need no node Admin connection or bucket/root path.</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context milvus-prod meta log list
 wp --context milvus-prod meta log show my-channel
 wp --context milvus-prod meta segment list my-channel
@@ -5762,7 +6201,28 @@ wp --context milvus-prod meta check my-channel</code></pre></div></div>
 <p>Validate log/segment metadata constraints (does not verify physical data)</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta check &lt;logName&gt; [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta check my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -5794,15 +6254,17 @@ Usage:
   wp meta check &lt;logName&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for check
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for check
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-export" id="ops-cli-meta-meta-export">
@@ -5820,9 +6282,21 @@ Flags:
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--output-file string</code>
 </td>
 <td>New snapshot file (required; never overwritten)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -5848,16 +6322,18 @@ Usage:
   wp meta export [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for export
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --output-file string            New snapshot file (required; never overwritten)</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for export
+      --meta-prefix string              Required full client metadata prefix
+      --output-file string              New snapshot file (required; never overwritten)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-log-list" id="ops-cli-meta-meta-log-list">
@@ -5865,7 +6341,28 @@ Flags:
 <p>list log metadata and etcd revision</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log list [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -5901,15 +6398,17 @@ Usage:
   wp meta log list [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for list
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for list
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-log-patch" id="ops-cli-meta-meta-log-patch">
@@ -5939,6 +6438,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--expected-revision int</code>
 </td>
 <td>Required target ModRevision for apply</td>
@@ -5960,6 +6465,12 @@ Flags:
 <code>--reason string</code>
 </td>
 <td>Operator&#x27;s reason, recorded with the change</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -5994,21 +6505,23 @@ Usage:
   wp meta log patch &lt;logName&gt; [flags]
 
 Flags:
-      --apply                         Commit the previewed correction (default: no writes)
-      --backup string                 New pre-change backup file (required for apply; never overwritten)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --expected-revision int         Required target ModRevision for apply
-  -h, --help                          help for patch
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --offline                       Confirm relevant writers/auditors are stopped and will remain stopped during repair
-      --patch-file string             JSON object containing supported scalar fields (required)
-      --reason string                 Operator&#x27;s reason, recorded with the change</code></pre></div></div>
+      --apply                           Commit the previewed correction (default: no writes)
+      --backup string                   New pre-change backup file (required for apply; never overwritten)
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --expected-revision int           Required target ModRevision for apply
+  -h, --help                            help for patch
+      --meta-prefix string              Required full client metadata prefix
+      --offline                         Confirm relevant writers/auditors are stopped and will remain stopped during repair
+      --patch-file string               JSON object containing supported scalar fields (required)
+      --reason string                   Operator&#x27;s reason, recorded with the change
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-log-show" id="ops-cli-meta-meta-log-show">
@@ -6016,7 +6529,28 @@ Flags:
 <p>show log metadata and etcd revision</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log show &lt;logName&gt; [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta log show my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -6045,15 +6579,17 @@ Usage:
   wp meta log show &lt;logName&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for show
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for show
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-quorum-list" id="ops-cli-meta-meta-quorum-list">
@@ -6061,7 +6597,28 @@ Flags:
 <p>list quorum metadata and etcd revision</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta quorum list [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta quorum list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -6103,15 +6660,17 @@ Usage:
   wp meta quorum list [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for list
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for list
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-quorum-show" id="ops-cli-meta-meta-quorum-show">
@@ -6119,7 +6678,28 @@ Flags:
 <p>show quorum metadata and etcd revision</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta quorum show &lt;ID&gt; [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta quorum show 1 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -6154,15 +6734,17 @@ Usage:
   wp meta quorum show &lt;ID&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for show
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for show
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-segment-list" id="ops-cli-meta-meta-segment-list">
@@ -6170,7 +6752,28 @@ Flags:
 <p>list segment metadata and etcd revision</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment list &lt;logName&gt; [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment list my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -6206,15 +6809,17 @@ Usage:
   wp meta segment list &lt;logName&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for list
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for list
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-segment-patch" id="ops-cli-meta-meta-segment-patch">
@@ -6244,6 +6849,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--expected-revision int</code>
 </td>
 <td>Required target ModRevision for apply</td>
@@ -6265,6 +6876,12 @@ Flags:
 <code>--reason string</code>
 </td>
 <td>Operator&#x27;s reason, recorded with the change</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -6299,21 +6916,23 @@ Usage:
   wp meta segment patch &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --apply                         Commit the previewed correction (default: no writes)
-      --backup string                 New pre-change backup file (required for apply; never overwritten)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --expected-revision int         Required target ModRevision for apply
-  -h, --help                          help for patch
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery
-      --offline                       Confirm relevant writers/auditors are stopped and will remain stopped during repair
-      --patch-file string             JSON object containing supported scalar fields (required)
-      --reason string                 Operator&#x27;s reason, recorded with the change</code></pre></div></div>
+      --apply                           Commit the previewed correction (default: no writes)
+      --backup string                   New pre-change backup file (required for apply; never overwritten)
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --expected-revision int           Required target ModRevision for apply
+  -h, --help                            help for patch
+      --meta-prefix string              Required full client metadata prefix
+      --offline                         Confirm relevant writers/auditors are stopped and will remain stopped during repair
+      --patch-file string               JSON object containing supported scalar fields (required)
+      --reason string                   Operator&#x27;s reason, recorded with the change
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="meta-segment-show" id="ops-cli-meta-meta-segment-show">
@@ -6321,7 +6940,28 @@ Flags:
 <p>show segment metadata and etcd revision</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment show &lt;logName&gt; &lt;segmentId&gt; [flags]</code></pre></div></div>
 <h3>Parameters to know</h3>
-<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
+</tr>
+</tbody>
+</table></div>
 <p class="small">Etcd connection flags: see <a href="#operations-cli-local/etcd-connection">CLI setup</a>.</p>
 <h3>Demo</h3>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp meta segment show my-channel 7 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker</code></pre></div></div>
@@ -6350,15 +6990,17 @@ Usage:
   wp meta segment show &lt;logName&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for show
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for show
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 </section>
@@ -6383,9 +7025,21 @@ Flags:
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--force</code>
 </td>
 <td>confirm (transition to OPERATOR_CONFIRMED) even if the record is not PENDING_MANUAL; IN_PROGRESS/COMPLETED are normally managed automatically</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -6415,16 +7069,18 @@ Usage:
   wp marking confirm &lt;logId&gt; &lt;segmentId&gt; [flags]
 
 Flags:
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-      --force                         confirm (transition to OPERATOR_CONFIRMED) even if the record is not PENDING_MANUAL; IN_PROGRESS/COMPLETED are normally managed automatically
-  -h, --help                          help for confirm
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+      --force                           confirm (transition to OPERATOR_CONFIRMED) even if the record is not PENDING_MANUAL; IN_PROGRESS/COMPLETED are normally managed automatically
+  -h, --help                            help for confirm
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="marking-list" id="ops-cli-marking-marking-list">
@@ -6448,9 +7104,21 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--log int</code>
 </td>
 <td>restrict to one log id (default: all logs)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -6472,29 +7140,31 @@ Usage:
   wp marking list [flags]
 
 Flags:
-      --all-states                    include IN_PROGRESS and COMPLETED records, not just PENDING_MANUAL
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for list
-      --log int                       restrict to one log id (default: all logs)
-      --meta-prefix string            Full metadata prefix; overrides context etcd.meta_prefix and admin discovery</code></pre></div></div>
+      --all-states                      include IN_PROGRESS and COMPLETED records, not just PENDING_MANUAL
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for list
+      --log int                         restrict to one log id (default: all logs)
+      --meta-prefix string              Required full client metadata prefix
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 </section>
 
 </div>
 <div class="doc-page ops-page" id="page-operations-cli-etcd">
-<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-etcd/discover">1. Discover keys before choosing a metadata prefix</a><a href="#operations-cli-etcd/values">2. Inspect a key and understand its value</a><a href="#operations-cli-etcd/pagination">3. Continue a listing at the same snapshot</a><a href="#operations-cli-etcd/context">4. Save an etcd-only context</a><a href="#operations-cli-etcd/etcd-cat">wp etcd cat</a><a href="#operations-cli-etcd/etcd-get">wp etcd get</a><a href="#operations-cli-etcd/etcd-list">wp etcd list</a></nav></details></aside>
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-etcd/discover">1. Discover keys before choosing a metadata prefix</a><a href="#operations-cli-etcd/values">2. Inspect a key and understand its value</a><a href="#operations-cli-etcd/pagination">3. Continue a listing at the same snapshot</a><a href="#operations-cli-etcd/context">4. Reuse explicit client parameters</a><a href="#operations-cli-etcd/etcd-cat">wp etcd cat</a><a href="#operations-cli-etcd/etcd-get">wp etcd get</a><a href="#operations-cli-etcd/etcd-list">wp etcd list</a></nav></details></aside>
 <p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Raw etcd exploration</p><h1>Raw etcd exploration</h1><p class="page-desc">Discover namespaces and inspect exact raw keys, revisions and values without writing etcd.</p><section id="ops-cli-etcd-topic-etcd">
 
 <h2 id="ops-cli-etcd-discover">1. Discover keys before choosing a metadata prefix</h2>
 <p>This command group is included in v0.1.47 and later; it is not included in v0.1.46. Install a matching release or build from source, and confirm <code>wp etcd --help</code> before using these examples.</p>
-<p>Use this read-only group when you can reach etcd but do not yet know the Woodpecker namespace. It connects directly to etcd: no Woodpecker admin endpoint, node mapping or metadata prefix is required. Supply a reachable endpoint, or save it in a context as shown below.</p>
+<p>Use this read-only group when you can reach etcd but do not yet know the Woodpecker namespace. It connects directly to etcd: no Woodpecker admin endpoint, node mapping or metadata prefix is required. Supply a reachable endpoint explicitly, or select a private client parameter file.</p>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Omit the prefix to explore all keys (first page only).
 wp etcd list --etcd 127.0.0.1:32379 --limit 20
 # Narrow the listing using an actual prefix found in that output.
@@ -6504,7 +7174,7 @@ wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20</code></pre></div></
 milvus-prod/woodpecker/version    90       1        0
 
 1 keys shown; snapshot revision 105; more=false</code></pre></div></div>
-<p>A prefix is literal: <code>list /</code> lists only keys starting with a slash; it does not mean all keys. Empty results mean no matching keys in this snapshot, not an unhealthy cluster. A connection or permission error means the listing could not be established. This group never prepends the context's <code>etcd.meta_prefix</code>.</p>
+<p>A prefix is literal: <code>list /</code> lists only keys starting with a slash; it does not mean all keys. Empty results mean no matching keys in this snapshot, not an unhealthy cluster. A connection or permission error means the listing could not be established. This group never prepends a metadata prefix.</p>
 <h2 id="ops-cli-etcd-values">2. Inspect a key and understand its value</h2>
 <div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd get milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 -o json
 wp etcd cat milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 --encoding base64</code></pre></div></div>
@@ -6547,17 +7217,14 @@ wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json \
   --after-key-base64 'CURSOR_FROM_PREVIOUS_RESPONSE' --revision 105</code></pre></div></div>
 <p>Repeat until <code>more=false</code>. The base64 cursor preserves binary keys. The <code>keys</code> array contains this page; <code>count</code> describes matching keys remaining in the queried range, so it can exceed the page length. <code>--after-key</code> is an alternative for ordinary text keys; never combine it with <code>--after-key-base64</code>.</p>
 <p>Use <code>--revision</code> on get/cat too when comparing values with a listing. If etcd has compacted that revision, restart the listing at a new snapshot; do not silently mix pages from different revisions.</p>
-<h2 id="ops-cli-etcd-context">4. Save an etcd-only context</h2>
-<p>Save the endpoint once for this command group. Select the file using the locations described in <a href="#operations-cli-local/cli-yaml">CLI setup</a>.</p>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>current-context: raw-etcd
-contexts:
-  raw-etcd:
-    etcd:
-      endpoints:
-        - 127.0.0.1:32379</code></pre></div></div>
-<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context raw-etcd etcd list --limit 20
-wp --context raw-etcd etcd get milvus-prod/woodpecker/version</code></pre></div></div>
-<p>Add the context's authentication/TLS fields or their command-flag equivalents when etcd requires them; see <a href="#operations-cli-local/etcd-connection">etcd connection settings</a>. Explicit flags override context settings for one invocation. Raw etcd operations never discover a connection through a Woodpecker node.</p>
+<h2 id="ops-cli-etcd-context">4. Reuse explicit client parameters</h2>
+<p>Keep etcd authority separate from server contexts. For repeated operations, explicitly select a private client parameter file:</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># /path/to/client-parameters.yaml
+endpoints: [http://127.0.0.1:32379]
+# Add host-local TLS/authentication settings when required.</code></pre></div></div>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp etcd list --client-parameters-file /path/to/client-parameters.yaml --limit 20
+wp etcd get tenant/woodpecker/version --etcd http://127.0.0.1:32379</code></pre></div></div>
+<p>Explicit flags override the private parameter file. Raw operations do not use context metadata authority or Admin discovery. See <a href="#operations-cli-local/etcd-connection">etcd connection settings</a> for authentication/TLS fields. Recent input suggestions are independent values, not a saved tenant profile.</p>
 <article class="command" data-command-anchor="etcd-cat" id="ops-cli-etcd-etcd-cat">
 <h2>wp etcd cat</h2>
 <p>Print only one key&#x27;s value; use --encoding raw for exact bytes</p>
@@ -6573,6 +7240,12 @@ wp --context raw-etcd etcd get milvus-prod/woodpecker/version</code></pre></div>
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--encoding string</code>
 </td>
 <td>Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)</td>
@@ -6582,6 +7255,12 @@ wp --context raw-etcd etcd get milvus-prod/woodpecker/version</code></pre></div>
 <code>--revision int</code>
 </td>
 <td>Read at this etcd revision (0: latest)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -6605,16 +7284,18 @@ Usage:
   wp etcd cat &lt;key&gt; [flags]
 
 Flags:
-      --encoding string               Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for cat
-      --revision int                  Read at this etcd revision (0: latest)</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --encoding string                 Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for cat
+      --revision int                    Read at this etcd revision (0: latest)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="etcd-get" id="ops-cli-etcd-etcd-get">
@@ -6632,6 +7313,12 @@ Flags:
 <tbody>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--encoding string</code>
 </td>
 <td>Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)</td>
@@ -6641,6 +7328,12 @@ Flags:
 <code>--revision int</code>
 </td>
 <td>Read at this etcd revision (0: latest)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -6662,16 +7355,18 @@ Usage:
   wp etcd get &lt;key&gt; [flags]
 
 Flags:
-      --encoding string               Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for get
-      --revision int                  Read at this etcd revision (0: latest)</code></pre></div></div>
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --encoding string                 Value encoding: auto|text|base64|hex; cat also supports raw (default &quot;auto&quot;)
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for get
+      --revision int                    Read at this etcd revision (0: latest)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
 </details>
 </article>
 <article class="command" data-command-anchor="etcd-list" id="ops-cli-etcd-etcd-list">
@@ -6701,6 +7396,12 @@ Flags:
 </tr>
 <tr>
 <td>
+<code>--client-parameters-file string</code>
+</td>
+<td>Private temporary etcd parameters file; not cli.yaml or a candidate profile</td>
+</tr>
+<tr>
+<td>
 <code>--limit int</code>
 </td>
 <td>Maximum keys per page (default 100)</td>
@@ -6710,6 +7411,12 @@ Flags:
 <code>--revision int</code>
 </td>
 <td>Read at this etcd snapshot revision (0: latest)</td>
+</tr>
+<tr>
+<td>
+<code>--standalone</code>
+</td>
+<td>Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</td>
 </tr>
 </tbody>
 </table></div>
@@ -6732,18 +7439,186 @@ Usage:
   wp etcd list [prefix] [flags]
 
 Flags:
-      --after-key string              Exclusive page start; use the previous response&#x27;s next_key
-      --after-key-base64 string       Exclusive page start from next_key_base64; preserves binary keys
-      --etcd string                   Etcd endpoints (comma-separated); overrides context etcd.endpoints and metadata admin discovery
-      --etcd-cacert string            Local etcd TLS CA cert file; overrides context and discovery
-      --etcd-cert string              Local etcd TLS client cert file; overrides context and discovery
-      --etcd-key string               Local etcd TLS client key file; overrides context and discovery
-      --etcd-password string          Etcd auth password; overrides context and discovery
-      --etcd-tls-min-version string   Etcd TLS min version (1.0/1.1/1.2/1.3); overrides context and discovery
-      --etcd-username string          Etcd auth username; overrides context and discovery
-  -h, --help                          help for list
-      --limit int                     Maximum keys per page (default 100)
-      --revision int                  Read at this etcd snapshot revision (0: latest)</code></pre></div></div>
+      --after-key string                Exclusive page start; use the previous response&#x27;s next_key
+      --after-key-base64 string         Exclusive page start from next_key_base64; preserves binary keys
+      --client-parameters-file string   Private temporary etcd parameters file; not cli.yaml or a candidate profile
+      --etcd string                     Required client etcd endpoints (comma-separated); independent of server context
+      --etcd-cacert string              Local etcd TLS CA cert file; explicit per-run setting
+      --etcd-cert string                Local etcd TLS client cert file; explicit per-run setting
+      --etcd-key string                 Local etcd TLS client key file; explicit per-run setting
+      --etcd-password string            Etcd auth password; explicit per-run setting
+      --etcd-tls-min-version string     Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting
+      --etcd-username string            Etcd auth username; explicit per-run setting
+  -h, --help                            help for list
+      --limit int                       Maximum keys per page (default 100)
+      --revision int                    Read at this etcd snapshot revision (0: latest)
+      --standalone                      Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery</code></pre></div></div>
+</details>
+</article>
+</section>
+
+</div>
+<div class="doc-page ops-page" id="page-operations-cli-telemetry">
+<aside class="ops-right-nav" aria-label="On this page"><details class="ops-rail" open><summary>On this page</summary><nav><a href="#operations-cli-telemetry/diag-catalog">wp diag catalog</a><a href="#operations-cli-telemetry/diag-metrics-check">wp diag metrics check</a><a href="#operations-cli-telemetry/diag-scenario">wp diag scenario</a><a href="#operations-cli-telemetry/diag-trace-check">wp diag trace check</a></nav></details></aside>
+<p class="small"><a href="#operations-cli">CLI Handbook overview</a> / Historical WAL diagnosis</p><h1>Historical WAL diagnosis</h1><p class="page-desc">Run Woodpecker-only atomic Metrics/Trace checks or summarize a fixed scenario over an incident window.</p><section id="ops-cli-telemetry-topic-telemetry">
+
+<article class="command" data-command-anchor="diag-catalog" id="ops-cli-telemetry-diag-catalog">
+<h2>wp diag catalog</h2>
+<p>List implemented checks, formulas, references and scenario manifests; no source/model queries</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp diag catalog [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--check string</code>
+</td>
+<td>Check name or stable ID</td>
+</tr>
+<tr>
+<td>
+<code>--source string</code>
+</td>
+<td>metrics|trace</td>
+</tr>
+</tbody>
+</table></div>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp diag catalog --source metrics --check writer-latency</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Lists the metric, formula, rule and required inputs without querying a source.</code></pre></div></div>
+<p>The CLI, rules and WebUI share the same canonical check keys.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>An unknown key is rejected.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>List implemented checks, formulas, references and scenario manifests; no source/model queries
+
+Usage:
+  wp diag catalog [flags]
+
+Flags:
+      --check string    Check name or stable ID
+  -h, --help            help for catalog
+      --source string   metrics|trace</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="diag-metrics-check" id="ops-cli-telemetry-diag-metrics-check">
+<h2>wp diag metrics check</h2>
+<p>Run one check; no implicit execution of other checks</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp diag metrics check &lt;name&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--threshold float</code>
+</td>
+<td>Override this check threshold in native units (Trace durations use ms; error counts allow zero)</td>
+</tr>
+</tbody>
+</table></div>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context local diag metrics check writer-latency --window 15m --details all -o json &gt; writes.json</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>A wp.diag/v1 report for the selected Writer timer.</code></pre></div></div>
+<p>This checks recorded WP client Writer operations. It does not infer application end-to-end latency.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Missing source configuration, failed queries and insufficient coverage remain explicit.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Run one check; no implicit execution of other checks
+
+Usage:
+  wp diag metrics check &lt;name&gt; [flags]
+
+Flags:
+  -h, --help              help for check
+      --threshold float   Override this check threshold in native units (Trace durations use ms; error counts allow zero)</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="diag-scenario" id="ops-cli-telemetry-diag-scenario">
+<h2>wp diag scenario</h2>
+<p>Run related Metrics/Trace checks and summarize their unchanged results by WAL step</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp diag scenario &lt;name|all&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context local diag scenario slow-writes --window 15m --node-id woodpecker-0 --details all -o json &gt; diagnosis.json</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Independent Metrics/Trace findings summarized by WAL step.</code></pre></div></div>
+<p>A scenario aggregates check results without a second root-cause engine or automatic cross-source association.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Configure at least one required source; checks without a source are skipped.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Run related Metrics/Trace checks and summarize their unchanged results by WAL step
+
+Usage:
+  wp diag scenario &lt;name|all&gt; [flags]
+
+Flags:
+  -h, --help   help for scenario</code></pre></div></div>
+</details>
+</article>
+<article class="command" data-command-anchor="diag-trace-check" id="ops-cli-telemetry-diag-trace-check">
+<h2>wp diag trace check</h2>
+<p>Run one check; no implicit execution of other checks</p>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp diag trace check &lt;name&gt; [flags]</code></pre></div></div>
+<h3>Parameters to know</h3>
+<div class="ops-table-wrap"><table class="doc-table ">
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--threshold float</code>
+</td>
+<td>Override this check threshold in native units (Trace durations use ms; error counts allow zero)</td>
+</tr>
+</tbody>
+</table></div>
+<h3>Demo</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>wp --context local diag trace check server-append-duration --window 15m --details all -o json &gt; spans.json</code></pre></div></div>
+<h3>Output and interpretation</h3>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>A source-local report for selected retained append spans.</code></pre></div></div>
+<p>Sampling, retention and emitted tags bound the evidence. No spans does not imply zero operation latency.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Missing spans or a query budget prevent a full assessment.</code></pre></div></div>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<div class="code-container"><div class="code-header"><span>Example / output</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>Run one check; no implicit execution of other checks
+
+Usage:
+  wp diag trace check &lt;name&gt; [flags]
+
+Flags:
+  -h, --help              help for check
+      --threshold float   Override this check threshold in native units (Trace durations use ms; error counts allow zero)</code></pre></div></div>
 </details>
 </article>
 </section>
@@ -7305,7 +8180,7 @@ kubectl version
 # Strict E2E coverage: fails on disconnected request paths.
 TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke -x</code></pre></div></div>
 <p>The smoke probe writes 100 vectors and verifies Strong query/search, then saves exact request trace IDs, client latency and raw spans. Normal perf records also contain sampled trace links. The supplied image currently connects query/search through SN and segcore, while its user Insert trace does not continue into SN/WP. Separate WP exporter activity is not proof of an E2E write trace; the report explicitly records this gap as <code>partial</code>.</p>
-<p>For compatible source builds, the separate <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/tracing/FULL_STACK.md">full-stack trace acceptance guide</a> checks real Proxy → SN WAL → WP client/server parent relationships and exact asynchronous batch links, with Strong query/search controls and standalone/composed diagnosis comparisons. Both the client embedded in Milvus and the WP server image must be compatible. The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/tracing/FULL_STACK_VALIDATION.md">local validation receipt</a> records temporary image revisions and remaining release gaps; it does not upgrade the supplied image or turn async links into a serial latency measurement.</p>
+<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/tracing/FULL_STACK_VALIDATION.md">historical full-stack tracing receipt</a> records tested custom-image relationships and remaining limits. The original published Milvus-image acceptance gate is retired under the WP-only scope decision. WP instrumentation fixes remain useful; the tool does not diagnose the surrounding Milvus engine or convert asynchronous links into serial latency.</p>
 <p>Full sampling favors small diagnostic runs and changes system overhead. Lower both server and workload sampling for sustained tests. Jaeger history is bounded and in memory, so save evidence before eviction or restart. See <a href="https://github.com/zilliztech/woodpecker/tree/master/deployments/milvus-full-stack-helm/TRACING.md">tracing setup, interpretation and known gaps</a>.</p>
 
 <h2 id="stack-examples-observability-logs">Search real Pod logs</h2>
@@ -7374,7 +8249,7 @@ TRACES_REQUIRE_E2E=1 ./stack.sh traces-smoke -x</code></pre></div></div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-wpcli">
 <h1>wpcli Operations in the Stack</h1>
 <p class="page-desc">Connect to the WP service cluster, attach the selected Milvus instance’s WP client metadata, and use both views during an investigation.</p>
-<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-wpcli/prepare">Prepare wpcli and local access</a><a href="#stack-examples-wpcli/scopes">Understand the two connection scopes</a><a href="#stack-examples-wpcli/commands">Inspect nodes and metadata</a><a href="#stack-examples-wpcli/shell">Keep an interactive operational session</a><a href="#stack-examples-wpcli/diagnosis-ui">Investigate with the local WebUI</a><a href="#stack-examples-wpcli/integrated">Plan an integrated diagnosis</a><a href="#stack-examples-wpcli/investigate">Use wpcli with the dashboards</a></nav>
+<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-wpcli/prepare">Prepare wpcli and local access</a><a href="#stack-examples-wpcli/scopes">Understand the two connection scopes</a><a href="#stack-examples-wpcli/commands">Inspect nodes and metadata</a><a href="#stack-examples-wpcli/shell">Keep an interactive operational session</a><a href="#stack-examples-wpcli/diagnosis-ui">Use the local operations workspace</a><a href="#stack-examples-wpcli/integrated">Check a Woodpecker scenario from the CLI</a><a href="#stack-examples-wpcli/investigate">Use wpcli with the dashboards</a></nav>
 
 <h2 id="stack-examples-wpcli-prepare">Prepare wpcli and local access</h2>
 <p>Install wp using the <a href="#operations-cli-local/start">CLI setup guide</a>, and check <code>wp version</code> and <code>wp --help</code>. The noninteractive examples work with the established operations; interactive <code>wp shell</code> requires a source build containing the shell addition and is not part of v0.1.47.</p>
@@ -7419,82 +8294,29 @@ node list
 meta log list</code></pre></div></div>
 <p><code>status --check</code> verifies Admin and etcd access for the current session. These connection checks establish reachability; use a workload and the relevant log/data checks to establish application progress and readability.</p>
 
-<h2 id="stack-examples-wpcli-diagnosis-ui">Investigate with the local WebUI</h2>
-<p>Use <code>wpdiag serve</code> to select an independent source, a Milvus stage or an integrated investigation in the browser. The WebUI shares the CLI runner and evidence, with plan preview, progress, cancellation, original observation navigation and JSON export. Configure named connections in the existing private <code>wpdiag.yaml</code>; no separate UI installation or Helm component is needed.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>make wpcli wpdiag
-bin/wpdiag serve --config wpdiag.yaml
-# Open the printed local URL, normally http://127.0.0.1:8787.</code></pre></div></div>
-<p>Choose the scope, read/write flow and observation window, select source-local connections, then preview the plan before running it. Historical inputs are UTC. Current WP context is explicitly a separate snapshot; it cannot clear a past incident. Inspect supporting and contradicting observations, executed queries, coverage gaps and suggested next checks. Recent results stay in server memory and expire under the documented limits; exporting JSON preserves the original report bytes. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/cmd/wpdiag/webui">WebUI operator guide, API and bounds</a>.</p>
-
-<h2 id="stack-examples-wpcli-integrated">Plan an integrated diagnosis</h2>
-<p><code>wpdiag run</code> selects the existing source modules and stage assessors through one bounded, headless command. Begin with the plan to see module/profile versions, source connections, windows and budgets before collecting evidence. Configure only the sources you need; the example stack is optional. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/integrated">integrated diagnosis guide and supported matrix</a>.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>make wpcli wpdiag
-bin/wpdiag run --list
-bin/wpdiag run --config wpdiag.yaml --scope e2e --flow write --plan
-bin/wpdiag run --config wpdiag.yaml --scope e2e --flow write \
-  --sources prometheus,wpcli --stages append \
-  --window 30s --budget 1m --progress -o json &gt; run.json</code></pre></div></div>
-<p>Write auto plans select append/persistence metrics; read plans select consume/query metrics. Native WP and optional trace/log source overviews keep their own declared coverage. Choose exact sources/modules and source-local connections when needed. Explicitly selected unavailable sources produce partial/error status; completed execution is not a cluster-health verdict. Reports retain original finding IDs, evidence, contradictions, uncertainties and next checks.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Substitute the incident interval and your own named connections.
-bin/wpdiag run --config wpdiag.yaml --scope e2e --flow write \
-  --sources prometheus,wpcli --stages append --current-native \
-  --connections prometheus=metrics,wpcli=native \
-  --mode historical --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z -o json</code></pre></div></div>
-<p>Historical auto plans omit current native state. <code>--current-native</code> adds a separately labeled snapshot, which cannot disprove a historical incident. Matching observed trace IDs, deployment binding and actual event times can associate retained Jaeger/Loki evidence. Missing channel/WP-client metadata mappings remain explicit; same-time anomalies and matching numeric IDs are not joined. The CLI and local WebUI share the runner's run/cancel/progress/report API.</p>
-
+<h2 id="stack-examples-wpcli-diagnosis-ui">Use the local operations workspace</h2>
+<p>Build the current wp CLI and open its local WebUI. Diagnostics finds Woodpecker problems, Operations organizes native confirmation/recovery commands, and Command Explorer exposes individual wp commands. The browser uses the same checks and commands as the terminal.</p>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>make wpcli
+bin/wp webui --config /path/to/cli.yaml --listen 127.0.0.1:8795</code></pre></div></div>
+<p>Put Prometheus, Jaeger and Grafana connections inside the selected server context. Client metadata and storage scope remain explicit per-operation inputs. Check source access before selecting an incident interval. Successful connectivity does not establish historical data availability.</p>
+<h2 id="stack-examples-wpcli-integrated">Check a Woodpecker scenario from the CLI</h2>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>bin/wp diag catalog
+bin/wp --context local diag scenario slow-writes --window 15m \
+  --node-id YOUR_WP_NODE --details all -o json &gt; diagnosis.json
+bin/wp report inspect diagnosis.json server-disk-watermark
+bin/wp report export diagnosis.json --packet &gt; findings.json</code></pre></div></div>
+<p>Scenarios aggregate independent Metrics/Trace checks and summarize abnormalities, unavailable evidence and execution gaps. They do not add a second root-cause engine. The current catalog has 39 Metrics and 16 Trace checks. At least one evidence source must be configured; a missing Trace source does not block Metrics checks.</p>
 <h2 id="stack-examples-wpcli-investigate">Use wpcli with the dashboards</h2>
-<p>For slow query/search, the independent <code>wpdiag milvus query</code> command uses a Prometheus connection to assess Proxy completion, visibility waiting, scheduling, execution/loading and result return. It preserves source evidence and distinguishes persistent ready backlog from recovery; TSafe or query delay alone does not implicate WP. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvusquery">query-stage guide, metric catalog and evidence limits</a>.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>bin/wpdiag milvus query --list
-# Configure the named Prometheus connection and use your actual workload interval.
-bin/wpdiag milvus query --config wpdiag.yaml --connection stack \
-  --scope milvus --mode historical \
-  --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z</code></pre></div></div>
-<p>For WAL consumption or visibility lag, use <code>wpdiag milvus consume</code>. Its five groups cover read modes, separately observed WP retrieval, scanner buffers, subscription/dispatch and consumer processing. It distinguishes sampled pressure from recovery and normal blocking ReadNext/EOF; idle or missing series do not prove a stall. The initial path uses Prometheus only and shows missing client-metadata mappings explicitly. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvusconsume">consume-stage guide, metric catalog and evidence limits</a>.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>bin/wpdiag milvus consume --list
-# Substitute the retained interval for your workload.
-bin/wpdiag milvus consume --config wpdiag.yaml --connection stack \
-  --scope e2e --mode historical \
-  --from 2026-10-26T01:00:00Z --to 2026-10-26T01:05:00Z -o json</code></pre></div></div>
-<p>Source builds also provide an independent <code>wpdiag</code> binary for bounded diagnostic reports. Build it with <code>make wpcli wpdiag</code>, inspect <code>bin/wpdiag capabilities</code>, and configure a named connection referring to the generated wpcli context and cli.yaml. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/cmd/wpdiag">wpdiag setup and examples</a>.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># From the repository root, after preparing wpdiag.yaml with your connection.
-bin/wpdiag wpcli diagnose --config wpdiag.yaml --connection local \
-  --scope wp --flow write --window 30s --interval 1s --budget 1m -o json
-bin/wpdiag wpcli diagnose --config wpdiag.yaml --connection local \
-  --scope wp --flow read --stage wal_read --mode snapshot -o json</code></pre></div></div>
-<p>The native module imports WP runtime evidence from <code>wp diagnose</code>; it does not require Prometheus, Jaeger or Loki. Completion is not a health verdict, snapshots cannot establish sustained stalls, and current ops cannot answer historical questions. Source-specific and integrated Milvus E2E diagnosis have separate boundaries; unimplemented combinations return an explicit unsupported result.</p>
-<p>The independent <code>wpdiag trace diagnose</code> command (alias <code>wpdiag jaeger diagnose</code>) reads Jaeger using its own connection and exact service bindings. It reports suspicious spans and partial/connected observed stages for WP, Milvus or source-only E2E reads/writes. An Insert trace missing SN/WP spans remains partial; normal ReadNext waiting, async work and overlapping spans are not converted into a serial latency total. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/jaeger">Jaeger setup, profiles and evidence limits</a>.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Configure sources.trace.connections.stack in wpdiag.yaml; replace the ID.
-bin/wpdiag trace diagnose --config wpdiag.yaml --connection stack \
-  --scope e2e --flow write --mode snapshot --trace-id YOUR_TRACE_ID -o json</code></pre></div></div>
-<p>For a retained metric interval, the separate <code>wpdiag prometheus diagnose</code> command works using only a Prometheus connection. It has WP, Milvus and source-only E2E read/write profiles that report observed latency bounds, throughput changes, exported admission pressure and evidence gaps. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/prometheus">Prometheus setup, metric catalog and interpretation guide</a>. These profiles assess component populations independently; use the stage commands or integrated runner to compose the available stage assessments while retaining their evidence limits.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Configure a Prometheus connection named stack and use your workload's UTC interval.
-bin/wpdiag prometheus diagnose --config wpdiag.yaml --connection stack \
-  --scope e2e --flow write --mode historical \
-  --from 2026-10-25T08:00:00Z --to 2026-10-25T08:05:00Z -o json</code></pre></div></div>
-<p>Start from the symptom and the test’s time window. Use <a href="#operations-cli-ops">in-flight operations</a> and <a href="#operations-cli-logstore">writer runtime</a> for slow writes, <a href="#operations-cli-log">log progress</a> and <a href="#operations-cli-segment">segment diagnosis</a> for stalled progress, and <a href="#operations-cli-meta">metadata inspection</a> when coordinator state needs examination.</p>
-<p>The <a href="#operations-scenarios-write">write-stall</a>, <a href="#operations-scenarios-read">read-stall</a> and <a href="#operations-scenarios-corruption">data-corruption</a> guides explain the evidence and verification needed for each investigation. Begin with their read-only inspection steps and choose any repair from the observed cause and consequences.</p>
-
-<p>The independent <code>wpdiag loki diagnose</code> command reads retained WP/Milvus logs using its own Loki connection. Select WP, Milvus or source-only E2E reads/writes. Findings include known message excerpts, event lineage and exact LogQL/windows; no-match remains inconclusive. Cross-component association requires an actual shared request/trace identity. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/loki">Loki configuration, supported patterns and evidence limits</a>.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code># Configure sources.loki.connections.stack using the Alloy namespace/cluster labels.
-bin/wpdiag loki diagnose --config wpdiag.yaml --connection stack \
-  --scope e2e --flow write --window 30s --budget 1m -o json</code></pre></div></div>
-
-<p>For slow inserts, <code>wpdiag milvus append</code> assesses Proxy preparation/completion, producer quota/routing, SN WAL/interceptors and, with <code>--scope e2e</code>, separate WP append/flush/disk context. It reuses Prometheus source findings and reports concrete steps, evidence and next checks. Internal quantiles are never subtracted to invent waiting time; WP evidence stays unassociated until an authoritative client metadata mapping exists. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvusappend">append-stage catalog, setup and interpretation limits</a>.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>bin/wpdiag milvus append --list
-bin/wpdiag milvus append --config wpdiag.yaml --connection stack \
-  --scope e2e --window 30s --budget 1m -o json</code></pre></div></div>
-
-<p>For persistence lag, <code>wpdiag milvus persistence</code> uses an independent Prometheus connection to assess growing pressure, sync scheduling/recovery, execution/upload timing and checkpoint advancement. A flusher-seen TimeTick is not a durable checkpoint; idle checkpoint age is not a stall. E2E WP flush/offload is shown as a parallel path with explicit mapping gaps. See the <a href="https://github.com/zilliztech/woodpecker/tree/master/diagnostics/milvuspersistence">persistence-stage hypotheses, configuration and evidence limits</a>.</p>
-<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>bin/wpdiag milvus persistence --list
-bin/wpdiag milvus persistence --config wpdiag.yaml --connection stack \
-  --scope e2e --window 30s --budget 1m -o json</code></pre></div></div>
+<p><code>wp diagnose</code> uses current WP Metrics/Admin evidence. <code>wp diag</code> queries retained Prometheus/Jaeger evidence over a lookback or explicit From/To interval. Use native commands to confirm the observed WP condition and review the operation’s own effects before executing an intervention.</p>
+<p>The tool diagnoses Woodpecker client/server behavior, including a WP client embedded in Milvus. It does not diagnose Milvus components, query/search, indexing, persistence stages or Loki logs. The former <code>wpdiag</code> source/stage commands and standalone UI are retired. Their accepted receipts remain historical records.</p>
+<p>Saved runs and optional Agent analysis belong to Diagnostics. A model call is explicit and receives supplied findings; it cannot automatically query sources or change the cluster. See the <a href="https://github.com/zilliztech/woodpecker/blob/master/docs/admin-guides/wpcli/diagnostics.md">current CLI/WebUI guide</a> for configuration, rules, report semantics and migration.</p>
 
 <div class="doc-pagination"><a href="#stack-examples-dashboards"><div class="pg-label">Previous</div><div class="pg-title">E2E dashboards</div></a><a href="#stack-examples-e2e"><div class="pg-label">Next</div><div class="pg-title">E2E testing &amp; optimization</div></a></div>
 </div>
 <div class="doc-page stack-examples-page" id="page-stack-examples-e2e">
 <h1>E2E Testing &amp; Optimization</h1>
 <p class="page-desc">Use a repeatable workload and its operational evidence to find gaps, investigate bottlenecks and evaluate a change.</p>
-<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-e2e/baseline">Establish a working baseline</a><a href="#stack-examples-e2e/writes">Run a bounded write experiment</a><a href="#stack-examples-e2e/evidence">Follow the evidence</a><a href="#stack-examples-e2e/own-system">Turn an observation into an improvement</a><a href="#stack-examples-e2e/diagnostic-acceptance">Validate diagnosis through a controlled slowdown</a><a href="#stack-examples-e2e/consume-acceptance">Validate new-scanner consumption and initial visibility</a><a href="#stack-examples-e2e/query-acceptance">Validate loaded query/search consistency</a><a href="#stack-examples-e2e/persistence-acceptance">Validate object-store CPU slowdown and persistence recovery</a><a href="#stack-examples-e2e/native-acceptance">Validate native WP operations and diagnosis</a><a href="#stack-examples-e2e/source-acceptance">Validate actual trace and log corroboration</a><a href="#stack-examples-e2e/webui-acceptance">Validate interactive diagnosis against real sources</a><a href="#stack-examples-e2e/discontinuity-acceptance">Validate restart and missing-scrape evidence</a><a href="#stack-examples-e2e/future">Future operational chapters</a></nav>
+<nav class="stack-onpage" aria-label="On this page"><a href="#stack-examples-e2e/baseline">Establish a working baseline</a><a href="#stack-examples-e2e/writes">Run a bounded write experiment</a><a href="#stack-examples-e2e/evidence">Follow the evidence</a><a href="#stack-examples-e2e/own-system">Turn an observation into an improvement</a><a href="#stack-examples-e2e/diagnostic-acceptance">Validate the current Woodpecker diagnostic tool</a><a href="#stack-examples-e2e/native-acceptance">Confirm WP runtime observations</a><a href="#stack-examples-e2e/future">Operational improvements</a></nav>
 
 <h2 id="stack-examples-e2e-baseline">Establish a working baseline</h2>
 <p>With the stack and forwards running, start with the integrated acceptance path:</p>
@@ -7530,38 +8352,28 @@ bin/wpdiag milvus persistence --config wpdiag.yaml --connection stack \
 </ol>
 <p>Use the same approach on your own Milvus + WP deployment after adapting endpoints, labels, permissions and workload limits. Treat a local result as evidence for the measured configuration, then validate the change on the target environment.</p>
 
-<h2 id="stack-examples-e2e-diagnostic-acceptance">Validate diagnosis through a controlled slowdown</h2>
-<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/MATRIX.md">diagnostic acceptance ledger</a> separates implemented commands, fixture tests and actual deployment receipts. The fixed <a href="https://github.com/zilliztech/woodpecker/issues/458">#458</a> program covers six children: #488–#492 are merged, while <a href="https://github.com/zilliztech/woodpecker/issues/493">#493</a> supplies the final restart/gap and evidence-audit delivery. The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/FINAL_AUDIT.md">final audit</a> records original requirements, evidence levels and build/profile limits. Released full-trace image acceptance remains a separate <a href="https://github.com/zilliztech/woodpecker/issues/459">#459</a> gate.</p>
-<p>The <a href="https://github.com/zilliztech/woodpecker/tree/master/tests/integration/diagnostics">deployed CLI acceptance guide</a> provides a separate, explicitly opted-in scenario: normal writes and strong queries, controlled producer admission throttling, then recovery. It reuses the bounded workload and existing <code>wpdiag milvus append</code>, <code>milvus query</code> and <code>run</code> commands. It requires a dedicated disposable namespace, a compatible Milvus management API and Prometheus; no WebUI is required.</p>
-<p>The harness records user latency, throughput, correctness, exact metric windows and source/stage findings, compares standalone and composed diagnoses, and verifies configuration restoration. With an optional current wpcli snapshot, it checks that a recovered current state does not clear the retained historical incident. Missing or inconclusive completion metrics cannot pass as normal traffic. A failed or non-reproducing fault remains a failed receipt.</p>
-<p>Read the preparation and recovery instructions before executing: this harness creates its own collection and temporarily changes deployment-wide admission controls. It never manages the Kubernetes cluster lifecycle. Plain <code>wpdiag</code> commands remain read-only. This covers the first CLI subset of the original <a href="https://github.com/zilliztech/woodpecker/issues/458">#458</a>; remaining validation is tracked through <a href="https://github.com/zilliztech/woodpecker/issues/450">#450</a> and focused follow-ups.</p>
-
-<h2 id="stack-examples-e2e-consume-acceptance">Validate new-scanner consumption and initial visibility</h2>
-<p>The separate <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/CONSUME.md">consume acceptance guide</a> covers <a href="https://github.com/zilliztech/woodpecker/issues/484">#484</a>: working writes and Strong queries, intentional idle, an explicitly paused new scanner, and recovery. It uses the existing Prometheus/consume/integrated commands without Jaeger, Loki, native metadata or WebUI dependencies.</p>
-<p>The native pause control is checked at scanner startup; it does not stop an already-running reader. The test creates only its own collections and contrasts bounded initial-visibility query timeouts with an existing collection that remains queryable. A collection still Loading is not presented as an already-loaded slow reader. Continuously sampled pause with zero pending bytes remains an observation, not a fabricated downstream or disk-pressure conclusion.</p>
-<p>The harness journals and restores the exact setting/override absence, verifies every acknowledged ID and vector search after recovery, compares standalone/composed results, and preserves the original historical interval. Review its offline plan and dedicated-namespace opt-in before adding <code>--execute</code>. See the <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/CONSUME_VALIDATION.md">deployed validation receipt</a> for actual builds, observations and limits.</p>
-
-<h2 id="stack-examples-e2e-query-acceptance">Validate loaded query/search consistency</h2>
-<p>The independent <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/QUERY_STEPS.md">query scheduling/execution guide</a> and <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/QUERY_STEPS_VALIDATION.md">deployed receipt</a> cover <a href="https://github.com/zilliztech/woodpecker/issues/490">#490</a>: serial expensive FLAT/L2 work versus concurrent requests with actual ready backlog, then exact vector verification, recovery and retained findings. Existing source/stage rules own the conclusions. TSafe and core observations can come from different components; queue and ready evidence must match the same exporter.</p>
-<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/QUERY.md">loaded query/search consistency acceptance guide</a> covers <a href="https://github.com/zilliztech/woodpecker/issues/486">#486</a>: baseline and idle, actual TSafe waits from a bounded server-derived Customized guarantee timestamp, paired Strong controls, and normal-request recovery. The collection stays Loaded; no scanner, Pod or shared configuration is paused. This request control is distinct from a Strong-query production incident.</p>
-<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/QUERY_VALIDATION.md">deployed receipt</a> records successful exact query/search results, default-policy visibility findings, historical replay and standalone/composed lineage. The protocol helper is isolated from production dependencies. Use the offline plan and dedicated-namespace opt-in before execution.</p>
-<h2 id="stack-examples-e2e-persistence-acceptance">Validate object-store CPU slowdown and persistence recovery</h2>
-<p>The separate <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/PERSISTENCE.md">persistence acceptance guide</a> covers <a href="https://github.com/zilliztech/woodpecker/issues/488">#488</a>: working sync completions, intentional idle, bounded in-place CPU throttling of PVC-backed MinIO, and normal-workload recovery. The harness journals controller/claim ownership and original CPU resources, respects the deployment's existing flush quota, restores resources before exact-ID/search checks and owned-data cleanup, and compares standalone/integrated historical findings at unchanged policy.</p>
-<p>Only an explicitly opted-in disposable namespace may run this deployment-wide dependency fault. Sync completion includes upload and callbacks; pending tasks include queued and executing work. Idle checkpoint age, a seen TimeTick and slow completion timers do not prove physical disk/fsync failure or crash durability. The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/PERSISTENCE_VALIDATION.md">deployed receipt</a> records the selected builds, failed attempts, actual contrast and limits.</p>
-
-<h2 id="stack-examples-e2e-native-acceptance">Validate native WP operations and diagnosis</h2>
-<p>For WP-native operations, use the independent <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/NATIVE.md">native service acceptance guide</a> and <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/NATIVE_VALIDATION.md">real deployed receipt</a> for <a href="https://github.com/zilliztech/woodpecker/issues/489">#489</a>. It verifies acknowledged payloads, real pending append/read suspicions, correct EOF/idle interpretation, original adapter evidence and historical/current separation. A disposable MinIO-backed WP service fixture keeps existing stack resources unchanged; it does not validate staged WAL fsync or a full SDK quorum.</p>
-
-<h2 id="stack-examples-e2e-source-acceptance">Validate actual trace and log corroboration</h2>
-<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/SOURCES.md">source acceptance guide</a> covers <a href="https://github.com/zilliztech/woodpecker/issues/491">#491</a> with an isolated real WP/MinIO service, deployed Alloy/Loki, Jaeger and Prometheus. It verifies acknowledged values, application-emitted rejection events, retained read/write spans and independent/composed findings. Trace/log association requires the same actual identity, deployment binding and overlapping event time; an unrelated request in the same window stays separate.</p>
-<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/SOURCES_VALIDATION.md">real-source receipt</a> preserves partial traces, no-match, failed lookups, budgets, cancellation and failed attempts. WP-only traces cannot prove the Milvus query path or full write propagation. Review the offline plan and dedicated namespace opt-in; the harness never manages the Kubernetes cluster or changes an existing Helm release.</p>
-<h2 id="stack-examples-e2e-webui-acceptance">Validate interactive diagnosis against real sources</h2>
-<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/WEBUI.md">deployed WebUI guide</a> for <a href="https://github.com/zilliztech/woodpecker/issues/492">#492</a> reuses the source fixture with actual Prometheus, Jaeger, Alloy/Loki and WP. A real browser selects individual or integrated modules, previews without querying, inspects original metric/span/log evidence, exports exact JSON and compares owner findings with separate CLI collections. Explicit limits, selected source failures and live/in-flight cancellation remain visible. The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/WEBUI_VALIDATION.md">receipt</a> distinguishes deployed evidence from controlled response-delay/privacy tests. WP-only traces still do not establish full Milvus propagation; the WebUI retains reports only in its current server session.</p>
-<h2 id="stack-examples-e2e-discontinuity-acceptance">Validate restart and missing-scrape evidence</h2>
-<p>The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/DISCONTINUITIES.md">restart/gap guide</a> reuses an owned source fixture, restarts only its verified WP process and creates a bounded exporter pause. Actual counter decreases and missing samples remain unknown/inconclusive; current recovery does not clear the historical incident. The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/DISCONTINUITIES_VALIDATION.md">deployed receipt</a> records process/container identities, real up=0 to up=1, exact acknowledged-data checks, original timestamps and cleanup. Only the explicitly opted-in fixture mutates; diagnostics remain read-only and scripts do not manage cluster lifecycle.</p>
-<h2 id="stack-examples-e2e-future">Future operational chapters</h2>
-<p>This collection can grow with controlled restart/recovery drills, read/write stall investigations, disk/object-store pressure scenarios, scaling/capacity comparisons and optimization experiments. These fault scenarios are not automatically exercised by the current performance test.</p>
-<p>Each new chapter should provide a reproducible starting state, bounded trigger, expected metrics and alerts, wpcli/log investigation, recovery procedure and application-level verification. Structured reports and meaningful exit status make those chapters reusable by local AI agents as well as people. Autonomous orchestration remains a future addition.</p>
+<h2 id="stack-examples-e2e-diagnostic-acceptance">Validate the current Woodpecker diagnostic tool</h2>
+<p>The current workflow is tracked in <a href="https://github.com/zilliztech/woodpecker/issues/503">#503</a>: wp CLI atomic Metrics/Trace checks, scenario summaries, native Operations, Command Explorer and optional supplied-report Agent analysis. Use <code>wp diag</code> and <code>wp webui</code>; the old wpdiag execution surface is retired.</p>
+<div class="code-container"><div class="code-header"><span>Commands</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div><div class="code-body"><pre><code>make wpcli
+python3 cmd/wpdiag/tests/workspace_acceptance.py
+python3 cmd/wpdiag/tests/prometheus_smoke.py
+python3 cmd/wpdiag/tests/jaeger_smoke.py</code></pre></div></div>
+<p>Browser acceptance uses bounded HTTP fixtures and a fake Agent; source smoke tests use isolated temporary Prometheus/Jaeger containers. These are separate from real deployment receipts. Record the actual image/build, interval, scope and source coverage when checking the stack. Missing samples, idle traffic and an incomplete Trace query are not proof of health.</p>
+<h2 id="stack-examples-e2e-native-acceptance">Confirm WP runtime observations</h2>
+<p>Use current WP Metrics/Admin commands and explicitly scoped metadata to confirm a suspected WAL problem. The <a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/NATIVE.md">earlier native acceptance guide</a> records its bounded service fixture and limits. Do not run fault-injection harnesses against a shared deployment. Existing metadata views/checks are native operations, not a new dynamic metadata diagnosis subsystem.</p>
+<details><summary>Historical foundation and acceptance records</summary>
+<p>The original <a href="https://github.com/zilliztech/woodpecker/issues/450">#450</a> and finite <a href="https://github.com/zilliztech/woodpecker/issues/458">#458</a> acceptance program are closed. <a href="https://github.com/zilliztech/woodpecker/issues/493">#493</a> supplied the final audit. The remaining Milvus published-image propagation outcome in <a href="https://github.com/zilliztech/woodpecker/issues/459">#459</a> was retired by scope decision, not counted as a passed full-chain test.</p>
+<p>These records preserve the builds, experiments and limits of earlier implementations. Their legacy commands and Milvus stages are not supported capabilities of the current WP-only tool.</p>
+<ul>
+<li id="stack-examples-e2e-consume-acceptance"><a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/CONSUME_VALIDATION.md">Consumption validation history</a></li>
+<li id="stack-examples-e2e-query-acceptance"><a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/QUERY_VALIDATION.md">Query validation history</a></li>
+<li id="stack-examples-e2e-persistence-acceptance"><a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/PERSISTENCE_VALIDATION.md">Persistence validation history</a></li>
+<li id="stack-examples-e2e-source-acceptance"><a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/SOURCES_VALIDATION.md">Source validation history</a></li>
+<li id="stack-examples-e2e-webui-acceptance"><a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/WEBUI_VALIDATION.md">Former WebUI validation history</a></li>
+<li id="stack-examples-e2e-discontinuity-acceptance"><a href="https://github.com/zilliztech/woodpecker/blob/master/tests/integration/diagnostics/FINAL_AUDIT.md">Final audit and discontinuity evidence</a></li>
+</ul></details>
+<h2 id="stack-examples-e2e-future">Operational improvements</h2>
+<p>Use measured Woodpecker problems to improve check coverage, guidance and observability. Milvus remains a useful application workload and deployment example; it does not expand the diagnostic tool’s ownership boundary.</p>
 
 <div class="doc-pagination"><a href="#stack-examples-wpcli"><div class="pg-label">Previous</div><div class="pg-title">wpcli operations</div></a><div></div></div>
 </div>

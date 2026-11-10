@@ -9,6 +9,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "config/**"
+      - ".agents/skills/**"
       - "cmd/wpcli/**"
       - "cmd/wpdiag/**"
       - "diagnostics/**"
@@ -30,6 +31,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "config/**"
+      - ".agents/skills/**"
       - "cmd/wpcli/**"
       - "cmd/wpdiag/**"
       - "diagnostics/**"
@@ -86,10 +88,10 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-      - name: Validate changed workflow syntax and shell commands
+      - name: Validate all workflow syntax and shell commands
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          "$(go env GOPATH)/bin/actionlint" .github/workflows/unit-test.yaml .github/workflows/wpcli-ci.yaml .github/workflows/diagnostics-ci.yaml .github/workflows/integration-test-components.yaml .github/workflows/pr-ci-label.yaml .github/workflows/rerun-ci.yaml .github/workflows/pr-ci-guide.yaml
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yaml
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

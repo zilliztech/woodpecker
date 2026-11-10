@@ -1,0 +1,195 @@
+# Evidence assessment rules. Copy beside cli.yaml as diag-metrics.yaml.
+# Keys match the WebUI selector and CLI check name exactly.
+# Numeric values use the native unit shown below.
+# observe: measurements only; no universal workload baseline.
+# runtime_watermarks: use the same node's exported protection watermarks.
+# sustained_growth: use Metrics defaults.sustain_ms.
+schema_version: wp.diag.rules/v1
+source: metrics
+defaults:
+  latency_ms: 100
+  min_observations: 100
+  sustain_ms: 180000
+  max_gap_ms: 30000
+  calculation_window_ms: 60000
+evidence:
+  # Writer operation p99
+  writer-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # Failed Writer operations
+  writer-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Successful Writer byte rate
+  writer-throughput:
+    mode: observe
+    unit: bytes/s
+  # Submitted append entry rate
+  append-submissions:
+    mode: observe
+    unit: entries/s
+  # Pending append growth
+  append-pending:
+    mode: sustained_growth
+    unit: observation
+  # Append completion p99
+  client-append-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # Acknowledged write-position progress
+  writer-progress:
+    mode: observe
+    unit: observation
+  # Failed replica append outcomes
+  replica-append-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # server append errors
+  server-append-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Buffer notification p99
+  server-buffer-wait:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # Flush execution p99
+  server-flush-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # Completed Flush byte rate
+  server-flush-throughput:
+    mode: observe
+    unit: bytes/s
+  # Disk-protection write rejections
+  disk-rejections:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # WAL disk usage vs configured watermarks
+  server-disk-watermark:
+    mode: runtime_watermarks
+    unit: ratio
+  # Server batch-read p99
+  server-read-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # server read errors
+  server-read-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Delivered Reader byte rate
+  reader-throughput:
+    mode: observe
+    unit: bytes/s
+  # Reader loop-iteration p99
+  reader-iteration-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # Failed read_next observations
+  reader-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Reader position progress
+  reader-progress:
+    mode: observe
+    unit: observation
+  # Direct object-read p99
+  direct-read-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # Failed direct object reads
+  direct-read-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Failed quorum-read candidate outcomes
+  quorum-read-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Read failover events
+  read-failovers:
+    mode: observe
+    unit: count
+  # Observed read-branch activity
+  read-branch-activity:
+    mode: observe
+    unit: count
+  # Completed segment rolls
+  segment-rolls:
+    mode: observe
+    unit: count
+  # Compaction failures
+  compaction-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Compaction frontier progress
+  compaction-progress:
+    mode: observe
+    unit: observation
+  # Node CPU usage
+  cpu-utilization:
+    mode: threshold
+    threshold: 90
+    unit: percent
+  # Node I/O-wait activity
+  io-wait-rate:
+    mode: observe
+    unit: seconds/s
+  # Node memory usage ratio
+  memory-utilization:
+    mode: threshold
+    threshold: 0.9
+    unit: ratio
+  # Successful Reader opens
+  reader-open-success:
+    mode: observe
+    unit: count
+  # Failed Reader opens
+  reader-open-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Successful Open Reader p99
+  reader-open-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # Failed Open Reader p99
+  reader-open-error-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms
+  # Successful Writer opens
+  writer-open-success:
+    mode: observe
+    unit: count
+  # Writer-lock acquisition failures
+  writer-lock-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Writer fencing failures
+  writer-fencing-errors:
+    mode: threshold
+    threshold: 0
+    unit: count
+  # Open Writer error timing
+  writer-open-error-latency:
+    mode: threshold
+    threshold: 100
+    unit: ms

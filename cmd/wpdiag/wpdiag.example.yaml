@@ -77,3 +77,31 @@ sources:
             namespace: milvus-stack
           # bearer_token_env: LOKI_TOKEN
           # tenant_env: LOKI_TENANT
+
+# Optional problem-oriented WAL WebUI. Existing CLI connections above are reused.
+# See diagnostics/wal/README.md for binding, policies and optional Agent setup.
+# workbench:
+#   targets:
+#     my-log:
+#       label: My WP log / mapped replica
+#       prometheus: local
+#       log_namespace: your-bucket/your-client-root
+#       log_id: "1001"
+#       node_id: your-mapped-wp-node
+#       wpcli: local
+#       log_name: your-log-name
+#       metadata:
+#         etcd: http://127.0.0.1:2379
+#         prefix: your-milvus-client-prefix/woodpecker
+#       # milvus: {prometheus: local, channel: your-explicit-channel}
+#   policy: {latency_ms: 100, min_observations: 100, sustain_ms: 180000, max_gap_ms: 30000}
+#   agent:
+#     enabled: false
+#     provider: codex
+#     auth: cli
+#     executable: codex
+#     timeout_ms: 120000
+#     # Reuse the login of the OS user running wpdiag.
+#     # API-key alternative: auth: api_key, api_key_env: CODEX_API_KEY
+#     # Claude: provider: claude, auth: api_key, executable: claude,
+#     #         api_key_env: ANTHROPIC_API_KEY

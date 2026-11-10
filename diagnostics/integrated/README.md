@@ -1,3 +1,8 @@
+> Historical module contract. The current WP-only product does not expose this
+> legacy execution surface. `wpdiag` is retired; use `wp diag`, `wp report` and
+> `wp webui`. Retained code/receipts support history and reuse, not additional
+> supported Milvus/Loki diagnostic capabilities. See [the current guide](../../docs/admin-guides/wpcli/diagnostics.md).
+
 # Integrated diagnosis CLI
 
 `wpdiag run` implements the orchestration boundary of [#467](https://github.com/zilliztech/woodpecker/issues/467).

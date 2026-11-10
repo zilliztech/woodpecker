@@ -9,6 +9,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "config/**"
+      - ".agents/skills/**"
       - "cmd/wpcli/**"
       - "cmd/wpdiag/**"
       - "diagnostics/**"
@@ -30,6 +31,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "config/**"
+      - ".agents/skills/**"
       - "cmd/wpcli/**"
       - "cmd/wpdiag/**"
       - "diagnostics/**"
@@ -86,13 +88,11 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-      - run: make wpcli wpdiag
+      - run: make wpcli
       - uses: actions/upload-artifact@v4
         with:
           name: diagnostics-binaries
-          path: |
-            bin/wp
-            bin/wpdiag
+          path: bin/wp
           retention-days: 1
 
   cli:
@@ -106,7 +106,7 @@ jobs:
         with:
           name: diagnostics-binaries
           path: bin
-      - run: chmod +x bin/wp bin/wpdiag
+      - run: chmod +x bin/wp
       - run: python3 cmd/wpdiag/tests/smoke.py
 
   backends:
@@ -120,27 +120,15 @@ jobs:
         include:
           - fixture: prometheus
             image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: integrated
-            image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: append
-            image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: persistence
-            image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: consume
-            image: quay.io/prometheus/prometheus:v3.0.1
-          - fixture: query
-            image: quay.io/prometheus/prometheus:v3.0.1
           - fixture: jaeger
             image: jaegertracing/all-in-one:1.53.0
-          - fixture: loki
-            image: grafana/loki:3.5.7
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: diagnostics-binaries
           path: bin
-      - run: chmod +x bin/wp bin/wpdiag
+      - run: chmod +x bin/wp
       - run: docker pull "${{ matrix.image }}"
       - run: python3 cmd/wpdiag/tests/${{ matrix.fixture }}_smoke.py
 
@@ -155,7 +143,7 @@ jobs:
         with:
           name: diagnostics-binaries
           path: bin
-      - run: chmod +x bin/wp bin/wpdiag
+      - run: chmod +x bin/wp
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -168,7 +156,8 @@ jobs:
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
         run: '"$CHROME_BIN" --version'
-      - run: python3 cmd/wpdiag/tests/webui_smoke.py
+      - run: |
+          python3 cmd/wpdiag/tests/webui_smoke.py
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
       - uses: actions/upload-artifact@v4

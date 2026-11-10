@@ -175,6 +175,13 @@ func evaluate(data *Dataset, sig signal, r d.Request, p Policy, id string) []d.F
 }
 
 func histogram(series []Series, sig signal, data Dataset, p Policy) (Fact, string) {
+	return histogramAtQuantile(series, sig, data, p, 0.95)
+}
+
+// histogramAtQuantile shares the existing family/coverage/precision checks.
+// Legacy callers continue to use P95 through histogram. Other callers must
+// translate the interval into an explicitly named quantile in their own DTO.
+func histogramAtQuantile(series []Series, sig signal, data Dataset, p Policy, quantileFraction float64) (Fact, string) {
 	fact := Fact{ThresholdMS: p.LatencyMS[sig.ID]}
 	var count, sum []Point
 	type bucket struct {
@@ -249,7 +256,7 @@ func histogram(series []Series, sig signal, data Dataset, p Policy) (Fact, strin
 	}
 	mean := (sum[len(sum)-1].Value - sum[0].Value) / fact.Completions * sig.Factor
 	fact.MeanMS = &mean
-	quantile := fact.Completions * 0.95
+	quantile := fact.Completions * quantileFraction
 	lower := 0.0
 	previous := 0.0
 	for _, b := range buckets {

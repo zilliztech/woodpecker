@@ -21,6 +21,7 @@ type queryPlanKind int
 
 const (
 	defaultPlan queryPlanKind = iota
+	atomicPlan
 	queryPlan
 	appendPlan
 	persistencePlan
@@ -83,7 +84,10 @@ func runPlan(ctx context.Context, r d.Request, connection d.Connection, planKind
 		case <-timer.C:
 		}
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport, err := d.HTTPTransport(s.TLS, connection.BaseDir)
+	if err != nil {
+		return d.Failure("prometheus", "invalid", "tls_configuration_unavailable", err.Error())
+	}
 	defer transport.CloseIdleConnections()
 	c := client{http: &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, settings: s, token: token, user: user, password: password}
 	result := d.NewResult("prometheus")

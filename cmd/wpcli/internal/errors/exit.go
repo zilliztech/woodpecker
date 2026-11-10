@@ -8,6 +8,10 @@ func ExitCodeFor(err error) int {
 	if err == nil {
 		return 0
 	}
+	var execution interface{ ExitCode() int }
+	if errors.As(err, &execution) {
+		return execution.ExitCode()
+	}
 	var cli *CLIError
 	if !errors.As(err, &cli) {
 		return 1

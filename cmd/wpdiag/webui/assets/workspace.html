@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="wpdiag-session" content="SESSION_TOKEN"><title>Woodpecker · Operations</title>
+<link rel="stylesheet" href="/wal.css"><link rel="stylesheet" href="/workspace.css"><link rel="stylesheet" href="/ops-console.css"><link rel="stylesheet" href="/workflow.css">
+<script src="/form-controls.js" defer></script><script src="/curves.js" defer></script><script src="/workspace.js" defer></script><script src="/workspace-help.js" defer></script><script src="/workspace-bindings.js" defer></script><script src="/workspace-operations.js" defer></script><script src="/workspace-history.js" defer></script><script src="/workspace-diagnostics.js" defer></script><script src="/workspace-command-console.js" defer></script>
+</head>
+<body>
+<nav class="nav"><div class="nav-inner"><div class="console-brand"><div class="logo">w</div><span class="brand">Woodpecker</span></div><div class="console-breadcrumb"><span class="nav-sub">Operations workspace</span><span class="breadcrumb-divider">/</span><span id="workspace-page">Overview</span></div><span class="nav-end workspace-readonly">Local session</span></div></nav>
+<div class="app">
+<aside class="rail" aria-label="Workspace navigation">
+<div class="rail-caption">WORKSPACE</div>
+<div class="workspace-tabs">
+<button class="problem active" data-tab="overview"><span class="nav-icon" data-workspace-icon="overview" aria-hidden="true"></span><span class="nav-label"><strong>Overview</strong></span></button>
+<button class="problem" data-tab="diagnostics"><span class="nav-icon" data-workspace-icon="diagnostics" aria-hidden="true"></span><span class="nav-label"><strong>Diagnostics</strong></span></button>
+<button class="problem" data-tab="runbooks"><span class="nav-icon" data-workspace-icon="runbooks" aria-hidden="true"></span><span class="nav-label"><strong>Operations</strong></span></button>
+<button class="problem" data-tab="commands"><span class="nav-icon" data-workspace-icon="commands" aria-hidden="true"></span><span class="nav-label"><strong>Command Explorer</strong></span></button>
+<button class="problem" data-tab="settings" id="connections"><span class="nav-icon" data-workspace-icon="settings" aria-hidden="true"></span><span class="nav-label"><strong>Settings</strong></span></button>
+</div>
+<div class="rail-bottom"><b>Local workspace</b><p>Connections are selected per operation.</p></div>
+</aside>
+<main class="content">
+<div id="request-error" class="error-box" role="alert" hidden></div>
+<div id="runbook-return" class="guidance-return" hidden></div>
+<section id="overview-view">
+<header class="question-header"><div><div class="problem-eyebrow">WORKSPACE</div><h1>Overview</h1><p>Find problems, work through an operational scenario, or run a command.</p></div></header>
+<div class="overview-legend">Configuration readiness only. Source reachability and findings are checked when you run an operation.</div>
+<div id="overview-modules" class="overview-modules"></div>
+<div class="overview-help"><span>Need to add a connection?</span><button class="text-link" data-tab="settings">View connection settings ↗</button></div>
+</section>
+<section id="diagnostics-view" hidden>
+<header class="question-header"><div><div class="problem-eyebrow">METRICS &amp; TRACE</div><h1>WAL diagnostics</h1><p>Configure on the left. Run checks, inspect results and continue analysis on the right.</p></div><button id="history" class="ghost">Run history ↓</button></header>
+<div class="workflow-layout diagnostic-workflow">
+<aside class="workflow-controls workspace-input" aria-label="Diagnostic configuration"><div class="workspace-region-heading input-region"><span class="region-tag">INPUT</span><div><strong>Configuration</strong><p>Choose what, where and when to check.</p></div></div><div class="workflow-config-fields">
+<section class="surface context workflow-step"><div class="panel-head"><div class="panel-title"><span class="workflow-number">1</span>Choose checks</div><button id="catalog" class="ghost">All evidence ↗</button></div>
+<div class="context-fields"><div class="field"><label for="mode">Check type</label><select id="mode"><option value="scenario">Problem scenario</option><option value="metrics">One Metrics check</option><option value="trace">One Trace check</option></select></div>
+<div class="field" id="scenario-field"><label for="scenario">Problem</label><select id="scenario"></select></div><div class="field" id="atomic-field" hidden><label for="atomic-check">Evidence key</label><select id="atomic-check"></select><p class="field-hint atomic-check-description" id="atomic-check-description"></p></div>
+</div></section>
+<section class="surface context workflow-step server-context-step"><div class="panel-head"><div class="panel-title"><span class="workflow-number">2</span>Server context &amp; evidence sources</div><button type="button" class="ghost" data-view-config>View cli.yaml ↗</button></div><div id="diagnostic-components"></div></section>
+<section class="surface context workflow-step"><div class="panel-head"><div class="panel-title"><span class="workflow-number">3</span>Check parameters</div><button type="button" class="ghost" data-view-recent-config>View recent config ↗</button></div><div id="diagnostic-observability"></div><div class="context-fields"><span id="source-summary"></span></div></section>
+<section class="surface context workflow-step"><div class="panel-head"><div class="panel-title"><span class="workflow-number">4</span>Incident window</div></div>
+<div class="context-fields"><div class="field"><label for="period">Time range</label><select id="period"><option value="15">Last 15 minutes</option><option value="5">Last 5 minutes</option><option value="60">Last hour</option><option value="lookback">Custom lookback</option><option value="custom">From / To</option></select></div><div class="field"><label for="zone">Time zone</label><select id="zone"><option value="local">Browser local</option><option value="utc">UTC</option></select></div>
+<div class="range-custom" id="custom-range" hidden><div class="field"><label for="from">From</label><input id="from" type="datetime-local" step="1"></div><div class="field"><label for="to">To</label><input id="to" type="datetime-local" step="1"></div></div>
+<div class="range-custom" id="lookback-range" hidden><div class="field"><label for="lookback">Look back (minutes)</label><input id="lookback" type="number" min="0.01" step="0.01" value="45"></div><div class="field"><label for="anchor">End at (empty = now)</label><input id="anchor" type="datetime-local" step="1"></div></div></div></section>
+</div><div class="surface workflow-launch"><button id="run" class="primary">▶ Run checks</button><p>Queries the selected interval. No model call or automatic repairs.</p><div id="diagnostic-setup" class="diagnostic-validation-feedback" hidden></div></div>
+</aside>
+<div class="workflow-results" aria-label="Diagnostic execution and results"><section class="current-diagnostic-run" aria-label="Selected diagnostic run"><div class="workspace-region-heading output-region"><span class="region-tag">OUTPUT</span><div><strong>Execution &amp; results</strong><p>Inspect collected evidence and check outcomes.</p></div><span id="output-mode" class="output-mode">Ready</span></div>
+<section class="surface execution-plan"><div class="panel-head"><div class="panel-title">Check plan</div><span id="completion" class="field-hint">Not checked</span></div><div class="execution-progress"><progress id="check-progress" max="1" value="0" aria-label="Finalized diagnostic checks"></progress><span id="check-progress-label">Ready</span></div><div id="checks" class="checks"></div></section>
+<section id="diagnostic-result" class="diagnostic-result" hidden><div id="result-origin" class="result-origin"></div>
+<section id="result-banner" class="result-banner ready" aria-live="polite"></section>
+<details id="diagnostic-details" class="surface result-details"><summary>Evidence details <span id="result-detail-count"></span></summary><div id="filters" class="filters"></div><div id="result-detail-list"></div></details>
+<section class="surface result-actions"><div class="panel-head"><div class="panel-title">Use this result</div><div class="result-export-actions"><button id="export-report" class="ghost" disabled>Download JSON</button><button id="packet" class="ghost" disabled>Agent packet ↗</button></div></div><div class="result-agent-body"><div class="result-agent-input"><label class="analysis-question-label" for="analysis-question">Question (optional)</label><textarea id="analysis-question" rows="3" maxlength="2000" placeholder="What should the Agent examine further?"></textarea><p id="analysis-context-note" class="field-hint"></p></div><div class="result-agent-actions"><button id="analyze" class="primary" disabled>Analyze findings</button><p id="analysis-requirement" class="action-requirement"></p><button class="text-link" data-tab="settings">Agent settings ↗</button><button id="cancel-analysis" class="text-link" hidden>Stop analysis</button></div></div><p class="result-action-note">Analysis uses this result and creates a separate report. No additional source queries or operations are executed.</p></section>
+<section id="investigation" class="surface investigation" hidden></section>
+</section>
+</section><details class="surface diagnostic-history history-surface" id="diagnostic-history" open><summary><span class="history-section-label">HISTORY</span> Saved runs <span id="run-history-count">0 runs</span></summary><div class="run-history-heading"><p>Earlier runs and their analysis reports · newest first. Retained while this server is running.</p><button class="ghost" id="refresh-run-history">Refresh</button></div><p id="run-history-progress" class="analysis-progress" role="status" hidden><i class="spinner"></i> Opening the selected run and its analysis reports…</p><p id="run-history-error" class="error-box" role="alert" hidden></p><div id="run-history-list"></div></details>
+</div></div></section>
+<section id="runbooks-view" hidden>
+<header class="question-header"><div><div class="problem-eyebrow">OPERATIONS</div><h1>Operational Scenarios</h1><p><strong>Confirm issues and take action.</strong> Follow a scenario to review evidence and choose the next operation.</p></div></header>
+<div class="workflow-layout operations-workflow"><aside class="workflow-controls workspace-input"><div class="workspace-region-heading input-region"><span class="region-tag">INPUT</span><div><strong>Scenario selection</strong><p>Choose a case and its review step.</p></div></div><section class="surface workflow-step"><div class="panel-head"><div class="panel-title"><span class="workflow-number">1</span>Choose a scenario</div></div><div id="runbook-picker" class="runbook-picker"></div></section><section class="surface workflow-step"><div class="panel-head"><div class="panel-title"><span class="workflow-number">2</span>Review steps</div></div><div id="runbook-step-nav"></div><p class="requirement">Open the required operation on the right. Review marks are manual.</p></section></aside><div class="workflow-results" id="runbook-content"></div></div>
+</section>
+<section id="commands-view" hidden>
+<div id="command-catalogue">
+<header class="question-header"><div><div class="problem-eyebrow">CLI OPERATIONS</div><h1>Command Explorer</h1><p><strong>All operations commands.</strong> Choose a command, set its parameters, run it and inspect the result.</p></div></header>
+<div class="workflow-layout command-browser">
+<aside class="workflow-controls workspace-input" id="command-controls"><div class="workspace-region-heading input-region"><span class="region-tag">INPUT</span><div><strong>Command &amp; parameters</strong><p>Select a command, then configure its inputs.</p></div></div><section class="surface workflow-step"><div class="panel-head"><div class="panel-title"><span class="workflow-number">1</span>Choose a command</div></div><div class="command-path-picker"><div class="command-path-row"><code class="command-path-prefix">wp</code><div id="command-path-controls"></div></div><div class="command-path-summary"><code id="selected-command-label"></code><span id="command-count"></span></div><div class="visual-shortcuts"><button data-tab="cluster">Cluster view ↗</button><button data-tab="metadata">Metadata ↗</button></div></div></section><section class="surface command-console command-config" id="command-config"></section></aside>
+<div class="workflow-results"><div class="workspace-region-heading output-region"><span class="region-tag">OUTPUT</span><div><strong>Execution &amp; results</strong><p>Inspect progress, exit status and command output.</p></div></div><section class="surface command-console output-surface" id="command-console"></section><section class="surface command-history history-surface" id="command-history"><div class="panel-head"><div class="panel-title"><span class="history-section-label">HISTORY</span> Recent command results</div></div><div id="command-history-list"></div></section></div></div>
+</div>
+<div id="command-return" class="guidance-return" hidden><button class="text-link" data-back-commands>← All command topics</button><span>Command Explorer / <b id="visual-view-name"></b></span></div>
+<section id="cluster-view" hidden>
+<header class="question-header"><div><div class="problem-eyebrow">WP ADMIN</div><h1>Cluster &amp; nodes</h1><p>Read the current memberlist of one WP service.</p></div><button id="refresh-cluster" class="primary">Read cluster state</button></header>
+<div class="workflow-layout"><aside class="workflow-controls workspace-input"><div class="workspace-region-heading input-region"><span class="region-tag">INPUT</span><div><strong>Server connection</strong><p>Select the service to inspect.</p></div></div><section class="surface context"><div class="panel-head"><div class="panel-title">WP service connection</div><button class="ghost" data-setup="cluster">Connection details ↗</button></div><div class="context-fields"><div class="field instance"><label for="wp-context">WP context</label><select id="wp-context"></select><b id="wp-context-name" class="single-choice" hidden></b></div></div><p id="cluster-requirement" class="requirement">Needs a WP Admin context. Metrics, Trace and client metadata are not required.</p></section>
+</aside><div class="workflow-results"><div class="workspace-region-heading output-region"><span class="region-tag">OUTPUT</span><div><strong>Cluster snapshot</strong><p>Current members returned by the selected service.</p></div></div><div id="cluster-result" class="surface ops-result output-surface">Read cluster state to fetch its current memberlist.</div></div></div>
+</section>
+<section id="metadata-view" hidden>
+<header class="question-header"><div><div class="problem-eyebrow">CLIENT ETCD</div><h1>Metadata</h1><p>Inspect current client metadata in one explicit etcd namespace.</p></div></header>
+<div class="workflow-layout"><aside class="workflow-controls workspace-input"><div class="workspace-region-heading input-region"><span class="region-tag">INPUT</span><div><strong>Client metadata</strong><p>Choose a namespace and the view to read.</p></div></div><section class="surface context"><div class="panel-head"><div class="panel-title"><span class="workflow-number">1</span>Metadata namespace</div><button class="ghost" data-setup="metadata">Connection details ↗</button></div>
+<details class="manual-meta" id="manual-meta"><summary>Explicit client metadata connection</summary><div class="context-fields"><div class="field"><label for="meta-etcd">Etcd endpoints</label><input id="meta-etcd" data-recent-field="metadata.etcd" autocomplete="off" placeholder="http://127.0.0.1:2379"></div><div class="field"><label for="meta-prefix">Full metadata prefix</label><input id="meta-prefix" data-recent-field="metadata.prefix" autocomplete="off" placeholder="client-instance/woodpecker"></div><button id="connect-manual">Use this namespace</button></div></details>
+<p class="requirement">Connections are remembered locally for next time. No credentials are saved. Needs etcd endpoints and a full client metadata prefix. WP Admin, observability and incident window are not required. Selecting a namespace does not test etcd connectivity.</p>
+</section>
+<div id="metadata-history-notice" class="page-notice" hidden></div>
+<div class="metadata-connection-state"><span id="metadata-attachment">No metadata connection</span><button id="disconnect-meta">Detach</button></div>
+<section class="surface metadata-views"><div class="panel-head"><div class="panel-title"><span class="workflow-number">2</span>Log &amp; operation</div></div><div class="context-fields"><div class="field"><label for="meta-log">Log name</label><input data-recent-field="log_name" autocomplete="off" id="meta-log" placeholder="Required for log, segments and consistency check"><span class="field-hint">Quorums uses the connected namespace; no log name is required.</span></div></div>
+<div class="metadata-actions"><button data-meta="M01">Log snapshot</button><button data-meta="M02">Segments</button><button data-meta="M03">Quorums</button><button data-meta="M04">Consistency check</button></div></section>
+</aside><div class="workflow-results"><div class="workspace-region-heading output-region"><span class="region-tag">OUTPUT</span><div><strong>Metadata snapshot</strong><p>Records and consistency findings from the selected namespace.</p></div></div><div id="metadata-result" class="surface ops-result output-surface">Connect to client etcd to read its current metadata.</div></div></div>
+</section>
+</section>
+<section id="settings-view" hidden>
+<header class="question-header"><div><div class="problem-eyebrow">WORKSPACE SETUP</div><h1>Settings</h1><p>Configure each connection for the operations that use it.</p></div></header>
+<section class="surface settings-panel"><div class="panel-head"><div class="panel-title">What each operation needs</div></div><div class="settings-body table-scroll"><table class="requirements-table"><thead><tr><th>Operation</th><th>Required</th><th>Choose it in</th></tr></thead><tbody>
+<tr><td>Local commands / catalog</td><td>No remote configuration</td><td>Command Explorer</td></tr>
+<tr><td>Read cluster state</td><td>WP Admin context</td><td><button class="text-link" data-tab="cluster">Cluster ↗</button></td></tr>
+<tr><td>Read client metadata</td><td>Etcd endpoints + metadata prefix; log name for log-specific views</td><td><button class="text-link" data-tab="metadata">Metadata ↗</button></td></tr>
+<tr><td>Node-local LogStore</td><td>WP Admin context → Node → Log ID → Segment ID as required; no etcd</td><td>Command Explorer</td></tr>
+<tr><td>Replica checks / probes</td><td>WP Admin + client metadata namespace → Log name → Segment</td><td>Command Explorer</td></tr>
+<tr><td>Raw etcd keys</td><td>Etcd profile or endpoints → key / prefix; no WP metadata prefix</td><td>Command Explorer</td></tr>
+<tr><td>Kubernetes</td><td>Kubeconfig / Kubernetes context → namespace → resource / Pod</td><td>Command Explorer</td></tr>
+<tr><td>Run WAL checks</td><td>Client / Server sources + explicit scope + incident interval</td><td><button class="text-link" data-tab="diagnostics">Diagnostics ↗</button></td></tr>
+<tr><td>Inspect / download a report</td><td>A completed or partial result; no live connection required</td><td>Diagnostics result</td></tr>
+<tr><td>Analyze findings</td><td>A diagnostic result + optional Agent configuration</td><td>Diagnostics result</td></tr>
+</tbody></table></div></section>
+<section class="surface settings-panel"><div class="panel-head"><div class="panel-title">Configured connections</div></div><div class="settings-body"><p id="config-path"></p><p id="metadata-history-location" class="field-hint"></p><div id="connection-inventory"></div><p class="requirement">Edit cli.yaml and restart wp webui to update connection definitions. Client parameters are temporary request inputs. Suggestions are stored separately, one field at a time. Page selections do not modify the file.</p><div id="dashboard-links"></div></div></section>
+<section class="surface settings-panel"><div class="panel-head"><div class="panel-title">Optional Agent <span id="agent-status" class="status pending">Off</span></div><button id="agent-settings" class="ghost">Setup instructions ↗</button></div><div class="settings-body"><p id="agent-description"></p><p class="requirement">Checks and report inspection run without a model. Analysis sends only the collected findings packet.</p></div></section>
+</section>
+</main></div>
+<div class="overlay" id="overlay" hidden><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1"><header class="drawer-top"><div><div class="eyebrow" id="drawer-kicker"></div><h2 id="drawer-title"></h2></div><button id="close" aria-label="Close details">✕</button></header><div class="drawer-body" id="drawer-body"></div><footer class="drawer-bottom"><button id="drawer-close">Close</button></footer></section></div>
+</body></html>

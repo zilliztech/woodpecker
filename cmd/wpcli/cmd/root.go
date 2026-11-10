@@ -1,7 +1,11 @@
 // Package cmd holds the cobra commands for the wp CLI.
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/spf13/cobra"
+
+	diagcommand "github.com/zilliztech/woodpecker/diagnostics/command"
+)
 
 // NewRootCommand creates the root cobra command for wp with all global flags.
 func NewRootCommand() *cobra.Command {
@@ -16,6 +20,7 @@ func NewRootCommand() *cobra.Command {
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			sourceWriter = cmd.ErrOrStderr()
 		},
+		PersistentPostRun: rememberCommandInputs,
 		// RunE prints help when wp is invoked with no sub-command so that
 		// the global flags section is visible in the output.
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -54,8 +59,11 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newOpsCommand())
 	root.AddCommand(newMetricsCommand())
 	root.AddCommand(newDiagnoseCommand())
+	root.AddCommand(diagcommand.NewCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }}))
 	root.AddCommand(newK8sCommand())
 	root.AddCommand(newShellCommand())
+	root.AddCommand(newWebUICommand())
+	root.AddCommand(diagcommand.NewReportCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }}))
 
 	return root
 }

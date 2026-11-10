@@ -436,5 +436,53 @@
     "{\"schema_version\":\"wp.diagnosis/v1\",\"collection_status\":\"completed\",\"observation_mode\":\"live_window\",\"findings\":[{\"rule_id\":\"write_stall\",\"outcome\":\"suspected_stall\",\"evidence_strength\":\"suspected\",\"unknown\":[\"tenant_association_unknown\"]}]}\n# Abbreviated illustrative output; inspect actual observations and coverage_gaps.",
     "PartialCollection (exit 6): required metrics/ops/writers were unavailable or writer details exceeded the bound; report retained.\nBudget exhausted (exit 5) / cancellation (exit 7): partial evidence retained.",
     "Source-build capability. Reuses the WP service context and node Admin mappings. The write scenario checks append, writer-local buffer/flush trends, actual disk watermarks and optional explicitly selected log/segment quorum. Missing metadata does not fall back to another namespace. All includes these checks; focused stuck-write/read contracts remain compatible. --window samples from now; snapshot cannot prove a sustained stall. Queue pressure does not prove a disk/fsync cause, and missing replica observations do not prove quorum loss. Maintenance/object-store attribution remains an explicit evidence gap. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for warning/critical findings. Same-log completions cannot prove an individual op finished; resets, registry limits and missing evidence remain explicit. No external Prometheus, trace or Loki client is included.\n\nSource-build capability. Reuses the WP service context and node Admin mappings. The read scenario separates success/EOF and pending server activity from leased reader progress and configured quorum evidence. Reader checks require explicit log/segment and WP-client etcd/prefix; there is no fallback namespace. The source client profile reports about every 30 seconds, so short unchanged-position windows are inconclusive. Fresh renewed attempts plus available data and catch-up expectation are needed for a no-progress suspicion. A missing replica is not quorum loss or corruption; a metadata end is not payload verification. Server ops lack reader identity, and duplicate numeric log IDs do not establish a tenant join. Existing focused stuck-write/read contracts remain compatible. --window samples now, not history. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for warning/critical findings. No external Prometheus, trace or Loki client is included."
+  ],
+  "webui": [
+    "wp webui --config /path/to/cli.yaml --listen 127.0.0.1:8795",
+    "Open the printed local URL.",
+    "A missing or invalid cli.yaml prevents startup.",
+    "Diagnostics finds issues; Operations confirms and handles them; Command Explorer exposes native commands. No diagnostic action automatically repairs the cluster."
+  ],
+  "diag catalog": [
+    "wp diag catalog --source metrics --check writer-latency",
+    "Lists the metric, formula, rule and required inputs without querying a source.",
+    "An unknown key is rejected.",
+    "The CLI, rules and WebUI share the same canonical check keys."
+  ],
+  "diag metrics check": [
+    "wp --context local diag metrics check writer-latency --window 15m --details all -o json > writes.json",
+    "A wp.diag/v1 report for the selected Writer timer.",
+    "Missing source configuration, failed queries and insufficient coverage remain explicit.",
+    "This checks recorded WP client Writer operations. It does not infer application end-to-end latency."
+  ],
+  "diag trace check": [
+    "wp --context local diag trace check server-append-duration --window 15m --details all -o json > spans.json",
+    "A source-local report for selected retained append spans.",
+    "Missing spans or a query budget prevent a full assessment.",
+    "Sampling, retention and emitted tags bound the evidence. No spans does not imply zero operation latency."
+  ],
+  "diag scenario": [
+    "wp --context local diag scenario slow-writes --window 15m --node-id woodpecker-0 --details all -o json > diagnosis.json",
+    "Independent Metrics/Trace findings summarized by WAL step.",
+    "Configure at least one required source; checks without a source are skipped.",
+    "A scenario aggregates check results without a second root-cause engine or automatic cross-source association."
+  ],
+  "report inspect": [
+    "wp report inspect diagnosis.json server-disk-watermark",
+    "Shows the recorded calculation, measurements and available curves.",
+    "Detail omitted during collection cannot be reconstructed without another check.",
+    "Consumes saved JSON without a source query or model call."
+  ],
+  "report export": [
+    "wp report export diagnosis.json --packet > findings.json",
+    "Exports a bounded findings packet with original report provenance.",
+    "Malformed or oversized reports are rejected.",
+    "Without --packet, copies the original report. It does not rerun checks."
+  ],
+  "report analyze": [
+    "wp --context local report analyze diagnosis.json --config /path/to/cli.yaml",
+    "The explicitly configured backend-local Agent explains abnormal findings.",
+    "No Agent configuration, no findings or a model failure leaves the original report unchanged.",
+    "This explicitly invokes a model with supplied evidence. It cannot automatically query sources, run commands or repair the cluster."
   ]
 }

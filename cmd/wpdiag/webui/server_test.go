@@ -212,10 +212,14 @@ func TestRunLimitsCancellationAndShutdown(t *testing.T) {
 	require.Equal(t, 429, code)
 	code, _ = call(t, s, "GET", "/api/runs/"+a.ID+"/report", nil)
 	require.Equal(t, 409, code)
-	select {
-	case <-m.entered:
-	case <-time.After(time.Second):
-		t.Fatal("No collection started")
+	// Both jobs must enter the fixture before cancelling a specific one; either
+	// job may otherwise be the first sender on the shared channel.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-m.entered:
+		case <-time.After(time.Second):
+			t.Fatal("Both collections must start")
+		}
 	}
 	code, _ = call(t, s, "POST", "/api/runs/"+a.ID+"/cancel", map[string]any{})
 	require.Equal(t, 200, code)

@@ -1,132 +1,128 @@
 # CI ownership and local verification
 
-Three primary workflows report independently. Their first revision deliberately
-shares the same conservative change filters, including shared runtime/config,
-root dependencies, tools, acceptance helpers and CI files. Splitting ownership
-does not assume that a CLI is independent of its SDK/runtime dependencies.
+Three unit workflows have disjoint package ownership. They intentionally share
+conservative triggers because `wp` imports native SDK/runtime code and the
+coverage aggregate expects three uploads for the same commit. A shared trigger
+does not mean the workflows execute each other's unit packages.
 
-| Workflow | Check / owner | Local entry point |
+| Workflow / rerun command | Responsibility | Local verification |
 | --- | --- | --- |
-| Core Unit Test (`unit-test.yaml`) | Core runtime, SDK, server, metadata, common libraries and remaining root packages | `make unit-test-core` |
-| Core Unit Test | CI Contracts: ownership, migration, coverage and actual label-script counterexamples | `python3 -m unittest discover -s .github/scripts -p 'test_ci_*.py' -v` |
-| WPCLI CI (`wpcli-ci.yaml`) | WPCLI Unit, including native WP diagnosis | `make unit-test-wpcli` |
-| WPCLI CI | WPCLI Terminal: real pseudo-terminal interaction against local fixtures | `make wpcli` then `python3 cmd/wpcli/tests/shell_terminal_test.py --binary bin/wp` |
-| Diagnostics CI (`diagnostics-ci.yaml`) | Diagnostics Unit: external sources, stages, runner, CLI/WebUI and wpcli adapter | `make unit-test-diagnostics` |
-| Diagnostics CI | Diagnostics Build / CLI: both real binaries and standalone contracts | `make wpcli wpdiag`; `python3 cmd/wpdiag/tests/smoke.py` |
-| Diagnostics CI | Eight independent backend smoke matrix jobs; `fail-fast: false` | `python3 cmd/wpdiag/tests/NAME_smoke.py` |
-| Diagnostics CI | Diagnostics WebUI: Node 22, Chrome and bounded HTTP fixtures | `python3 cmd/wpdiag/tests/webui_smoke.py` |
-| Diagnostics CI | Diagnostics Harness: nested protocol module, root helper packages and offline Python lifecycle/evidence regressions | Commands below |
-| Diagnostics CI | Stack Examples: all dotted Python test files, support-chart lint and generated website consistency | `python3 .github/scripts/stack_tests.py` |
-| Component Integration Test (existing workflow) | SDK component tests, excluding diagnostics/tracing helper packages | `make integration-test` |
-| Component Integration Test | Trace Export Integration: actual queue/client spans exported into temporary Jaeger, request-helper and lifecycle regressions | `python3 tests/integration/tracing/append_propagation.py --output /tmp/wp-append-trace-evidence` |
+| Core Unit Test — `/rerun-unit-test` | SDK, server, metadata and common runtime packages; CI ownership/controller contracts | `make unit-test-core`; `python3 -m unittest discover -s .github/scripts -p 'test_ci_*.py' -v` |
+| WPCLI CI — `/rerun-wpcli` | Native commands including **`wp diagnose`**, context/configuration, candidate inputs and shell | `make unit-test-wpcli`; `python3 cmd/wpcli/tests/shell_terminal_test.py --binary bin/wp` |
+| Diagnostics CI — `/rerun-diagnostics` | **`wp diag`**, saved `wp report` results, evidence clients/rules, optional Agent adapters and operations WebUI | `make unit-test-diagnostics`; current CLI/browser and backend fixtures below |
+| Component Integration Test — `/rerun-component-test` | SDK integration packages; actual runtime Trace export and protocol propagation | `make integration-test`; `python3 tests/integration/tracing/append_propagation.py --output /tmp/wp-append-trace-evidence` |
 
-Root-package ownership is defined once in `scripts/ci_packages.py`. `core`,
-`wpcli` and `diagnostics` are complete, disjoint partitions of the former root
-unit set (all packages outside `tests/`). Native diagnosis stays under wpcli;
-`diagnostics/wpcli` stays under the external tool and tests the adapter contract.
-`python3 .github/scripts/ci_packages.py verify` enumerates actual packages and
-rejects incomplete ownership or an unregistered nested diagnostic Go module.
-New packages under an owned directory are included automatically.
-Enumeration retains packages with import errors (`go list -e`): the owning
-suite fails its actual tests, while an unrelated tool's broken import does not
-prevent enumeration/startup of every other suite.
+`wp diagnose` inspects the current native runtime. `wp diag` queries retained
+Metrics/Trace for an incident window. Their command-entry unit tests belong to
+WPCLI and Diagnostics respectively, even though both are exposed by `bin/wp`.
+`wp webui` startup is wired by WPCLI; its server/interaction implementation is
+owned by Diagnostics. No supported CI execution depends on the retired
+`bin/wpdiag`; its migration notice still has a unit test.
 
-The SDK selector retains future SDK integration subpackages but excludes all
-`tests/integration/diagnostics/**` and `tests/integration/tracing/**` helpers.
-Those helpers have explicit owners above. The nested `queryclient` module is
-not included by root `go list`; its independent test/tidy step is intentional.
+## Diagnostics jobs
 
-## Coverage
+| Check | What it verifies |
+| --- | --- |
+| Diagnostics Unit | `diagnostics/**` and `cmd/wpdiag/**` unit/race/coverage tests, including reusable historical parser libraries |
+| Diagnostics Build | Builds the current `bin/wp` once for the dependent jobs |
+| Diagnostics CLI | Atomic checks, executable Skill examples, Explorer rule-file propagation and scenario/source/window/output contracts against bounded HTTP fixtures |
+| Diagnostics Smoke (prometheus) | Current WP Metrics checks against a disposable real Prometheus 3.0.1 |
+| Diagnostics Smoke (jaeger) | Current WP Trace checks against disposable real Jaeger 1.53.0, including exact Trace IDs |
+| Diagnostics WebUI | All three workspace modules, validation, history and fake-Agent follow-up using Node 22/Chrome and HTTP fixtures |
+| Diagnostics Harness | Tests the evidence/workload fixture utilities: nested query-client protocol module, root helper packages and offline Python regressions |
+| Stack Examples | Offline deployment-script tests, support-chart lint and generated website consistency |
 
-The three Go unit jobs preserve `-race -short -cover -covermode=atomic -failfast`
-and the 20-minute test timeout. They produce `coverage-core.out`,
-`coverage-wpcli.out`, `coverage-diagnostics.out`, uploaded with matching flags.
-Only the selected packages are instrumented, preserving the previous package
-coverage boundary. Codecov merges the reports for the same commit and waits for
-three uploads before reporting statuses. Existing project/patch thresholds and
-Server/Client/Meta/Common components remain; WPCLI and Diagnostics components
-make the new boundaries visible.
+The backend matrix has **two** entries. Retired Milvus-stage, integrated and Loki
+smoke programs under `cmd/wpdiag/tests/legacy/` are historical receipts and are
+not executed by the workflow. Keeping a reusable library or offline fixture
+regression does not expose a retired diagnostic command.
 
-Coverage upload follows only its own Go tests. CLI smoke, browser, backend,
-terminal, stack and harness failures remain independently visible and do not
-prevent another successful unit job from uploading. A failed unit job does not
-produce a falsely complete three-report aggregate. `make unit-test` remains the
-local aggregate command and produces the legacy combined `coverage.out`.
+Stack Examples stays in Diagnostics CI as verification of the supplied
+observability/deployment example, rather than adding a fourth workflow here.
+It does not deploy a cluster. The harness tests the fixture helpers, not an
+operator's running system; it never opts into `--execute` workloads. Browser
+and ordinary CLI tests use no model credentials or real model requests.
 
-All three workflows must retain equivalent triggers while this three-upload
-strategy is used. A later selective-routing change must also handle coverage
-and expected checks; it cannot simply omit one of the three reports.
+## Package ownership and coverage
 
-## Fixtures, deployment and artifacts
+`.github/scripts/ci_packages.py` defines one owner per root-module package:
+`cmd/wpcli/**` → WPCLI; `cmd/wpdiag/**` and `diagnostics/**` → Diagnostics;
+remaining non-test packages → Core. `verify` enumerates actual packages and
+rejects incomplete/overlapping ownership or an unregistered nested module.
+Future packages under an owned directory are included automatically. Broken
+imports stay in the owning package set and fail its own tests rather than
+preventing every suite from starting.
 
-Backend smoke uses temporary Prometheus 3.0.1, Jaeger 1.53.0 and Loki 3.5.7
-containers. WebUI uses explicit HTTP fixtures; trace export uses actual Go
-execution with a generated-gRPC acknowledgement fixture, not real disk storage.
-These are not real Kubernetes, Milvus E2E, durability or the #492 browser gate.
-The harness job runs only `test_*.py`, never opted-in `--execute` workloads.
-Real deployment/fault/performance acceptance remains externally provisioned,
-explicitly opted in and separately documented under #458.
+SDK component selection excludes `tests/integration/diagnostics/**` and
+`tests/integration/tracing/**`. The nested diagnostic `queryclient` module has
+an explicit independent test/tidy owner. Trace request/lifecycle helper tests
+belong to Trace Export Integration.
 
-The stack loader imports every `*.test.py` explicitly because Python's standard
-discovery skips dotted/hyphenated filenames. Empty/missing suites fail. All
-99 existing offline cases are retained; the existing cache-dependent Grafana
-render case may skip when its pinned chart is not cached. The support chart is
-separately linted with optional observability enabled. No cluster is contacted.
+The three unit jobs retain race, short tests, atomic coverage and bounded
+execution. They upload `coverage-core.out`, `coverage-wpcli.out` and
+`coverage-diagnostics.out` with corresponding flags. Codecov waits for all three
+uploads. Current project/patch thresholds remain in force; CI cleanup does not
+suppress coverage failures or exclude newly added implementation from coverage.
+`make unit-test` remains the local combined suite producing `coverage.out`.
 
-Install `.github/scripts/requirements-ci.txt` for CI contract and stack tests.
-The stack tests use fake command backends; the terminal tests use Unix PTYs.
-Browser evidence is uploaded on failure, trace evidence always, with seven-day
-retention. Linux binaries are shared only between jobs in the same Diagnostics
-run, retained for one day and made executable after download.
-The browser job installs stable Chrome for Testing and passes its exact binary
-path, rather than relying on a runner-image browser wrapper. Startup retains
-bounded Chrome stderr, detects early exit and waits for owned process cleanup;
-the original ten-second startup bound and test assertions remain in force.
+Keep the three primary workflow triggers equivalent until coverage/expected
+checks support selective routing. The other runtime integration workflows also
+retain conservative Go/dependency triggers; this change does not redesign their
+nightly, release, upgrade, fault or performance responsibilities.
+
+Changes under `.agents/skills/**` trigger the three primary suites too. Diagnostic
+examples are executed against fixtures so retired flags cannot remain in Skills
+while the CLI's own tests pass. Explorer regressions exercise both rule-file
+overrides with positional arguments and bindings, checking effective thresholds
+and verdicts in the actual subprocess results.
+
+## Runtime export versus diagnostic assessment
+
+Trace Export Integration runs actual WP queue/client/executor code and a local
+generated-gRPC acknowledgement fixture, exporting real spans into disposable
+Jaeger. It checks retained parent identities, remote client/server relationships
+and distinct batch links directly. It requires neither a diagnostic binary nor
+an application cluster. Diagnostic query/rule behavior belongs to the independent
+Jaeger smoke job above. Stream cleanup cancellation alone does not establish an
+application failure; the export receipt makes no health/durability verdict.
+
+These fixtures do not verify disk writes/fsync, crash durability, a deployed
+Milvus read/write chain, production sampling or lossless export. Previous #450,
+#458 and #459 receipts remain historical; CI does not reinstate a cross-application
+release or image-matrix gate. Real workloads/repairs are separate explicit actions.
+
+## Artifacts and local prerequisites
+
+Install `.github/scripts/requirements-ci.txt` for CI/stack Python tests.
+Terminal tests use Unix PTYs. WebUI installs stable Chrome for Testing and passes
+its exact executable through `CHROME_BIN`, preserving bounded startup diagnostics
+and owned-process cleanup. Browser artifacts are uploaded on failure; raw Trace
+export evidence is uploaded after either outcome, with seven-day retention.
+The current `wp` binary is shared only among jobs within one Diagnostics run and
+retained for one day.
+
+The stack loader explicitly imports dotted `*.test.py` files, rejects missing or
+empty suites, and retains the cache-dependent Grafana-only render skip when its
+pinned chart is unavailable. The support chart is linted with optional
+observability enabled. No Kubernetes cluster is contacted by these checks.
 
 ## Rerun and check aggregation
 
-- `/rerun-unit-test`: Core Unit Test and CI Contracts.
-- `/rerun-wpcli`: WPCLI Unit and WPCLI Terminal.
-- `/rerun-diagnostics`: all Diagnostics CI jobs.
-- `/rerun-component-test`: SDK component and trace export integration.
-- `/rerun`: failed jobs in failed workflows on the current PR head.
+`/rerun` retries failed jobs in failed runs on the current PR head. A named
+`/rerun-*` command reruns its **whole workflow**; for example `/rerun-lint` and
+`/rerun-mod-tidy` both rerun Code Checker. The PR command guide lists the supported
+mappings, including service corruption/stability and issue-command tests. The
+unknown-command help derives its list from the actual dispatch mapping.
 
-Comment commands and the privileged label controller load from the default
-branch, so their updated mappings take effect after merge. This PR's new check
-names must be inspected directly before that transition. Repository rulesets or
-branch-protection required checks are external configuration; this change does
-not edit those settings. Each check name is unique.
+`ci-passed` checks all 12 primary job names, including both backend entries.
+Matching changes with a missing, pending, failed, skipped or cancelled primary
+check cannot get the label. Other PR test workflows participate when their
+checks run, including corruption, both PR stability tiers and Issue Command
+Tests. K8s stability, Chaos Mesh, release and baseline-priming workflows remain
+nightly/manual/tag operations, outside PR gating.
 
-`ci-passed` considers all 18 primary job names, including every smoke matrix
-entry. Matching changes with a missing, pending, failed, skipped or cancelled
-primary check cannot get the label. The controller uses only GitHub API metadata,
-checks both names of renamed files, and ignores completed runs for an older PR
-head. It never checks out or executes PR code/artifacts in its privileged job.
-Other existing workflows retain their established selected-check policy.
-
-## Migration receipt
-
-Base: merged #498 (`4db790c`). All prior Unit Test steps have an owner in the
-table above: pure Go packages, standalone CLI, eight smoke scripts, browser,
-diagnostic helpers/nested module/Python tests, actual append export and tracing
-request/Python contracts. Added coverage includes shell PTY interaction, stack
-offline suites and CI migration/label counterexamples. No diagnostic rule,
-production behavior, fault threshold or live acceptance result is changed.
-
-Local verification of this migration: actual package sets are 60 core, nine
-wpcli and 13 diagnostics packages; all three race/coverage suites pass with
-Go 1.25.1. The host's older downloaded Go 1.25.0 fails coverage for no-test
-entrypoint packages with `no such tool "covdata"`; CI's Go `1.25` selection uses
-the available patch release. Initial core runs also exposed an intermittent
-failure of the unchanged metadata reader lease-TTL test, including in isolation.
-The final complete core suite passed without production/test edits. Failure
-and final logs are retained at `/tmp/wp-ci-core-1251.log`,
-`/tmp/wp-ci-meta-isolated.log` and `/tmp/wp-ci-core-final.log`; no assertion was
-weakened or test skipped to obtain that pass.
-
-The standalone CLI, nine PTY checks, all eight backend smoke programs, 21 browser
-checks, 102 diagnostics harness and ten tracing Python regressions passed.
-All 99 stack tests executed (one existing chart-cache skip), the support chart
-linted, the eleven new CI contract/startup tests passed, and actionlint 1.7.12 accepted
-the changed workflows. Codecov's official validation endpoint accepted the new
-configuration. This validation does not run the real Kubernetes fault harnesses.
+The privileged label controller uses API metadata only, checks previous filenames
+for renames and ignores completed runs for an older head. It never executes PR
+code or artifacts. The comment/controller workflows load from the default branch,
+so mapping and aggregation changes take effect after merge. Repository branch
+protection is external configuration and is not changed by this patch.

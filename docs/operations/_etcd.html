@@ -1,6 +1,6 @@
 <h2 id="discover">1. Discover keys before choosing a metadata prefix</h2>
 <p>This command group is included in v0.1.47 and later; it is not included in v0.1.46. Install a matching release or build from source, and confirm <code>wp etcd --help</code> before using these examples.</p>
-<p>Use this read-only group when you can reach etcd but do not yet know the Woodpecker namespace. It connects directly to etcd: no Woodpecker admin endpoint, node mapping or metadata prefix is required. Supply a reachable endpoint, or save it in a context as shown below.</p>
+<p>Use this read-only group when you can reach etcd but do not yet know the Woodpecker namespace. It connects directly to etcd: no Woodpecker admin endpoint, node mapping or metadata prefix is required. Supply a reachable endpoint explicitly, or select a private client parameter file.</p>
 <pre><code># Omit the prefix to explore all keys (first page only).
 wp etcd list --etcd 127.0.0.1:32379 --limit 20
 # Narrow the listing using an actual prefix found in that output.
@@ -10,7 +10,7 @@ wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20</code></pre>
 milvus-prod/woodpecker/version    90       1        0
 
 1 keys shown; snapshot revision 105; more=false</code></pre>
-<p>A prefix is literal: <code>list /</code> lists only keys starting with a slash; it does not mean all keys. Empty results mean no matching keys in this snapshot, not an unhealthy cluster. A connection or permission error means the listing could not be established. This group never prepends the context's <code>etcd.meta_prefix</code>.</p>
+<p>A prefix is literal: <code>list /</code> lists only keys starting with a slash; it does not mean all keys. Empty results mean no matching keys in this snapshot, not an unhealthy cluster. A connection or permission error means the listing could not be established. This group never prepends a metadata prefix.</p>
 
 <h2 id="values">2. Inspect a key and understand its value</h2>
 <pre><code>wp etcd get milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 -o json
@@ -36,14 +36,11 @@ wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json \
 <p>Repeat until <code>more=false</code>. The base64 cursor preserves binary keys. The <code>keys</code> array contains this page; <code>count</code> describes matching keys remaining in the queried range, so it can exceed the page length. <code>--after-key</code> is an alternative for ordinary text keys; never combine it with <code>--after-key-base64</code>.</p>
 <p>Use <code>--revision</code> on get/cat too when comparing values with a listing. If etcd has compacted that revision, restart the listing at a new snapshot; do not silently mix pages from different revisions.</p>
 
-<h2 id="context">4. Save an etcd-only context</h2>
-<p>Save the endpoint once for this command group. Select the file using the locations described in <a href="cli.html#cli-yaml">CLI setup</a>.</p>
-<pre><code>current-context: raw-etcd
-contexts:
-  raw-etcd:
-    etcd:
-      endpoints:
-        - 127.0.0.1:32379</code></pre>
-<pre><code>wp --context raw-etcd etcd list --limit 20
-wp --context raw-etcd etcd get milvus-prod/woodpecker/version</code></pre>
-<p>Add the context's authentication/TLS fields or their command-flag equivalents when etcd requires them; see <a href="cli.html#etcd-connection">etcd connection settings</a>. Explicit flags override context settings for one invocation. Raw etcd operations never discover a connection through a Woodpecker node.</p>
+<h2 id="context">4. Reuse explicit client parameters</h2>
+<p>Keep etcd authority separate from server contexts. For repeated operations, explicitly select a private client parameter file:</p>
+<pre><code># /path/to/client-parameters.yaml
+endpoints: [http://127.0.0.1:32379]
+# Add host-local TLS/authentication settings when required.</code></pre>
+<pre><code>wp etcd list --client-parameters-file /path/to/client-parameters.yaml --limit 20
+wp etcd get tenant/woodpecker/version --etcd http://127.0.0.1:32379</code></pre>
+<p>Explicit flags override the private parameter file. Raw operations do not use context metadata authority or Admin discovery. See <a href="cli.html#etcd-connection">etcd connection settings</a> for authentication/TLS fields. Recent input suggestions are independent values, not a saved tenant profile.</p>

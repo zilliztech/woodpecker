@@ -26,6 +26,10 @@ on:
       - E2E Object Storage
       - Embed MinIO Without ConditionWrite
       - E2E Service
+      - E2E Service Data Corruption
+      - Service Stability (Process)
+      - Service Stability (Docker)
+      - Issue Command Tests
       - Component Integration Test
       - Chaos Test
       - Operator Test
@@ -94,12 +98,9 @@ jobs:
             "Core Unit Test" "CI Contracts" "WPCLI Unit" "WPCLI Terminal"
             "Diagnostics Unit" "Diagnostics Build" "Diagnostics CLI"
             "Diagnostics WebUI" "Diagnostics Harness" "Stack Examples"
-            "Diagnostics Smoke (prometheus)" "Diagnostics Smoke (integrated)"
-            "Diagnostics Smoke (append)" "Diagnostics Smoke (persistence)"
-            "Diagnostics Smoke (consume)" "Diagnostics Smoke (query)"
-            "Diagnostics Smoke (jaeger)" "Diagnostics Smoke (loki)"
+            "Diagnostics Smoke (prometheus)" "Diagnostics Smoke (jaeger)"
           )
-          REQUIRED_CHECKS=("${ROOT_CHECKS[@]}" "Lint" "Go Mod Tidy Check" "E2E Local" "E2E Object Storage" "Embed MinIO Without ConditionWrite" "E2E Service" "Component Integration Test" "Trace Export Integration" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
+          REQUIRED_CHECKS=("${ROOT_CHECKS[@]}" "Lint" "Go Mod Tidy Check" "E2E Local" "E2E Object Storage" "Embed MinIO Without ConditionWrite" "E2E Service" "E2E Service Data Corruption" "Service Stability (Process)" "Service Stability (Docker)" "Issue Command Tests" "Component Integration Test" "Trace Export Integration" "Chaos Test" "Operator Test" "Upgrade Compat Local" "Upgrade Compat Object Storage" "Upgrade Compat Service")
           CHECKS=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket 2>/dev/null || echo "[]")
 
           # Match the identical paths in the three primary workflows. Missing
@@ -110,7 +111,7 @@ jobs:
           ROOT_EXPECTED=false
           while IFS= read -r path; do
             case "$path" in
-              *.go|go.mod|go.sum|config/*|cmd/wpcli/*|cmd/wpdiag/*|diagnostics/*|tests/integration/diagnostics/*|tests/integration/tracing/*|deployments/milvus-full-stack-helm/*|docs/stack-examples/*|Makefile|codecov.yml|.github/scripts/ci_*|.github/scripts/test_ci_*|.github/scripts/stack_tests.py|.github/scripts/requirements-ci.txt|.github/workflows/*)
+              *.go|go.mod|go.sum|config/*|.agents/skills/*|cmd/wpcli/*|cmd/wpdiag/*|diagnostics/*|tests/integration/diagnostics/*|tests/integration/tracing/*|deployments/milvus-full-stack-helm/*|docs/stack-examples/*|Makefile|codecov.yml|.github/scripts/ci_*|.github/scripts/test_ci_*|.github/scripts/stack_tests.py|.github/scripts/requirements-ci.txt|.github/workflows/*)
                 ROOT_EXPECTED=true ;;
             esac
           done <<< "$CHANGED_FILES"

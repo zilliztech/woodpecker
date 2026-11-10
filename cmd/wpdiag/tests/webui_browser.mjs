@@ -43,7 +43,7 @@ try{
  const expectStatus=(report,status)=>assert.equal(report.status,status);
  await call('Page.enable');await call('Runtime.enable');await call('Accessibility.enable');
  await call('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:output,eventsEnabled:true});
- await call('Page.navigate',{url});
+ await call('Page.navigate',{url:new URL('/advanced',url).href});
  await wait("typeof state!=='undefined' && state.catalog!==null",'No module catalog');
  assert.equal(await evaluate("document.querySelectorAll('#modules input').length"),8);
  await set('connection-prometheus','fixture');await set('connection-trace','fixture');await historical();await preview();

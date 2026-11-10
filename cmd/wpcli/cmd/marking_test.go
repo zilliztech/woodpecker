@@ -34,19 +34,8 @@ func TestMarkingDiscovery_FromAdminConfig(t *testing.T) {
 	require.NoError(t, err)
 	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
 
-	conn, err := resolveMetaEtcd(&metaEtcdFlags{})
-	require.NoError(t, err)
-	require.Equal(t, []string{"etcd-a:2379", "etcd-b:2379"}, conn.endpoints)
-	require.Equal(t, "by-dev/woodpecker/marking", conn.kb.SegmentCompactedNotifyStatusPrefix())
-	require.Equal(t, "by-dev/woodpecker/marking/7/3", conn.kb.BuildSegmentCompactedNotifyStatusKey(7, 3))
-	// The cluster's own TLS/auth settings are carried into the connection spec.
-	assert.True(t, conn.useSSL)
-	assert.Equal(t, "/certs/client.crt", conn.tlsCert)
-	assert.Equal(t, "/certs/client.key", conn.tlsKey)
-	assert.Equal(t, "/certs/ca.crt", conn.tlsCACert)
-	assert.Equal(t, "1.3", conn.tlsMinVer)
-	assert.Equal(t, "wp", conn.username)
-	assert.Equal(t, "secret", conn.password)
+	_, err = resolveMetaEtcd(&metaEtcdFlags{})
+	require.ErrorContains(t, err, "--etcd")
 }
 
 // TestMarkingDiscovery_FlagOverridesSkipDiscovery verifies --etcd/--meta-prefix work fully
@@ -133,7 +122,7 @@ func TestMarkingDiscovery_ExplicitFlagBeatsLoopback(t *testing.T) {
 	require.NoError(t, err)
 	Globals = GlobalFlags{AdminPort: port, Timeout: 5 * time.Second}
 
-	conn, err := resolveMetaEtcd(&metaEtcdFlags{etcdEndpoints: "etcd-a:2379"})
+	conn, err := resolveMetaEtcd(&metaEtcdFlags{etcdEndpoints: "etcd-a:2379", metaPrefix: "explicit/wp"})
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"etcd-a:2379"}, conn.endpoints)
@@ -166,7 +155,7 @@ func TestMarkingDiscovery_NoEndpointDiscoveredIsRefused(t *testing.T) {
 	require.Contains(t, err.Error(), "--etcd", "the message must name the flag that resolves it")
 	// Assert the empty-list wording, not just the flag: the loopback branch also names --etcd,
 	// so a broken length guard would otherwise pass here while reporting "endpoint [] is loopback".
-	require.Contains(t, err.Error(), "no etcd endpoint could be discovered")
+	require.Contains(t, err.Error(), "server contexts do not select client metadata")
 }
 
 // TestMarkingDiscovery_LoopbackIPIsRefused pins the address form, not the spelling: 127.0.0.1
