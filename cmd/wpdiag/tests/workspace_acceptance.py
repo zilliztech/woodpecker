@@ -5,17 +5,126 @@ No cluster, model account, model request or npm package is used.
 """
 import argparse
 import copy
+import datetime
+import http.cookiejar
 import http.server
 import json
 import os
 from pathlib import Path
 import queue
 import re
+import shlex
 import subprocess
 import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
+
+
+def verify_skill_examples(binary, path):
+    """Execute the documented commands against fixtures, never through a shell."""
+    stamp = lambda seconds: datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc).isoformat()
+    substitutions = {'context': 'fixture-a', 'node-id': 'node-1',
+                     'RFC3339-start': stamp(time.time()-300), 'RFC3339-end': stamp(time.time()-1)}
+    substitutions.update(start=substitutions['RFC3339-start'], end=substitutions['RFC3339-end'])
+    receipts = []
+    skills = Path(__file__).parents[3] / '.agents/skills'
+    for name in ('wp-metrics-checks', 'wp-trace-checks', 'wp-wal-reads', 'wp-wal-writes'):
+        document = (skills / name / 'SKILL.md').read_text()
+        blocks = re.findall(r'```bash\n(.*?)```', document, re.S)
+        assert blocks, name
+        for block in blocks:
+            for example in block.replace('\\\n', ' ').splitlines():
+                if not example.strip():
+                    continue
+                values = dict(substitutions, name='writer-errors' if name == 'wp-metrics-checks' else 'server-append-duration')
+                example = re.sub(r'<([^>]+)>', lambda match: values[match[1]], example)
+                argv = shlex.split(example)
+                assert argv[:2] == ['wp', 'diag'], (name, argv)
+                result = subprocess.run([binary, *argv[1:], '--config', str(path)], capture_output=True, text=True, timeout=45)
+                assert result.returncode == 0, (name, result.stderr, result.stdout[:1000])
+                report = json.loads(result.stdout)
+                assert report['complete'] and report['checks'], (name, report)
+                receipts.append({'skill': name, 'command': argv, 'status': report['status']})
+    assert len(receipts) == 8
+    return receipts
+
+
+def verify_explorer_rules(binary, path, root, endpoint):
+    """Exercise real WebUI -> wp subprocess parsing and effective rule loading."""
+    paths = {}
+    for source, key, threshold in [('metrics', 'writer-errors', 100000), ('trace', 'server-append-duration', 3000)]:
+        paths[source] = root / ('custom ' + source + '.yaml')
+        paths[source].write_text(json.dumps({'schema_version': 'wp.diag.rules/v1', 'source': source,
+                                            'evidence': {key: {'threshold': threshold}}}))
+    scope = {'metrics_endpoint': endpoint, 'trace_endpoint': endpoint, 'deployment': 'fixture',
+             'metric_labels': {'cluster': 'fixture'}, 'trace_service': 'wp', 'node_id': 'node-1'}
+    receipts = []
+    for enabled in [('metrics',), ('trace',), ('metrics', 'trace')]:
+        argv = [binary, 'webui', '--config', str(path), '--listen', '127.0.0.1:0']
+        for source in enabled:
+            argv += ['--' + source + '-rules', str(paths[source])]
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            lines = queue.Queue()
+            threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()
+            match = re.search(r'http://127.0.0.1:\d+', lines.get(timeout=20))
+            assert match
+            base = match[0]
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            with opener.open(base, timeout=5) as response:
+                token = re.search(r'name="wpdiag-session" content="([^"]+)"', response.read().decode())[1]
+
+            def api(url, body=None):
+                request = urllib.request.Request(base+url, data=json.dumps(body).encode() if body is not None else None,
+                                                 headers={'Content-Type': 'application/json', 'Origin': base, 'X-WPDiag-Session': token})
+                with opener.open(request, timeout=5) as response:
+                    return json.load(response)
+
+            cases = [('diag ' + source + ' check', 'writer-errors' if source == 'metrics' else 'server-append-duration', False)
+                     for source in enabled]
+            if len(enabled) == 2:
+                cases += [('diag scenario', 'slow-writes', False), ('diag catalog', None, False)]
+                cases += [(name, key, True) for name, key, _ in cases if key]
+            for name, key, bindings in cases:
+                flags = {'output': 'json'}
+                if key:
+                    flags.update({'window': '5m', 'node-id': 'node-1', 'details': 'all'})
+                request = {'name': name, 'context': 'fixture-a', 'arguments': [key] if key else [], 'flags': flags}
+                if bindings:
+                    request['bindings'] = {'client': scope, 'server': scope}
+                job = api('/api/ops/commands', request)
+                deadline = time.monotonic()+45
+                while True:
+                    job = api('/api/runs/' + job['id'])
+                    if job['report_ready']:
+                        break
+                    assert time.monotonic() < deadline, job
+                    time.sleep(.02)
+                command = job['command']
+                assert command['status'] == 'completed' and command['exit_code'] == 0, command
+                report = json.loads(command['stdout'])
+                if key:
+                    assert report['complete'], report
+                    for source, check_key, threshold in [('metrics', 'writer-errors', 100000), ('trace', 'server-append-duration', 3000)]:
+                        if source not in enabled or name not in ('diag ' + source + ' check', 'diag scenario'):
+                            continue
+                        check = next(c for c in report['checks'] if c['name'] == check_key)
+                        assert check['assessment']['threshold'] == threshold, check
+                        assert check['assessment']['configured_by'] == str(paths[source]), check
+                        assert check['status'] in ('clear', 'context'), check
+                else:
+                    assert report['schema_version'] == 'wp.diag.catalog/v1'
+                receipts.append({'rules': enabled, 'command': name, 'bindings': bindings, 'exit_code': command['exit_code']})
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    return receipts
 
 
 def main():
@@ -182,6 +291,12 @@ def main():
             assert result['summary']['trace']['matched_traces'] == 1
             (output/'cli-scenario.json').write_text(cli.stdout)
             print('CLI scenario passed', flush=True)
+            for key in ('writer-errors', 'server-append-duration'):
+                assert next(c for c in result['checks'] if c['name'] == key)['status'] == 'abnormal'
+            regression = {'skills': verify_skill_examples(binary, path),
+                          'explorer_rules': verify_explorer_rules(binary, path, root, endpoint)}
+            (output/'command-contracts.json').write_text(json.dumps(regression, indent=2))
+            print('Skill examples and Explorer rule overrides passed', flush=True)
             if args.cli_only:
                 assert state['mutations'] == 0
                 return

@@ -3,16 +3,19 @@ name: wp-wal-reads
 description: Investigate Woodpecker WAL slow reads, reads not advancing or OpenReader failures by running Metrics/Trace scenarios and following specific findings. Focuses on WAL; all Milvus-owned diagnosis is outside this skill.
 ---
 
-Resolve the affected target and incident interval using the user's cli.yaml.
+Select the server context and incident interval using the user's cli.yaml.
 Keep the selected context separate from client metadata authority. Do not guess
-a log-to-node or Metrics-to-Trace association.
+a log-to-node or Metrics-to-Trace association. Context observability connections
+provide the sources; pass applicable scope explicitly. Server Metrics checks
+require `--node-id`; omit it for a Trace-only scenario. `--bindings-file` is an
+alternative for explicit per-run Client/Server sources and scope.
 
 Start with the symptom's scenario:
 
 ```bash
-wp diag scenario slow-reads --target <target> --from <start> --to <end> --details all --output json
-wp diag scenario stuck-reads --target <target> --from <start> --to <end> --details all --output json
-wp diag scenario open-reader --target <target> --from <start> --to <end> --details all --output json
+wp diag scenario slow-reads --context <context> --node-id <node-id> --from <start> --to <end> --details all --output json
+wp diag scenario stuck-reads --context <context> --node-id <node-id> --from <start> --to <end> --details all --output json
+wp diag scenario open-reader --context <context> --node-id <node-id> --from <start> --to <end> --details all --output json
 ```
 
 Use one command matching the symptom. `--window` with optional `--to` is the
@@ -43,7 +46,7 @@ report. Do not run every possible follow-up or a model call for an ordinary,
 adequately observed result. Stop when the supplied evidence answers the user's
 question or explain the specific unresolved gap.
 
-`wp diag scenario all` is an optional agreed-catalog sweep for the selected target,
+`wp diag scenario all` is an optional agreed-catalog sweep for the selected scope,
 not all services/metrics. Milvus-owned diagnostics are not supported. Current metadata
 inspection uses existing `wp meta` and cannot establish historical state.
 No repairs, cluster changes, fault injection or load generation are part of this

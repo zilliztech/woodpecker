@@ -3,13 +3,16 @@ name: wp-wal-writes
 description: Investigate Woodpecker WAL slow writes, writes not completing or OpenWriter failures through cross-source scenarios and focused atomic follow-up. Excludes Milvus-owned and Loki diagnosis.
 ---
 
-Resolve the intended WP target and incident interval from cli.yaml. Select one
-symptom scenario, preserving the complete structured result for inspection:
+Select the server context and incident interval from cli.yaml. Its observability
+connections provide the sources; pass applicable scope explicitly. Server Metrics
+checks require `--node-id`; omit it for a Trace-only scenario. `--bindings-file`
+is an alternative for explicit per-run Client/Server sources and scope. Select
+one symptom scenario, preserving the complete structured result for inspection:
 
 ```bash
-wp diag scenario slow-writes --target <target> --from <start> --to <end> --details all --output json
-wp diag scenario stuck-writes --target <target> --from <start> --to <end> --details all --output json
-wp diag scenario open-writer --target <target> --from <start> --to <end> --details all --output json
+wp diag scenario slow-writes --context <context> --node-id <node-id> --from <start> --to <end> --details all --output json
+wp diag scenario stuck-writes --context <context> --node-id <node-id> --from <start> --to <end> --details all --output json
+wp diag scenario open-writer --context <context> --node-id <node-id> --from <start> --to <end> --details all --output json
 ```
 
 Use the command corresponding to the symptom, not all three by default.
@@ -45,7 +48,7 @@ queries, Trace IDs and original references for follow-up. No extra model request
 or WebUI is needed for ordinary screening. Stop when evidence answers the user's
 question or identify the precise unresolved gap.
 
-`wp diag scenario all` optionally sweeps the agreed catalog for this target.
+`wp diag scenario all` optionally sweeps the agreed catalog for this scope.
 Milvus-owned diagnostics are not supported. Metadata inspection uses existing
 `wp meta` at its observation time. No repairs, fencing, deletion, deployment,
 fault injection or performance load are included in this workflow.

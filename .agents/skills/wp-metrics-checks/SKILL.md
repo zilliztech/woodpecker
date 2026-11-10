@@ -5,15 +5,16 @@ description: Run source-local Woodpecker WAL Metrics checks with wp diag, select
 
 Use the user's existing `wp` executable and cli.yaml. Inspect `wp diag catalog
 --source metrics --output json` for implemented names/IDs, actual metrics,
-formulas, criteria and limitations. Configuration lives under
-`diagnostics.sources.metrics.connections` and `diagnostics.targets`. The selected
-context can supply `diagnostic_target`; `--target` selects it explicitly. A
-Metrics check does not require Trace, Admin or an Agent to be available.
+formulas, criteria and limitations. Select `--context` to use
+`contexts.<name>.observability.prometheus`. Supply scope such as `--log-namespace`,
+`--log-id` or `--node-id` only where applicable; the catalog lists required inputs.
+Alternatively use `--bindings-file` for explicit per-run sources and scope.
+A Metrics check does not require Trace, Admin or an Agent to be available.
 
 Choose one question and run:
 
 ```bash
-wp diag metrics check <name> --target <target> \
+wp diag metrics check <name> --context <context> \
   --from <RFC3339-start> --to <RFC3339-end> --details all --output json
 ```
 

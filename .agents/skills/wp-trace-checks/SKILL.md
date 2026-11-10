@@ -4,13 +4,14 @@ description: Inspect retained Woodpecker WAL operation durations or error spans 
 ---
 
 Discover implemented operations and boundaries with `wp diag catalog --source
-trace --output json`. Use the existing cli.yaml Trace connection, its exact
-service bindings and the selected diagnostic target. Metrics and Admin are not
-required. A missing/disabled Trace connection is a configuration error; an
-unreachable configured connection is a collection failure.
+trace --output json`. Select `--context` to use
+`contexts.<name>.observability.trace` and its WP service mappings. Supply applicable
+scope flags or use `--bindings-file` for explicit per-run sources and scope.
+Metrics and Admin are not required. A missing/disabled Trace connection is a
+configuration error; an unreachable configured connection is a collection failure.
 
 ```bash
-wp diag trace check <name> --target <target> \
+wp diag trace check <name> --context <context> \
   --from <RFC3339-start> --to <RFC3339-end> --details all --output json
 ```
 
@@ -25,7 +26,7 @@ status/data_state, rule, `inspect.spans`, anomalies, query references and covera
 notes. Trace IDs in source summaries are deduplicated; trace counts, abnormal
 span counts and abnormal-check counts are different quantities.
 
-Default evidence is service-scoped. Only a verified target tag mapping or exact
+Default evidence is service-scoped. Only a verified identity-tag mapping or exact
 request/Trace relationship can support a more specific association. Do not claim
 that a span belongs to the selected Metrics log merely because it shares a
 scenario, service, Kubernetes namespace or time range. Returned tags are checked

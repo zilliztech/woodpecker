@@ -255,6 +255,7 @@ else: sys.exit('Unexpected gh command')
     def test_path_policy_matches_workflow_filters_and_stale_head_is_ignored(self):
         paths = workflow(PRIMARY[0])["on"]["pull_request"]["paths"]
         samples = ["server/storage/writer.go", "go.mod", "go.sum", "config/woodpecker.yaml", "cmd/wpcli/tests/shell_terminal_test.py",
+            ".agents/skills/wp-metrics-checks/SKILL.md",
             "cmd/wpdiag/webui/page.html", "diagnostics/README.md", "tests/integration/diagnostics/test_source_acceptance.py",
             "tests/integration/tracing/full_stack.py", "deployments/milvus-full-stack-helm/tests/cli.test.py",
             "docs/stack-examples/_e2e.html", "Makefile", "codecov.yml", ".github/scripts/ci_packages.py",

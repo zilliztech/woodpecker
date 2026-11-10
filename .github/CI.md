@@ -25,7 +25,7 @@ owned by Diagnostics. No supported CI execution depends on the retired
 | --- | --- |
 | Diagnostics Unit | `diagnostics/**` and `cmd/wpdiag/**` unit/race/coverage tests, including reusable historical parser libraries |
 | Diagnostics Build | Builds the current `bin/wp` once for the dependent jobs |
-| Diagnostics CLI | Atomic checks, scenario/source/window/output contracts against bounded HTTP fixtures |
+| Diagnostics CLI | Atomic checks, executable Skill examples, Explorer rule-file propagation and scenario/source/window/output contracts against bounded HTTP fixtures |
 | Diagnostics Smoke (prometheus) | Current WP Metrics checks against a disposable real Prometheus 3.0.1 |
 | Diagnostics Smoke (jaeger) | Current WP Trace checks against disposable real Jaeger 1.53.0, including exact Trace IDs |
 | Diagnostics WebUI | All three workspace modules, validation, history and fake-Agent follow-up using Node 22/Chrome and HTTP fixtures |
@@ -69,6 +69,12 @@ Keep the three primary workflow triggers equivalent until coverage/expected
 checks support selective routing. The other runtime integration workflows also
 retain conservative Go/dependency triggers; this change does not redesign their
 nightly, release, upgrade, fault or performance responsibilities.
+
+Changes under `.agents/skills/**` trigger the three primary suites too. Diagnostic
+examples are executed against fixtures so retired flags cannot remain in Skills
+while the CLI's own tests pass. Explorer regressions exercise both rule-file
+overrides with positional arguments and bindings, checking effective thresholds
+and verdicts in the actual subprocess results.
 
 ## Runtime export versus diagnostic assessment
 

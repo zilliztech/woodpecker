@@ -381,6 +381,21 @@ func (out commandWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// commandOptions keeps injected flags before the positional-argument delimiter.
+func commandOptions(args []string, options ...string) []string {
+	at := len(args)
+	for i, arg := range args {
+		if arg == "--" {
+			at = i
+			break
+		}
+	}
+	out := make([]string, 0, len(args)+len(options))
+	out = append(out, args[:at]...)
+	out = append(out, options...)
+	return append(out, args[at:]...)
+}
+
 func (s *Server) executeCommand(parent context.Context, j *job, args []string, initial commandResult) {
 	ctx, cancel := context.WithTimeout(parent, time.Duration(initial.BudgetMS)*time.Millisecond)
 	defer cancel()
@@ -388,7 +403,7 @@ func (s *Server) executeCommand(parent context.Context, j *job, args []string, i
 	if strings.HasPrefix(initial.Name, "diag ") {
 		for _, source := range []string{"metrics", "trace"} {
 			if path := s.workspace.rulePaths[source]; path != "" {
-				args = append(args, "--"+source+"-rules", path)
+				args = commandOptions(args, "--"+source+"-rules", path)
 			}
 		}
 	}
@@ -415,16 +430,7 @@ func (s *Server) executeCommand(parent context.Context, j *job, args []string, i
 					err = closeErr
 				}
 				if err == nil {
-					at := len(args)
-					for i, arg := range args {
-						if arg == "--" {
-							at = i
-							break
-						}
-					}
-					tail := append([]string{}, args[at:]...)
-					args = append(args[:at], "--bindings-file", params.Name())
-					args = append(args, tail...)
+					args = commandOptions(args, "--bindings-file", params.Name())
 				}
 			}
 		}

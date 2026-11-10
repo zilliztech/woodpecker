@@ -111,7 +111,7 @@ jobs:
           ROOT_EXPECTED=false
           while IFS= read -r path; do
             case "$path" in
-              *.go|go.mod|go.sum|config/*|cmd/wpcli/*|cmd/wpdiag/*|diagnostics/*|tests/integration/diagnostics/*|tests/integration/tracing/*|deployments/milvus-full-stack-helm/*|docs/stack-examples/*|Makefile|codecov.yml|.github/scripts/ci_*|.github/scripts/test_ci_*|.github/scripts/stack_tests.py|.github/scripts/requirements-ci.txt|.github/workflows/*)
+              *.go|go.mod|go.sum|config/*|.agents/skills/*|cmd/wpcli/*|cmd/wpdiag/*|diagnostics/*|tests/integration/diagnostics/*|tests/integration/tracing/*|deployments/milvus-full-stack-helm/*|docs/stack-examples/*|Makefile|codecov.yml|.github/scripts/ci_*|.github/scripts/test_ci_*|.github/scripts/stack_tests.py|.github/scripts/requirements-ci.txt|.github/workflows/*)
                 ROOT_EXPECTED=true ;;
             esac
           done <<< "$CHANGED_FILES"
