@@ -95,8 +95,10 @@ type MinioFileWriter struct {
 	checkpointThreshold       int
 	lastCheckpointBlockCount  atomic.Int32
 	checkpointStoredSize      atomic.Int64         // Last successful checkpoint size accounted by this writer; zero before its first success.
-	checkpointMu              sync.Mutex           // guards checkpointRunning and checkpointPendingSnapshot
+	checkpointMu              sync.Mutex           // guards worker admission, cancellation and the pending snapshot
 	checkpointRunning         bool                 // true while a checkpoint goroutine is active
+	checkpointCancel          context.CancelFunc   // cancels the current worker, including its in-flight PUT
+	checkpointWG              sync.WaitGroup       // Add under checkpointMu after checking closed; Close joins all workers
 	checkpointPendingSnapshot []*codec.IndexRecord // latest snapshot waiting to be written; nil means nothing pending
 
 	// async upload blocks task pool
@@ -1249,6 +1251,12 @@ func (f *MinioFileWriter) maybeWriteCheckpointAsync(ctx context.Context) {
 	copy(snapshot, f.blockIndexes)
 
 	f.checkpointMu.Lock()
+	// Close takes this lock before waiting, so each admitted worker is tracked
+	// by that wait, or rejected here if shutdown passed the earlier closed check.
+	if f.closed.Load() || f.finalized.Load() {
+		f.checkpointMu.Unlock()
+		return
+	}
 	f.checkpointPendingSnapshot = snapshot
 	if f.checkpointRunning {
 		// A goroutine is already active; it will pick up this snapshot.
@@ -1256,9 +1264,18 @@ func (f *MinioFileWriter) maybeWriteCheckpointAsync(ctx context.Context) {
 		return
 	}
 	f.checkpointRunning = true
+	// Data acknowledgments and their contexts do not control hint lifetime.
+	// The writer owns cancellation and joins the worker during Close instead.
+	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	f.checkpointCancel = cancel
+	f.checkpointWG.Add(1)
 	f.checkpointMu.Unlock()
 
-	go f.writeCheckpointLoop(ctx)
+	go func() {
+		defer f.checkpointWG.Done()
+		defer cancel()
+		f.writeCheckpointLoop(workerCtx)
+	}()
 }
 
 // writeCheckpointLoop drains pending checkpoint snapshots and writes them.
@@ -1266,7 +1283,7 @@ func (f *MinioFileWriter) maybeWriteCheckpointAsync(ctx context.Context) {
 // only the latest snapshot is kept and written in the next iteration. The loop
 // exits when no pending snapshot remains or the writer is closed/finalized.
 // Each PutObject call is bounded by a 30-second timeout to avoid hanging on
-// unresponsive object storage.
+// unresponsive object storage, and is canceled when the writer closes.
 func (f *MinioFileWriter) writeCheckpointLoop(ctx context.Context) {
 	for {
 		// Stop immediately if the writer has been closed or finalized.
@@ -1293,16 +1310,22 @@ func (f *MinioFileWriter) writeCheckpointLoop(ctx context.Context) {
 
 		data, err := checkpoint.Serialize(checkpoint.New(snapshot))
 		if err == nil {
-			writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			err = f.client.PutObject(writeCtx, f.bucket, cpKey, bytes.NewReader(data), int64(len(data)), f.logNs, f.logIdStr)
 			cancel()
 		}
 
 		if err != nil {
-			logger.Ctx(ctx).Warn("failed to write checkpoint.blk (best-effort)",
+			fields := []zap.Field{
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.String("checkpointKey", cpKey),
-				zap.Error(err))
+				zap.Error(err),
+			}
+			if ctx.Err() != nil {
+				logger.Ctx(ctx).Debug("checkpoint writer stopped", fields...)
+			} else {
+				logger.Ctx(ctx).Warn("failed to write checkpoint.blk (best-effort)", fields...)
+			}
 			// On error, clear any pending snapshot and stop the loop;
 			// the next trigger from the ack goroutine will retry.
 			f.checkpointMu.Lock()
@@ -1597,10 +1620,16 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return nil
 	}
-	// Drop queued snapshots; an in-flight checkpoint remains a best-effort hint.
+	// Stop checkpoint admission, cancel the in-flight PUT and join the worker.
+	// Cancellation alone is insufficient: a PUT may already have committed, so
+	// cleanup must not list/delete objects until its result and metrics settle.
 	f.checkpointMu.Lock()
 	f.checkpointPendingSnapshot = nil
+	if f.checkpointCancel != nil {
+		f.checkpointCancel()
+	}
 	f.checkpointMu.Unlock()
+	f.checkpointWG.Wait()
 
 	// Ensure goroutine, channel, pool, and lock cleanup always runs,
 	// even if awaitAllFlushTasks fails (e.g., timeout or context cancellation).
