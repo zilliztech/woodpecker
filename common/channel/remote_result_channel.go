@@ -73,10 +73,6 @@ func (r *RemoteResultChannel) SendResult(ctx context.Context, result *AppendResu
 		return fmt.Errorf("remote result channel %s is closed", r.identifier)
 	}
 	r.result = result
-	logger.Ctx(ctx).Debug("sent result to remote channel directly",
-		zap.String("identifier", r.identifier),
-		zap.Int64("syncedID", result.SyncedId),
-		zap.Error(result.Err))
 	return nil
 }
 
@@ -191,7 +187,6 @@ func (r *RemoteResultChannel) Close(ctx context.Context) error {
 		// Cancel the stream context first
 		if r.cancel != nil {
 			r.cancel()
-			logger.Ctx(ctx).Debug("cancelled remote result channel context", zap.String("identifier", r.identifier))
 		}
 
 		// Then close the stream
@@ -199,8 +194,6 @@ func (r *RemoteResultChannel) Close(ctx context.Context) error {
 			closeErr := r.ch.CloseSend()
 			if closeErr != nil {
 				logger.Ctx(ctx).Warn("closed remote result channel failed", zap.String("identifier", r.identifier), zap.Error(closeErr))
-			} else {
-				logger.Ctx(ctx).Debug("closed remote result channel", zap.String("identifier", r.identifier))
 			}
 		}
 	}

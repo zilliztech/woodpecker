@@ -788,7 +788,7 @@ func (s *segmentProcessor) UpdateSegmentLastAddConfirmed(ctx context.Context, la
 	defer sp.End()
 	s.updateAccessTime()
 	start := time.Now()
-	logger.Ctx(ctx).Info("Starting segment processor update lac operation",
+	logger.Ctx(ctx).Debug("Starting segment processor update lac operation",
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId),
 		zap.Int64("lac", lac))
@@ -803,7 +803,7 @@ func (s *segmentProcessor) UpdateSegmentLastAddConfirmed(ctx context.Context, la
 		return err
 	}
 
-	logger.Ctx(ctx).Info("Starting update lac operation",
+	logger.Ctx(ctx).Debug("Segment reader acquired for LAC update",
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId),
 		zap.Int64("lac", lac))
@@ -819,9 +819,10 @@ func (s *segmentProcessor) UpdateSegmentLastAddConfirmed(ctx context.Context, la
 	}
 
 	cleanupDuration := time.Since(start)
-	logger.Ctx(ctx).Info("Segment processor update lac operation completed successfully",
+	logger.Ctx(ctx).Debug("Segment processor update lac operation completed successfully",
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId),
+		zap.Int64("lac", lac),
 		zap.Duration("totalDuration", cleanupDuration))
 	return nil
 }

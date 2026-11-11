@@ -426,7 +426,6 @@ func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool) error {
 
 	submitted := false
 	if needSync {
-		logger.Ctx(ctx).Debug("Sync: triggering rollBufferAndFlush", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Int64("entryCount", entryCount), zap.Int64("bufferSize", bufferSize), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		// Add global writer lock to prevent race conditions with WriteDataAsync
 		submitted = w.rollBufferAndEnqueueFlushTaskUnsafe(ctx)
 	}
@@ -487,6 +486,8 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 
 	// Submit flush task
 	logger.Ctx(ctx).Debug("Submitting flush task to channel",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
 		zap.Int64("firstEntryId", flushTask.firstEntryId),
 		zap.Int64("lastEntryId", flushTask.lastEntryId),
 		zap.Int32("blockNumber", flushTask.blockNumber),
@@ -495,6 +496,8 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 	select {
 	case w.flushTaskChan <- flushTask:
 		logger.Ctx(ctx).Debug("Flush task submitted successfully",
+			zap.Int64("logId", w.logId),
+			zap.Int64("segId", w.segmentId),
 			zap.Int64("firstEntryId", flushTask.firstEntryId),
 			zap.Int64("lastEntryId", flushTask.lastEntryId),
 			zap.Int32("blockNumber", flushTask.blockNumber),
@@ -569,7 +572,6 @@ func (w *StagedFileWriter) processFlushTasksQueue() {
 				zap.Int64("lastEntryId", flushTask.lastEntryId),
 				zap.Int("entriesCount", len(flushTask.entries)))
 			w.processFlushTask(w.runCtx, flushTask)
-			logger.Ctx(w.runCtx).Debug("Flush task processing completed")
 		default:
 			return
 		}
@@ -814,6 +816,10 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int32("blockNumber", task.blockNumber),
 		zap.Int64("firstEntryId", task.firstEntryId),
 		zap.Int64("lastEntryId", task.lastEntryId),
+		zap.Int("entriesCount", len(task.entries)),
+		zap.Int64("bytesWritten", actualDataSize),
+		zap.Uint32("blockCrc", blockCrc),
+		zap.Duration("duration", time.Since(op.StartedAt())),
 		zap.Int64("blockStartOffset", blockStartOffset),
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
 
@@ -987,9 +993,6 @@ func (w *StagedFileWriter) WriteDataBatchAsync(ctx context.Context, entryIds []i
 func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "WriteDataAsync")
 	defer sp.End()
-	logger.Ctx(ctx).Debug("WriteDataAsync called",
-		zap.Int64("entryId", entryId),
-		zap.Int("dataLen", len(data)))
 
 	if id, err := w.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
 		return id, err
@@ -1046,14 +1049,6 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 	entryCount := currentBuffer.GetExpectedNextEntryId() - currentBuffer.GetFirstEntryId()
 	timeSinceLastSync := time.Now().UnixMilli() - w.lastSyncTimestamp.Load()
 	w.mu.Unlock()
-
-	logger.Ctx(ctx).Debug("WriteDataAsync sync check",
-		zap.Int64("bufferSize", bufferSize),
-		zap.Int64("maxFlushSize", w.maxFlushSize),
-		zap.Int64("entryCount", entryCount),
-		zap.Int64("maxBufferEntries", w.maxBufferEntries),
-		zap.Int64("timeSinceLastSync", timeSinceLastSync),
-		zap.Int64("lastSyncTimestamp", w.lastSyncTimestamp.Load()))
 
 	// Immediate sync conditions:
 	// - Buffer size exceeded
@@ -1137,11 +1132,6 @@ func (w *StagedFileWriter) writeRecord(ctx context.Context, record codec.Record)
 	}
 
 	w.writtenBytes += int64(n)
-
-	logger.Ctx(ctx).Debug("record written successfully",
-		zap.Uint8("recordType", record.Type()),
-		zap.Int("bytesWritten", n),
-		zap.Int64("totalWrittenBytes", w.writtenBytes))
 
 	return nil
 }

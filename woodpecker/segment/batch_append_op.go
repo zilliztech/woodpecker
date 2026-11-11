@@ -25,6 +25,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -142,7 +143,16 @@ func (b *BatchAppendOp) sendBatchToNode(ctx context.Context, entries []*proto.Lo
 	// when the drain exits (normally or on give-up), so a stalled peer can't leave
 	// the client demux goroutine + gRPC stream + server handler hanging.
 	streamCtx, streamCancel := context.WithCancel(ctx)
+	logger.Ctx(ctx).Debug("batch append send started",
+		zap.Int64("logId", first.logId), zap.Int64("segId", first.segmentId),
+		zap.Int64("firstEntryId", first.entryId), zap.Int64("lastEntryId", b.ops[len(b.ops)-1].entryId),
+		zap.Int("entriesCount", len(entries)), zap.String("serverAddr", serverAddr))
 	_, err := cli.AppendEntries(streamCtx, first.bucketName, first.rootPath, first.logId, entries, resultChs)
+	logger.Ctx(ctx).Debug("batch append send completed",
+		zap.Int64("logId", first.logId), zap.Int64("segId", first.segmentId),
+		zap.Int64("firstEntryId", first.entryId), zap.Int64("lastEntryId", b.ops[len(b.ops)-1].entryId),
+		zap.Int("entriesCount", len(entries)), zap.String("serverAddr", serverAddr),
+		zap.Duration("duration", time.Since(startRequestTime)), zap.Error(err))
 	if err != nil {
 		streamCancel()
 		b.failNode(ctx, nodeIdx, serverAddr, err)

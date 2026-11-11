@@ -33,8 +33,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
@@ -2759,7 +2762,8 @@ func TestNewStagedFileReaderAdv_MkdirAllError(t *testing.T) {
 }
 
 func TestVerifyBlockDataIntegrity_CRCMismatch(t *testing.T) {
-	ctx := context.Background()
+	core, logs := observer.New(zap.DebugLevel)
+	ctx := context.WithValue(context.Background(), logger.CtxLogKey, zap.New(core))
 	tempDir := t.TempDir()
 	localBaseDir := filepath.Join(tempDir, "local")
 	logId := int64(101)
@@ -2805,6 +2809,17 @@ func TestVerifyBlockDataIntegrity_CRCMismatch(t *testing.T) {
 	}
 	err = reader.verifyBlockDataIntegrity(ctx, wrongBlockHeader, 0, []byte("some data!"))
 	assert.Error(t, err)
+
+	// Keep file/block coordinates and checksum details available on corruption.
+	failures := logs.FilterMessage("block data integrity verification failed").All()
+	require.NotEmpty(t, failures)
+	lastFailure := failures[len(failures)-1]
+	fields := lastFailure.ContextMap()
+	assert.Equal(t, zap.WarnLevel, lastFailure.Level)
+	assert.Equal(t, filePath, fields["filePath"])
+	assert.Equal(t, int64(0), fields["blockNumber"])
+	assert.Equal(t, int32(0), fields["recordBlockNumber"])
+	assert.Equal(t, err.Error(), fields["error"])
 
 	// The block CRC verification should have failed during scan
 	// so no block indexes should be found (CRC failed blocks are skipped)

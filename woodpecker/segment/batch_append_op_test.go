@@ -26,8 +26,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
@@ -312,6 +316,8 @@ func TestBatchAppendOp_GetClientFails_AllOpsRoutedToFailure(t *testing.T) {
 // TestBatchAppendOp_AppendEntriesError_AllOpsRoutedToFailure covers the batch RPC
 // itself failing: every op must be routed through HandleAppendRequestFailure.
 func TestBatchAppendOp_AppendEntriesError_AllOpsRoutedToFailure(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	t.Cleanup(logger.ReplaceGlobals(zap.New(core)))
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
@@ -338,6 +344,22 @@ func TestBatchAppendOp_AppendEntriesError_AllOpsRoutedToFailure(t *testing.T) {
 	for i, op := range ops {
 		assert.Equal(t, sendErr, op.channelErrors[0], "op %d should record the send error", i)
 	}
+
+	// A failed batch send must identify its replica and affected entry range.
+	started := logs.FilterMessage("batch append send started").All()
+	completed := logs.FilterMessage("batch append send completed").All()
+	require.Len(t, started, 1)
+	require.Len(t, completed, 1)
+	fields := completed[0].ContextMap()
+	for _, key := range []string{"logId", "segId", "firstEntryId", "lastEntryId", "entriesCount", "serverAddr"} {
+		assert.Contains(t, fields, key)
+		assert.Equal(t, started[0].ContextMap()[key], fields[key])
+	}
+	assert.Equal(t, "node1", fields["serverAddr"])
+	assert.Equal(t, ops[0].entryId, fields["firstEntryId"])
+	assert.Equal(t, ops[batchN-1].entryId, fields["lastEntryId"])
+	assert.Equal(t, sendErr.Error(), fields["error"])
+	assert.Contains(t, fields, "duration")
 }
 
 // TestBatchAppendOp_StalledNode_FailsRemainingAndCancelsStream is a regression

@@ -112,7 +112,7 @@ func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, bucketName s
 
 func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (entryId int64, err error) {
 	defer func() { l.maybeDropCachedConn(err) }()
-	logger.Ctx(ctx).Debug("logStoreClientRemote: append entry", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId))
+	logger.Ctx(ctx).Debug("logStoreClientRemote: append entry", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId), zap.String("serverAddr", l.target))
 	l.mu.RLock()
 	if l.closed {
 		l.mu.RUnlock()

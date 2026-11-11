@@ -25,10 +25,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
@@ -97,6 +100,8 @@ func oneEntryResult() *proto.BatchReadResult {
 // the call is bounded, its connection is dropped, and the next replica serves.
 func TestReadBatchAdv_ActiveSegment_SilentReplicaFailsOver(t *testing.T) {
 	shrinkReadTimeouts(t, 200*time.Millisecond, 10*time.Second)
+	core, logs := observer.New(zap.DebugLevel)
+	t.Cleanup(logger.ReplaceGlobals(zap.New(core)))
 
 	pool := mocks_logstore_client.NewLogStoreClientPool(t)
 	cli1 := mocks_logstore_client.NewLogStoreClient(t)
@@ -115,6 +120,25 @@ func TestReadBatchAdv_ActiveSegment_SilentReplicaFailsOver(t *testing.T) {
 	assert.Equal(t, "node2", result.LastReadState.Node)
 	assert.Less(t, time.Since(start), 2*time.Second, "the silent replica was not bounded by the active read timeout")
 	pool.AssertNotCalled(t, "Clear", mock.Anything, mock.Anything)
+
+	// The timeout and recovery must remain correlatable without a trace exporter.
+	timeouts := logs.FilterMessage("read batch timed out on node, trying next").All()
+	require.Len(t, timeouts, 1)
+	timeoutFields := timeouts[0].ContextMap()
+	assert.Equal(t, zap.WarnLevel, timeouts[0].Level)
+	assert.Equal(t, int64(1), timeoutFields["logId"])
+	assert.Equal(t, int64(1), timeoutFields["segId"])
+	assert.Equal(t, "node1", timeoutFields["node"])
+	assert.Equal(t, 200*time.Millisecond, timeoutFields["timeout"])
+	assert.NotEmpty(t, timeoutFields["error"])
+	recovered := logs.FilterMessage("finish read batch successfully").All()
+	require.Len(t, recovered, 1)
+	recoveredFields := recovered[0].ContextMap()
+	assert.Equal(t, timeoutFields["logId"], recoveredFields["logId"])
+	assert.Equal(t, timeoutFields["segId"], recoveredFields["segId"])
+	assert.Equal(t, "node2", recoveredFields["successfulNode"])
+	assert.Equal(t, int64(0), recoveredFields["from"])
+	assert.Equal(t, int64(1), recoveredFields["count"])
 }
 
 // The handle's view of the state can lag: a segment it believes active may be

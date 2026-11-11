@@ -1321,12 +1321,10 @@ func (l *logHandleImpl) performBackgroundCleanup(maxIdleTime time.Duration) {
 	l.Lock()
 	defer l.Unlock()
 
-	totalHandles := len(l.SegmentHandles)
-
 	logger.Ctx(l.ctx).Debug("Starting background segment handle cleanup cycle",
 		zap.String("logName", l.Name),
 		zap.Int64("logId", l.Id),
-		zap.Int("totalHandles", totalHandles),
+		zap.Int("totalHandles", len(l.SegmentHandles)),
 		zap.Duration("maxIdleTime", maxIdleTime))
 
 	l.cleanupIdleSegmentHandlesUnsafe(l.ctx, maxIdleTime)
@@ -1337,12 +1335,6 @@ func (l *logHandleImpl) performBackgroundCleanup(maxIdleTime time.Duration) {
 func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, maxIdleTime time.Duration) {
 	now := time.Now()
 	var toRemove []int64
-
-	logger.Ctx(ctx).Debug("Scanning for idle segment handles to cleanup",
-		zap.String("logName", l.Name),
-		zap.Int64("logId", l.Id),
-		zap.Duration("maxIdleTime", maxIdleTime),
-		zap.Int("totalHandles", len(l.SegmentHandles)))
 
 	// Check each segment for cleanup eligibility
 	for segmentId, handle := range l.SegmentHandles {
@@ -1383,11 +1375,6 @@ func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, max
 			zap.Int64("logId", l.Id),
 			zap.Int("cleanedCount", len(toRemove)),
 			zap.Int("remainingHandles", len(l.SegmentHandles)))
-	} else {
-		logger.Ctx(ctx).Debug("Idle segment handle cleanup completed - no handles cleaned",
-			zap.String("logName", l.Name),
-			zap.Int64("logId", l.Id),
-			zap.Int("totalHandles", len(l.SegmentHandles)))
 	}
 }
 
