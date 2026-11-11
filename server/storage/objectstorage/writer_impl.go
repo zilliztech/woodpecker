@@ -94,6 +94,7 @@ type MinioFileWriter struct {
 	// missing or unusable hints fall back to normal full block-scan recovery.
 	checkpointThreshold       int
 	lastCheckpointBlockCount  atomic.Int32
+	checkpointStoredSize      atomic.Int64         // Last successful checkpoint size accounted by this writer; zero before its first success.
 	checkpointMu              sync.Mutex           // guards checkpointRunning and checkpointPendingSnapshot
 	checkpointRunning         bool                 // true while a checkpoint goroutine is active
 	checkpointPendingSnapshot []*codec.IndexRecord // latest snapshot waiting to be written; nil means nothing pending
@@ -1309,6 +1310,13 @@ func (f *MinioFileWriter) writeCheckpointLoop(ctx context.Context) {
 			f.checkpointRunning = false
 			f.checkpointMu.Unlock()
 			return
+		}
+		// The same key is overwritten: count its first successful write once,
+		// then adjust bytes by the size delta. Failed writes leave both unchanged.
+		previousSize := f.checkpointStoredSize.Swap(int64(len(data)))
+		metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr).Add(float64(int64(len(data)) - previousSize))
+		if previousSize == 0 {
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr).Inc()
 		}
 		f.lastCheckpointBlockCount.Store(snapshotCount)
 		logger.Ctx(ctx).Debug("checkpoint.blk written",

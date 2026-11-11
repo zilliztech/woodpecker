@@ -39,16 +39,17 @@ import (
 const defaultObjectDeleteConcurrency = 16
 
 // Object names woodpecker writes under {rootPath}/{logId}/{segmentId}/.
-// Keep in sync with getBlockKey / getMergedBlockKey / getFooterBlockKey / getSegmentLockKey
-// in server/storage/objectstorage/writer_impl.go.
+// Keep in sync with getBlockKey / getMergedBlockKey / getFooterBlockKey /
+// getCheckpointBlockKey / getSegmentLockKey in server/storage/objectstorage/writer_impl.go.
 var (
 	blockObjectRe       = regexp.MustCompile(`^\d+\.blk$`)
 	mergedBlockObjectRe = regexp.MustCompile(`^m_\d+\.blk$`)
 )
 
 const (
-	footerObjectName = "footer.blk"
-	lockObjectName   = "write.lock"
+	footerObjectName     = "footer.blk"
+	checkpointObjectName = "checkpoint.blk"
+	lockObjectName       = "write.lock"
 )
 
 // logObjectPrefix returns the object-storage prefix holding everything for one log.
@@ -83,7 +84,7 @@ func isLogObject(rel string) bool {
 	if _, err := strconv.ParseInt(segment, 10, 64); err != nil {
 		return false
 	}
-	return name == footerObjectName || name == lockObjectName ||
+	return name == footerObjectName || name == checkpointObjectName || name == lockObjectName ||
 		blockObjectRe.MatchString(name) || mergedBlockObjectRe.MatchString(name)
 }
 
