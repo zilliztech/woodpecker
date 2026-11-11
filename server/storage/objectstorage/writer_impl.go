@@ -411,72 +411,28 @@ func (f *MinioFileWriter) recoverFromCheckpoint(ctx context.Context) error {
 	}
 	recoveredIndexes := checkpoint.Indexes(cp)
 	checkpointBlockCount := len(recoveredIndexes)
-	maxBlockID := int64(checkpointBlockCount) - 1
-	firstEntryID := int64(-1)
-	if checkpointBlockCount > 0 {
-		firstEntryID = recoveredIndexes[0].FirstEntryID
-	}
-	lastEntryID := cp.LastEntryId
-
 	logger.Ctx(ctx).Info("recovered checkpoint, scanning incremental blocks",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("checkpointBlocks", checkpointBlockCount),
-		zap.Int64("maxBlockID", maxBlockID))
+		zap.Int64("maxBlockID", int64(checkpointBlockCount)-1))
 
-	// Scan blocks after maxBlockID+1
-	fenceBlockId := int64(-1)
-	blockID := maxBlockID + 1
-	for {
-		blockKey := getBlockKey(f.segmentFileKey, blockID)
-		objSize, isFenced, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, f.logNs, f.logIdStr)
-		if stateErr != nil {
-			if f.client.IsObjectNotExistsError(stateErr) {
-				break
-			}
-			return stateErr
-		}
-		if isFenced {
-			fenceBlockId = blockID
-			break
-		}
-
-		blockHeaderRecord, parseErr := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
-		if parseErr != nil {
-			return parseErr
-		}
-
-		if int64(blockHeaderRecord.BlockNumber) != blockID ||
-			blockHeaderRecord.FirstEntryID < 0 || blockHeaderRecord.LastEntryID < blockHeaderRecord.FirstEntryID ||
-			(lastEntryID >= 0 && blockHeaderRecord.FirstEntryID != lastEntryID+1) {
-			return fmt.Errorf("non-contiguous block header during checkpoint recovery: block %d", blockID)
-		}
-
-		indexRecord := &codec.IndexRecord{
-			BlockNumber:  int32(blockID),
-			StartOffset:  blockID,
-			BlockSize:    uint32(objSize),
-			FirstEntryID: blockHeaderRecord.FirstEntryID,
-			LastEntryID:  blockHeaderRecord.LastEntryID,
-		}
-		recoveredIndexes = append(recoveredIndexes, indexRecord)
-
-		if firstEntryID == -1 || blockHeaderRecord.FirstEntryID < firstEntryID {
-			firstEntryID = blockHeaderRecord.FirstEntryID
-		}
-		if blockHeaderRecord.LastEntryID > lastEntryID {
-			lastEntryID = blockHeaderRecord.LastEntryID
-		}
-		if blockID > maxBlockID {
-			maxBlockID = blockID
-		}
-
-		blockID++
+	scan, err := f.scanContiguousBlocks(ctx, int64(checkpointBlockCount), cp.LastEntryId)
+	if err != nil {
+		return err
+	}
+	recoveredIndexes = append(recoveredIndexes, scan.indexes...)
+	firstEntryID, lastEntryID, maxBlockID := int64(-1), int64(-1), int64(-1)
+	if len(recoveredIndexes) > 0 {
+		firstEntryID = recoveredIndexes[0].FirstEntryID
+		lastBlock := recoveredIndexes[len(recoveredIndexes)-1]
+		lastEntryID = lastBlock.LastEntryID
+		maxBlockID = int64(lastBlock.BlockNumber)
 	}
 
 	// Commit once, replacing the previous snapshot on a fence retry. Failed
 	// incremental scans leave the existing writer state untouched.
 	f.blockIndexes = recoveredIndexes
-	f.fenced.Store(fenceBlockId >= 0)
+	f.fenced.Store(scan.fenceBlockID >= 0)
 	f.firstEntryID.Store(firstEntryID)
 	f.lastEntryID.Store(lastEntryID)
 	f.lastBlockID.Store(maxBlockID)
@@ -504,94 +460,16 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	logger.Ctx(ctx).Info("recovering from storage by sequentially reading blocks",
 		zap.String("segmentFileKey", f.segmentFileKey))
 
-	// Try to read each data object to rebuild block indexes
-	var firstEntryID int64 = -1
-	var lastEntryID int64 = -1
-	var tempIndexRecords []*codec.IndexRecord
-	lastModifiedTime := int64(0)
-
-	// fence state recover
-	fenceBlockId := int64(-1)
-
-	// Sequentially try to read blocks starting from ID 0
-	// Block sequence must be continuous without gaps - if any block is missing, stop recovery
-	blockID := int64(0)
-	for {
-		blockKey := getBlockKey(f.segmentFileKey, blockID)
-
-		// Try to get object info first to check if it exists
-		objSize, isFenced, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, f.logNs, f.logIdStr)
-		if stateErr != nil {
-			if f.client.IsObjectNotExistsError(stateErr) {
-				// Block doesn't exist, we've reached the end of continuous sequence
-				logger.Ctx(ctx).Debug("block not found, stopping recovery as sequence must be continuous",
-					zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockID", blockID), zap.String("blockKey", blockKey))
-				break
-			}
-			// Other errors (network issues, permissions, etc.) should also stop recovery
-			logger.Ctx(ctx).Warn("failed to stat object during recovery, please retry later",
-				zap.String("blockKey", blockKey), zap.Error(stateErr))
-			return stateErr
-		}
-		if isFenced {
-			logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
-				zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fenceBlockID", blockID), zap.String("blockKey", blockKey))
-			fenceBlockId = blockID
-			break
-		}
-
-		// Update last modified time (use current time since we don't have exact modification time)
-		currentTime := time.Now().UnixMilli()
-		if currentTime > lastModifiedTime {
-			lastModifiedTime = currentTime
-		}
-
-		// Parse the data to find blockHeaderRecord
-		logger.Ctx(ctx).Debug("attempting to parse block header record during recovery",
-			zap.String("blockKey", blockKey),
-			zap.Int64("dataSize", objSize))
-
-		blockHeaderRecord, parseBlockHeaderErr := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
-		if parseBlockHeaderErr != nil {
-			logger.Ctx(ctx).Warn("failed to parse block header record during recovery, please retry later",
-				zap.String("blockKey", blockKey),
-				zap.Error(parseBlockHeaderErr))
-			return parseBlockHeaderErr
-		}
-
-		// Create index record for this block
-		indexRecord := &codec.IndexRecord{
-			BlockNumber:  int32(blockID),
-			StartOffset:  blockID,
-			BlockSize:    uint32(objSize), // Use object size as block size
-			FirstEntryID: blockHeaderRecord.FirstEntryID,
-			LastEntryID:  blockHeaderRecord.LastEntryID,
-		}
-
-		tempIndexRecords = append(tempIndexRecords, indexRecord)
-
-		if firstEntryID == -1 || blockHeaderRecord.FirstEntryID < firstEntryID {
-			firstEntryID = blockHeaderRecord.FirstEntryID
-		}
-		if blockHeaderRecord.LastEntryID > lastEntryID {
-			lastEntryID = blockHeaderRecord.LastEntryID
-		}
-
-		logger.Ctx(ctx).Debug("recovered block during recovery",
-			zap.String("blockKey", blockKey),
-			zap.Int64("blockID", blockID),
-			zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
-			zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
-			zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
-
-		blockID++
+	scan, err := f.scanContiguousBlocks(ctx, 0, -1)
+	if err != nil {
+		return err
 	}
-
-	f.lastModifiedTime.Store(lastModifiedTime)
-	if fenceBlockId > -1 {
+	tempIndexRecords := scan.indexes
+	f.lastModifiedTime.Store(scan.lastModifiedTime)
+	if scan.fenceBlockID >= 0 {
 		logger.Ctx(ctx).Info("fence block found, fence state recovered",
 			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Int64("fenceBlockId", fenceBlockId))
+			zap.Int64("fenceBlockId", scan.fenceBlockID))
 		f.fenced.Store(true)
 	}
 
@@ -603,26 +481,17 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 		return nil
 	}
 
-	// Index records are already in correct order since we read them sequentially
+	// Only publish index and entry state after the complete scan succeeds.
 	f.blockIndexes = tempIndexRecords
-
-	// Update writer state
-	if firstEntryID != -1 {
-		f.firstEntryID.Store(firstEntryID)
-	}
-	if lastEntryID != -1 {
-		f.lastEntryID.Store(lastEntryID)
-	}
-
-	// Calculate maxBlockID from the recovered blocks
-	var maxBlockID int64 = -1
-	if len(tempIndexRecords) > 0 {
-		// Since blocks are sequential, the last block has the maximum ID
-		maxBlockID = int64(tempIndexRecords[len(tempIndexRecords)-1].BlockNumber)
-		f.lastBlockID.Store(maxBlockID)
-		f.lastSubmittedUploadingBlockID.Store(maxBlockID)
-		f.lastSubmittedUploadingEntryID.Store(lastEntryID)
-	}
+	firstEntryID := tempIndexRecords[0].FirstEntryID
+	lastBlock := tempIndexRecords[len(tempIndexRecords)-1]
+	lastEntryID := lastBlock.LastEntryID
+	maxBlockID := int64(lastBlock.BlockNumber)
+	f.firstEntryID.Store(firstEntryID)
+	f.lastEntryID.Store(lastEntryID)
+	f.lastBlockID.Store(maxBlockID)
+	f.lastSubmittedUploadingBlockID.Store(maxBlockID)
+	f.lastSubmittedUploadingEntryID.Store(lastEntryID)
 
 	logger.Ctx(ctx).Info("successfully recovered writer state from storage",
 		zap.String("segmentFileKey", f.segmentFileKey),
@@ -635,6 +504,68 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
+}
+
+type blockScanResult struct {
+	indexes          []*codec.IndexRecord
+	fenceBlockID     int64
+	lastModifiedTime int64
+}
+
+// scanContiguousBlocks reads blocks sequentially from startBlockID (inclusive),
+// stopping at the first missing block or fence. previousEntryID is the last
+// entry in an already recovered prefix, or -1 for a scan from block zero.
+// Both full and checkpoint recovery use the same header validation. Indexes
+// remain local to the result so a failed scan cannot publish partial index/LAC state.
+func (f *MinioFileWriter) scanContiguousBlocks(ctx context.Context, startBlockID, previousEntryID int64) (*blockScanResult, error) {
+	result := &blockScanResult{fenceBlockID: -1}
+	for blockID := startBlockID; ; blockID++ {
+		blockKey := getBlockKey(f.segmentFileKey, blockID)
+		objSize, isFenced, err := f.client.StatObject(ctx, f.bucket, blockKey, f.logNs, f.logIdStr)
+		if err != nil {
+			if f.client.IsObjectNotExistsError(err) {
+				logger.Ctx(ctx).Debug("block not found, stopping recovery as sequence must be continuous",
+					zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockID", blockID), zap.String("blockKey", blockKey))
+				return result, nil
+			}
+			logger.Ctx(ctx).Warn("failed to stat object during recovery, please retry later",
+				zap.String("blockKey", blockKey), zap.Error(err))
+			return nil, err
+		}
+		if isFenced {
+			logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
+				zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fenceBlockID", blockID), zap.String("blockKey", blockKey))
+			result.fenceBlockID = blockID
+			return result, nil
+		}
+
+		logger.Ctx(ctx).Debug("attempting to parse block header record during recovery",
+			zap.String("blockKey", blockKey), zap.Int64("dataSize", objSize))
+		header, err := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to parse block header record during recovery, please retry later",
+				zap.String("blockKey", blockKey), zap.Error(err))
+			return nil, err
+		}
+		if int64(header.BlockNumber) != blockID || header.FirstEntryID < 0 || header.LastEntryID < header.FirstEntryID ||
+			(previousEntryID >= 0 && header.FirstEntryID != previousEntryID+1) {
+			return nil, fmt.Errorf("non-contiguous block header during recovery: block %d", blockID)
+		}
+
+		result.indexes = append(result.indexes, &codec.IndexRecord{
+			BlockNumber:  int32(blockID),
+			StartOffset:  blockID,
+			BlockSize:    uint32(objSize),
+			FirstEntryID: header.FirstEntryID,
+			LastEntryID:  header.LastEntryID,
+		})
+		previousEntryID = header.LastEntryID
+		result.lastModifiedTime = time.Now().UnixMilli()
+		logger.Ctx(ctx).Debug("recovered block during recovery",
+			zap.String("blockKey", blockKey), zap.Int64("blockID", blockID),
+			zap.Int32("readBlockNumber", header.BlockNumber),
+			zap.Int64("firstEntryID", header.FirstEntryID), zap.Int64("lastEntryID", header.LastEntryID))
+	}
 }
 
 // parseBlockHeaderRecord extracts the BlockHeaderRecord from the end of block data

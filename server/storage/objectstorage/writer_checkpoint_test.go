@@ -147,18 +147,112 @@ func TestCheckpointRecoveryFenceRetryReplacesIndexes(t *testing.T) {
 	require.Equal(t, int32(2), footer.TotalBlocks)
 }
 
-func TestCheckpointRecoveryStopsAtGapOrFence(t *testing.T) {
-	for _, fenced := range []bool{false, true} {
-		t.Run(fmt.Sprint(fenced), func(t *testing.T) {
-			w, m := checkpointTestWriter(t, checkpointTestData(t, checkpointTestIndexes(2)))
-			// A later object may exist due to concurrent uploads. It must never be
-			// read past the first missing block or fence (unexpected calls fail).
-			expectCheckpointEnd(w, m, 2, fenced)
-			require.NoError(t, w.recoverFromStorageUnsafe(context.Background()))
-			require.Equal(t, int64(1), w.lastEntryID.Load())
-			require.Equal(t, fenced, w.fenced.Load())
-			m.AssertNumberOfCalls(t, "GetObject", 1)
-		})
+// Both recovery entry points scan the same suffix, starting after a valid
+// one-block prefix. Full recovery reads that prefix; checkpoint recovery loads it.
+func recoveryScanTestWriter(t *testing.T, fromCheckpoint bool) (*MinioFileWriter, *mocks_objectstorage.ObjectStorage, func(context.Context) error) {
+	t.Helper()
+	if fromCheckpoint {
+		w, m := checkpointTestWriter(t, checkpointTestData(t, checkpointTestIndexes(1)))
+		return w, m, w.recoverFromCheckpoint
+	}
+	w := newTestMinioFileWriter()
+	t.Cleanup(w.pool.Release)
+	m := mocks_objectstorage.NewObjectStorage(t)
+	w.client = m
+	m.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(func(err error) bool { return werr.ErrEntryNotFound.Is(err) }).Maybe()
+	expectCheckpointTailBlock(t, w, m, 0)
+	return w, m, w.recoverFromFullListing
+}
+
+func TestRecoveryScanStopsAtGapOrFence(t *testing.T) {
+	for _, fromCheckpoint := range []bool{false, true} {
+		for _, fenced := range []bool{false, true} {
+			t.Run(fmt.Sprintf("checkpoint=%t/fenced=%t", fromCheckpoint, fenced), func(t *testing.T) {
+				w, m, recoverState := recoveryScanTestWriter(t, fromCheckpoint)
+				// A later upload must not be read beyond the first missing block
+				// or fence; the mock rejects any such request.
+				expectCheckpointEnd(w, m, 1, fenced)
+				require.NoError(t, recoverState(context.Background()))
+				require.Len(t, w.blockIndexes, 1)
+				require.Equal(t, int64(0), w.lastEntryID.Load())
+				require.Equal(t, fenced, w.fenced.Load())
+				m.AssertNumberOfCalls(t, "GetObject", 1)
+			})
+		}
+	}
+}
+
+func TestRecoveryScanRejectsNonContiguousHeaders(t *testing.T) {
+	for _, fromCheckpoint := range []bool{false, true} {
+		for name, header := range map[string]*codec.BlockHeaderRecord{
+			"wrong block ID": {BlockNumber: 2, FirstEntryID: 1, LastEntryID: 1},
+			"entry gap":      {BlockNumber: 1, FirstEntryID: 2, LastEntryID: 2},
+			"entry overlap":  {BlockNumber: 1, FirstEntryID: 0, LastEntryID: 0},
+			"negative entry": {BlockNumber: 1, FirstEntryID: -1, LastEntryID: -1},
+			"reversed range": {BlockNumber: 1, FirstEntryID: 1, LastEntryID: 0},
+		} {
+			t.Run(fmt.Sprintf("checkpoint=%t/%s", fromCheckpoint, name), func(t *testing.T) {
+				w, m, recoverState := recoveryScanTestWriter(t, fromCheckpoint)
+				before := checkpointTestIndexes(3)
+				w.blockIndexes = before
+				w.lastEntryID.Store(2)
+				raw := codec.EncodeRecord(header)
+				key := getBlockKey(w.segmentFileKey, 1)
+				m.EXPECT().StatObject(mock.Anything, w.bucket, key, mock.Anything, mock.Anything).Return(int64(128), false, nil).Once()
+				m.EXPECT().GetObject(mock.Anything, w.bucket, key, int64(0), int64(len(raw)), mock.Anything, mock.Anything).
+					Return(&mockFileReader{data: raw}, nil).Once()
+				err := recoverState(context.Background())
+				require.ErrorContains(t, err, "non-contiguous block header")
+				require.Equal(t, before, w.blockIndexes)
+				require.Equal(t, int64(2), w.lastEntryID.Load())
+			})
+		}
+	}
+}
+
+func TestCheckpointFallbackRejectsTheSameInvalidHeader(t *testing.T) {
+	w, m := checkpointTestWriter(t, checkpointTestData(t, checkpointTestIndexes(1)))
+	before := checkpointTestIndexes(3)
+	w.blockIndexes = before
+	w.lastEntryID.Store(2)
+	// The checkpoint scan rejects block 1; the full-scan fallback must reject
+	// the same entry gap rather than bypass the shared header validation.
+	expectCheckpointTailBlock(t, w, m, 0)
+	raw := codec.EncodeRecord(&codec.BlockHeaderRecord{BlockNumber: 1, FirstEntryID: 2, LastEntryID: 2})
+	key := getBlockKey(w.segmentFileKey, 1)
+	m.EXPECT().StatObject(mock.Anything, w.bucket, key, mock.Anything, mock.Anything).Return(int64(128), false, nil).Twice()
+	m.EXPECT().GetObject(mock.Anything, w.bucket, key, int64(0), int64(len(raw)), mock.Anything, mock.Anything).RunAndReturn(
+		func(context.Context, string, string, int64, int64, string, string) (minioHandler.FileReader, error) {
+			return &mockFileReader{data: raw}, nil
+		},
+	).Twice()
+	require.ErrorContains(t, w.recoverFromStorageUnsafe(context.Background()), "non-contiguous block header")
+	require.Equal(t, before, w.blockIndexes)
+	require.Equal(t, int64(2), w.lastEntryID.Load())
+}
+
+func TestRecoveryScanStorageFailureLeavesStateUntouched(t *testing.T) {
+	for _, fromCheckpoint := range []bool{false, true} {
+		for _, failRead := range []bool{false, true} {
+			t.Run(fmt.Sprintf("checkpoint=%t/read=%t", fromCheckpoint, failRead), func(t *testing.T) {
+				w, m, recoverState := recoveryScanTestWriter(t, fromCheckpoint)
+				before := checkpointTestIndexes(3)
+				w.blockIndexes = before
+				w.lastEntryID.Store(2)
+				failure := errors.New("temporary storage failure")
+				key := getBlockKey(w.segmentFileKey, 1)
+				if failRead {
+					m.EXPECT().StatObject(mock.Anything, w.bucket, key, mock.Anything, mock.Anything).Return(int64(128), false, nil).Once()
+					m.EXPECT().GetObject(mock.Anything, w.bucket, key, int64(0), int64(codec.RecordHeaderSize+codec.BlockHeaderRecordSize), mock.Anything, mock.Anything).
+						Return(nil, failure).Once()
+				} else {
+					m.EXPECT().StatObject(mock.Anything, w.bucket, key, mock.Anything, mock.Anything).Return(int64(0), false, failure).Once()
+				}
+				require.ErrorIs(t, recoverState(context.Background()), failure)
+				require.Equal(t, before, w.blockIndexes)
+				require.Equal(t, int64(2), w.lastEntryID.Load())
+			})
+		}
 	}
 }
 
