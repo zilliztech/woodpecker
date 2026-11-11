@@ -517,9 +517,30 @@ type blockScanResult struct {
 // entry in an already recovered prefix, or -1 for a scan from block zero.
 // Both full and checkpoint recovery use the same header validation. Indexes
 // remain local to the result so a failed scan cannot publish partial index/LAC state.
-func (f *MinioFileWriter) scanContiguousBlocks(ctx context.Context, startBlockID, previousEntryID int64) (*blockScanResult, error) {
+func (f *MinioFileWriter) scanContiguousBlocks(ctx context.Context, startBlockID, previousEntryID int64) (_ *blockScanResult, retErr error) {
 	result := &blockScanResult{fenceBlockID: -1}
-	for blockID := startBlockID; ; blockID++ {
+	startTime := time.Now()
+	blockID := startBlockID
+	operation := "stat"
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		fields := []zap.Field{
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.String("blockKey", getBlockKey(f.segmentFileKey, blockID)),
+			zap.Int64("startBlockID", startBlockID), zap.Int64("blockID", blockID),
+			zap.Int("scannedBlocks", len(result.indexes)), zap.String("operation", operation),
+			zap.Duration("elapsed", time.Since(startTime)), zap.Error(retErr),
+		}
+		if ctx.Err() != nil {
+			logger.Ctx(ctx).Debug("block recovery scan canceled", fields...)
+		} else {
+			logger.Ctx(ctx).Warn("block recovery scan failed", fields...)
+		}
+	}()
+	for ; ; blockID++ {
+		operation = "stat"
 		blockKey := getBlockKey(f.segmentFileKey, blockID)
 		objSize, isFenced, err := f.client.StatObject(ctx, f.bucket, blockKey, f.logNs, f.logIdStr)
 		if err != nil {
@@ -528,28 +549,25 @@ func (f *MinioFileWriter) scanContiguousBlocks(ctx context.Context, startBlockID
 					zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockID", blockID), zap.String("blockKey", blockKey))
 				return result, nil
 			}
-			logger.Ctx(ctx).Warn("failed to stat object during recovery, please retry later",
-				zap.String("blockKey", blockKey), zap.Error(err))
 			return nil, err
 		}
 		if isFenced {
-			logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
+			logger.Ctx(ctx).Debug("object is fenced, stopping recovery",
 				zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fenceBlockID", blockID), zap.String("blockKey", blockKey))
 			result.fenceBlockID = blockID
 			return result, nil
 		}
 
-		logger.Ctx(ctx).Debug("attempting to parse block header record during recovery",
-			zap.String("blockKey", blockKey), zap.Int64("dataSize", objSize))
+		operation = "read_header"
 		header, err := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
 		if err != nil {
-			logger.Ctx(ctx).Warn("failed to parse block header record during recovery, please retry later",
-				zap.String("blockKey", blockKey), zap.Error(err))
 			return nil, err
 		}
+		operation = "validate_header"
 		if int64(header.BlockNumber) != blockID || header.FirstEntryID < 0 || header.LastEntryID < header.FirstEntryID ||
 			(previousEntryID >= 0 && header.FirstEntryID != previousEntryID+1) {
-			return nil, fmt.Errorf("non-contiguous block header during recovery: block %d", blockID)
+			return nil, fmt.Errorf("non-contiguous block header during recovery: block %d, header block %d, entry range [%d,%d], previous entry %d",
+				blockID, header.BlockNumber, header.FirstEntryID, header.LastEntryID, previousEntryID)
 		}
 
 		result.indexes = append(result.indexes, &codec.IndexRecord{
@@ -568,7 +586,8 @@ func (f *MinioFileWriter) scanContiguousBlocks(ctx context.Context, startBlockID
 	}
 }
 
-// parseBlockHeaderRecord extracts the BlockHeaderRecord from the end of block data
+// parseBlockHeaderRecord extracts the BlockHeaderRecord from the start of a
+// block. Its caller owns recovery error logging to avoid duplicate warnings.
 func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID int64, blockKey string) (*codec.BlockHeaderRecord, error) {
 	// For the first block (block 0), we need to read more data to account for the HeaderRecord
 	// For other blocks, we only need to read the BlockHeaderRecord
@@ -583,17 +602,11 @@ func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID in
 	// get block header record from the beginning of the block
 	headerRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, 0, readSize, f.logNs, f.logIdStr)
 	if getErr != nil {
-		logger.Ctx(ctx).Warn("Error getting block header record",
-			zap.String("blockKey", blockKey),
-			zap.Error(getErr))
 		return nil, getErr
 	}
 	defer headerRecordObj.Close()
 	data, readErr := minioHandler.ReadObjectFull(ctx, headerRecordObj, readSize, f.logNs, f.logIdStr)
 	if readErr != nil {
-		logger.Ctx(ctx).Warn("failed to read object data during prefetch, please retry later",
-			zap.String("blockKey", blockKey),
-			zap.Error(readErr))
 		return nil, readErr
 	}
 
@@ -601,41 +614,23 @@ func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID in
 		return nil, errors.New("empty data")
 	}
 
-	logger.Ctx(ctx).Info("parsing block data for BlockHeaderRecord",
-		zap.Int("dataSize", len(data)))
-
 	// Parse all records in the data to find the BlockHeaderRecord
 	// The BlockHeaderRecord should be at the beginning of the block
 	records, err := codec.DecodeRecordList(data)
 	if err != nil {
-		logger.Ctx(ctx).Info("failed to decode records",
-			zap.Error(err),
-			zap.Int("dataSize", len(data)))
 		return nil, fmt.Errorf("failed to decode records: %w", err)
 	}
-
-	logger.Ctx(ctx).Info("decoded records from block data",
-		zap.Int("recordCount", len(records)))
 
 	// Check if the first record is HeaderRecord (to determine if header was written)
 	if len(records) > 0 {
 		if _, ok := records[0].(*codec.HeaderRecord); ok {
-			logger.Ctx(ctx).Info("found HeaderRecord in existing block, marking header as written")
 			f.headerWritten.Store(true)
 		}
 	}
 
 	// Look for BlockHeaderRecord from the beginning (after optional HeaderRecord)
 	for i := 0; i < len(records); i++ {
-		logger.Ctx(ctx).Info("checking record type",
-			zap.Int("recordIndex", i),
-			zap.String("recordType", fmt.Sprintf("%T", records[i])))
-
 		if blockHeaderRecord, ok := records[i].(*codec.BlockHeaderRecord); ok {
-			logger.Ctx(ctx).Info("found BlockHeaderRecord",
-				zap.Int32("blockNumber", blockHeaderRecord.BlockNumber),
-				zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
-				zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
 			return blockHeaderRecord, nil
 		}
 	}
