@@ -416,9 +416,7 @@ func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64
 	if result >= 0 {
 		notifyValue = entryId
 	}
-	if result >= 0 {
-		// Successful notifications are covered by the flush and writer callbacks.
-	} else {
+	if result < 0 {
 		logger.Ctx(ctx).Debug("Notified pending entry directly with fail",
 			zap.Int64("logId", logId),
 			zap.Int64("segId", segId),
