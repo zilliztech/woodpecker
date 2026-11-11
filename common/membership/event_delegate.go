@@ -27,6 +27,9 @@ type EventDelegate struct {
 	discovery *ServiceDiscovery
 	role      NodeRole
 	addrPort  string // only used for logging
+	// onLeave, if set, is told of every node that leaves or is declared dead,
+	// before discovery forgets it.
+	onLeave func(name string)
 }
 
 func NewEventDelegate(discovery *ServiceDiscovery, role NodeRole, addrPort string) *EventDelegate {
@@ -44,6 +47,8 @@ func (e *EventDelegate) NotifyJoin(node *memberlist.Node) {
 			} else {
 				log.Printf("[SERVER-EVENT] Server[%s] joined: %s (RG: %s, AZ: %s)", e.addrPort, node.Name, meta.ResourceGroup, meta.Az)
 			}
+		} else {
+			log.Printf("[%s-EVENT] Error: failed to unmarshal metadata for joined node %s (metaLen=%d): %v", string(e.role), node.Name, len(node.Meta), err)
 		}
 	} else { // no meta, indicating a client role joining
 		if e.role == RoleServer {
@@ -54,7 +59,26 @@ func (e *EventDelegate) NotifyJoin(node *memberlist.Node) {
 
 // NotifyLeave node leaves
 func (e *EventDelegate) NotifyLeave(node *memberlist.Node) {
-	e.discovery.RemoveServer(node.Name)
+	if e.onLeave != nil {
+		e.onLeave(node.Name)
+	}
+	// When metadata is available, use guarded removal to prevent stale leave events
+	// from removing a node that has already rejoined with a new incarnation.
+	if len(node.Meta) > 0 {
+		var leavingMeta proto.NodeMeta
+		if err := pb.Unmarshal(node.Meta, &leavingMeta); err == nil {
+			if !e.discovery.RemoveServerIfMatch(node.Name, &leavingMeta) {
+				log.Printf("[%s-EVENT] Ignored stale leave for %s (node has rejoined with updated endpoint/metadata)",
+					string(e.role), node.Name)
+				return
+			}
+		} else {
+			e.discovery.RemoveServer(node.Name)
+		}
+	} else {
+		e.discovery.RemoveServer(node.Name)
+	}
+
 	if e.role == RoleClient {
 		log.Printf("[CLIENT-WATCH] Node left: %s", node.Name)
 	} else {
@@ -73,6 +97,8 @@ func (e *EventDelegate) NotifyUpdate(node *memberlist.Node) {
 			} else {
 				log.Printf("[SERVER-EVENT] Server updated: %s (Version: %d)", node.Name, meta.Version)
 			}
+		} else {
+			log.Printf("[%s-EVENT] Error: failed to unmarshal metadata for updated node %s (metaLen=%d): %v", string(e.role), node.Name, len(node.Meta), err)
 		}
 	}
 }

@@ -1,0 +1,226 @@
+package http
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/zilliztech/woodpecker/common/config"
+)
+
+func resetGlobals() {
+	metricsServer = nil
+	server = nil
+}
+
+func TestRegister_HandlerFunc(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+
+	called := false
+	Register(&Handler{
+		Path: "/test",
+		HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
+			called = true
+		},
+	})
+	assert.NotNil(t, metricsServer)
+	assert.False(t, called) // just registered, not invoked
+}
+
+func TestRegister_Handler(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+
+	Register(&Handler{
+		Path:    "/test2",
+		Handler: http.NotFoundHandler(),
+	})
+	assert.NotNil(t, metricsServer)
+}
+
+func TestRegister_PprofEnabled(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "true")
+
+	Register(&Handler{
+		Path:    "/test-pprof-enabled",
+		Handler: http.NotFoundHandler(),
+	})
+	assert.Equal(t, http.DefaultServeMux, metricsServer)
+}
+
+func TestRegister_PprofDefault(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "")
+
+	Register(&Handler{
+		Path:    "/test-pprof-default",
+		Handler: http.NotFoundHandler(),
+	})
+	// Empty env defaults to pprof enabled → DefaultServeMux
+	assert.Equal(t, http.DefaultServeMux, metricsServer)
+}
+
+func TestStop_NilServer(t *testing.T) {
+	resetGlobals()
+	err := Stop()
+	assert.NoError(t, err)
+}
+
+func TestStartAndStop(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+	t.Setenv(ListenPortEnvKey, "19091") // use non-default port to avoid conflicts
+
+	cfg, _ := config.NewConfiguration()
+	err := Start(cfg, AdminCallbacks{
+		GetMemberlistStatus: func() string { return "memberlist status" },
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, server)
+
+	// Give server time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Hit the log level endpoint to cover the handler closure
+	resp, httpErr := http.Get("http://127.0.0.1:19091" + LogLevelRouterPath)
+	if httpErr == nil {
+		resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	}
+
+	// Hit the memberlist endpoint
+	resp, httpErr = http.Get("http://127.0.0.1:19091" + AdminMemberlistPath)
+	if httpErr == nil {
+		resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	}
+
+	err = Stop()
+	assert.NoError(t, err)
+}
+
+func TestStartAndStop_WithLifecycleEndpoints(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+	t.Setenv(ListenPortEnvKey, "19092")
+
+	cfg, _ := config.NewConfiguration()
+
+	decommissioned := false
+	err := Start(cfg, AdminCallbacks{
+		GetMemberlistStatus: func() string { return "ok" },
+		GetNodeStatus: func() any {
+			return map[string]string{"state": "active"}
+		},
+		Decommission: func() error {
+			decommissioned = true
+			return nil
+		},
+		GetDecommissionProgress: func() any {
+			return map[string]any{"safe_to_terminate": decommissioned}
+		},
+	})
+	assert.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	// Test GET /admin/node/status
+	resp, httpErr := http.Get("http://127.0.0.1:19092" + AdminNodeStatusPath)
+	if httpErr == nil {
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+	}
+
+	// Test POST /admin/node/decommission
+	resp, httpErr = http.Post("http://127.0.0.1:19092"+AdminNodeDecommissionPath, "", nil)
+	if httpErr == nil {
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+	}
+	assert.True(t, decommissioned)
+
+	// Test GET /admin/node/decommission/progress
+	resp, httpErr = http.Get("http://127.0.0.1:19092" + AdminNodeDecommissionProgressPath)
+	if httpErr == nil {
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+	}
+
+	err = Stop()
+	assert.NoError(t, err)
+}
+
+// TestStartAndStop_WithInstanceDataEndpoint covers the wiring from the callback to the
+// registered route: the filter reaches the callback and the payload reaches the caller.
+func TestStartAndStop_WithInstanceDataEndpoint(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+	t.Setenv(ListenPortEnvKey, "19093")
+
+	cfg, _ := config.NewConfiguration()
+
+	var gotBucket, gotRoot string
+	err := Start(cfg, AdminCallbacks{
+		GetInstanceData: func(bucketName, rootPath string) any {
+			gotBucket, gotRoot = bucketName, rootPath
+			return map[string]any{"node_id": "woodpecker-0", "instances": []any{}}
+		},
+	})
+	assert.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	resp, httpErr := http.Get("http://127.0.0.1:19093" + AdminInstanceDataPath +
+		"?bucket_name=a-bucket&root_path=in01-abc")
+	require.NoError(t, httpErr)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "woodpecker-0", body["node_id"])
+	assert.Equal(t, "a-bucket", gotBucket)
+	assert.Equal(t, "in01-abc", gotRoot)
+
+	assert.NoError(t, Stop())
+}
+
+// TestStartAndStop_SegmentProbeIsReachable pins the wiring rather than the handler: providing the
+// callback has to publish the route. A handler that is never registered answers 404 with nothing to
+// show for it, and no test of the handler itself would notice.
+func TestStartAndStop_SegmentProbeIsReachable(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+	t.Setenv(ListenPortEnvKey, "19096")
+
+	cfg, _ := config.NewConfiguration()
+	var gotLogID, gotSegmentID int64
+	err := Start(cfg, AdminCallbacks{
+		GetMemberlistStatus: func() string { return "ok" },
+		Logstore: LogstoreCallbacks{
+			ProbeSegment: func(_ context.Context, _, _ string, logID, segmentID, _, _ int64) (any, error) {
+				gotLogID, gotSegmentID = logID, segmentID
+				return map[string]any{"stop_reason": "not_yet_written", "last_entry": 4821}, nil
+			},
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = Stop() }()
+	time.Sleep(50 * time.Millisecond)
+
+	resp, httpErr := http.Get("http://127.0.0.1:19096" + AdminLogstoreProbePath + "?log_id=7&segment_id=3")
+	require.NoError(t, httpErr)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var payload map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&payload))
+	assert.Equal(t, "not_yet_written", payload["stop_reason"])
+	assert.Equal(t, int64(7), gotLogID)
+	assert.Equal(t, int64(3), gotSegmentID)
+}

@@ -108,7 +108,7 @@ func (c *Checkpoint) GetSectionData(sectionType SectionType) ([]byte, error) {
 	if sec == nil {
 		return nil, fmt.Errorf("section type %d not found", sectionType)
 	}
-	if sec.Offset+sec.Length > len(c.data) {
+	if sec.Offset < 0 || sec.Length < 0 || sec.Offset > len(c.data) || sec.Length > len(c.data)-sec.Offset {
 		return nil, fmt.Errorf("section type %d out of range: offset=%d length=%d dataSize=%d",
 			sectionType, sec.Offset, sec.Length, len(c.data))
 	}
@@ -152,6 +152,15 @@ func Parse(raw []byte) (*Checkpoint, error) {
 	var meta Meta
 	if err := json.Unmarshal(raw[dataEnd:len(raw)-trailerSize], &meta); err != nil {
 		return nil, fmt.Errorf("failed to parse checkpoint metadata: %w", err)
+	}
+
+	if meta.Version != 1 {
+		return nil, fmt.Errorf("unsupported checkpoint version %d", meta.Version)
+	}
+	for _, section := range meta.Sections {
+		if section.Offset < 0 || section.Length < 0 || section.Offset > dataEnd || section.Length > dataEnd-section.Offset {
+			return nil, fmt.Errorf("checkpoint section %d out of range", section.Type)
+		}
 	}
 
 	data := make([]byte, dataEnd)

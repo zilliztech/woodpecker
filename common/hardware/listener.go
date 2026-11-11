@@ -14,8 +14,8 @@ import (
 // systemMetricsWatcher is a hardware monitor that can be used to monitor hardware information.
 var (
 	defaultMetricMonitorInterval = 1 * time.Second
-	systemMericsWatcherOnce      sync.Once
-	systemMetricsWatcher         *SystemMericsWatcher
+	systemMetricsWatcherOnce     sync.Once
+	systemMetricsWatcher         *SystemMetricsWatcher
 )
 
 // SystemMetrics is the system metrics.
@@ -59,8 +59,8 @@ func UnregisterSystemMetricsListener(listener *SystemMetricsListener) {
 }
 
 // getSystemMetricsWatcher returns the systemMetricsWatcher instance.
-func getSystemMetricsWatcher() *SystemMericsWatcher {
-	systemMericsWatcherOnce.Do(func() {
+func getSystemMetricsWatcher() *SystemMetricsWatcher {
+	systemMetricsWatcherOnce.Do(func() {
 		systemMetricsWatcher = NewSystemMetricsWatcher(defaultMetricMonitorInterval)
 		warningLoggerListener := &SystemMetricsListener{
 			Cooldown: 1 * time.Minute,
@@ -76,9 +76,9 @@ func getSystemMetricsWatcher() *SystemMericsWatcher {
 	return systemMetricsWatcher
 }
 
-// NewSystemMetricsWatcher creates a new SystemMericsWatcher.
-func NewSystemMetricsWatcher(interval time.Duration) *SystemMericsWatcher {
-	w := &SystemMericsWatcher{
+// NewSystemMetricsWatcher creates a new SystemMetricsWatcher.
+func NewSystemMetricsWatcher(interval time.Duration) *SystemMetricsWatcher {
+	w := &SystemMetricsWatcher{
 		listener: make(map[*SystemMetricsListener]struct{}),
 		closed:   make(chan struct{}),
 		finished: make(chan struct{}),
@@ -87,8 +87,8 @@ func NewSystemMetricsWatcher(interval time.Duration) *SystemMericsWatcher {
 	return w
 }
 
-// SystemMericsWatcher is a hardware monitor that can be used to monitor hardware information.
-type SystemMericsWatcher struct {
+// SystemMetricsWatcher is a hardware monitor that can be used to monitor hardware information.
+type SystemMetricsWatcher struct {
 	mu       sync.Mutex
 	listener map[*SystemMetricsListener]struct{}
 	closed   chan struct{}
@@ -96,7 +96,7 @@ type SystemMericsWatcher struct {
 }
 
 // RegisterListener registers a listener.
-func (w *SystemMericsWatcher) RegisterListener(listener *SystemMetricsListener) {
+func (w *SystemMetricsWatcher) RegisterListener(listener *SystemMetricsListener) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	newListeners := make(map[*SystemMetricsListener]struct{})
@@ -108,7 +108,7 @@ func (w *SystemMericsWatcher) RegisterListener(listener *SystemMetricsListener) 
 }
 
 // UnregisterListener unregisters a listener.
-func (w *SystemMericsWatcher) UnregisterListener(listener *SystemMetricsListener) {
+func (w *SystemMetricsWatcher) UnregisterListener(listener *SystemMetricsListener) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	newListeners := make(map[*SystemMetricsListener]struct{})
@@ -119,8 +119,8 @@ func (w *SystemMericsWatcher) UnregisterListener(listener *SystemMetricsListener
 	w.listener = newListeners
 }
 
-// loop is the main loop of the SystemMericsWatcher.
-func (w *SystemMericsWatcher) loop(interval time.Duration) {
+// loop is the main loop of the SystemMetricsWatcher.
+func (w *SystemMetricsWatcher) loop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer func() {
 		ticker.Stop()
@@ -136,7 +136,7 @@ func (w *SystemMericsWatcher) loop(interval time.Duration) {
 	}
 }
 
-func (w *SystemMericsWatcher) updateMetrics() {
+func (w *SystemMetricsWatcher) updateMetrics() {
 	stats := SystemMetrics{
 		UsedMemoryBytes:  GetUsedMemoryCount(),
 		TotalMemoryBytes: GetMemoryCount(),
@@ -158,7 +158,7 @@ func (w *SystemMericsWatcher) updateMetrics() {
 	}
 }
 
-func (s *SystemMericsWatcher) Close() {
+func (s *SystemMetricsWatcher) Close() {
 	close(s.closed)
 	<-s.finished
 }

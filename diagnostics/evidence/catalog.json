@@ -1,0 +1,1734 @@
+{
+  "version": "wpdiag.wal.catalog/v1",
+  "policy": {
+    "latency_ms": 100,
+    "min_observations": 100,
+    "sustain_ms": 180000,
+    "max_gap_ms": 30000,
+    "note": "Initial configurable reference policies, not universal SLOs. Quantile intervals are retained; P99 is not inferred from legacy P95."
+  },
+  "registry": {
+    "woodpecker_client_write_frontier_segment": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:54"
+    },
+    "woodpecker_client_write_frontier_entry": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:60"
+    },
+    "woodpecker_client_compaction_frontier_segment": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:66"
+    },
+    "woodpecker_client_compaction_frontier_entry": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:72"
+    },
+    "woodpecker_client_read_frontier_segment": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "reader_name"
+      ],
+      "definition": "common/metrics/client_metrics.go:90"
+    },
+    "woodpecker_client_read_frontier_entry": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "reader_name"
+      ],
+      "definition": "common/metrics/client_metrics.go:96"
+    },
+    "woodpecker_client_append_requests_total": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:104"
+    },
+    "woodpecker_client_append_latency": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:117"
+    },
+    "woodpecker_client_log_handle_operations_total": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "operation",
+        "status"
+      ],
+      "definition": "common/metrics/client_metrics.go:126"
+    },
+    "woodpecker_client_log_handle_operation_latency": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "operation",
+        "status"
+      ],
+      "definition": "common/metrics/client_metrics.go:132"
+    },
+    "woodpecker_client_reader_bytes_read": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:167"
+    },
+    "woodpecker_client_reader_operation_latency": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "operation",
+        "status"
+      ],
+      "definition": "common/metrics/client_metrics.go:173"
+    },
+    "woodpecker_client_writer_bytes_written": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:210"
+    },
+    "woodpecker_client_writer_operation_latency": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "operation",
+        "status"
+      ],
+      "definition": "common/metrics/client_metrics.go:216"
+    },
+    "woodpecker_client_segment_handle_pending_append_ops": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:238"
+    },
+    "woodpecker_client_segment_rolled_total": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "reason"
+      ],
+      "definition": "common/metrics/client_metrics.go:247"
+    },
+    "woodpecker_client_segment_compaction_failures_total": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "reason"
+      ],
+      "definition": "common/metrics/client_metrics.go:253"
+    },
+    "woodpecker_client_direct_read_requests_total": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "status"
+      ],
+      "definition": "common/metrics/client_metrics.go:272"
+    },
+    "woodpecker_client_direct_read_latency": {
+      "labels": [
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/client_metrics.go:278"
+    },
+    "woodpecker_client_replica_append_total": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "az_scope",
+        "status"
+      ],
+      "definition": "common/metrics/client_metrics.go:291"
+    },
+    "woodpecker_client_quorum_read_total": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "az_scope",
+        "status"
+      ],
+      "definition": "common/metrics/client_metrics.go:306"
+    },
+    "woodpecker_client_read_failover_total": {
+      "labels": [
+        "log_ns",
+        "log_id",
+        "from_scope",
+        "to_scope"
+      ],
+      "definition": "common/metrics/client_metrics.go:318"
+    },
+    "woodpecker_server_logstore_operations_total": {
+      "labels": [
+        "node_id",
+        "log_ns",
+        "log_id",
+        "operation",
+        "status"
+      ],
+      "definition": "common/metrics/service_metrics.go:90"
+    },
+    "woodpecker_server_logstore_operation_latency": {
+      "labels": [
+        "node_id",
+        "log_ns",
+        "log_id",
+        "operation",
+        "status"
+      ],
+      "definition": "common/metrics/service_metrics.go:96"
+    },
+    "woodpecker_server_logstore_disk_usage_ratio": {
+      "labels": [
+        "node_id",
+        "path"
+      ],
+      "definition": "common/metrics/service_metrics.go:111"
+    },
+    "woodpecker_server_logstore_write_rejected_total": {
+      "labels": [
+        "node_id",
+        "reason"
+      ],
+      "definition": "common/metrics/service_metrics.go:129"
+    },
+    "woodpecker_server_logstore_disk_watermark_soft": {
+      "labels": [
+        "node_id"
+      ],
+      "definition": "common/metrics/service_metrics.go:143"
+    },
+    "woodpecker_server_logstore_disk_watermark_hard": {
+      "labels": [
+        "node_id"
+      ],
+      "definition": "common/metrics/service_metrics.go:149"
+    },
+    "woodpecker_server_buffer_wait_latency": {
+      "labels": [
+        "node_id",
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/service_metrics.go:157"
+    },
+    "woodpecker_server_file_flush_latency": {
+      "labels": [
+        "node_id",
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/service_metrics.go:200"
+    },
+    "woodpecker_server_flush_bytes_written": {
+      "labels": [
+        "node_id",
+        "log_ns",
+        "log_id"
+      ],
+      "definition": "common/metrics/service_metrics.go:207"
+    },
+    "woodpecker_server_system_cpu_usage": {
+      "labels": [
+        "node_id"
+      ],
+      "definition": "common/metrics/system_metrics_collector.go:37"
+    },
+    "woodpecker_server_system_memory_usage_ratio": {
+      "labels": [
+        "node_id"
+      ],
+      "definition": "common/metrics/system_metrics_collector.go:61"
+    },
+    "woodpecker_server_system_io_wait": {
+      "labels": [
+        "node_id"
+      ],
+      "definition": "Cumulative host CPU I/O-wait seconds from cpu.Times(false).Iowait; percentage HELP text is inaccurate. No verified host CPU-time denominator is available."
+    }
+  },
+  "evidence": [
+    {
+      "id": "W01",
+      "title": "Writer operation p99",
+      "group": "Writer",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_writer_operation_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "With at least 100 observations in each evaluated 1-minute interval, p99 exceeds the configured 100 ms reference for 3 consecutive minutes. This is an illustrative threshold, not a universal SLO.",
+      "limits": "Writer API timing only; select write and write_async separately. It is not the Milvus SDK request latency.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "write",
+        "status": "success"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:216"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "W02",
+      "title": "Failed Writer operations",
+      "group": "Writer",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_writer_operation_latency"
+      ],
+      "kind": "errors",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "A positive increase in the error observation count indicates instrumented failed calls.",
+      "limits": "Counts instrumented errors only; some early returns may not be observed. Error count is not the number of lost entries.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "write",
+        "status": "error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:216"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "W03",
+      "title": "Successful Writer byte rate",
+      "group": "Writer",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_writer_bytes_written"
+      ],
+      "kind": "rate",
+      "unit": "bytes/s",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report rate(bytes_written); compare with an explicit offered-load target only when that target is provided.",
+      "limits": "Encoded successful bytes, not raw vector payload or per-replica disk traffic. Throughput alone does not identify a bottleneck.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:210"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "W04",
+      "title": "Submitted append entry rate",
+      "group": "Writer",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_append_requests_total"
+      ],
+      "kind": "rate",
+      "unit": "entries/s",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report the rate of logical entries successfully submitted to the executor.",
+      "limits": "Not application request QPS, per-replica RPC rate, or quorum success rate.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:104"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "W05",
+      "title": "Pending append growth",
+      "group": "Writer",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_segment_handle_pending_append_ops"
+      ],
+      "kind": "trend",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Flag a nondecreasing pending gauge that increases over at least the configured sustained interval, with positive append submissions in the same exporter/log window. This is an initial queue-growth finding, not a service-capacity or root-cause verdict.",
+      "limits": "Includes submitted operations not yet removed, not just a pre-send queue. A single high sample is insufficient.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [
+        "W04"
+      ],
+      "references": [
+        "common/metrics/client_metrics.go:238"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "W06",
+      "title": "Append completion p99",
+      "group": "Writer",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_append_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "With at least 100 observations in each evaluated 1-minute interval, p99 exceeds the configured 100 ms reference for 3 consecutive minutes. This is an illustrative threshold, not a universal SLO.",
+      "limits": "Successful quorum-callback send-attempt interval; it does not cover all Writer preparation or retry time.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:117"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "W07",
+      "title": "Acknowledged write-position progress",
+      "group": "Writer",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_write_frontier_segment",
+        "woodpecker_client_write_frontier_entry"
+      ],
+      "kind": "position",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Flag an unchanged paired acknowledgment position for at least 120 seconds only with positive same-exporter/log submission delta and continuously nonzero pending work in the retained window.",
+      "limits": "Compare entries only within the same segment; position pairs cannot be subtracted across segment changes.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [
+        "W04",
+        "W05"
+      ],
+      "references": [
+        "common/metrics/client_metrics.go:54",
+        "common/metrics/client_metrics.go:60"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "W08",
+      "title": "Failed replica append outcomes",
+      "group": "Writer",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_replica_append_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "A positive increase in status=error identifies failed replica outcomes; retain az_scope.",
+      "limits": "Per-replica outcomes are not logical write failures. An unavailable metric in an older image is Unknown, not zero.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "status": "error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:291"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "S01",
+      "title": "Failed AddEntry method calls",
+      "group": "LogStore",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_logstore_operations_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report status=error for the active add_entry or add_entry_batch method; do not merge methods silently.",
+      "limits": "Method return is not the later asynchronous durable ACK, and one batch is not one entry.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "add_entry",
+        "status": "error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/service_metrics.go:90"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "S02",
+      "title": "Buffer notification p99",
+      "group": "LogStore",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_buffer_wait_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "With at least 100 observations in each evaluated 1-minute interval, p99 exceeds the configured 100 ms reference for 3 consecutive minutes. This is an illustrative threshold, not a universal SLO.",
+      "limits": "Includes flush triggering, flush execution and notification overhead. Do not subtract Flush p99 to derive queue time.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/service_metrics.go:157"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "S03",
+      "title": "Flush execution p99",
+      "group": "LogStore",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_file_flush_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "With at least 100 observations in each evaluated 1-minute interval, p99 exceeds the configured 100 ms reference for 3 consecutive minutes. This is an illustrative threshold, not a universal SLO.",
+      "limits": "Includes flushMu wait, encoding, write and fsync inside processFlushTask. It is not isolated fsync or pre-function scheduler wait.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/service_metrics.go:200"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "S04",
+      "title": "Completed Flush byte rate",
+      "group": "LogStore",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_flush_bytes_written"
+      ],
+      "kind": "rate",
+      "unit": "bytes/s",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report completed local flush bytes per second on each mapped replica node.",
+      "limits": "Encoded local blocks, not deduplicated logical ingestion. Do not sum replicas and compare directly with Writer throughput.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/service_metrics.go:207"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "S05",
+      "title": "Disk-protection write rejections",
+      "group": "LogStore",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_logstore_write_rejected_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "A positive increase with reason=disk_pressure confirms protection-related rejections on the mapped node.",
+      "limits": "Node-scoped evidence; it cannot identify the affected tenant without explicit association and does not explain why disk filled.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "reason": "disk_pressure"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/service_metrics.go:129"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "S06",
+      "title": "WAL disk usage vs configured watermarks",
+      "group": "LogStore",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_logstore_disk_usage_ratio",
+        "woodpecker_server_logstore_disk_watermark_soft",
+        "woodpecker_server_logstore_disk_watermark_hard"
+      ],
+      "kind": "gauge",
+      "unit": "ratio",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Compare the actual WAL-path usage ratio with the same node's observed soft/hard watermarks. Missing watermarks means Unknown.",
+      "limits": "A full filesystem does not by itself prove retention or cleanup failure. Disk samples are per path, not per log.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/service_metrics.go:111",
+        "common/metrics/service_metrics.go:143",
+        "common/metrics/service_metrics.go:149"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "S07",
+      "title": "Server batch-read p99",
+      "group": "Replica read",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_logstore_operation_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples. R10 must independently establish the applicable read branch; absence of a branch metric is not inactivity.",
+      "rule": "With at least 100 observations in each evaluated 1-minute interval, p99 exceeds the configured 100 ms reference for 3 consecutive minutes. This is an illustrative threshold, not a universal SLO.",
+      "limits": "get_batch_entries method interval, not pure physical disk read latency. Only applies to a used replica-read branch.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "get_batch_entries",
+        "status": "success"
+      },
+      "dependencies": [
+        "R10"
+      ],
+      "references": [
+        "common/metrics/service_metrics.go:96"
+      ],
+      "branch": "replica",
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "S08",
+      "title": "Failed server batch-read calls",
+      "group": "Replica read",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_logstore_operations_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples. R10 must independently establish the applicable read branch; absence of a branch metric is not inactivity.",
+      "rule": "Report error-return count for get_batch_entries in the used replica branch.",
+      "limits": "A failed batch is not a count of failed entries. Keep operation and status separate.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "get_batch_entries",
+        "status": "error"
+      },
+      "dependencies": [
+        "R10"
+      ],
+      "references": [
+        "common/metrics/service_metrics.go:90"
+      ],
+      "branch": "replica",
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R01",
+      "title": "Delivered Reader byte rate",
+      "group": "Reader",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_reader_bytes_read"
+      ],
+      "kind": "rate",
+      "unit": "bytes/s",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report delivered encoded bytes/s. A slowdown needs a comparable load target or baseline.",
+      "limits": "Low output alone does not prove slowness; a caught-up reader can be idle.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:167"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R02",
+      "title": "Reader loop-iteration p99",
+      "group": "Reader",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_reader_operation_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "With at least 100 observations in each evaluated 1-minute interval, p99 exceeds the configured 100 ms reference for 3 consecutive minutes. This is an illustrative threshold, not a universal SLO.",
+      "limits": "The timer resets each loop. This is not the complete ReadNext wait across loops, retries or tail waiting.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "read_next",
+        "status": "success"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:173"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R03",
+      "title": "Failed read_next observations",
+      "group": "Reader",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_reader_operation_latency"
+      ],
+      "kind": "errors",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report the increase in status=error observation count; keep cancellation separate.",
+      "limits": "One observed loop error is not necessarily one user-visible failed ReadNext; no inference of lost data.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "read_next",
+        "status": "error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:173"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R04",
+      "title": "Reader position progress",
+      "group": "Reader",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_read_frontier_segment",
+        "woodpecker_client_read_frontier_entry"
+      ],
+      "kind": "position",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report one reader's paired segment/entry positions. Without historical readable-tail and expected-activity evidence, no advancement remains Context, never a confirmed stall.",
+      "limits": "Reader identity is mandatory; do not subtract entries across segments or use a current snapshot as historical evidence.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [
+        "R05"
+      ],
+      "references": [
+        "common/metrics/client_metrics.go:90",
+        "common/metrics/client_metrics.go:96"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R05",
+      "title": "Readable backlog at the incident time",
+      "group": "Reader",
+      "source": "capture",
+      "metrics": [
+        "Time-aligned readable-tail capture + Reader position"
+      ],
+      "kind": "capture",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "A historical, time-aligned readable-tail capture and a matching Reader identity are provided.",
+      "rule": "Establish whether readable data existed beyond this Reader at the same incident time. No backlog permits an Idle result.",
+      "limits": "The existing Reader-position gauge alone cannot establish the readable tail. Present-day wpcli output cannot fill a historical gap.",
+      "availability": "Requires an explicitly retained readable-tail observation; no verified standalone historical metric is assumed.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "client": true,
+      "disposition": "defer",
+      "owner": "Existing independent source commands; exact per-log correlation/capture is not inferred",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R06",
+      "title": "Direct object-read p99",
+      "group": "Direct read",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_direct_read_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples. R10 must independently establish the applicable read branch; absence of a branch metric is not inactivity.",
+      "rule": "With at least 100 observations in each evaluated 1-minute interval, p99 exceeds the configured 100 ms reference for 3 consecutive minutes. This is an illustrative threshold, not a universal SLO.",
+      "limits": "Only the successful direct-read branch. No samples from an unused branch mean Not applicable, not zero latency.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [
+        "R10"
+      ],
+      "references": [
+        "common/metrics/client_metrics.go:278"
+      ],
+      "branch": "direct",
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R07",
+      "title": "Failed direct object reads",
+      "group": "Direct read",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_direct_read_requests_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples. R10 must independently establish the applicable read branch; absence of a branch metric is not inactivity.",
+      "rule": "Report status=error only when this direct-read branch has observed activity.",
+      "limits": "An unused branch is Not applicable only when branch activity evidence confirms that; absent metrics alone mean Unknown.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "status": "error"
+      },
+      "dependencies": [
+        "R10"
+      ],
+      "references": [
+        "common/metrics/client_metrics.go:272"
+      ],
+      "client": true,
+      "branch": "direct",
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R08",
+      "title": "Failed quorum-read candidate outcomes",
+      "group": "Replica read",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_quorum_read_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples. R10 must independently establish the applicable read branch; absence of a branch metric is not inactivity.",
+      "rule": "Report failed candidate outcomes by az_scope during active replica reads.",
+      "limits": "Caught-up tail polling with no new entry is excluded from this metric. Per-candidate failures do not equal final Reader failures.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "status": "error"
+      },
+      "dependencies": [
+        "R10"
+      ],
+      "references": [
+        "common/metrics/client_metrics.go:306"
+      ],
+      "client": true,
+      "branch": "replica",
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R09",
+      "title": "Read failover events",
+      "group": "Replica read",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_read_failover_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples. R10 must independently establish the applicable read branch; absence of a branch metric is not inactivity.",
+      "rule": "Report the observed count and from_scope/to_scope. Classify as context unless a deployment-specific failover policy is provided.",
+      "limits": "A successful fallback can preserve normal reads. Cross-scope service does not establish an outage.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [
+        "R10"
+      ],
+      "references": [
+        "common/metrics/client_metrics.go:318"
+      ],
+      "client": true,
+      "branch": "replica",
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "R10",
+      "title": "Observed read-branch activity",
+      "group": "Reader",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_quorum_read_total",
+        "woodpecker_client_direct_read_requests_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "Targeted branch counters are present; activity and known-zero observations cover the same interval.",
+      "rule": "Identify the observed branch from positive activity. A known zero direct counter with active replica reads permits unused-direct classification.",
+      "limits": "Missing series cannot be treated as zero. Cached delivery and caught-up polling may produce no branch activity; that case remains Unknown.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:306",
+        "common/metrics/client_metrics.go:272"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "B01",
+      "title": "Completed segment rolls",
+      "group": "Background",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_segment_rolled_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report completed roll events by reason; use as lifecycle context.",
+      "limits": "No roll can be normal if idle or below roll thresholds. This counter cannot prove that all attempted rolls succeeded.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:247"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "B02",
+      "title": "Compaction failures",
+      "group": "Background",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_segment_compaction_failures_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "A positive increase identifies failed compaction attempts; retain reason.",
+      "limits": "Does not establish the cause or prove that every completed segment should already be sealed.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:253"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "B03",
+      "title": "Compaction frontier progress",
+      "group": "Background",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_compaction_frontier_segment",
+        "woodpecker_client_compaction_frontier_entry"
+      ],
+      "kind": "position",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report paired seal/compaction progress as context. A stall needs an independently known eligible backlog.",
+      "limits": "Do not subtract this position from the write frontier across segments to invent a backlog size.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:66",
+        "common/metrics/client_metrics.go:72"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "H01",
+      "title": "Node CPU usage",
+      "group": "Resources",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_system_cpu_usage"
+      ],
+      "kind": "gauge",
+      "unit": "percent",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "With an explicit node mapping, usage above an illustrative 90% for 3 minutes is a resource signal.",
+      "limits": "System-level utilization, not proof of WP CPU saturation; OS and container boundaries must be verified.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/system_metrics_collector.go:37"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "H02",
+      "title": "Node I/O-wait activity",
+      "group": "Resources",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_system_io_wait"
+      ],
+      "kind": "io_wait_rate",
+      "unit": "seconds/s",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "Qualified monotonic cumulative I/O-wait samples from an explicitly mapped node and exporter.",
+      "rule": "Show delta(cumulative I/O-wait seconds) / elapsed wall seconds as context. Do not classify this value as a percentage. A trustworthy host CPU-time denominator is unavailable in the current source contract.",
+      "limits": "The collector forwards cpu.Times(false).Iowait: cumulative host CPU seconds, despite its percentage HELP text. system_cpu_num is GOMAXPROCS, not a verified host CPU count. Neither raw seconds nor this rate proves disk latency, fsync time or WP causation.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/system_metrics_collector.go:139",
+        "common/hardware/hardware_info.go:45",
+        "common/hardware/hardware_info.go:144"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "H03",
+      "title": "Node memory usage ratio",
+      "group": "Resources",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_server_system_memory_usage_ratio"
+      ],
+      "kind": "gauge",
+      "unit": "ratio",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Above an illustrative 90% for 3 minutes is a resource signal. Retain the collector's environment scope.",
+      "limits": "System memory usage is not necessarily container RSS or a WP memory leak.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {},
+      "dependencies": [],
+      "references": [
+        "common/metrics/system_metrics_collector.go:61"
+      ],
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OR01",
+      "title": "Successful Reader opens",
+      "group": "Open results",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_log_handle_operations_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report the success counter increase for this operation.",
+      "limits": "Instrumented returns only. Success counts are context and do not rule out uninstrumented early failures.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "open_log_reader",
+        "status": "success"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:126"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OR02",
+      "title": "Failed Reader opens",
+      "group": "Open results",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_log_handle_operations_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "A positive status=error increase identifies instrumented Open Reader failures.",
+      "limits": "Not an all-path API failure rate. Exact failure reason needs the corresponding application error or log.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "open_log_reader",
+        "status": "error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:126"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OR03",
+      "title": "Successful Open Reader p99",
+      "group": "Open timing",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_log_handle_operation_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "With at least 100 observations in each evaluated 1-minute interval, p99 exceeds the configured 100 ms reference for 3 consecutive minutes. This is an illustrative threshold, not a universal SLO.",
+      "limits": "Only successfully completed opens. Check finite histogram buckets; a capped p99 must be reported as a lower bound.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "open_log_reader",
+        "status": "success"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:132"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OR04",
+      "title": "Failed Open Reader p99",
+      "group": "Open timing",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_log_handle_operation_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report failed-call timing as context; latency alone cannot establish a timeout.",
+      "limits": "Fast failures still fail. If the quantile enters the +Inf bucket, do not present the last finite bucket as an exact latency.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "open_log_reader",
+        "status": "error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:132"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OR05",
+      "title": "Matching Reader open error",
+      "group": "Error context",
+      "source": "logs",
+      "metrics": [
+        "Application error / matching log event"
+      ],
+      "kind": "log",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Retain the exact error event, timestamp, log identity and correlation identifier when available.",
+      "limits": "An unmatched keyword is not a causal explanation. No collected log is Unknown, not evidence that no error occurred.",
+      "availability": "Needs a configured log source or an explicitly supplied application error.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "defer",
+      "owner": "Existing independent source commands; exact per-log correlation/capture is not inferred",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OW01",
+      "title": "Successful Writer opens",
+      "group": "Open results",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_log_handle_operations_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report the success counter increase for this operation.",
+      "limits": "Instrumented returns only. Success counts are context and do not rule out uninstrumented early failures.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "open_log_writer",
+        "status": "success"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:126"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OW02",
+      "title": "Writer-lock acquisition failures",
+      "group": "Open results",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_log_handle_operations_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "A positive lock_error increase identifies failed lock acquisition in a distributed-lock Writer path.",
+      "limits": "Confirm that this mode applies. It does not prove another active Writer, a stale lease, or metadata corruption.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "open_log_writer",
+        "status": "lock_error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:126"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OW03",
+      "title": "Writer fencing failures",
+      "group": "Open results",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_log_handle_operations_total"
+      ],
+      "kind": "increase",
+      "unit": "count",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "A positive fence_error increase identifies failure in the instrumented fencing stage.",
+      "limits": "It does not identify a failed peer or prescribe fencing/lock repair.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "open_log_writer",
+        "status": "fence_error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:126"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OW04",
+      "title": "Open Writer error timing",
+      "group": "Open timing",
+      "source": "metrics",
+      "metrics": [
+        "woodpecker_client_log_handle_operation_latency"
+      ],
+      "kind": "p99",
+      "unit": "ms",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Report timing separately by error status. Latency does not replace the operation outcome.",
+      "limits": "Do not merge lock_error with fence_error. Check histogram saturation and sample sufficiency.",
+      "availability": "Existing metric; verify deployed version and label availability.",
+      "match": {
+        "operation": "open_log_writer",
+        "status": "lock_error"
+      },
+      "dependencies": [],
+      "references": [
+        "common/metrics/client_metrics.go:132"
+      ],
+      "client": true,
+      "disposition": "adapt",
+      "owner": "diagnostics/wal (rules); diagnostics/prometheus (source client and quality gates)",
+      "ruleVersion": 1
+    },
+    {
+      "id": "OW05",
+      "title": "Matching Writer open error",
+      "group": "Error context",
+      "source": "logs",
+      "metrics": [
+        "Application error / matching log event"
+      ],
+      "kind": "log",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Retain the exact error event, timestamp, log identity and correlation identifier when available.",
+      "limits": "An unmatched keyword is not a causal explanation. No collected log is Unknown, not evidence that no error occurred.",
+      "availability": "Needs a configured log source or an explicitly supplied application error.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "defer",
+      "owner": "Existing independent source commands; exact per-log correlation/capture is not inferred",
+      "ruleVersion": 1
+    },
+    {
+      "id": "M01",
+      "title": "Log metadata snapshot",
+      "group": "Current metadata",
+      "source": "native",
+      "metrics": [
+        "Existing wpcli Log view"
+      ],
+      "kind": "view",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Display the current read-only output and its observation timestamp. Do not add an independent diagnosis.",
+      "limits": "Reading a record is not consistency verification. Current output does not reconstruct incident-time metadata.",
+      "availability": "Reuse existing wpcli read-only views.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "reuse",
+      "owner": "Existing wpcli meta views / meta check via diagnostics/wpcli",
+      "ruleVersion": 1
+    },
+    {
+      "id": "M02",
+      "title": "Segment metadata snapshot",
+      "group": "Current metadata",
+      "source": "native",
+      "metrics": [
+        "Existing wpcli Segment view"
+      ],
+      "kind": "view",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Display the current read-only output and its observation timestamp. Do not add an independent diagnosis.",
+      "limits": "Reading a record is not consistency verification. Current output does not reconstruct incident-time metadata.",
+      "availability": "Reuse existing wpcli read-only views.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "reuse",
+      "owner": "Existing wpcli meta views / meta check via diagnostics/wpcli",
+      "ruleVersion": 1
+    },
+    {
+      "id": "M03",
+      "title": "Quorum metadata snapshot",
+      "group": "Current metadata",
+      "source": "native",
+      "metrics": [
+        "Existing wpcli Quorum view"
+      ],
+      "kind": "view",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Display the current read-only output and its observation timestamp. Do not add an independent diagnosis.",
+      "limits": "Reading a record is not consistency verification. Current output does not reconstruct incident-time metadata.",
+      "availability": "Reuse existing wpcli read-only views.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "reuse",
+      "owner": "Existing wpcli meta views / meta check via diagnostics/wpcli",
+      "ruleVersion": 1
+    },
+    {
+      "id": "M04",
+      "title": "Existing wpcli meta-check findings",
+      "group": "Current metadata",
+      "source": "native",
+      "metrics": [
+        "wp meta check"
+      ],
+      "kind": "native",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Preserve the existing command's findings and pass/fail result; add no new metadata rules.",
+      "limits": "Coverage is exactly what wpcli implements. Standalone Quorum viewing is not a guarantee of complete Quorum validation.",
+      "availability": "Reuse the existing wpcli check; no dynamic metadata diagnostics.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "reuse",
+      "owner": "Existing wpcli meta views / meta check via diagnostics/wpcli",
+      "ruleVersion": 1
+    },
+    {
+      "id": "T01",
+      "title": "Correlated WP write span",
+      "group": "Optional trace",
+      "source": "trace",
+      "metrics": [
+        "Trace span with matching log / request identity"
+      ],
+      "kind": "trace",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Show the span's actual interval and relationship when correlation is established. Treat it as supporting context.",
+      "limits": "Missing sampling or broken propagation cannot establish that a step did not run; span names alone are not enough.",
+      "availability": "Needs configured tracing and explicit correlation; exact span mapping must be verified.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "defer",
+      "owner": "Existing independent source commands; exact per-log correlation/capture is not inferred",
+      "ruleVersion": 1
+    },
+    {
+      "id": "T02",
+      "title": "Correlated WP read span",
+      "group": "Optional trace",
+      "source": "trace",
+      "metrics": [
+        "Trace span with matching log / request identity"
+      ],
+      "kind": "trace",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Show the span's actual interval and relationship when correlation is established. Treat it as supporting context.",
+      "limits": "Missing sampling or broken propagation cannot establish that a step did not run; span names alone are not enough.",
+      "availability": "Needs configured tracing and explicit correlation; exact span mapping must be verified.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "defer",
+      "owner": "Existing independent source commands; exact per-log correlation/capture is not inferred",
+      "ruleVersion": 1
+    },
+    {
+      "id": "T03",
+      "title": "Correlated open-operation span",
+      "group": "Optional trace",
+      "source": "trace",
+      "metrics": [
+        "Trace span with matching log / request identity"
+      ],
+      "kind": "trace",
+      "unit": "observation",
+      "scope": "Exact deployment target, log namespace and ID; mapped node/path for node metrics; reader identity where applicable.",
+      "preconditions": "The source is reachable, the target series are present, and the selected window has enough valid samples.",
+      "rule": "Show the span's actual interval and relationship when correlation is established. Treat it as supporting context.",
+      "limits": "Missing sampling or broken propagation cannot establish that a step did not run; span names alone are not enough.",
+      "availability": "Needs configured tracing and explicit correlation; exact span mapping must be verified.",
+      "match": {},
+      "dependencies": [],
+      "references": [],
+      "disposition": "defer",
+      "owner": "Existing independent source commands; exact per-log correlation/capture is not inferred",
+      "ruleVersion": 1
+    }
+  ],
+  "problems": [
+    {
+      "id": "read_slow",
+      "title": "Slow reads",
+      "icon": "\u2199",
+      "sub": "Data arrives, but slowly",
+      "description": "Inspect actual read branches and delivered data. Keep tail waiting separate from slow I/O.",
+      "evidence": [
+        "R10",
+        "R01",
+        "R02",
+        "R03",
+        "S07",
+        "S08",
+        "R06",
+        "R07",
+        "R08",
+        "R09",
+        "H01",
+        "H02",
+        "T02"
+      ],
+      "path": [
+        "Reader delivery",
+        "Actual read branch",
+        "Replica batch read / direct object read"
+      ],
+      "extension": []
+    },
+    {
+      "id": "write_slow",
+      "title": "Slow writes",
+      "icon": "\u2197",
+      "sub": "Writes finish with high latency",
+      "description": "Inspect each measured write interval separately, from Writer through replica persistence.",
+      "evidence": [
+        "W01",
+        "W02",
+        "W03",
+        "W04",
+        "W05",
+        "W06",
+        "W08",
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "H01",
+        "H02",
+        "H03",
+        "T01"
+      ],
+      "path": [
+        "Writer operation",
+        "Submit / replica append",
+        "Buffer notification",
+        "Flush / durable ACK",
+        "Quorum / ordered completion"
+      ],
+      "extension": []
+    },
+    {
+      "id": "read_stuck",
+      "title": "Reads not advancing",
+      "icon": "\u2161",
+      "sub": "No observed read progress",
+      "description": "Establish readable backlog before labeling a waiting Reader as stalled.",
+      "evidence": [
+        "R10",
+        "R05",
+        "R04",
+        "R01",
+        "R03",
+        "S08",
+        "R07",
+        "R08",
+        "R09",
+        "T02"
+      ],
+      "path": [
+        "Readable data at incident time",
+        "Reader position",
+        "Active read branch",
+        "Response / errors"
+      ],
+      "extension": []
+    },
+    {
+      "id": "write_stuck",
+      "title": "Writes not completing",
+      "icon": "\u21e5",
+      "sub": "Submissions without completion",
+      "description": "Check input activity, uncompleted work, acknowledgments and explicit service rejections.",
+      "evidence": [
+        "W04",
+        "W07",
+        "W05",
+        "W02",
+        "W08",
+        "S05",
+        "S06",
+        "S03",
+        "B01",
+        "B02",
+        "B03",
+        "T01"
+      ],
+      "path": [
+        "New submissions",
+        "Pending operations",
+        "Replica admission",
+        "Acknowledged position"
+      ],
+      "extension": []
+    },
+    {
+      "id": "open_reader",
+      "title": "Open Reader fails",
+      "icon": "R",
+      "sub": "Opening a Reader returns errors",
+      "description": "Separate instrumented outcomes, timing and the exact error context.",
+      "evidence": [
+        "OR01",
+        "OR02",
+        "OR03",
+        "OR04",
+        "OR05",
+        "T03"
+      ],
+      "path": [
+        "OpenLogReader",
+        "Locate start / segment",
+        "Initialize Reader",
+        "Return outcome"
+      ],
+      "extension": []
+    },
+    {
+      "id": "open_writer",
+      "title": "Open Writer fails",
+      "icon": "W",
+      "sub": "Opening a Writer returns errors",
+      "description": "Separate successful opens, lock errors and fencing errors before explaining the failure.",
+      "evidence": [
+        "OW01",
+        "OW02",
+        "OW03",
+        "OW04",
+        "OW05",
+        "T03"
+      ],
+      "path": [
+        "OpenLogWriter",
+        "Lock if mode requires it",
+        "Fence active segments",
+        "Create Writer"
+      ],
+      "extension": []
+    },
+    {
+      "id": "metadata",
+      "title": "Metadata checks",
+      "icon": "\u25a6",
+      "sub": "Existing wpcli views and checks",
+      "description": "Show current read-only records and existing wpcli findings. No new dynamic diagnosis.",
+      "evidence": [
+        "M01",
+        "M02",
+        "M03",
+        "M04"
+      ],
+      "path": [
+        "Existing wpcli connection",
+        "Read current records",
+        "Existing meta check",
+        "Preserve original output"
+      ],
+      "extension": []
+    }
+  ]
+}

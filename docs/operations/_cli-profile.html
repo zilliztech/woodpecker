@@ -1,0 +1,70 @@
+<section id="topic-profile">
+<h2>Profiles & trace</h2>
+<article class="command" id="profile">
+<h2>wp profile</h2>
+<p>Download a Go profile or execution trace from a node</p>
+<pre>
+<code>wp profile &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--output-file string</code>
+</td>
+<td>output file path (default: ./&lt;node&gt;-&lt;type&gt;-&lt;timestamp&gt;.pb.gz; trace uses .trace)</td>
+</tr>
+<tr>
+<td>
+<code>--seconds int</code>
+</td>
+<td>duration for cpu/trace profiles (default 30)</td>
+</tr>
+<tr>
+<td>
+<code>--type string</code>
+</td>
+<td>profile type: cpu|heap|goroutine|allocs|mutex|block|threadcreate|trace (default &quot;cpu&quot;)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp profile node-0 --type cpu --seconds 10 --output-file node0-cpu.pb.gz</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Saved: node0-cpu.pb.gz
+To analyze: go tool pprof -http=127.0.0.1:8081 node0-cpu.pb.gz</code>
+</pre>
+<p>CPU uses /debug/pprof/profile. Trace uses go tool trace, not pprof, and saves .trace. allocs is cumulative allocation, heap is live memory; a sparse mutex profile does not prove absence of deadlocks. Goroutine pprof aggregates stacks; it is not a raw stack dump.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>pprof returned status 404 / timeout</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Download a Go profile or execution trace from a node
+
+Usage:
+  wp profile &lt;node&gt; [flags]
+
+Flags:
+  -h, --help                 help for profile
+      --output-file string   output file path (default: ./&lt;node&gt;-&lt;type&gt;-&lt;timestamp&gt;.pb.gz; trace uses .trace)
+      --seconds int          duration for cpu/trace profiles (default 30)
+      --type string          profile type: cpu|heap|goroutine|allocs|mutex|block|threadcreate|trace (default &quot;cpu&quot;)</code>
+</pre>
+</details>
+</article>
+</section>

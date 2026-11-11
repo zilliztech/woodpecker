@@ -1,0 +1,9 @@
+# Disposable acceptance fixture only. Repeated vector writes can trigger index
+# builds that exceed the small stack example's 768Mi DataNode limit.
+dataNode:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi

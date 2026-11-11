@@ -3,6 +3,17 @@ PROTOC_GEN_GO_VERSION := v1.36.2
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
 PROTOC_GEN_GO_VTPROTO_VERSION := v0.6.0
 
+# Version info injected via -ldflags at build time.
+# Consumed by github.com/zilliztech/woodpecker/common/version.
+VERSION_PKG := github.com/zilliztech/woodpecker/common/version
+VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS     := -ldflags "-s -w \
+                -X '$(VERSION_PKG).Version=$(VERSION)' \
+                -X '$(VERSION_PKG).Commit=$(COMMIT)' \
+                -X '$(VERSION_PKG).BuildTime=$(BUILD_TIME)'"
+
 # Default target - show help
 .DEFAULT_GOAL := help
 
@@ -65,8 +76,110 @@ proto_clean:
 build: ## Build binary for current platform
 	go build -v -o bin/woodpecker ./cmd
 
-test: build ## Run tests
+.PHONY: wpcli
+wpcli: | $(BIN_DIR) ## Build wp CLI binary (outputs bin/wp)
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BIN_DIR)/wp ./cmd/wpcli
+	@echo "Built $(BIN_DIR)/wp"
+
+WPCLI_PLATFORMS ?= linux/amd64 linux/arm64 darwin/arm64 windows/amd64
+
+.PHONY: wpdiag
+wpdiag: | $(BIN_DIR) ## Build the retired wpdiag migration notice (outputs bin/wpdiag)
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BIN_DIR)/wpdiag ./cmd/wpdiag
+
+.PHONY: wpcli-release
+wpcli-release: | $(BIN_DIR) ## Build wp CLI for all release platforms
+	@for platform in $(WPCLI_PLATFORMS); do \
+		os=$${platform%%/*}; arch=$${platform##*/}; \
+		ext=""; if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
+		echo "Building wp-$$os-$$arch$$ext ..."; \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build $(LDFLAGS) \
+			-o $(BIN_DIR)/wp-$$os-$$arch$$ext \
+			./cmd/wpcli; \
+	done
+	@echo "Release binaries in $(BIN_DIR):"
+	@ls -1 $(BIN_DIR)/wp-*
+
+test: build ## Run all tests
 	go test -cover -race ./...
+
+.PHONY: lint
+lint: ## Run golangci-lint
+	golangci-lint run --config .golangci.yml ./...
+
+.PHONY: lint-fix
+lint-fix: ## Run golangci-lint with auto-fix
+	golangci-lint run --config .golangci.yml --fix ./...
+
+.PHONY: fmt
+fmt: ## Format code with gofumpt and gci
+	gofumpt -l -w .
+	gci write . --section standard --section default --section "prefix(github.com/zilliztech/woodpecker)" --skip-generated
+
+.PHONY: fmt-check
+fmt-check: ## Check code formatting (CI)
+	@echo "Checking gofumpt..."
+	@test -z "$$(gofumpt -l .)" || (echo "Files need formatting:"; gofumpt -l .; exit 1)
+	@echo "Checking gci..."
+	@gci diff . --section standard --section default --section "prefix(github.com/zilliztech/woodpecker)" --skip-generated | tee /dev/stderr | (! grep .)
+	@echo "All files formatted correctly."
+
+.PHONY: unit-test
+unit-test: ## Run unit tests only (excludes integration/benchmark/stability/docker/k8s)
+	@set -e; packages="$$(python3 .github/scripts/ci_packages.py all)"; \
+		go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m $$packages
+
+.PHONY: unit-test-core unit-test-wpcli unit-test-diagnostics
+unit-test-core unit-test-wpcli unit-test-diagnostics: ## Run one CI-owned unit suite with its own coverage profile
+	@set -e; scope="$(@:unit-test-%=%)"; \
+		packages="$$(python3 .github/scripts/ci_packages.py $$scope)"; \
+		go test -race -short -cover -coverprofile=coverage-$$scope.out -covermode=atomic -failfast -timeout=20m $$packages
+
+.PHONY: integration-test
+integration-test: ## Run SDK integration tests (requires etcd + MinIO)
+	@set -e; packages="$$(python3 .github/scripts/ci_packages.py sdk-integration)"; \
+		go test -race -cover -failfast -timeout=45m -v $$packages
+
+.PHONY: integration-test-e2e-local
+integration-test-e2e-local: ## Run e2e tests with local filesystem storage
+	go test -race -cover -failfast -timeout=20m -v \
+		-run "/LocalFsStorage" \
+		./tests/integration/...
+
+.PHONY: integration-test-e2e-objectstorage
+integration-test-e2e-objectstorage: ## Run e2e tests with object storage (MinIO)
+	go test -race -cover -failfast -timeout=20m -v \
+		-run "/ObjectStorage" \
+		./tests/integration/...
+
+.PHONY: integration-test-e2e-service
+integration-test-e2e-service: ## Run e2e tests with service storage + failover
+	go test -race -cover -failfast -timeout=25m -v \
+		-run "/ServiceStorage" \
+		./tests/integration/...
+	go test -race -cover -failfast -timeout=25m -v \
+		-run "^TestStagedStorageService" \
+		./tests/integration/...
+
+.PHONY: integration-test-service-stability-process
+integration-test-service-stability-process: ## Service stability, process tier (requires etcd + MinIO; latency budgets, so no -race)
+	go test -cover -timeout=30m -v \
+		-run "^TestServiceStabilityProcess" \
+		./tests/integration/...
+
+.PHONY: integration-test-service-stability-docker
+integration-test-service-stability-docker: ## Service stability, Docker tier (builds the image and starts a 4-node compose cluster)
+	./tests/docker/stability/run_service_stability.sh
+
+.PHONY: integration-test-service-stability-k8s
+integration-test-service-stability-k8s: ## Service stability, K8s tier (minikube + operator + Chaos Mesh; nightly)
+	./tests/k8s/stability/run_service_stability.sh
+
+.PHONY: integration-test-components
+integration-test-components: ## Run component integration tests (non-e2e)
+	go test -race -cover -failfast -timeout=20m -v \
+		-skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestServiceStability)" \
+		./tests/integration/...
 
 clean: ## Clean built binaries
 	rm -f $(BIN_DIR)/*
@@ -82,10 +195,12 @@ docker-multiarch: ## Build multi-architecture Docker image
 # Build binary for Linux (basic build commands)
 build-linux: ## Build Linux binary (AMD64)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -o bin/woodpecker ./cmd
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o bin/wp ./cmd/wpcli
 
 # Build binary for Linux ARM64
 build-linux-arm64: ## Build Linux binary (ARM64)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -v -o bin/woodpecker ./cmd
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o bin/wp ./cmd/wpcli
 
 # Auto-detect architecture build (using new build system)
 build-auto: ## Build binary (auto-detect architecture)

@@ -22,13 +22,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -45,6 +46,23 @@ type Client interface {
 	OpenLog(ctx context.Context, logName string) (log.LogHandle, error)
 	// DeleteLog deletes the log with the specified name.
 	DeleteLog(ctx context.Context, logName string) error
+	// DeleteAllLogs deletes all logs managed by this client.
+	DeleteAllLogs(ctx context.Context) error
+	// DeleteLogSync deletes a log and waits until every node has reclaimed its local data,
+	// so the return means the log holds nothing anywhere. The stats report what was actually
+	// removed per tier; see DeleteStats for why that is worth returning.
+	// Options are optional; see WithSkipUnreachableNodes for the only one that changes
+	// whether an unreachable node fails the delete.
+	DeleteLogSync(ctx context.Context, logName string, opts ...DeleteOption) (DeleteStats, error)
+	// DeleteAllLogsSync is DeleteAllLogs with the same wait-for-reclaim guarantee.
+	DeleteAllLogsSync(ctx context.Context, opts ...DeleteOption) (DeleteStats, error)
+	// ClearMeta wipes this instance's content metadata and re-seeds the instance-level keys.
+	// See ClearMetaExceptLogIdGen for the safe default.
+	ClearMeta(ctx context.Context, clearLogIdGen bool) error
+	// ClearMetaExceptLogIdGen wipes the instance's content metadata while preserving the log
+	// id counter, so a reused instance can never hand a new log a directory that an old log's
+	// objects may still occupy. This is the form callers should use.
+	ClearMetaExceptLogIdGen(ctx context.Context) error
 	// LogExists checks if a log with the specified name exists.
 	LogExists(ctx context.Context, logName string) (bool, error)
 	// GetAllLogs retrieves all log names.
@@ -73,20 +91,71 @@ type woodpeckerClient struct {
 	// quorum discovery implementation
 	quorumDiscovery quorum.QuorumDiscovery
 
+	// object storage client for direct read of sealed segments
+	objectStorageOnce   sync.Once
+	objectStorageClient storageclient.ObjectStorage
+
+	// object storage client used by log deletion; independent of the direct-read flag
+	cleanupStorageMu     sync.Mutex
+	cleanupStorageClient storageclient.ObjectStorage
+
 	// close state
 	closeState atomic.Bool
 }
 
+// reportClientPlacement says once, at startup, whether this client knows where
+// it is.
+//
+// The client reads its own REGION/AVAILABILITY_ZONE to work out how far each
+// replica sits from it. Unset, every peer classifies as ScopeUnknown, so the
+// per-replica traffic metrics stop distinguishing local from cross-region while
+// still looking well-formed. Reported separately from the server: the two are
+// configured independently and either can be the one that is wrong.
+//
+// It lives here rather than inline because a client is built by two independent
+// constructors - NewClient and NewEmbedClient - and an embedded deployment is no
+// better placed to notice the gap from a dashboard than a service one.
+func reportClientPlacement(ctx context.Context) {
+	if missing := topology.MissingPlacementEnv(); len(missing) > 0 {
+		logger.Ctx(ctx).Warn("topology placement is not configured; this client cannot classify replicas as local, cross-az or cross-region",
+			zap.Strings("unset", missing))
+		return
+	}
+	logger.Ctx(ctx).Info("topology placement",
+		zap.String("region", topology.GetCurrentRegion()),
+		zap.String("az", topology.GetCurrentAvailabilityZone()))
+}
+
 func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clientv3.Client, managed bool) (Client, error) {
+	// Re-validate the object-storage section at the consumption point (the config may have
+	// been mutated after load); the client builds object-storage keys and RPC rootPath values
+	// from it verbatim. Scoped to the minio section so hand-rolled partial configs still work.
+	if err := cfg.ValidateMinioConfig(); err != nil {
+		return nil, err
+	}
 	logger.InitLogger(cfg)
 	initTraceErr := tracer.InitTracer(cfg, "woodpecker", 1001)
 	if initTraceErr != nil {
 		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
 	}
-	// Register client metrics so they are available before initClient() touches etcd metadata.
-	metrics.RegisterClientMetricsWithRegisterer(prometheus.DefaultRegisterer)
-
-	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
+	reportClientPlacement(ctx)
+	maxSendSize, maxRecvSize, legacySendSize, legacyRecvSize := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
+	if legacySendSize {
+		logger.Ctx(ctx).Warn("using deprecated client gRPC message size configuration; move this key to woodpecker.client.grpc.clientMaxSendSize",
+			zap.String("legacyKey", "woodpecker.logstore.grpc.clientMaxSendSize"),
+			zap.Int("valueBytes", maxSendSize))
+	}
+	if legacyRecvSize {
+		logger.Ctx(ctx).Warn("using deprecated client gRPC message size configuration; move this key to woodpecker.client.grpc.clientMaxRecvSize",
+			zap.String("legacyKey", "woodpecker.logstore.grpc.clientMaxRecvSize"),
+			zap.Int("valueBytes", maxRecvSize))
+	}
+	clientPool := client.NewLogStoreClientPool(maxSendSize, maxRecvSize,
+		client.WithGRPCClientConfig(cfg.Woodpecker.Client.GRPC),
+		client.WithCallTimeouts(client.CallTimeouts{
+			AppendSend:  cfg.Woodpecker.Client.SegmentAppend.SendTimeout.Duration.Duration(),
+			SelectNodes: cfg.Woodpecker.Client.Quorum.SelectNodesTimeout.Duration.Duration(),
+		}))
 	c := &woodpeckerClient{
 		cfg:        cfg,
 		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg),
@@ -180,6 +249,26 @@ func createLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logNam
 	return lastErr
 }
 
+// getOrCreateObjectStorageClient lazily creates and caches an object storage client
+// for direct read of sealed segments. Returns nil if direct read is not enabled.
+func (c *woodpeckerClient) getOrCreateObjectStorageClient(ctx context.Context) storageclient.ObjectStorage {
+	if !c.cfg.Woodpecker.Client.DirectRead.Enabled {
+		return nil
+	}
+	c.objectStorageOnce.Do(func() {
+		var err error
+		c.objectStorageClient, err = storageclient.NewObjectStorage(ctx, c.cfg)
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to create object storage client for direct read, direct read will be disabled",
+				zap.Error(err))
+			c.objectStorageClient = nil
+		} else {
+			logger.Ctx(ctx).Info("object storage client created for direct read of sealed segments")
+		}
+	})
+	return c.objectStorageClient
+}
+
 // OpenLog opens an existing log with the specified name and returns a log handle.
 func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
 	c.mu.Lock()
@@ -187,19 +276,28 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
-	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes)
+	objStorageClient := c.getOrCreateObjectStorageClient(ctx)
+	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes, objStorageClient)
 }
 
 func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string, clientPool client.LogStoreClientPool,
-	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)) (log.LogHandle, error) {
+	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
+	objectStorageClient storageclient.ObjectStorage,
+) (log.LogHandle, error) {
 	// Open log and retrieve metadata with detailed comments
 	logMeta, segmentsMeta, err := metadata.OpenLog(ctx, logName)
 	if err != nil {
 		logger.Ctx(ctx).Warn("open log failed", zap.String("logName", logName), zap.Error(err))
 		return nil, err
 	}
-	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc)
-	metrics.WpLogNameIdMapping.WithLabelValues(metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath), logName).Set(float64(logMeta.Metadata.GetLogId()))
+	logID := logMeta.Metadata.GetLogId()
+	logNs, logIdStr := metrics.BuildLogLabels(cfg.Minio.BucketName, cfg.Minio.RootPath, logID)
+	if logMeta.Metadata.GetTruncatedSegmentId() >= 0 {
+		metrics.SetTruncationFrontier(logNs, logIdStr, logMeta.Metadata.GetTruncatedSegmentId(), logMeta.Metadata.GetTruncatedEntryId())
+	}
+	newLogHandle := log.NewLogHandle(logName, logID, segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc,
+		objectStorageClient)
+	metrics.WpLogNameIdMapping.WithLabelValues(logNs, logName).Set(float64(logID))
 	return newLogHandle, nil
 }
 
@@ -214,9 +312,102 @@ func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.Quorum
 
 // DeleteLog deletes the log with the specified name.
 func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error {
-	// Implement the DeleteLog method
-	// This is just a stub - you'll need to implement this
-	return werr.ErrOperationNotSupported.WithCauseErrMsg("delete log is not supported currently")
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	_, err := deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), logName, false, newDeleteOptions(nil))
+	return err
+}
+
+// DeleteLogSync deletes the log and waits for every node to reclaim its local data.
+func (c *woodpeckerClient) DeleteLogSync(ctx context.Context, logName string, opts ...DeleteOption) (DeleteStats, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return DeleteStats{}, werr.ErrWoodpeckerClientClosed
+	}
+	return deleteLogUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), logName, true, newDeleteOptions(opts))
+}
+
+// DeleteAllLogs deletes all logs managed by this client.
+func (c *woodpeckerClient) DeleteAllLogs(ctx context.Context) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	_, err := deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), false, newDeleteOptions(nil))
+	return err
+}
+
+// DeleteAllLogsSync deletes every log and waits for local reclaim on each.
+func (c *woodpeckerClient) DeleteAllLogsSync(ctx context.Context, opts ...DeleteOption) (DeleteStats, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return DeleteStats{}, werr.ErrWoodpeckerClientClosed
+	}
+	return deleteAllLogsUnsafe(ctx, c.Metadata, c.clientPool, c.cfg, c.getOrCreateCleanupStorage(ctx), true, newDeleteOptions(opts))
+}
+
+// ClearMeta wipes this instance's content metadata.
+func (c *woodpeckerClient) ClearMeta(ctx context.Context, clearLogIdGen bool) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrWoodpeckerClientClosed
+	}
+	if _, err := sweepParkedLogObjects(ctx, c.Metadata, c.cfg, c.getOrCreateCleanupStorage(ctx)); err != nil {
+		return err
+	}
+	return c.Metadata.ClearMeta(ctx, clearLogIdGen)
+}
+
+// ClearMetaExceptLogIdGen wipes content metadata but keeps the log id counter.
+func (c *woodpeckerClient) ClearMetaExceptLogIdGen(ctx context.Context) error {
+	return c.ClearMeta(ctx, false)
+}
+
+// getOrCreateCleanupStorage lazily builds the object-storage client the delete path uses.
+//
+// Deliberately separate from getOrCreateObjectStorageClient: that one is gated on the
+// direct-read feature flag, and cleanup must work regardless of whether direct read is on.
+//
+// Deliberately not a sync.Once. NewObjectStorage is not a local construction — NewMinioHandler
+// makes BucketExists/MakeBucket calls with retries — so a brief outage, a credential hiccup,
+// or a caller context expiring mid-retry is enough to fail it. With a Once, that one failure
+// is permanent for the life of the client: the Once is spent, the field stays nil, and every
+// later delete refuses with "object storage client unavailable" because deleting metadata
+// while objects remain would strand them. These clients are long-lived inside Milvus, so the
+// only recovery would be a process restart.
+//
+// This is the opposite trade-off from getOrCreateObjectStorageClient, where a spent Once only
+// disables direct read — a performance fallback, not a correctness stop.
+//
+// The lock is held across construction so concurrent deletes do not each build a client; the
+// loser of the race sees the winner's result.
+func (c *woodpeckerClient) getOrCreateCleanupStorage(ctx context.Context) storageclient.ObjectStorage {
+	if c.cfg.Woodpecker.Storage.IsStorageLocal() {
+		return nil
+	}
+	c.cleanupStorageMu.Lock()
+	defer c.cleanupStorageMu.Unlock()
+	if c.cleanupStorageClient != nil {
+		return c.cleanupStorageClient
+	}
+	cli, err := storageclient.NewObjectStorage(ctx, c.cfg)
+	if err != nil {
+		// Leave the field nil so the next call retries. The caller refuses to delete
+		// metadata without a storage client, so a nil here fails the delete rather than
+		// silently skipping object cleanup.
+		logger.Ctx(ctx).Warn("failed to create object storage client for cleanup; will retry on next delete",
+			zap.Error(err))
+		return nil
+	}
+	c.cleanupStorageClient = cli
+	return c.cleanupStorageClient
 }
 
 // LogExists checks if a log with the specified name exists.

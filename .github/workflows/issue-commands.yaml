@@ -1,0 +1,39 @@
+name: Issue Commands
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  command:
+    name: Handle issue command
+    if: >-
+      github.event.comment.user.type != 'Bot' &&
+      (startsWith(github.event.comment.body, '/assign') ||
+       startsWith(github.event.comment.body, '/unassign') ||
+       startsWith(github.event.comment.body, '/set-milestone') ||
+       startsWith(github.event.comment.body, '/milestone') ||
+       startsWith(github.event.comment.body, '/clear-milestone'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # issue_comment uses the default branch SHA. Never check out a PR head:
+      # this job has a writable token, including for comments on fork PRs.
+      - name: Checkout trusted handler
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Handle command
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const handle = require('./.github/scripts/issue-commands.cjs');
+            await handle({ github, context, core });

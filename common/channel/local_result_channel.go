@@ -51,19 +51,14 @@ func (l *LocalResultChannel) GetIdentifier() string {
 }
 
 func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResult) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = werr.ErrAppendOpResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
-			return
-		}
-	}()
+	l.mu.RLock()
+	if l.closed {
+		l.mu.RUnlock()
+		return werr.ErrAppendOpResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
+	}
+	defer l.mu.RUnlock()
 	select {
 	case l.ch <- result:
-		logger.Ctx(ctx).Debug("sent result to local channel",
-			zap.String("identifier", l.identifier),
-			zap.Int64("syncedId", result.SyncedId),
-			zap.String("ch", fmt.Sprintf("%p", l)),
-			zap.Error(result.Err))
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -84,15 +79,26 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 			// Channel was closed externally
 			return nil, werr.ErrAppendOpResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
 		}
-		logger.Ctx(ctx).Debug("read result from local channel",
-			zap.String("identifier", l.identifier),
-			zap.Int64("syncedId", r.SyncedId),
-			zap.String("ch", fmt.Sprintf("%p", l)),
-			zap.Error(r.Err),
-		)
 		return r, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, readBudgetExhausted(ctx.Err())
+	}
+}
+
+// TryReadResult reads a result without blocking: it returns (result, true) when
+// one is immediately available, or (nil, false) when nothing is ready yet or the
+// channel is closed. It lets a consumer opportunistically drain entries that are
+// already durable (e.g. flushed together) so they can be acknowledged as a group
+// without waiting on the next, not-yet-ready entry.
+func (l *LocalResultChannel) TryReadResult() (*AppendResult, bool) {
+	select {
+	case r, ok := <-l.ch:
+		if !ok {
+			return nil, false
+		}
+		return r, true
+	default:
+		return nil, false
 	}
 }
 
@@ -103,10 +109,16 @@ func (l *LocalResultChannel) Close(ctx context.Context) error {
 		l.closed = true
 		close(l.ch)
 	}
-	logger.Ctx(ctx).Debug("closed local result channel and underlying channel",
-		zap.String("identifier", l.identifier),
-		zap.String("ch", fmt.Sprintf("%p", l)))
 	return nil
+}
+
+// String renders the channel without exposing its fields to reflection; see the
+// comment on RemoteResultChannel.String for why a mutex-guarded type has to
+// control how it is printed.
+func (l *LocalResultChannel) String() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return fmt.Sprintf("LocalResultChannel{identifier:%s closed:%v}", l.identifier, l.closed)
 }
 
 func (l *LocalResultChannel) IsClosed() bool {

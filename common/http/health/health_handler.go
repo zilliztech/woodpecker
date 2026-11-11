@@ -20,10 +20,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/labstack/gommon/log"
-	"go.uber.org/zap"
 	"net/http"
 	"sync"
+
+	"github.com/labstack/gommon/log"
+	"go.uber.org/zap"
 )
 
 const (

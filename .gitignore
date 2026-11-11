@@ -7,7 +7,8 @@
 *.dll
 *.so
 *.dylib
-bin/*
+bin/
+**/bin/
 
 **/.idea/*
 **/.vscode/*
@@ -28,3 +29,13 @@ go.work.sum
 
 # env file
 .env
+
+# operator bin
+deployments/operator/bin/*
+
+# superpowers (Claude Code) design/plan docs — not for the repo
+docs/superpowers/
+
+# Python fixture/documentation caches
+__pycache__/
+*.pyc

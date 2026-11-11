@@ -21,17 +21,246 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
 )
+
+// cleanupAppendOp stops background goroutines spawned by Execute().
+// It sets fastCalled to make goroutines exit early after ReadResult returns,
+// then closes all result channels to unblock them.
+// waitAckGoroutinesDone waits until every result channel the op holds has been
+// closed by the goroutine that was reading it.
+//
+// Tests normally observe "the ack was processed" through a mock call made from
+// inside receivedAckCallback - SendAppendSuccessCallbacks or
+// HandleAppendRequestFailure - and both of those run BEFORE its deferred close.
+// Returning at that point leaves the goroutine still writing to the channel while
+// the mock's AssertExpectations cleanup reflects over that same object without
+// holding its lock, which the race detector reports.
+func waitAckGoroutinesDone(t *testing.T, op *AppendOp) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		for _, resultChan := range op.resultChannels {
+			if resultChan != nil && !resultChan.IsClosed() {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 2*time.Millisecond, "an ack goroutine is still holding a result channel")
+}
+
+func cleanupAppendOp(t *testing.T, op *AppendOp) {
+	t.Helper()
+	op.fastCalled.Store(true)
+	for _, ch := range op.resultChannels {
+		if ch != nil {
+			ch.Close(context.Background())
+		}
+	}
+	// Give goroutines time to see fastCalled and exit
+	time.Sleep(100 * time.Millisecond)
+}
+
+// TestAppendOp_Retry_RebuildsResultChannelForRemoteClient is a regression test for
+// issue #225 (#1): the group-commit batch path installs a LocalResultChannel in
+// op.resultChannels[serverIndex]. A subsequent single-entry retry must NOT reuse
+// that Local channel against a remote client — the remote AppendEntry requires a
+// RemoteResultChannel and rejects a Local one with ErrInternalError, which would
+// make every retry deterministically fail and force a segment roll. The retry must
+// instead rebuild a fresh channel whose type matches the client.
+func TestAppendOp_Retry_RebuildsResultChannelForRemoteClient(t *testing.T) {
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"},
+	}
+	op := NewAppendOp("bucket", "root", 1, 2, 10, []byte("v"),
+		func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
+
+	// Simulate the batch path having installed a LocalResultChannel in the slot.
+	op.resultChannels = make([]channel.ResultChannel, 1)
+	op.resultChannels[0] = channel.NewLocalResultChannel(op.Identifier())
+
+	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+
+	var captured channel.ResultChannel
+	mockClient.EXPECT().
+		AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ string, _ int64, _ *proto.LogEntry, ch channel.ResultChannel) (int64, error) {
+			captured = ch
+			// Return a retryable error so the background receivedAckCallback takes the
+			// synchronous-error path and returns immediately (no ReadResult wait).
+			return -1, werr.ErrInternalError
+		})
+
+	// receivedAckCallback runs in a background goroutine; signal when it finishes so
+	// the mock is not exercised after the test returns.
+	done := make(chan struct{})
+	mockHandle.EXPECT().
+		HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(context.Context, int64, error, int, string) { close(done) }).Return().Once()
+
+	op.sendWriteRequestRetry(context.Background(), 0)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("receivedAckCallback did not complete")
+	}
+
+	remoteChannel, isRemote := captured.(*channel.RemoteResultChannel)
+	require.True(t, isRemote,
+		"retry must rebuild a RemoteResultChannel for a remote client, not reuse the batch's LocalResultChannel")
+
+	// done is signalled from inside HandleAppendRequestFailure, which runs before
+	// receivedAckCallback's deferred close.
+	waitAckGoroutinesDone(t, op)
+	assert.True(t, remoteChannel.IsClosed(), "the ack goroutine must close the channel it was handed")
+}
+
+// newApplyNodeAckOp builds an AppendOp wired only for applyNodeAck unit tests
+// (no client pool needed; applyNodeAck only touches the handle and op state).
+func newApplyNodeAckOp(t *testing.T, quorumInfo *proto.QuorumInfo) (*AppendOp, *mocks_segment_handle.SegmentHandle) {
+	t.Helper()
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("v"),
+		func(int64, int64, error) {}, nil, mockHandle, quorumInfo, nil)
+	return op, mockHandle
+}
+
+// TestAppendOp_applyNodeAck_ReadError_RoutesToFailure covers the batch drain
+// handing applyNodeAck a read error (e.g. the shared-timeout DeadlineExceeded):
+// the op must route it through HandleAppendRequestFailure and record the error.
+func TestAppendOp_applyNodeAck_ReadError_RoutesToFailure(t *testing.T) {
+	op, mockHandle := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}})
+	readErr := werr.ErrSegmentHandleWriteFailed
+	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), readErr, 0, "node1").Return().Once()
+
+	op.applyNodeAck(context.Background(), time.Now(), nil, readErr, 0, "node1")
+
+	assert.Equal(t, readErr, op.channelErrors[0])
+	assert.False(t, op.completed.Load())
+}
+
+// TestAppendOp_applyNodeAck_FailedResult_RoutesToFailure covers a per-entry
+// Failed durability result (SyncedId == -1 / Err set) being routed to failure.
+func TestAppendOp_applyNodeAck_FailedResult_RoutesToFailure(t *testing.T) {
+	op, mockHandle := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}})
+	failErr := werr.ErrSegmentFenced
+	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), failErr, 0, "node1").Return().Once()
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: -1, Err: failErr}, nil, 0, "node1")
+
+	assert.Equal(t, failErr, op.channelErrors[0])
+	assert.False(t, op.completed.Load())
+}
+
+// TestAppendOp_applyNodeAck_FastCalled_NoOp verifies that once the op has been
+// fast-completed (FastFail/FastSuccess), a late node ack is dropped: neither a
+// failure nor a success callback fires. The strict mock (no expectations) fails
+// the test if any handle method is called.
+func TestAppendOp_applyNodeAck_FastCalled_NoOp(t *testing.T) {
+	op, _ := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}})
+	op.fastCalled.Store(true)
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, 0, "node1")
+	op.applyNodeAck(context.Background(), time.Now(), nil, werr.ErrSegmentFenced, 0, "node1")
+
+	assert.False(t, op.completed.Load())
+}
+
+// TestAppendOp_applyNodeAck_QuorumReached_Success covers a single-replica quorum:
+// one synced ack reaches Aq and acknowledges the entry exactly once.
+func TestAppendOp_applyNodeAck_QuorumReached_Success(t *testing.T) {
+	op, mockHandle := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}})
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Return().Once()
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, 0, "node1")
+
+	assert.True(t, op.completed.Load())
+}
+
+// TestAppendOp_applyNodeAck_BelowQuorumThenReached covers Aq=2: the first node's
+// ack does not acknowledge (below quorum), the second reaches quorum and fires
+// SendAppendSuccessCallbacks exactly once.
+func TestAppendOp_applyNodeAck_BelowQuorumThenReached(t *testing.T) {
+	op, mockHandle := newApplyNodeAckOp(t, &proto.QuorumInfo{Id: 1, Wq: 2, Aq: 2, Es: 2, Nodes: []string{"node1", "node2"}})
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Return().Once()
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, 0, "node1")
+	assert.False(t, op.completed.Load(), "single ack must not reach Aq=2")
+
+	op.applyNodeAck(context.Background(), time.Now(), &channel.AppendResult{SyncedId: 3}, nil, 1, "node2")
+	assert.True(t, op.completed.Load(), "second ack reaches Aq=2")
+}
+
+// TestAppendOp_RetryChannelRebuild_RacesWithFastFail is a regression test for
+// issue #231: the retry path (AppendRequestRetryOp.Execute ->
+// sendWriteRequestRetry -> sendWriteRequest) rewrites
+// op.resultChannels[serverIndex] (channel rebuild on client-type mismatch),
+// while FastFail/FastSuccess iterate the same slice under op.mu. The
+// initial-send path is protected because AppendOp.Execute holds op.mu across
+// the fan-out; the retry entry point must hold the same lock. Run with -race:
+// without the lock the detector flags the unsynchronized write/read pair.
+// The concurrency is realistic: an op's per-replica retry (executor worker)
+// can overlap a FastFail triggered by another entry's final failure
+// (HandleAppendRequestFailure fast-fails all queued ops with a larger entryId).
+func TestAppendOp_RetryChannelRebuild_RacesWithFastFail(t *testing.T) {
+	for iter := 0; iter < 30; iter++ {
+		mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+		mockClient := mocks_logstore_client.NewLogStoreClient(t)
+		mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+		quorumInfo := &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}
+
+		op := NewAppendOp("bucket", "root", 1, 2, 10, []byte("v"),
+			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
+		// As installed by a prior batched send: a LocalResultChannel in the slot,
+		// which the retry against a remote client must rebuild (type mismatch).
+		op.resultChannels = make([]channel.ResultChannel, 1)
+		op.resultChannels[0] = channel.NewLocalResultChannel(op.Identifier())
+
+		mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
+		mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+		mockClient.EXPECT().
+			AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(int64(-1), werr.ErrInternalError).Maybe()
+		mockHandle.EXPECT().
+			HandleAppendRequestFailure(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return().Maybe()
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { // retry: rewrites op.resultChannels[0]
+			defer wg.Done()
+			<-start
+			NewAppendRequestRetryOp(context.Background(), 0, op).Execute()
+		}()
+		go func() { // fast-fail: iterates op.resultChannels under op.mu
+			defer wg.Done()
+			<-start
+			op.FastFail(context.Background(), werr.ErrSegmentFenced)
+		}()
+		close(start)
+		wg.Wait()
+		// Let the retry's spawned receivedAckCallback finish before mock teardown.
+		waitAckGoroutinesDone(t, op)
+	}
+}
 
 func TestNewAppendOp(t *testing.T) {
 	logId := int64(1)
@@ -49,7 +278,7 @@ func TestNewAppendOp(t *testing.T) {
 		Nodes: []string{"node1"},
 	}
 
-	op := NewAppendOp("a-bucket", "files", logId, segmentId, entryId, value, callback, clientPool, handle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", logId, segmentId, entryId, value, callback, clientPool, handle, quorumInfo, nil)
 
 	assert.NotNil(t, op)
 	assert.Equal(t, logId, op.logId)
@@ -90,18 +319,42 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 	}
 
 	// Setup expectations
-	// mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(quorumInfo, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	done := make(chan struct{})
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Run(func(_ context.Context, _ int64) {
+		close(done)
+	}).Return()
+
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
 
 	// Verify
 	assert.Equal(t, 1, len(op.resultChannels))
+
+	// Send a result through the channel so the background goroutine completes
+	// instead of blocking for 30s and panicking after the test ends.
+	err := op.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+		SyncedId: 3,
+		Err:      nil,
+	})
+	assert.NoError(t, err)
+
+	// Wait for the goroutine to finish
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for goroutine to complete")
+	}
+
+	// Not every replica's outcome is awaited above (a failing replica's
+	// HandleAppendRequestFailure is mocked but never joined), so wait for the
+	// goroutines themselves before the mocks are asserted.
+	waitAckGoroutinesDone(t, op)
 }
 
 func TestAppendOp_Execute_GetClientError(t *testing.T) {
@@ -121,13 +374,18 @@ func TestAppendOp_Execute_GetClientError(t *testing.T) {
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, expectedErr)
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, mock.Anything, mock.Anything).Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 
 	op.Execute()
 	// Wait for async handleAppendRequestFailure to be processed
 	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, expectedErr, op.channelErrors[0])
+
+	// Not every replica's outcome is awaited above (a failing replica's
+	// HandleAppendRequestFailure is mocked but never joined), so wait for the
+	// goroutines themselves before the mocks are asserted.
+	waitAckGoroutinesDone(t, op)
 }
 
 func TestAppendOp_receivedAckCallback_Success(t *testing.T) {
@@ -140,7 +398,7 @@ func TestAppendOp_receivedAckCallback_Success(t *testing.T) {
 		Nodes: []string{"node1"},
 	}
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, quorumInfo, nil)
 
 	// Create a channel and send success signal
 	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
@@ -164,7 +422,7 @@ func TestAppendOp_receivedAckCallback_SyncError(t *testing.T) {
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
 	expectedErr := errors.New("sync error")
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, mock.Anything, mock.Anything).Return()
 
@@ -177,7 +435,7 @@ func TestAppendOp_receivedAckCallback_SyncError(t *testing.T) {
 
 func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Create a channel and send failure signal
 	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
@@ -196,7 +454,7 @@ func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
 
 func TestAppendOp_receivedAckCallback_ChannelClosed(t *testing.T) {
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Create a channel and close it
 	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
@@ -211,7 +469,7 @@ func TestAppendOp_receivedAckCallback_ChannelClosed(t *testing.T) {
 }
 
 func TestAppendOp_FastFail(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Add some result channels
 	rc1 := channel.NewLocalResultChannel("1/2/3-1")
@@ -234,7 +492,8 @@ func TestAppendOp_FastFail(t *testing.T) {
 	assert.NoError(t, err2)
 	assert.Equal(t, int64(-1), result2.SyncedId)
 
-	// Verify channels are closed
+	// FastFail still closes, deliberately: the entry is abandoned, so every
+	// waiter should stop at once instead of sitting out its read budget.
 	assert.True(t, rc1.IsClosed())
 	assert.True(t, rc2.IsClosed())
 
@@ -243,7 +502,7 @@ func TestAppendOp_FastFail(t *testing.T) {
 }
 
 func TestAppendOp_FastFail_Idempotent(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	rc := channel.NewLocalResultChannel("1/2/3")
 	op.resultChannels = []channel.ResultChannel{rc}
@@ -264,7 +523,7 @@ func TestAppendOp_FastFail_Idempotent(t *testing.T) {
 }
 
 func TestAppendOp_FastSuccess(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Add some result channels
 	rc1 := channel.NewLocalResultChannel("1/2/3-1")
@@ -274,29 +533,23 @@ func TestAppendOp_FastSuccess(t *testing.T) {
 	// Execute FastSuccess
 	op.FastSuccess(context.Background())
 
-	// Verify channels received success signal
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel1()
-	result1, err1 := rc1.ReadResult(ctx1)
-	assert.NoError(t, err1)
-	assert.Equal(t, int64(3), result1.SyncedId)
-
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-	result2, err2 := rc2.ReadResult(ctx2)
-	assert.NoError(t, err2)
-	assert.Equal(t, int64(3), result2.SyncedId)
-
-	// Verify channels are closed
-	assert.True(t, rc1.IsClosed())
-	assert.True(t, rc2.IsClosed())
+	// FastSuccess leaves every replica channel exactly as it found it: open, and
+	// carrying nothing. The replicas outside the quorum are still answering, and
+	// a synthetic success would be read instead of the real answer - or, on the
+	// batch path, fill the one-slot buffer so the real ack is dropped.
+	assert.False(t, rc1.IsClosed(), "FastSuccess must not close a replica's channel")
+	assert.False(t, rc2.IsClosed(), "FastSuccess must not close a replica's channel")
+	_, ok1 := rc1.TryReadResult()
+	_, ok2 := rc2.TryReadResult()
+	assert.False(t, ok1, "FastSuccess must not write into a replica's channel")
+	assert.False(t, ok2, "FastSuccess must not write into a replica's channel")
 
 	// Verify fastCalled flag is set
 	assert.True(t, op.fastCalled.Load())
 }
 
 func TestAppendOp_FastSuccess_Idempotent(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	rc := channel.NewLocalResultChannel("1/2/3")
 	op.resultChannels = []channel.ResultChannel{rc}
@@ -305,19 +558,15 @@ func TestAppendOp_FastSuccess_Idempotent(t *testing.T) {
 	op.FastSuccess(context.Background())
 	op.FastSuccess(context.Background()) // Should be no-op
 
-	// Verify only one signal was sent
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	result, err := rc.ReadResult(ctx)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(3), result.SyncedId)
-
-	// Channel should be closed
-	assert.True(t, rc.IsClosed())
+	assert.True(t, op.fastCalled.Load())
+	// Untouched, however many times it is called.
+	assert.False(t, rc.IsClosed())
+	_, ok := rc.TryReadResult()
+	assert.False(t, ok)
 }
 
 func TestAppendOp_FastFail_WithClosedChannel(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Add a closed channel
 	rc := channel.NewLocalResultChannel("1/2/3")
@@ -334,7 +583,7 @@ func TestAppendOp_FastFail_WithClosedChannel(t *testing.T) {
 }
 
 func TestAppendOp_FastSuccess_WithClosedChannel(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	// Add a closed channel
 	rc := channel.NewLocalResultChannel("1/2/3")
@@ -351,7 +600,7 @@ func TestAppendOp_FastSuccess_WithClosedChannel(t *testing.T) {
 }
 
 func TestAppendOp_ConcurrentFastCalls(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}}, nil)
 
 	rc := channel.NewLocalResultChannel("1/2/3")
 	op.resultChannels = []channel.ResultChannel{rc}
@@ -382,15 +631,17 @@ func TestAppendOp_ConcurrentFastCalls(t *testing.T) {
 	assert.True(t, op.fastCalled.Load())
 	assert.Equal(t, 10, callCount) // All calls completed
 
-	// Verify channel received exactly one signal
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	result, err := rc.ReadResult(ctx)
-	assert.NoError(t, err)
-	assert.True(t, result.SyncedId == -1 || result.SyncedId == 3) // Either success or failure
-
-	// Channel should be closed
-	assert.True(t, rc.IsClosed())
+	// Exactly one of the ten calls won the CAS, and the two endings differ on
+	// purpose: FastFail stops the waiters at once, with the reason; FastSuccess
+	// leaves the channel entirely to the replica's own ack goroutine. So either
+	// the channel is closed and carries the failure, or it is untouched.
+	result, ok := rc.TryReadResult()
+	if ok {
+		assert.Equal(t, int64(-1), result.SyncedId, "only FastFail writes a result")
+		assert.True(t, rc.IsClosed(), "FastFail won the race: it closes the channel")
+	} else {
+		assert.False(t, rc.IsClosed(), "FastSuccess won the race: it leaves the channel alone")
+	}
 }
 
 func TestAppendOp_toSegmentEntry(t *testing.T) {
@@ -430,9 +681,18 @@ func TestAppendOp_receivedAckCallback_Timeout(t *testing.T) {
 	assert.True(t, elapsed < 200*time.Millisecond) // Ensure test doesn't hang
 }
 
-// TestAppendOp_Execute_RetryIdempotency tests that retry operations are idempotent
-// by verifying that result channels are reused across multiple Execute calls
-func TestAppendOp_Execute_RetryIdempotency(t *testing.T) {
+// TestAppendOp_Retry_UsesAFreshResultChannelPerAttempt pins the ownership rule
+// that lets receivedAckCallback close the channel it was handed: every attempt
+// gets its own.
+//
+// Reuse used to be asserted here as "retry idempotency", but it never carried
+// any idempotency - the entry id does that, server-side. What reuse actually did
+// was let two attempts share one container while InitResponseStream replaced the
+// stream, context and cancel inside it, dropping the previous attempt's cancel
+// and leaving any recorded result in place for the next read to return. With the
+// ack goroutine now closing its own channel (outside op.mu), a shared container
+// would also let one attempt's close cancel the next attempt's stream.
+func TestAppendOp_Retry_UsesAFreshResultChannelPerAttempt(t *testing.T) {
 	// Setup mocks
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -453,7 +713,8 @@ func TestAppendOp_Execute_RetryIdempotency(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution
 	op.Execute()
@@ -463,30 +724,37 @@ func TestAppendOp_Execute_RetryIdempotency(t *testing.T) {
 	assert.NotNil(t, op.resultChannels[0])
 	assert.NotNil(t, op.resultChannels[1])
 
-	// Store references to original channels
-	originalChannel0 := op.resultChannels[0]
-	originalChannel1 := op.resultChannels[1]
+	// Store references to the first attempt's channels
+	firstChannel0 := op.resultChannels[0]
+	firstChannel1 := op.resultChannels[1]
 
 	// Second execution (simulating retry)
 	op.Execute()
 
-	// Verify channels are reused (idempotent)
 	assert.Equal(t, 2, len(op.resultChannels))
-	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be reused on retry")
-	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be reused on retry")
+	assert.NotSame(t, firstChannel0, op.resultChannels[0], "retry must build its own channel")
+	assert.NotSame(t, firstChannel1, op.resultChannels[1], "retry must build its own channel")
+
+	secondChannel0 := op.resultChannels[0]
 
 	// Third execution (simulating another retry)
 	op.Execute()
 
-	// Verify channels are still the same
 	assert.Equal(t, 2, len(op.resultChannels))
-	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be reused on multiple retries")
-	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be reused on multiple retries")
+	assert.NotSame(t, firstChannel0, op.resultChannels[0], "every attempt gets a new channel")
+	assert.NotSame(t, secondChannel0, op.resultChannels[0], "every attempt gets a new channel")
+
+	// The decisive property: retiring an earlier attempt's channel must not
+	// touch the live one. This is what a shared container would have broken -
+	// the earlier ack goroutine's close would have cancelled the newest stream.
+	_ = firstChannel0.Close(context.Background())
+	assert.False(t, op.resultChannels[0].IsClosed(),
+		"closing an earlier attempt's channel must leave the current attempt alone")
 }
 
-// TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize tests idempotency
-// when quorum info is refreshed but maintains the same size
-func TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize(t *testing.T) {
+// TestAppendOp_Retry_BuildsFreshChannelsAcrossQuorumRefresh covers the same rule
+// when the quorum is refreshed to the same size, so the slice is not reallocated.
+func TestAppendOp_Retry_BuildsFreshChannelsAcrossQuorumRefresh(t *testing.T) {
 	// Setup mocks
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -507,7 +775,8 @@ func TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo, nil)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution with 2 nodes
 	op.Execute()
@@ -517,22 +786,22 @@ func TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize(t *testing.T) {
 	assert.NotNil(t, op.resultChannels[0])
 	assert.NotNil(t, op.resultChannels[1])
 
-	// Store references to original channels
-	originalChannel0 := op.resultChannels[0]
-	originalChannel1 := op.resultChannels[1]
+	// Store references to the first attempt's channels
+	firstChannel0 := op.resultChannels[0]
+	firstChannel1 := op.resultChannels[1]
 
 	// Second execution with same quorum size (simulating retry with refreshed quorum info)
 	op.Execute()
 
-	// Verify that existing channels are preserved
 	assert.Equal(t, 2, len(op.resultChannels))
-	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be preserved")
-	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be preserved")
+	assert.NotSame(t, firstChannel0, op.resultChannels[0], "retry must build its own channel")
+	assert.NotSame(t, firstChannel1, op.resultChannels[1], "retry must build its own channel")
 }
 
-// TestAppendOp_sendWriteRequest_ChannelReuse tests that sendWriteRequest
-// creates channels only once per server
-func TestAppendOp_sendWriteRequest_ChannelReuse(t *testing.T) {
+// TestAppendOp_sendWriteRequest_BuildsANewChannelEachCall pins the rule at its
+// source: sendWriteRequest builds the channel, one per send, never reusing the
+// slot it is about to overwrite.
+func TestAppendOp_sendWriteRequest_BuildsANewChannelEachCall(t *testing.T) {
 	// Setup mocks
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
@@ -548,7 +817,8 @@ func TestAppendOp_sendWriteRequest_ChannelReuse(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo, nil)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// Initialize result channels slice
 	op.resultChannels = make([]channel.ResultChannel, 1)
@@ -558,18 +828,18 @@ func TestAppendOp_sendWriteRequest_ChannelReuse(t *testing.T) {
 
 	// Verify channel was created
 	assert.NotNil(t, op.resultChannels[0])
-	originalChannel := op.resultChannels[0]
+	firstChannel := op.resultChannels[0]
 
 	// Second call to sendWriteRequest for the same server
 	op.sendWriteRequest(context.Background(), mockClient, 0, "node0")
 
-	// Verify the same channel is reused
-	assert.Same(t, originalChannel, op.resultChannels[0], "Channel should be reused for the same server")
+	assert.NotSame(t, firstChannel, op.resultChannels[0],
+		"each send must own its channel, so the previous send's close cannot reach this one")
 }
 
 // TestAppendOp_Execute_RetryIdempotency_WithNilChannels tests behavior when
 // some channels are nil during retry
-func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
+func TestAppendOp_Execute_ReplacesBothExistingAndNilChannels(t *testing.T) {
 	// Setup mocks
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -589,27 +859,29 @@ func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
-	// Manually set up result channels with one nil channel (simulating partial failure)
+	// One slot already holds a channel of the right type, the other is nil. Both
+	// are replaced: a slot's previous contents are never carried into a send.
 	op.resultChannels = make([]channel.ResultChannel, 2)
-	op.resultChannels[0] = channel.NewLocalResultChannel("test-channel-0")
-	op.resultChannels[1] = nil // This should be recreated
+	op.resultChannels[0] = channel.NewRemoteResultChannel("test-channel-0")
+	op.resultChannels[1] = nil
 
-	originalChannel0 := op.resultChannels[0]
+	preExistingChannel0 := op.resultChannels[0]
 
 	// Execute should handle nil channels correctly
 	op.Execute()
 
-	// Verify that existing non-nil channel is preserved and nil channel is created
 	assert.Equal(t, 2, len(op.resultChannels))
-	assert.Same(t, originalChannel0, op.resultChannels[0], "Existing non-nil channel should be preserved")
+	assert.NotSame(t, preExistingChannel0, op.resultChannels[0], "an existing channel is replaced, not adopted")
 	assert.NotNil(t, op.resultChannels[1], "Nil channel should be created")
 }
 
-// TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier tests that
-// channels created for retry use the same identifier
-func TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier(t *testing.T) {
+// TestAppendOp_Retry_ChannelKeepsTheOpIdentifier checks that a rebuilt channel
+// still carries the op's identifier, so a retry stays traceable in logs even
+// though the channel object behind it is new.
+func TestAppendOp_Retry_ChannelKeepsTheOpIdentifier(t *testing.T) {
 	// Setup mocks
 	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -628,7 +900,8 @@ func TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier(t *testing.T) {
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution
 	op.Execute()
@@ -637,16 +910,15 @@ func TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier(t *testing.T) {
 	assert.Equal(t, 1, len(op.resultChannels))
 	assert.NotNil(t, op.resultChannels[0])
 
-	// We can't directly access the channel's identifier, but we can verify
-	// that the channel is properly created and reused
-	// The identifier should be consistent with the operation's identifier: "1/2/3"
-	originalChannel := op.resultChannels[0]
+	assert.Equal(t, op.Identifier(), op.resultChannels[0].GetIdentifier())
+	firstChannel := op.resultChannels[0]
 
 	// Second execution (retry)
 	op.Execute()
 
-	// Verify the same channel is reused
-	assert.Same(t, originalChannel, op.resultChannels[0], "Channel should be reused with same identifier")
+	assert.NotSame(t, firstChannel, op.resultChannels[0], "retry builds a new channel")
+	assert.Equal(t, op.Identifier(), op.resultChannels[0].GetIdentifier(),
+		"the new channel must still identify itself as this op")
 }
 
 // TestAppendOp_QuorumWrite_Case1_AllNodesSuccess tests quorum write with es=3,wq=3,aq=2
@@ -667,15 +939,18 @@ func TestAppendOp_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 		Nodes: []string{"node1", "node2", "node3"},
 	}
 
-	callbackCalled := false
 	var callbackSegmentId, callbackEntryId int64
 	var callbackErr error
+	callbackDone := make(chan struct{}, 1)
 
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
 		callbackSegmentId = segmentId
 		callbackEntryId = entryId
 		callbackErr = err
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Setup expectations - AppendEntry calls will create async operations
@@ -697,7 +972,7 @@ func TestAppendOp_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 		callback(2, entryId, nil)
 	}).Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -722,12 +997,20 @@ func TestAppendOp_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 	assert.True(t, op.completed.Load(), "Operation should be completed")
 	assert.GreaterOrEqual(t, op.ackSet.Count(), 2, "At least 2 nodes should have acked")
 
-	// Wait for callback
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, callbackCalled, "Callback should have been called")
+	// Wait for callback via channel synchronization
+	select {
+	case <-callbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for callback")
+	}
 	assert.Equal(t, int64(2), callbackSegmentId)
 	assert.Equal(t, int64(3), callbackEntryId)
 	assert.NoError(t, callbackErr)
+
+	// Not every replica's outcome is awaited above (a failing replica's
+	// HandleAppendRequestFailure is mocked but never joined), so wait for the
+	// goroutines themselves before the mocks are asserted.
+	waitAckGoroutinesDone(t, op)
 }
 
 // TestAppendOp_QuorumWrite_Case2_TwoSuccessOneFail tests quorum write with es=3,wq=3,aq=2
@@ -748,15 +1031,18 @@ func TestAppendOp_QuorumWrite_Case2_TwoSuccessOneFail(t *testing.T) {
 		Nodes: []string{"node1", "node2", "node3"},
 	}
 
-	callbackCalled := false
 	var callbackSegmentId, callbackEntryId int64
 	var callbackErr error
+	callbackDone := make(chan struct{}, 1)
 
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
 		callbackSegmentId = segmentId
 		callbackEntryId = entryId
 		callbackErr = err
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Setup expectations
@@ -781,7 +1067,7 @@ func TestAppendOp_QuorumWrite_Case2_TwoSuccessOneFail(t *testing.T) {
 	// Expect HandleAppendRequestFailure for the failing node
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, 2, "node3").Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -821,12 +1107,20 @@ func TestAppendOp_QuorumWrite_Case2_TwoSuccessOneFail(t *testing.T) {
 	assert.True(t, op.completed.Load(), "Operation should be completed successfully")
 	assert.GreaterOrEqual(t, op.ackSet.Count(), 2, "At least 2 nodes should have acked (quorum reached)")
 
-	// Wait for callback
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, callbackCalled, "Success callback should have been called")
+	// Wait for callback via channel synchronization
+	select {
+	case <-callbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for callback")
+	}
 	assert.Equal(t, int64(2), callbackSegmentId)
 	assert.Equal(t, int64(3), callbackEntryId)
 	assert.NoError(t, callbackErr, "Should succeed despite 1 node failure")
+
+	// Not every replica's outcome is awaited above (a failing replica's
+	// HandleAppendRequestFailure is mocked but never joined), so wait for the
+	// goroutines themselves before the mocks are asserted.
+	waitAckGoroutinesDone(t, op)
 }
 
 // TestAppendOp_QuorumWrite_Case3_SingleNodeSuccess tests quorum write with es=1,wq=1,aq=1
@@ -845,15 +1139,18 @@ func TestAppendOp_QuorumWrite_Case3_SingleNodeSuccess(t *testing.T) {
 		Nodes: []string{"node1"},
 	}
 
-	callbackCalled := false
 	var callbackSegmentId, callbackEntryId int64
 	var callbackErr error
+	callbackDone := make(chan struct{}, 1)
 
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
 		callbackSegmentId = segmentId
 		callbackEntryId = entryId
 		callbackErr = err
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Setup expectations
@@ -867,7 +1164,7 @@ func TestAppendOp_QuorumWrite_Case3_SingleNodeSuccess(t *testing.T) {
 		callback(2, entryId, nil)
 	}).Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -890,12 +1187,20 @@ func TestAppendOp_QuorumWrite_Case3_SingleNodeSuccess(t *testing.T) {
 	assert.True(t, op.completed.Load(), "Operation should be completed")
 	assert.Equal(t, 1, op.ackSet.Count(), "Single node should have acked")
 
-	// Wait for callback
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, callbackCalled, "Callback should have been called")
+	// Wait for callback via channel synchronization
+	select {
+	case <-callbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for callback")
+	}
 	assert.Equal(t, int64(2), callbackSegmentId)
 	assert.Equal(t, int64(3), callbackEntryId)
 	assert.NoError(t, callbackErr)
+
+	// Not every replica's outcome is awaited above (a failing replica's
+	// HandleAppendRequestFailure is mocked but never joined), so wait for the
+	// goroutines themselves before the mocks are asserted.
+	waitAckGoroutinesDone(t, op)
 }
 
 // TestAppendOp_QuorumWrite_Case4_SingleNodeFailure tests quorum write with es=1,wq=1,aq=1
@@ -929,7 +1234,7 @@ func TestAppendOp_QuorumWrite_Case4_SingleNodeFailure(t *testing.T) {
 	// Expect HandleAppendRequestFailure for the failing node
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, 0, "node1").Return()
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -951,7 +1256,11 @@ func TestAppendOp_QuorumWrite_Case4_SingleNodeFailure(t *testing.T) {
 	// Verify that operation did not complete successfully
 	assert.False(t, op.completed.Load(), "Operation should not be completed")
 	assert.Equal(t, 0, op.ackSet.Count(), "No nodes should have acked")
-	assert.Equal(t, failureErr, op.channelErrors[0], "Error should be set for channel 0")
+
+	// Not every replica's outcome is awaited above (a failing replica's
+	// HandleAppendRequestFailure is mocked but never joined), so wait for the
+	// goroutines themselves before the mocks are asserted.
+	waitAckGoroutinesDone(t, op)
 }
 
 // TestAppendOp_QuorumWrite_Case5_SimpleQuorumTest tests basic quorum behavior
@@ -1029,9 +1338,12 @@ func testSimpleQuorum(t *testing.T, nodeCount, ackQuorum, successCount int, expe
 		Nodes: nodes,
 	}
 
-	callbackCalled := false
+	callbackDone := make(chan struct{}, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Setup expectations for client pool and AppendEntry
@@ -1055,7 +1367,7 @@ func testSimpleQuorum(t *testing.T, nodeCount, ackQuorum, successCount int, expe
 		}).Return()
 	}
 
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), callback, mockClientPool, mockHandle, quorumInfo, nil)
 
 	// Execute
 	op.Execute()
@@ -1085,11 +1397,63 @@ func testSimpleQuorum(t *testing.T, nodeCount, ackQuorum, successCount int, expe
 
 	// Verify results
 	if expectedSuccess {
+		select {
+		case <-callbackDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Timed out waiting for callback")
+		}
 		assert.True(t, op.completed.Load(), "Operation should be completed successfully")
 		assert.GreaterOrEqual(t, op.ackSet.Count(), ackQuorum, fmt.Sprintf("At least %d nodes should have acked", ackQuorum))
-		assert.True(t, callbackCalled, "Success callback should have been called")
 	} else {
 		assert.False(t, op.completed.Load(), "Operation should not be completed")
 		assert.Less(t, op.ackSet.Count(), ackQuorum, fmt.Sprintf("Less than %d nodes should have acked (insufficient for quorum)", ackQuorum))
 	}
+
+	// Not every replica's outcome is awaited above (a failing replica's
+	// HandleAppendRequestFailure is mocked but never joined), so wait for the
+	// goroutines themselves before the mocks are asserted.
+	waitAckGoroutinesDone(t, op)
+}
+
+// TestAppendOp_Execute_ParallelFanout verifies that Execute() issues the
+// per-replica sends concurrently rather than sequentially. Each AppendEntry
+// blocks for sendDelay; if the sends were serialized the call would take
+// ~ensembleSize*sendDelay, whereas a parallel fan-out takes ~sendDelay.
+func TestAppendOp_Execute_ParallelFanout(t *testing.T) {
+	const sendDelay = 80 * time.Millisecond
+
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    3,
+		Aq:    2,
+		Es:    3,
+		Nodes: []string{"node1", "node2", "node3"},
+	}
+
+	var sends atomic.Int32
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().IsRemoteClient().Return(true)
+	mockClient.EXPECT().
+		AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, _ int64, _ *proto.LogEntry, _ channel.ResultChannel) {
+			sends.Add(1)
+			time.Sleep(sendDelay)
+		}).
+		Return(int64(3), nil)
+
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
+
+	start := time.Now()
+	op.Execute()
+	elapsed := time.Since(start)
+
+	assert.Equal(t, int32(3), sends.Load(), "all replicas should be contacted")
+	assert.Equal(t, 3, len(op.resultChannels))
+	assert.Less(t, elapsed, 2*sendDelay, "per-replica sends should run concurrently (sequential would be ~ensembleSize*sendDelay)")
+
+	cleanupAppendOp(t, op)
 }

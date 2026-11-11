@@ -1,0 +1,404 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package segment
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
+	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
+	"github.com/zilliztech/woodpecker/proto"
+)
+
+func newTestSegmentForCompletion(t *testing.T) (*segmentHandleImpl, *mocks_logstore_client.LogStoreClient) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
+	return segmentHandle.(*segmentHandleImpl), mockClient
+}
+
+// TestCompletionManager_TriggerAndWait tests that triggering completion and waiting returns success.
+func TestCompletionManager_TriggerAndWait(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(5), nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(5), nil)
+
+	seg.completionMgr.TriggerCompletion()
+	err := seg.completionMgr.WaitForCompletion()
+	assert.NoError(t, err)
+
+	// Verify segment is no longer writable
+	writable, _ := seg.IsWritable(context.Background())
+	assert.False(t, writable)
+	assert.Equal(t, proto.SegmentState_Completed, seg.segmentMetaCache.Load().Metadata.State)
+	assert.Equal(t, int64(5), seg.segmentMetaCache.Load().Metadata.LastEntryId)
+}
+
+// TestCompletionManager_RetryOnFailureThenSucceed tests that completion retries on transient failure
+// and eventually succeeds.
+func TestCompletionManager_RetryOnFailureThenSucceed(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	callCount := 0
+	// First call fails, second succeeds
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		RunAndReturn(func(ctx context.Context, bucket, root string, logId, segId int64) (int64, error) {
+			callCount++
+			if callCount == 1 {
+				return -1, assert.AnError
+			}
+			return int64(3), nil
+		})
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(3), nil).Maybe()
+
+	seg.completionMgr.TriggerCompletion()
+	err := seg.completionMgr.WaitForCompletion()
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, callCount, 2, "Should have retried at least once")
+
+	writable, _ := seg.IsWritable(context.Background())
+	assert.False(t, writable)
+}
+
+func TestCompletionManager_CompleteRetryKeepsFixedTargetLAC(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	const targetLAC = int64(5)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Return(targetLAC, nil).Once()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
+		Return(int64(-1), assert.AnError).Once()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
+		Return(targetLAC, nil).Once()
+
+	seg.completionMgr.TriggerCompletion()
+	err := seg.completionMgr.WaitForCompletion()
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentState_Completed, seg.segmentMetaCache.Load().Metadata.State)
+	assert.Equal(t, targetLAC, seg.segmentMetaCache.Load().Metadata.LastEntryId)
+}
+
+// TestCompletionManager_AllRetriesExhausted tests that when all retries fail,
+// WaitForCompletion returns an error and writer invalidation is triggered.
+func TestCompletionManager_AllRetriesExhausted(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	// All fence calls fail
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Return(int64(-1), assert.AnError)
+
+	invalidated := false
+	seg.SetWriterInvalidationNotifier(context.Background(), func(ctx context.Context, reason string) {
+		invalidated = true
+	})
+
+	seg.completionMgr.TriggerCompletion()
+	err := seg.completionMgr.WaitForCompletion()
+	assert.Error(t, err)
+	assert.True(t, invalidated, "Writer should be invalidated after retry exhaustion")
+
+	// Segment should still transition to non-writable (close writing runs regardless)
+	writable, _ := seg.IsWritable(context.Background())
+	assert.False(t, writable)
+}
+
+// TestCompletionManager_CompleteRetriesExhaustedDoesNotPublishCompleted covers
+// the case where fence establishes a target LAC but no replica ever finalizes at
+// it. The local writer is stopped, while metadata must remain Active for recovery
+// rather than advertising a segment no replica has closed.
+func TestCompletionManager_CompleteRetriesExhaustedDoesNotPublishCompleted(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	const targetLAC = int64(5)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Return(targetLAC, nil).Once()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
+		Return(int64(-1), assert.AnError).Times(3)
+
+	invalidated := false
+	seg.SetWriterInvalidationNotifier(context.Background(), func(ctx context.Context, reason string) {
+		invalidated = true
+	})
+
+	seg.completionMgr.TriggerCompletion()
+	err := seg.completionMgr.WaitForCompletion()
+	require.Error(t, err)
+	assert.True(t, invalidated)
+	assert.Equal(t, proto.SegmentState_Active, seg.segmentMetaCache.Load().Metadata.State)
+	assert.Equal(t, int64(-1), seg.segmentMetaCache.Load().Metadata.LastEntryId)
+	writable, _ := seg.IsWritable(context.Background())
+	assert.False(t, writable)
+}
+
+// TestCompletionManager_PartialReplicaFinalizeStillPublishesCompleted pins the
+// contract completion switched to in #320: an ack quorum of replicas must have
+// durably recorded the target LAC, not covered it locally.
+//
+// The target comes out of the fence, so some replica reported a tail at or above
+// it. That replica can be gone by the time CompleteSegment runs, leaving only
+// replicas whose own tail is short. Those entries were never acknowledged, so
+// nothing is owed on them, and refusing to publish Completed here would be worse
+// than publishing it: the segment stays Active, and OpenLogWriter fences and
+// completes every active segment before it returns a writer, so the whole log
+// would stop accepting writes until the missing replica came back.
+func TestCompletionManager_PartialReplicaFinalizeStillPublishesCompleted(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	const targetLAC = int64(5)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Return(targetLAC, nil).Once()
+	// Finalized at the target, but the replica's own tail stops one entry short.
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), targetLAC).
+		Return(targetLAC-1, nil).Once()
+
+	seg.completionMgr.TriggerCompletion()
+	require.NoError(t, seg.completionMgr.WaitForCompletion())
+	assert.Equal(t, proto.SegmentState_Completed, seg.segmentMetaCache.Load().Metadata.State)
+	assert.Equal(t, targetLAC, seg.segmentMetaCache.Load().Metadata.LastEntryId)
+}
+
+// Async rollover must retain writer invalidation for RPC failures and metadata
+// takeover without relying on the foreground caller to wait for completion.
+func TestSegmentHandle_SetRollingReady_CompletionFailureInvalidatesWriter(t *testing.T) {
+	for _, failure := range []string{"fence", "complete", "metadata_revision"} {
+		t.Run(failure, func(t *testing.T) {
+			seg, mockClient := newTestSegmentForCompletion(t)
+			invalidated := make(chan string, 1)
+			seg.SetWriterInvalidationNotifier(context.Background(), func(_ context.Context, reason string) {
+				invalidated <- reason
+			})
+			if failure == "fence" {
+				mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+					Return(int64(-1), assert.AnError).Times(3)
+			} else {
+				mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+					Return(int64(2), nil).Once()
+				if failure == "complete" {
+					mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(2)).
+						Return(int64(-1), assert.AnError).Times(3)
+				} else {
+					mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(2)).
+						Return(int64(2), nil).Once()
+					metadata := mocks_meta.NewMetadataProvider(t)
+					metadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Active).
+						Return(werr.ErrMetadataRevisionInvalid).Once()
+					seg.metadata = metadata
+				}
+			}
+			require.NoError(t, seg.SetRollingReady(context.Background()))
+			require.Error(t, seg.completionMgr.WaitForCompletion())
+			select {
+			case reason := <-invalidated:
+				require.NotEmpty(t, reason)
+			default:
+				t.Fatal("background completion failed without invalidating the writer")
+			}
+			require.False(t, seg.canWriteState.Load())
+			require.Equal(t, proto.SegmentState_Active, seg.segmentMetaCache.Load().Metadata.State)
+		})
+	}
+}
+
+// TestCompletionManager_MultipleTriggersCoalesce tests that multiple TriggerCompletion calls
+// result in only one execution.
+func TestCompletionManager_MultipleTriggersCoalesce(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	fenceCount := 0
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		RunAndReturn(func(ctx context.Context, bucket, root string, logId, segId int64) (int64, error) {
+			fenceCount++
+			return int64(2), nil
+		})
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
+
+	// Fire multiple triggers
+	for i := 0; i < 10; i++ {
+		seg.completionMgr.TriggerCompletion()
+	}
+
+	err := seg.completionMgr.WaitForCompletion()
+	assert.NoError(t, err)
+	assert.Equal(t, 1, fenceCount, "Fence should be called exactly once (coalesced)")
+}
+
+// TestCompletionManager_ConcurrentWaiters tests that multiple goroutines waiting on
+// WaitForCompletion all get the same result.
+func TestCompletionManager_ConcurrentWaiters(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(4), nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(4), nil)
+
+	numWaiters := 5
+	results := make([]error, numWaiters)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWaiters; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			results[idx] = seg.completionMgr.WaitForCompletion()
+		}(i)
+	}
+
+	// Give waiters time to block
+	time.Sleep(50 * time.Millisecond)
+	seg.completionMgr.TriggerCompletion()
+
+	wg.Wait()
+	for i := 0; i < numWaiters; i++ {
+		assert.NoError(t, results[i], "All waiters should get the same nil error result")
+	}
+}
+
+// TestCompletionManager_ContextCancellation tests that cancelling the context aborts the manager.
+func TestCompletionManager_ContextCancellation(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(0), nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(0), nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+
+	// Create segment handle manually without starting completionMgr via constructor
+	// so we can control the context.
+	seg := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil).(*segmentHandleImpl)
+
+	// Stop the auto-started completionMgr and replace with one using a cancellable context
+	seg.completionMgr.Stop()
+	cm := newCompletionManager(seg)
+	seg.completionMgr = cm
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cm.Start(ctx)
+
+	// Cancel before triggering
+	cancel()
+
+	err := cm.WaitForCompletion()
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// TestCompletionManager_ForceCompleteOnReadonly tests that ForceCompleteAndClose
+// on a readonly segment is a no-op.
+func TestCompletionManager_ForceCompleteOnReadonly(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+
+	// Create readonly segment (canWrite=false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
+
+	err := segmentHandle.ForceCompleteAndClose(context.Background())
+	assert.NoError(t, err)
+}

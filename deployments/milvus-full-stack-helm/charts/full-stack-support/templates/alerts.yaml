@@ -1,0 +1,38 @@
+{{- define "wp.alertScope" -}}
+{{- printf "cluster=%q,namespace=%q,woodpecker_id=%q" .Values.clusterLabel .Release.Namespace .Values.milvusRelease -}}
+{{- end -}}
+{{- define "wp.alertServer" -}}
+{{- include "wp.alertScope" . -}},component="woodpecker"
+{{- end -}}
+{{- define "wp.alertClient" -}}
+{{- include "wp.alertScope" . -}},component!="woodpecker"
+{{- end -}}
+{{- if and .Values.alerts.enabled (or .Values.components.prometheus .Values.alerts.renderRuleFile) }}
+{{- $spec := fromYaml (tpl (.Files.Get "rules/woodpecker.yaml") .) }}
+{{- range $group := $spec.groups }}
+{{- range $rule := $group.rules }}
+{{- $labels := default (dict) $rule.labels }}
+{{- $_ := set $labels "cluster" $.Values.clusterLabel }}
+{{- $_ := set $labels "namespace" $.Release.Namespace }}
+{{- $_ := set $labels "woodpecker_id" $.Values.milvusRelease }}
+{{- $_ := set $rule "labels" $labels }}
+{{- if hasKey $rule "alert" }}
+{{- $_ := set $labels "alert_set" "woodpecker-full-stack" }}
+{{- $_ := set $rule.annotations "dashboard_url" (printf "http://127.0.0.1:3000/d/woodpecker-%s-k8s" (ternary "client" "server" (eq $labels.alert_scope "client"))) }}
+{{- $_ := set $rule.annotations "diagnostic_command" (printf "kubectl --context <your-context> -n %s logs -l app.kubernetes.io/instance=%s,component=woodpecker --tail=100 --all-containers=true" $.Release.Namespace $.Values.milvusRelease) }}
+{{- $_ := set $rule.annotations "wp_command" "wp --endpoint http://127.0.0.1:19091 node list" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.alerts.renderRuleFile }}
+{{ toYaml $spec }}
+{{- else }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: full-stack-woodpecker-alerts
+  labels: {full-stack: milvus}
+spec:
+{{ toYaml $spec | indent 2 }}
+{{- end }}
+{{- end }}

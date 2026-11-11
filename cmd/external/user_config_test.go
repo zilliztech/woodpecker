@@ -91,7 +91,7 @@ trace:
   sampleFraction: 0.5
 `
 
-	err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	// Load user config
@@ -168,7 +168,7 @@ log:
   level: error
 `
 
-	err = os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err = os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	userConfig, err := LoadUserConfig(configFile)
@@ -217,7 +217,7 @@ woodpecker:
       # maxRetries is not set, should not override
 `
 
-	err = os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err = os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	userConfig, err := LoadUserConfig(configFile)
@@ -267,9 +267,9 @@ etcd:
   requestTimeout: 3000
 `
 
-	err := os.WriteFile(configFile1, []byte(yamlContent1), 0644)
+	err := os.WriteFile(configFile1, []byte(yamlContent1), 0o644)
 	require.NoError(t, err)
-	err = os.WriteFile(configFile2, []byte(yamlContent2), 0644)
+	err = os.WriteFile(configFile2, []byte(yamlContent2), 0o644)
 	require.NoError(t, err)
 
 	// Load both config files (config2 should override config1)
@@ -309,6 +309,7 @@ woodpecker:
     segmentSyncPolicy:
       maxInterval: 500ms
       maxIntervalForLocalStorage: 5ms
+      maxIntervalForService: 3ms
       maxBytes: 128M
       retryInterval: 1s
       maxFlushSize: 2MB
@@ -324,7 +325,7 @@ etcd:
   requestTimeout: 5s
 `
 
-	err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	// Load user config
@@ -346,6 +347,7 @@ etcd:
 	// Verify DurationMilliseconds parsing (default unit: milliseconds)
 	assert.Equal(t, 500, userConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
 	assert.Equal(t, 5, userConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
+	assert.Equal(t, 3, userConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds())
 	assert.Equal(t, 1000, userConfig.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
 	assert.Equal(t, 10000, userConfig.Minio.RequestTimeoutMs.Milliseconds())
 	assert.Equal(t, 5000, userConfig.Etcd.RequestTimeout.Milliseconds())
@@ -355,7 +357,7 @@ func TestLoadUserConfigInvalidYAML(t *testing.T) {
 	// Test with invalid YAML - should return error
 	tempDir := t.TempDir()
 	invalidFile := filepath.Join(tempDir, "invalid.yaml")
-	err := os.WriteFile(invalidFile, []byte("invalid: yaml: content: ["), 0644)
+	err := os.WriteFile(invalidFile, []byte("invalid: yaml: content: ["), 0o644)
 	require.NoError(t, err)
 
 	_, err = LoadUserConfig(invalidFile)
@@ -374,7 +376,7 @@ func TestLoadUserConfigEmptyYAML(t *testing.T) {
 	// Test with an empty YAML file
 	tempDir := t.TempDir()
 	emptyFile := filepath.Join(tempDir, "empty.yaml")
-	err := os.WriteFile(emptyFile, []byte(""), 0644)
+	err := os.WriteFile(emptyFile, []byte(""), 0o644)
 	require.NoError(t, err)
 
 	// Should not error, just return an empty config
@@ -416,7 +418,7 @@ woodpecker:
 log:
   level: debug
 `
-	err := os.WriteFile(existingFile, []byte(yamlContent), 0644)
+	err := os.WriteFile(existingFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	// Reference a file that doesn't exist

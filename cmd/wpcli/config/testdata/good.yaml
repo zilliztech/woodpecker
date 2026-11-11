@@ -1,0 +1,15 @@
+current-context: prod
+
+contexts:
+  prod:
+    endpoint:    http://prod.wp.svc:9091
+    admin_port:  9091
+    timeout:     30s
+    concurrency: 8
+    strict:      false
+  dev:
+    endpoint: http://localhost:9091
+
+defaults:
+  output:    table
+  no_color:  false

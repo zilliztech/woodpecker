@@ -1,0 +1,576 @@
+<section id="topic-cluster">
+<h2>Cluster & node status</h2>
+<article class="command" id="cluster-gossip-diff">
+<h2>wp cluster gossip-diff</h2>
+<p>Compare memberlist views across nodes to detect partitions</p>
+<pre>
+<code>wp cluster gossip-diff [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp cluster gossip-diff</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Peer membership views agree</code>
+</pre>
+<p>Agreement is among responding peers. Use --strict for incomplete fan-out; inspect whether a new/removed node has converged.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Membership views differ / unreachable peer</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Compare memberlist views across nodes to detect partitions
+
+Usage:
+  wp cluster gossip-diff [flags]
+
+Flags:
+  -h, --help   help for gossip-diff</code>
+</pre>
+</details>
+</article>
+<article class="command" id="cluster-health">
+<h2>wp cluster health</h2>
+<p>Red/yellow/green health check for the cluster</p>
+<pre>
+<code>wp cluster health [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--expected-replicas int</code>
+</td>
+<td>expected replica count baseline (default 3) (default 3)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp cluster health --expected-replicas 3</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Cluster Health: GREEN</code>
+</pre>
+<p>GREEN requires active &gt; N, no unreachable/decommissioning nodes and no version skew. RED: active &lt; N or any node unreachable. YELLOW: active == N, decommissioning or mixed versions. The default N=3 is a baseline, not inferred per-log quorum health.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Cluster Health: YELLOW
+active: 3
+zero redundancy (active == N)</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Red/yellow/green health check for the cluster
+
+Usage:
+  wp cluster health [flags]
+
+Flags:
+      --expected-replicas int   expected replica count baseline (default 3) (default 3)
+  -h, --help                    help for health</code>
+</pre>
+</details>
+</article>
+<article class="command" id="cluster-info">
+<h2>wp cluster info</h2>
+<p>Show cluster overview (nodes, state, topology)</p>
+<pre>
+<code>wp cluster info [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp cluster info</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>members: [node-0, node-1, node-2]</code>
+</pre>
+<p>Membership is the seed’s current view, not proof of data availability. Compare peer views with gossip-diff.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Network: seed unavailable</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show cluster overview (nodes, state, topology)
+
+Usage:
+  wp cluster info [flags]
+
+Flags:
+  -h, --help   help for info</code>
+</pre>
+</details>
+</article>
+<article class="command" id="node-cancel-decommission">
+<h2>wp node cancel-decommission</h2>
+<p>Cancel an in-progress decommission (decommissioning -&gt; active)</p>
+<pre>
+<code>wp node cancel-decommission &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>-y, --yes</code>
+</td>
+<td>skip interactive confirmation</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp node cancel-decommission node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>decommission cancelled on node-0; returning to active</code>
+</pre>
+<p>Cancels the lifecycle operation; re-check node state and application progress.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: StateConflict: ...</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Cancel an in-progress decommission (decommissioning -&gt; active)
+
+Usage:
+  wp node cancel-decommission &lt;node&gt; [flags]
+
+Flags:
+  -h, --help   help for cancel-decommission
+  -y, --yes    skip interactive confirmation</code>
+</pre>
+</details>
+</article>
+<article class="command" id="node-decommission">
+<h2>wp node decommission</h2>
+<p>Trigger graceful node decommission (blocks until safe by default)</p>
+<pre>
+<code>wp node decommission &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--async</code>
+</td>
+<td>return immediately instead of waiting for safe_to_terminate</td>
+</tr>
+<tr>
+<td>
+<code>--heartbeat-interval duration</code>
+</td>
+<td>heartbeat line interval when no progress change (default 15s)</td>
+</tr>
+<tr>
+<td>
+<code>--interval duration</code>
+</td>
+<td>progress poll interval (default 3s)</td>
+</tr>
+<tr>
+<td>
+<code>--timeout duration</code>
+</td>
+<td>overall timeout for the wait (default 30m0s)</td>
+</tr>
+<tr>
+<td>
+<code>-y, --yes</code>
+</td>
+<td>skip interactive confirmation</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp node decommission node-0 --async</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>decommission started on node-0
+# --async returns before drain completion; follow with drain-status.</code>
+</pre>
+<p>Changes node lifecycle state. Check capacity first; --async returns after request rather than completion. Timeout does not authorize termination.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>state=decommissioning remaining_processors=1 has_local_data=true safe=false</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Trigger graceful node decommission (blocks until safe by default)
+
+Usage:
+  wp node decommission &lt;node&gt; [flags]
+
+Flags:
+      --async                         return immediately instead of waiting for safe_to_terminate
+      --heartbeat-interval duration   heartbeat line interval when no progress change (default 15s)
+  -h, --help                          help for decommission
+      --interval duration             progress poll interval (default 3s)
+      --timeout duration              overall timeout for the wait (default 30m0s)
+  -y, --yes                           skip interactive confirmation</code>
+</pre>
+</details>
+</article>
+<article class="command" id="node-drain-status">
+<h2>wp node drain-status</h2>
+<p>Show (or watch) decommission progress for a node</p>
+<pre>
+<code>wp node drain-status &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--interval duration</code>
+</td>
+<td>watch poll interval (default 3s)</td>
+</tr>
+<tr>
+<td>
+<code>--timeout duration</code>
+</td>
+<td>watch total timeout (default 30m0s)</td>
+</tr>
+<tr>
+<td>
+<code>-w, --watch</code>
+</td>
+<td>continuously watch until safe_to_terminate</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp node drain-status node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>safe_to_terminate: true</code>
+</pre>
+<p>Terminate only after safe_to_terminate=true. active means decommission has not completed; processors and local data independently prevent a safe drain. -w polls.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>state: active
+remaining_processors: 1
+has_local_data: true
+safe_to_terminate: false</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show (or watch) decommission progress for a node
+
+Usage:
+  wp node drain-status &lt;node&gt; [flags]
+
+Flags:
+  -h, --help                help for drain-status
+      --interval duration   watch poll interval (default 3s)
+      --timeout duration    watch total timeout (default 30m0s)
+  -w, --watch               continuously watch until safe_to_terminate</code>
+</pre>
+</details>
+</article>
+<article class="command" id="node-healthz">
+<h2>wp node healthz</h2>
+<p>Query a node&#x27;s health probe (the one readiness uses)</p>
+<pre>
+<code>wp node healthz &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp node healthz node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Health probe on node-0: ok</code>
+</pre>
+<p>Process health/readiness does not establish log read/write progress or replica data integrity.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Health probe on node-0: failed
+# Read individual dependency/check codes in the report.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Query a node&#x27;s health probe (the one readiness uses)
+
+Usage:
+  wp node healthz &lt;node&gt; [flags]
+
+Flags:
+  -h, --help   help for healthz</code>
+</pre>
+</details>
+</article>
+<article class="command" id="node-list">
+<h2>wp node list</h2>
+<p>List all server nodes in the cluster</p>
+<pre>
+<code>wp node list [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--az string</code>
+</td>
+<td>filter by availability zone</td>
+</tr>
+<tr>
+<td>
+<code>--region string</code>
+</td>
+<td>filter by region</td>
+</tr>
+<tr>
+<td>
+<code>--rg string</code>
+</td>
+<td>filter by resource group</td>
+</tr>
+<tr>
+<td>
+<code>--state string</code>
+</td>
+<td>filter by state: active|decommissioning|decommissioned|unreachable|all (default &quot;all&quot;)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp node list --strict</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>NAME                  STATE   HEALTH
+milvus-woodpecker-0    active  OK
+milvus-woodpecker-1    active  OK</code>
+</pre>
+<p>Use node IDs from this list in node-scoped commands; distinguish membership from HTTP reachability.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>milvus-woodpecker-2    unreachable
+# With --strict, incomplete fan-out returns a nonzero exit code.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>List all server nodes in the cluster
+
+Usage:
+  wp node list [flags]
+
+Flags:
+      --az string       filter by availability zone
+  -h, --help            help for list
+      --region string   filter by region
+      --rg string       filter by resource group
+      --state string    filter by state: active|decommissioning|decommissioned|unreachable|all (default &quot;all&quot;)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="node-log-health">
+<h2>wp node log-health</h2>
+<p>Show per-log read/write health observed by a node</p>
+<pre>
+<code>wp node log-health &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--bucket string</code>
+</td>
+<td>Filter to one instance&#x27;s bucket (requires --root)</td>
+</tr>
+<tr>
+<td>
+<code>--root string</code>
+</td>
+<td>Filter to one instance&#x27;s root path (requires --bucket)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp node log-health node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>tracked: 1  healthy: 1  stalled: 0  failed: 0  idle: 0</code>
+</pre>
+<p>Write/read health describe client/log activity tracked on this node. Idle is inactivity, not a checksum failure. Stalled and Failed require looking at operations and last failure; this registry is not a complete metadata inventory.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>reason: idle_logs_present
+tracked: 1  healthy: 0  stalled: 0  failed: 0  idle: 1</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show per-log read/write health observed by a node
+
+Usage:
+  wp node log-health &lt;node&gt; [flags]
+
+Flags:
+      --bucket string   Filter to one instance&#x27;s bucket (requires --root)
+  -h, --help            help for log-health
+      --root string     Filter to one instance&#x27;s root path (requires --bucket)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="node-restart">
+<h2>wp node restart</h2>
+<p>(Not implemented) Restart a node — use your orchestrator instead</p>
+<pre>
+<code>wp node restart &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp node restart node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>No supported success path</code>
+</pre>
+<p>This command is currently a stub. Restart through the orchestrator; first verify drain safety when doing planned replacement.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>NotImplemented</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>(Not implemented) Restart a node — use your orchestrator instead
+
+Usage:
+  wp node restart &lt;node&gt; [flags]
+
+Flags:
+  -h, --help   help for restart</code>
+</pre>
+</details>
+</article>
+<article class="command" id="node-show">
+<h2>wp node show</h2>
+<p>Show detailed status for a single node</p>
+<pre>
+<code>wp node show &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp node show node-0 -o json</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{&quot;node_id&quot;:&quot;milvus-woodpecker-0&quot;,&quot;state&quot;:&quot;active&quot;,&quot;is_decommissioning&quot;:false,...}</code>
+</pre>
+<p>Inspect one discovered node. A missing target is different from an HTTP failure.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: Network: /admin/node returned status 503</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show detailed status for a single node
+
+Usage:
+  wp node show &lt;node&gt; [flags]
+
+Flags:
+  -h, --help   help for show</code>
+</pre>
+</details>
+</article>
+</section>

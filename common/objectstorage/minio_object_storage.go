@@ -42,7 +42,8 @@ func newMinioObjectStorageWithConfig(ctx context.Context, c *config.Configuratio
 	}
 	return &MinioObjectStorage{
 		minioHandler: minIOClient,
-		cfg:          c}, nil
+		cfg:          c,
+	}, nil
 }
 
 func (minioObjectStorage *MinioObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minioHandler.FileReader, error) {

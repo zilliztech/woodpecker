@@ -201,8 +201,9 @@ func ParseHeader(payload []byte) (*HeaderRecord, error) {
 		FirstEntryID: int64(binary.LittleEndian.Uint64(payload[4:])),
 	}
 
-	// Verify version
-	if h.Version != FormatVersion {
+	// Verify version (accept the v5 layout written by older releases as well as the
+	// current format, mirroring ParseFooter's backward-compatible version check).
+	if h.Version != 5 && h.Version != FormatVersion {
 		return nil, errors.New("invalid format version")
 	}
 
@@ -331,8 +332,16 @@ func VerifyBlockDataIntegrity(blockHeaderRecord *BlockHeaderRecord, blockData []
 func IsCompacted(flags uint16) bool {
 	return (flags & 1) != 0
 }
+
 func SetCompacted(flags uint16) uint16 {
 	return flags | 1
+}
+
+// ClearCompacted clears the compacted provenance bit. Used by the local (non-compacted)
+// reader when emitting a LastReadState, so a compacted bit absorbed from a prior hop's state
+// never leaks out with a local block number.
+func ClearCompacted(flags uint16) uint16 {
+	return flags &^ 1
 }
 
 // GetMaxFooterReadSize returns the maximum size needed to read any supported footer version
@@ -385,4 +394,28 @@ func tryParseFooterSize(data []byte, footerSize int) (*FooterRecord, error) {
 	footer := record.(*FooterRecord)
 
 	return footer, nil
+}
+
+// ExtractDataRecordBytes returns a zero-copy slice of blockData starting from the
+// first DataRecord, skipping any leading HeaderRecord / BlockHeaderRecord entries.
+// Block layout: [RecordHeader+HeaderPayload (optional)] + [RecordHeader+BlockHeaderPayload] + [DataRecords...]
+// Returns (nil, nil) if no DataRecords are found (empty block).
+func ExtractDataRecordBytes(blockData []byte) ([]byte, error) {
+	offset := 0
+	for offset < len(blockData) {
+		if offset+RecordHeaderSize > len(blockData) {
+			return nil, fmt.Errorf("truncated record header at offset %d", offset)
+		}
+		recordType := blockData[offset+4]
+		payloadLength := int(binary.LittleEndian.Uint32(blockData[offset+5 : offset+9]))
+		totalRecordLength := RecordHeaderSize + payloadLength
+		if offset+totalRecordLength > len(blockData) {
+			return nil, fmt.Errorf("truncated record payload at offset %d", offset)
+		}
+		if recordType == DataRecordType {
+			return blockData[offset:], nil
+		}
+		offset += totalRecordLength
+	}
+	return nil, nil
 }

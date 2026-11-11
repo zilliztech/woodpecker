@@ -1,0 +1,138 @@
+<div class="note">Source-build feature: <code>wp shell</code> is not included in v0.1.47. Build a checkout containing the command with <code>make wpcli</code> and run <code>./bin/wp shell --help</code> to check availability. Examples below use <code>wp</code> from that build. Output is illustrative; replace names, prefixes and storage locations with those of your deployment.</div>
+<p>Keep one terminal open while operating a multi-tenant Woodpecker service. Select the service once, then explicitly connect the tenant whose metadata you want to inspect. Inside the session, omit the leading <code>wp</code>; existing operation arguments, previews and confirmations still apply.</p>
+
+<h2 id="shell-context">1. Configure and select the service context</h2>
+<p>A service context is required. For a Helm installation accessed from outside Kubernetes, first establish the Admin port forwards described in <a href="cli.html#external-access">CLI setup</a>. Save this example as <code>~/.woodpecker/cli.yaml</code>:</p>
+<pre><code>current-context: milvus-prod
+contexts:
+  milvus-prod:
+    endpoint: http://127.0.0.1:19091
+    timeout: 10s
+    node_admin_urls:
+      milvus-woodpecker-0: http://127.0.0.1:19091
+      milvus-woodpecker-1: http://127.0.0.1:29091
+      milvus-woodpecker-2: http://127.0.0.1:39091
+  milvus-staging:
+    endpoint: https://wp-staging.example.com:9091</code></pre>
+<p><code>endpoint</code> is the Admin seed. <code>node_admin_urls</code> maps the node IDs or advertised addresses returned by your cluster to workstation-accessible Admin origins. A reachable seed alone does not make the other replicas reachable. The staging origin above is a placeholder; configure its actual mappings when required.</p>
+<pre><code>wp shell --context milvus-prod</code></pre>
+<p>For a configuration file in another location, set the environment variable in the same terminal before starting:</p>
+<pre><code>export WOODPECKER_CLI_CONFIG=/path/to/cli.yaml
+wp shell --context milvus-prod</code></pre>
+<p>Without <code>--context</code>, an interactive <code>wp shell</code> always displays a context selector, even when a current context exists. Enter a displayed number or exact name; Enter accepts a valid <code>current-context</code>. Piped input requires an explicit <code>--context</code>. Missing or invalid configuration reports the relevant configuration path and setup instructions. See <a href="cli.html#cli-yaml">CLI setup</a> for the full configuration search order.</p>
+<pre><code>Service context: milvus-prod
+Config file:     /Users/example/.woodpecker/cli.yaml
+Admin endpoint:  http://127.0.0.1:19091
+Node mappings:   3
+Tenant metadata: not configured
+
+wp[context=milvus-prod | meta=disconnected]&gt;</code></pre>
+<p>The prompt identifies two independent targets: <code>context</code> is the Woodpecker service cluster; <code>meta</code> is the selected tenant connection, or <code>disconnected</code>. The latter means no tenant is configured, not a network health verdict. Entering the shell does not contact the services or automatically attach the context's etcd settings. The shell pins its chosen service endpoint rather than inheriting <code>WOODPECKER_ENDPOINT</code>.</p>
+
+<h2 id="shell-connect">2. Connect the tenant: etcd, metadata prefix and storage</h2>
+<p>From the interactive prompt, connect using the tenant's workstation-accessible etcd endpoint and <strong>complete Woodpecker metadata prefix</strong>. Keep this example on one line when entering it:</p>
+<pre><code>connect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker --bucket tenant-a-bucket --root-path milvus/wp</code></pre>
+<table><thead><tr><th>Parameter</th><th>Meaning and requirement</th></tr></thead><tbody>
+<tr><td><code>tenant-a</code></td><td>Required operator-selected connection name, displayed as <code>meta=tenant-a</code>. It is an alias; it does not derive or change the actual metadata prefix.</td></tr>
+<tr><td><code>--etcd</code></td><td>Required reachable etcd endpoint; comma-separate multiple endpoints. Outside Kubernetes, use the forwarded or otherwise reachable address.</td></tr>
+<tr><td><code>--meta-prefix</code></td><td>Required complete metadata namespace configured by the client, for example <code>tenant-a/woodpecker</code>. Do not supply a particular log key or confuse it with the physical storage root.</td></tr>
+<tr><td><code>--bucket</code></td><td>Physical storage bucket for this tenant. Optional for metadata-only operations; provide together with <code>--root-path</code>.</td></tr>
+<tr><td><code>--root-path</code></td><td>Physical storage instance root, for example <code>milvus/wp</code>. Provide together with <code>--bucket</code>; it need not equal the metadata prefix.</td></tr>
+<tr><td><code>--etcd-username / --etcd-password</code></td><td>Credentials when etcd authentication is enabled. Each new connection starts with fresh settings; omitted credentials are not inherited from the previous tenant.</td></tr>
+<tr><td>TLS endpoint</td><td>Use an <code>https://</code> etcd endpoint or supply certificate flags to enable TLS. There is no separate <code>--etcd-tls</code> switch in this interface.</td></tr>
+<tr><td><code>--etcd-cacert</code></td><td>Local CA certificate file when needed. Certificate flags enable TLS.</td></tr>
+<tr><td><code>--etcd-cert / --etcd-key</code></td><td>Local client certificate and private key for mutual TLS; provide both.</td></tr>
+<tr><td><code>--etcd-tls-min-version</code></td><td>Minimum TLS version when TLS is enabled: 1.0, 1.1, 1.2 or 1.3; default 1.2.</td></tr>
+</tbody></table>
+<pre><code>Service context: milvus-prod
+Tenant:          tenant-a
+Etcd endpoints:  127.0.0.1:32379
+Meta prefix:     tenant-a/woodpecker
+Bucket:          tenant-a-bucket
+Root path:       milvus/wp
+
+wp[context=milvus-prod | meta=tenant-a]&gt;</code></pre>
+<p>Success verifies an etcd read under the supplied prefix, even if it is empty. It does not establish that you selected the intended tenant, that its quorum belongs to this service context, or that its data is healthy. Check <code>status</code> and the returned metadata before operating. <code>connect --help</code> lists the complete connection flags.</p>
+<details class="ops-help"><summary>Metadata-only and TLS connection examples</summary>
+<pre><code># Metadata-only connection; no bucket/root-path is needed.
+connect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker
+
+# Custom CA and client certificates; use files on this workstation.
+connect tenant-a --etcd etcd.example.com:2379 --meta-prefix tenant-a/woodpecker --etcd-cacert /path/to/ca.pem --etcd-cert /path/to/client.pem --etcd-key /path/to/client-key.pem</code></pre>
+<p>Each successful <code>connect</code> replaces the whole tenant connection. A metadata-only reconnect also clears a previous bucket/root-path. A failed connection retains the previous selected tenant and reports that the selection is unchanged.</p>
+</details>
+
+<h2 id="shell-prerequisites">3. Which commands can run now?</h2>
+<table><thead><tr><th>Session state</th><th>Available operations</th><th>Examples inside the shell</th></tr></thead><tbody>
+<tr><td>Service context only<br><code>meta=disconnected</code></td><td>Service runtime and node diagnostics: cluster/node, environment, configuration, logging, profiles, in-flight operations, metrics, local instance inventory and node-local logstore operations. Kubernetes helpers use the service context's Kubernetes settings. Required services/tools must still be reachable.</td><td><code>node list</code><br><code>cluster health</code><br><code>config show node-0</code><br><code>logstore segments node-0</code><br><code>instance data node-0</code></td></tr>
+<tr><td>Service context + tenant etcd and metadata prefix</td><td>All <code>meta</code>, <code>etcd</code>, and <code>marking</code> operations; <code>log readers</code>, <code>log skip-range</code>, <code>log truncate</code>; quorum-aware <code>logstore lac</code> and <code>logstore fence-quorum</code>. Mutations retain their existing validation, acceptance and backup requirements.</td><td><code>meta log list</code><br><code>meta check application-log</code><br><code>log readers application-log</code><br><code>log skip-range list application-log</code><br><code>etcd list tenant-a/woodpecker/</code></td></tr>
+<tr><td>Tenant connection + bucket and root-path</td><td><code>log scan</code>, <code>segment inspect</code>, and <code>segment probe</code> inherit the selected data location. In interactive mode these three require both location values, either from <code>connect</code> or explicit command flags.</td><td><code>log scan application-log --mode raw</code><br><code>segment inspect application-log 0</code><br><code>segment probe application-log 0</code></td></tr>
+<tr><td>Any session state</td><td>Local session inspection, switching, help and exit. Operation help is available before a tenant is attached.</td><td><code>status</code><br><code>ctx list</code><br><code>help meta log</code><br><code>connect --help</code><br><code>exit</code></td></tr>
+</tbody></table>
+<p>Connecting makes the required parameters available; it does not make every operation succeed. Physical reads also require reachable quorum node Admin endpoints, and mutation commands still require their operation-specific evidence and safeguards. Raw <code>etcd</code> commands use the literal key/prefix you supply; <code>--meta-prefix</code> does not automatically scope or prepend raw etcd paths.</p>
+<pre><code>meta log list
+log readers application-log
+log scan application-log --mode raw
+segment inspect application-log 0
+
+# Override data location for this one operation only.
+segment probe application-log 0 --bucket another-bucket --root-path another/root</code></pre>
+<p>Use actual log names from <code>meta log list</code> and segment IDs from <code>meta segment list application-log</code>. A per-command override does not modify the next command's defaults. When a tenant storage location is attached, <code>instance data</code> and <code>node log-health</code> also inherit it as a filter (their root flag is <code>--root</code>). They remain usable without a tenant connection. This shell's explicit storage-location rule does not change the existing non-interactive CLI's discovery behavior.</p>
+
+<h2 id="shell-status">4. Inspect the session with status</h2>
+<pre><code>status</code></pre>
+<pre><code>Service context: milvus-prod
+Config file:     /Users/example/.woodpecker/cli.yaml
+Admin endpoint:  http://127.0.0.1:19091
+Node mappings:   3
+Tenant:          tenant-a
+Etcd endpoints:  127.0.0.1:32379
+Meta prefix:     tenant-a/woodpecker
+Bucket:          tenant-a-bucket
+Root path:       milvus/wp</code></pre>
+<p><code>status</code> reads local session settings without making network requests, so it works while services are down or no tenant is attached. When credentials are configured, it reports that authentication is configured without printing them. An empty bucket/root-path means physical inspection needs explicit values.</p>
+<pre><code>status --check</code></pre>
+<pre><code>Admin check: OK
+Etcd check: OK</code></pre>
+<p>The check form also prints the session configuration, then performs bounded Admin and etcd checks. Read the two results separately. When disconnected it prints <code>Etcd check: skipped (no tenant configured)</code>; a failed Admin check does not hide the separate etcd result. Neither check verifies application progress or physical data integrity.</p>
+
+<h2 id="shell-switch">5. Disconnect or switch a service/tenant</h2>
+<pre><code>disconnect
+status
+use milvus-staging
+connect tenant-b --etcd 127.0.0.1:42379 --meta-prefix tenant-b/woodpecker
+status</code></pre>
+<p><code>disconnect</code> clears the entire tenant connection, including credentials, TLS, metadata prefix and storage location. It retains the service context. A successful <code>use &lt;context&gt;</code> switches the service and clears any tenant attachment; connect the intended tenant again. A failed context selection leaves the current service and tenant unchanged.</p>
+<pre><code>wp[context=milvus-prod | meta=tenant-a]&gt; disconnect
+Tenant metadata: not configured
+wp[context=milvus-prod | meta=disconnected]&gt; use milvus-staging
+Service context: milvus-staging
+Config file:     /Users/example/.woodpecker/cli.yaml
+Admin endpoint:  https://wp-staging.example.com:9091
+Node mappings:   0
+Tenant metadata: not configured
+wp[context=milvus-staging | meta=disconnected]&gt;</code></pre>
+<p>Session-local switching does not write <code>current-context</code> or affect another terminal. Inside the session, <code>ctx list</code> and <code>ctx view</code> inspect saved CLI configuration; use <code>status</code> to inspect the active tenant attachment. Use <code>use</code> for session-local switching. The existing <code>ctx use</code> command is a persistent change to the original configuration file and does not retarget this running session; invoke it only when you intend to change the default on disk. Exit and start a new shell to reload an edited configuration file.</p>
+
+<h2 id="shell-errors">6. Interpret missing configuration and connection failures</h2>
+<p>If a metadata-dependent command runs while disconnected, it fails before contacting Admin or etcd, even if the service context contains etcd settings or you pass connection flags on that operation:</p>
+<pre><code>wp[context=milvus-prod | meta=disconnected]&gt; meta log list
+wp shell: Prerequisite: no tenant metadata connection configured.
+Connect with: connect &lt;tenant&gt; --etcd &lt;host:port&gt; --meta-prefix &lt;prefix&gt;.
+Physical inspection also needs --bucket &lt;bucket&gt; --root-path &lt;root-path&gt;.
+Run status to view the session</code></pre>
+<table><thead><tr><th>Result</th><th>Meaning / next step</th></tr></thead><tbody>
+<tr><td><code>no tenant metadata connection configured</code></td><td>Run <code>connect</code>, then retry. Service-only commands and help remain available.</td></tr>
+<tr><td><code>physical inspection requires --bucket ... and --root-path ...</code></td><td>Supply the paired location flags on scan/inspect/probe, or reconnect the tenant with both. No physical inspection has started.</td></tr>
+<tr><td><code>tenant connection failed ...; active tenant unchanged: ...</code></td><td>Check endpoint forwarding, authentication and local TLS files. The previous tenant remains selected, or the session stays disconnected. Run <code>status</code> before continuing.</td></tr>
+<tr><td><code>Admin check: failed ...</code> / <code>Etcd check: failed ...</code></td><td>Configuration exists but that check could not succeed. A timeout or authentication failure is different from a missing connection configuration; the selected context/tenant remains intact.</td></tr>
+</tbody></table>
+
+<h2 id="shell-controls">7. Help, completion and exit</h2>
+<pre><code>help
+connect --help
+help segment inspect
+ctx list
+exit</code></pre>
+<p>Tab completes command/flag names and context names after <code>use</code>. Arrow keys recall in-memory history; <code>connect</code> and credential-bearing commands are excluded from history. Ctrl+C cancels the current operation and returns to the prompt. Use <code>exit</code>, <code>quit</code> or Ctrl+D to leave.</p>
+<p>This is a command session, not bash/zsh: quoted arguments work, but environment-variable expansion, pipes and redirection are not evaluated. Run exports and port forwards in your ordinary terminal. Enter each example operation as a separate command. Existing command findings can return errors while the shell remains open for further diagnosis.</p>

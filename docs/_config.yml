@@ -1,0 +1,31 @@
+exclude:
+  - .sass-cache/
+  - .jekyll-cache/
+  - gemfiles/
+  - Gemfile
+  - Gemfile.lock
+  - node_modules/
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+  - wip
+  # Internal AI-agent planning/spec artifacts (writing-plans skill output).
+  # Not user-facing docs, and they contain double-curly-brace sequences (PromQL/
+  # Grafana templating, Python f-string brace-escaping) that Jekyll's Liquid
+  # engine fails to parse, which breaks the Pages build. See issue #204.
+  - superpowers
+
+  # CLI handbook sources; only rendered HTML/CSS are public pages.
+  - operations/generate_cli.py
+  - operations/embed_operations.py
+  - operations/cli-examples.json
+  - operations/cli-categories.json
+  - operations/README.md
+
+  # Quick Start generator/maintenance notes; runnable examples remain downloadable.
+  - quickstart/generate.py
+  - quickstart/README.md
+
+  # Stack examples are embedded in docs.html; exclude authoring sources.
+  - stack-examples

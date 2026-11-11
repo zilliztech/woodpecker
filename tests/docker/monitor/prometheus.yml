@@ -2,20 +2,29 @@ global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
+# woodpecker_id identifies the woodpecker cluster a target belongs to. The k8s
+# suite derives it from the pod's app.kubernetes.io/instance label; here the
+# compose file defines a single cluster, so the value is stamped statically —
+# both suites end up with the same label scheme and the same dashboards work.
 scrape_configs:
   - job_name: woodpecker-node1
     static_configs:
       - targets: ['woodpecker-node1:9091']
+        labels: { woodpecker_id: my-woodpecker }
   - job_name: woodpecker-node2
     static_configs:
       - targets: ['woodpecker-node2:9092']
+        labels: { woodpecker_id: my-woodpecker }
   - job_name: woodpecker-node3
     static_configs:
       - targets: ['woodpecker-node3:9093']
+        labels: { woodpecker_id: my-woodpecker }
   - job_name: woodpecker-node4
     static_configs:
       - targets: ['woodpecker-node4:9094']
+        labels: { woodpecker_id: my-woodpecker }
   # Client metrics exposed by the Go test process on the host machine.
   - job_name: woodpecker-test-client
     static_configs:
       - targets: ['host.docker.internal:29099']
+        labels: { woodpecker_id: my-woodpecker }

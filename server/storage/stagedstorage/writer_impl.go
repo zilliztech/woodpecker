@@ -20,11 +20,12 @@ package stagedstorage
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -34,7 +35,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
-	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
@@ -45,9 +45,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	WriterScope = "StagedFileWriter"
-)
+var WriterScope = "StagedFileWriter"
 
 var _ storage.Writer = (*StagedFileWriter)(nil)
 
@@ -73,7 +71,7 @@ type StagedFileWriter struct {
 	segmentId       int64
 	file            *os.File
 	logIdStr        string // for metrics only
-	nsStr           string // for metrics only
+	logNs           string // for metrics only
 
 	// Configuration
 	maxFlushSize     int64 // Max buffer size before triggering sync
@@ -102,39 +100,55 @@ type StagedFileWriter struct {
 	lastEntryID    atomic.Int64 // The last entryId written to disk
 	headerWritten  atomic.Bool  // Ensures header is written before data
 	finalized      atomic.Bool
+	finalizing     atomic.Bool
 	fenced         atomic.Bool
 	inRecoveryMode atomic.Bool
-	recovered      atomic.Bool
+	// compacted marks a writer opened on a segment whose directory carries the
+	// data.compacted tombstone: the segment is durably compacted in object storage and its
+	// local data.log has been (or is being) reclaimed. Such a writer holds NO local file and
+	// only serves the idempotent tail of the lifecycle (Fence/Finalize return the footer's
+	// LAC, Compact hits the remote-footer idempotency branch, appends are rejected).
+	compacted atomic.Bool
+	recovered atomic.Bool
 
 	// Async flush management
-	flushTaskChan                chan *blockFlushTask
+	flushTaskChan                chan *blockFlushTask // flushTasksQueue
+	syncScheduler                *SyncScheduler
+	syncScheduled                atomic.Bool // Prevents repeated delayed sync checks for this writer in the shared delay heap.
+	syncTaskSubmitted            atomic.Bool // Prevents repeated scheduled Sync jobs for this writer in the shared worker queue.
 	storageWritable              atomic.Bool // Indicates whether the segment is writable
 	lastSubmittedFlushingEntryID atomic.Int64
 	lastSubmittedFlushingBlockID atomic.Int64
 	allUploadingTaskDone         atomic.Bool
-	flushMu                      sync.Mutex // the mutex ensures sequential writing for each flush batch
+	flushTasksQueueProcessing    atomic.Bool // Ensures only one shared worker is consuming this writer's flushTasksQueue.
+	flushMu                      sync.Mutex  // the mutex ensures sequential writing for each flush batch
 
 	// Close management
-	fileClose chan struct{} // Close signal
-	closed    atomic.Bool
-	runCtx    context.Context
-	runCancel context.CancelFunc
+	fileClose  chan struct{} // Close signal
+	closed     atomic.Bool
+	finalizeMu sync.Mutex
+	runCtx     context.Context
+	runCancel  context.CancelFunc
 }
 
 // NewStagedFileWriter creates a new staged file writer
-func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileWriter, error) {
-	return NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, false)
+func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
+	return NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, false, schedulers...)
 }
 
 // NewStagedFileWriterWithMode creates a new staged file writer with recovery mode option
-func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool) (*StagedFileWriter, error) {
+func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewStagedFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
 	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
 	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64()
 	flushQueueSize := max(int(maxBytes/blockSize), 300)
-	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds()
+	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds()
+	syncScheduler := DefaultSyncScheduler()
+	if len(schedulers) > 0 && schedulers[0] != nil {
+		syncScheduler = schedulers[0]
+	}
 	logger.Ctx(ctx).Debug("creating new staged file writer",
 		zap.String("localBaseDir", localBaseDir),
 		zap.Int64("logId", logId),
@@ -148,8 +162,21 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.Bool("recoveryMode", recoveryMode))
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
+	if HasCompactedMark(segmentDir) {
+		// The tombstone means this segment is durably compacted and its data.log reclaimed
+		// (or pending reclaim). A normal writer here would RESURRECT a local data.log —
+		// recovery mode via O_CREATE|O_APPEND, non-recovery via O_CREATE|O_TRUNC (which would
+		// also wipe a still-present drop-pending file) — and a present local file shadows
+		// object storage on the read path, making a compacted segment read as empty on this
+		// node until the next reconcile walk. Reachable through two windows of the protocol's
+		// own failure model: a stale client's append after a node restart cleared the
+		// in-memory fence, and the crash-recovery fence/complete/re-Compact of a segment
+		// whose meta update to Sealed was lost. Serve those with a fileless compacted writer
+		// instead: appends are rejected, fence/complete/compact converge idempotently.
+		return newCompactedStagedFileWriter(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg)
+	}
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
 			zap.String("segmentDir", segmentDir),
 			zap.Error(err))
@@ -170,7 +197,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		logId:               logId,
 		segmentId:           segmentId,
 		logIdStr:            strconv.FormatInt(logId, 10),
-		nsStr:               bucket + "/" + rootPath,
+		logNs:               bucket + "/" + rootPath,
 		bucket:              bucket,
 		rootPath:            rootPath,
 		storageCli:          storageCli,
@@ -179,8 +206,9 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		writtenBytes:        0,
 		maxFlushSize:        blockSize,
 		maxBufferEntries:    int64(maxBufferEntries),                    // Default max entries per buffer
-		maxIntervalMs:       maxInterval,                                // 10ms default sync interval for more responsive syncing
+		maxIntervalMs:       maxInterval,                                // service-mode sync interval (maxIntervalForService, 1ms default); event-driven sync also triggers flushes
 		flushTaskChan:       make(chan *blockFlushTask, flushQueueSize), // Increased buffer size to reduce blocking
+		syncScheduler:       syncScheduler,
 		runCtx:              runCtx,
 		runCancel:           runCancel,
 	}
@@ -191,6 +219,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	writer.currentBlockNumber.Store(0)
 	writer.headerWritten.Store(false)
 	writer.finalized.Store(false)
+	writer.finalizing.Store(false)
 	writer.fenced.Store(false)
 	writer.closed.Store(false)
 	writer.recovered.Store(false)
@@ -198,6 +227,9 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	writer.lastSubmittedFlushingEntryID.Store(-1)
 	writer.lastSubmittedFlushingBlockID.Store(-1)
 	writer.allUploadingTaskDone.Store(false)
+	writer.syncScheduled.Store(false)
+	writer.syncTaskSubmitted.Store(false)
+	writer.flushTasksQueueProcessing.Store(false)
 	writer.lastSyncTimestamp.Store(0) // Set to 0 so first write will trigger sync after interval
 
 	// Set default block size if not specified
@@ -239,17 +271,17 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		}
 		// Open file for appending (create if not exists)
 		logger.Ctx(ctx).Debug("opening file for appending in recovery mode")
-		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	} else {
 		// Open file for writing (create if not exists, truncate if exists)
 		logger.Ctx(ctx).Debug("opening file for writing (truncate mode)")
-		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err == nil {
-			metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, writer.nsStr, writer.logIdStr).Inc()
+			metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, writer.logNs, writer.logIdStr).Inc()
 		}
 	}
 
-	initialBuffer := cache.NewSequentialBuffer(logId, segmentId, startEntryId, writer.maxBufferEntries, writer.nsStr)
+	initialBuffer := cache.NewSequentialBuffer(logId, segmentId, startEntryId, writer.maxBufferEntries, writer.logNs)
 	writer.buffer.Store(initialBuffer)
 
 	if err != nil {
@@ -280,8 +312,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.Int64("maxBufferEntries", writer.maxBufferEntries),
 		zap.String("bufferInstance", fmt.Sprintf("%p", initialBuffer)))
 
-	// Start async flush goroutine
-	go writer.run()
+	metrics.WpFileWriters.WithLabelValues(metrics.NodeID, writer.logNs, writer.logIdStr).Inc()
 
 	logger.Ctx(ctx).Info("staged file writer created successfully",
 		zap.String("filePath", filePath),
@@ -296,76 +327,92 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	return writer, nil
 }
 
-// run is the main async goroutine that handles buffer flushing
-func (w *StagedFileWriter) run() {
-	ticker := time.NewTicker(time.Duration(w.maxIntervalMs) * time.Millisecond)
-	defer ticker.Stop()
-
-	metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Inc()
-
-	logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine started",
-		zap.Int64("logId", w.logId),
-		zap.Int64("segmentId", w.segmentId))
-
-	for {
-		select {
-		case <-w.runCtx.Done():
-			// Context cancelled, exit
-			logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine stopping due to context cancellation")
-			metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
-			return
-		case flushTask, ok := <-w.flushTaskChan:
-			// Process flush tasks with higher priority
-			if !ok {
-				// Channel closed, exit
-				logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine stopping due to channel close")
-				metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
-				return
-			}
-			if flushTask.entries == nil {
-				logger.Ctx(context.TODO()).Debug("received termination signal, marking all upload tasks as done",
-					zap.String("segmentFilePath", w.segmentFilePath))
-				w.allUploadingTaskDone.Store(true)
-				metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
-				return
-			}
-			// Process flush task synchronously
-			logger.Ctx(w.runCtx).Debug("Processing flush task from channel",
-				zap.Int64("logId", w.logId),
-				zap.Int64("segId", w.segmentId),
-				zap.Int32("blockNumber", flushTask.blockNumber),
-				zap.Int64("firstEntryId", flushTask.firstEntryId),
-				zap.Int64("lastEntryId", flushTask.lastEntryId),
-				zap.Int("entriesCount", len(flushTask.entries)))
-			w.processFlushTask(w.runCtx, flushTask)
-			logger.Ctx(w.runCtx).Debug("Flush task processing completed")
-		case <-ticker.C:
-			// Periodic sync check
-			autoSyncErr := w.Sync(w.runCtx)
-			if autoSyncErr != nil {
-				logger.Ctx(w.runCtx).Warn("auto sync error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(autoSyncErr))
-			}
-			// Reset ticker after sync to ensure consistent intervals
-			ticker.Reset(time.Duration(w.maxIntervalMs) * time.Millisecond)
-		}
+// newCompactedStagedFileWriter builds the fileless writer for a tombstoned segment (see the
+// branch in NewStagedFileWriterWithMode). State is loaded from the remote compacted footer —
+// the single durable source once the local data.log is gone: lastEntryID = footer LAC, so
+// Fence and Finalize (which fast-return on the pre-set flags below) answer the coordinator
+// with the correct value, and Compact's remote-footer idempotency branch reports
+// already-compacted. No local file is opened or created, no flush machinery runs, and
+// WriteDataAsync rejects via the finalized guard.
+func newCompactedStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileWriter, error) {
+	if storageCli == nil {
+		return nil, fmt.Errorf("segment %d/%d carries a compacted tombstone but no object storage client is available to serve it", logId, segmentId)
 	}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	w := &StagedFileWriter{
+		localBaseDir:        localBaseDir,
+		segmentFilePath:     getSegmentFilePath(localBaseDir, logId, segmentId),
+		logId:               logId,
+		segmentId:           segmentId,
+		logIdStr:            strconv.FormatInt(logId, 10),
+		logNs:               bucket + "/" + rootPath,
+		bucket:              bucket,
+		rootPath:            rootPath,
+		storageCli:          storageCli,
+		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
+		blockIndexes:        make([]*codec.IndexRecord, 0),
+		maxFlushSize:        cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64(),
+		maxBufferEntries:    int64(cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries),
+		runCtx:              runCtx,
+		runCancel:           runCancel,
+	}
+	w.firstEntryID.Store(-1)
+	w.lastEntryID.Store(-1)
+	// The pre-set flags do the heavy lifting: finalized rejects appends (ErrFileWriterFinalized)
+	// and fast-returns Finalize; allUploadingTaskDone fast-returns Fence; compacted
+	// short-circuits Close.
+	w.compacted.Store(true)
+	w.finalized.Store(true)
+	w.fenced.Store(true)
+	w.allUploadingTaskDone.Store(true)
+	w.recovered.Store(true)
+	w.storageWritable.Store(false)
+
+	footer, _, err := w.readRemoteFooter(ctx)
+	if err != nil {
+		runCancel()
+		return nil, fmt.Errorf("compacted segment %d/%d: cannot load remote footer: %w", logId, segmentId, err)
+	}
+	if footer == nil || !codec.IsCompacted(footer.Flags) {
+		// Tombstone without a compacted footer is the same anomaly the cleanup task warns
+		// about; surface it instead of serving guessed state.
+		runCancel()
+		return nil, fmt.Errorf("compacted segment %d/%d: tombstone present but no compacted footer in object storage (unexpected state)", logId, segmentId)
+	}
+	w.recoveredFooter = footer
+	w.lastEntryID.Store(footer.LAC)
+	w.buffer.Store(cache.NewSequentialBuffer(logId, segmentId, footer.LAC+1, w.maxBufferEntries, w.logNs))
+
+	logger.Ctx(ctx).Info("opened compacted (fileless) staged writer for tombstoned segment",
+		zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Int64("lac", footer.LAC))
+	return w, nil
 }
 
 // Sync forces immediate sync of all buffered data
 func (w *StagedFileWriter) Sync(ctx context.Context) error {
+	return w.sync(ctx, false)
+}
+
+func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Sync")
 	defer sp.End()
 	startTime := time.Now()
-	// Use syncMu to ensure only one sync can proceed at a time
+	// Roll the buffer under the writer lock; flush execution is serialized by flushTasksQueueProcessing/flushMu.
 	w.mu.Lock()
-	defer w.mu.Unlock()
+
+	if w.closed.Load() && !allowClosed {
+		w.mu.Unlock()
+		return werr.ErrFileWriterAlreadyClosed
+	}
 
 	if !w.storageWritable.Load() {
+		w.mu.Unlock()
 		return nil
 	}
 
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil {
+		w.mu.Unlock()
 		return nil
 	}
 
@@ -377,41 +424,48 @@ func (w *StagedFileWriter) Sync(ctx context.Context) error {
 	// Sync if there's any data to sync
 	needSync := bufferSize > 0 || hasEntries
 
+	submitted := false
 	if needSync {
-		logger.Ctx(ctx).Debug("Sync: triggering rollBufferAndFlush", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Int64("entryCount", entryCount), zap.Int64("bufferSize", bufferSize), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		// Add global writer lock to prevent race conditions with WriteDataAsync
-		w.rollBufferAndSubmitFlushTaskUnsafe(ctx)
+		submitted = w.rollBufferAndEnqueueFlushTaskUnsafe(ctx)
+	}
+	w.mu.Unlock()
+
+	if submitted {
+		w.startFlushTasksQueueProcessing(ctx)
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "sync", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }
 
-// rollBufferAndSubmitFlushTaskUnsafe rolls the current buffer and flushes it to disk (must be called with mu held)
-func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context) {
+// rollBufferAndEnqueueFlushTaskUnsafe rolls the current buffer and submits a
+// flush task (must be called with mu held). It returns true when a task was
+// accepted into the writer's flush queue.
+func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Context) bool {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "rollBufferAndFlushUnsafe")
 	defer sp.End()
 	startTime := time.Now()
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil {
-		return
+		return false
 	}
 
 	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		return
+		return false
 	}
 
 	// Get entries from old buffer
 	toFlushEntries, err := currentBuffer.ReadEntriesRange(currentBuffer.GetFirstEntryId(), currentBuffer.GetExpectedNextEntryId())
 	if err != nil {
-		logger.Ctx(ctx).Warn("rollBufferAndSubmitFlushTaskUnsafe: error reading entries from buffer", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Error(err))
-		return
+		logger.Ctx(ctx).Warn("rollBufferAndEnqueueFlushTaskUnsafe: error reading entries from buffer", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Error(err))
+		return false
 	}
 	if len(toFlushEntries) == 0 {
-		return
+		return false
 	}
 
 	// Create flush task
@@ -425,13 +479,15 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 
 	restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
 	if err != nil {
-		return
+		return false
 	}
 	restDataFirstEntryId := expectedNextEntryId
-	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, restDataFirstEntryId, w.maxBufferEntries, restData, w.nsStr)
+	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, restDataFirstEntryId, w.maxBufferEntries, restData, w.logNs)
 
 	// Submit flush task
 	logger.Ctx(ctx).Debug("Submitting flush task to channel",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
 		zap.Int64("firstEntryId", flushTask.firstEntryId),
 		zap.Int64("lastEntryId", flushTask.lastEntryId),
 		zap.Int32("blockNumber", flushTask.blockNumber),
@@ -440,6 +496,8 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 	select {
 	case w.flushTaskChan <- flushTask:
 		logger.Ctx(ctx).Debug("Flush task submitted successfully",
+			zap.Int64("logId", w.logId),
+			zap.Int64("segId", w.segmentId),
 			zap.Int64("firstEntryId", flushTask.firstEntryId),
 			zap.Int64("lastEntryId", flushTask.lastEntryId),
 			zap.Int32("blockNumber", flushTask.blockNumber),
@@ -457,34 +515,162 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 		logger.Ctx(ctx).Warn("Context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
 		// Notify entries of cancellation
 		w.notifyFlushError(flushTask.entries, ctx.Err())
+		return false
 	case <-w.runCtx.Done():
 		logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
 		// Notify entries of cancellation
 		w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
+		return false
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "rollBuffer", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "rollBuffer", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return true
+}
+
+func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
+	if !w.flushTasksQueueProcessing.CompareAndSwap(false, true) {
+		return
+	}
+	job := func(context.Context) {
+		w.processFlushTasksQueue()
+	}
+	if w.syncScheduler != nil && w.syncScheduler.tryEnqueueJob(job) {
+		return
+	}
+	// Scheduler shutdown should not leave accepted flush tasks stranded.
+	job(ctx)
+}
+
+func (w *StagedFileWriter) processFlushTasksQueue() {
+	defer func() {
+		w.flushTasksQueueProcessing.Store(false)
+		if w.runCtx.Err() == nil && len(w.flushTaskChan) > 0 {
+			w.startFlushTasksQueueProcessing(context.Background())
+		}
+	}()
+
+	for {
+		select {
+		case <-w.runCtx.Done():
+			return
+		case flushTask, ok := <-w.flushTaskChan:
+			if !ok {
+				return
+			}
+			if flushTask.entries == nil {
+				logger.Ctx(context.TODO()).Debug("received termination signal, marking all upload tasks as done",
+					zap.String("segmentFilePath", w.segmentFilePath))
+				w.allUploadingTaskDone.Store(true)
+				return
+			}
+			logger.Ctx(w.runCtx).Debug("Processing flush task from shared scheduler",
+				zap.Int64("logId", w.logId),
+				zap.Int64("segId", w.segmentId),
+				zap.Int32("blockNumber", flushTask.blockNumber),
+				zap.Int64("firstEntryId", flushTask.firstEntryId),
+				zap.Int64("lastEntryId", flushTask.lastEntryId),
+				zap.Int("entriesCount", len(flushTask.entries)))
+			w.processFlushTask(w.runCtx, flushTask)
+		default:
+			return
+		}
+	}
+}
+
+func (w *StagedFileWriter) resetSyncScheduled() {
+	w.syncScheduled.Store(false)
+}
+
+func (w *StagedFileWriter) scheduleDelayedSyncCheck(delay time.Duration) {
+	if w.syncScheduler == nil || !w.hasSyncableEntries() {
+		return
+	}
+	if !w.syncScheduled.CompareAndSwap(false, true) {
+		return
+	}
+	if !w.syncScheduler.ScheduleSyncCheckAfter(w, delay) {
+		w.syncScheduled.Store(false)
+	}
+}
+
+func (w *StagedFileWriter) enqueueScheduledSyncJob() {
+	if !w.hasSyncableEntries() {
+		return
+	}
+	if !w.syncTaskSubmitted.CompareAndSwap(false, true) {
+		w.scheduleDelayedSyncCheck(w.getSyncCheckInterval())
+		return
+	}
+	job := func(context.Context) {
+		defer w.syncTaskSubmitted.Store(false)
+		if !w.hasSyncableEntries() {
+			return
+		}
+		if err := w.Sync(w.runCtx); err != nil {
+			logger.Ctx(w.runCtx).Warn("scheduled sync failed",
+				zap.String("segmentFilePath", w.segmentFilePath),
+				zap.Int64("logId", w.logId),
+				zap.Int64("segmentId", w.segmentId),
+				zap.Error(err))
+		}
+		if w.hasSyncableEntries() {
+			w.scheduleDelayedSyncCheck(w.getSyncCheckInterval())
+		}
+	}
+	if w.syncScheduler != nil && w.syncScheduler.tryEnqueueJob(job) {
+		return
+	}
+	job(context.Background())
+}
+
+func (w *StagedFileWriter) getSyncCheckInterval() time.Duration {
+	delay := time.Duration(w.maxIntervalMs) * time.Millisecond
+	if delay <= 0 {
+		return time.Millisecond
+	}
+	return delay
+}
+
+func (w *StagedFileWriter) hasSyncableEntries() bool {
+	if w.closed.Load() || w.finalized.Load() || w.finalizing.Load() || !w.storageWritable.Load() {
+		return false
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	currentBuffer := w.buffer.Load()
+	if currentBuffer == nil {
+		return false
+	}
+	return currentBuffer.ExpectedNextEntryId.Load()-currentBuffer.FirstEntryId > 0
 }
 
 // processFlushTask processes a flush task by writing data to disk
 func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
-	startTime := time.Now()
-	w.flushMu.Lock()
-	defer w.flushMu.Unlock()
 
-	// Add nil check for safety
+	// Nil task is a sentinel termination signal — not a real flush, skip metrics.
 	if task == nil {
 		return
 	}
 
-	if w.fenced.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
-		w.notifyFlushError(task.entries, werr.ErrSegmentFenced)
-		return
-	}
+	op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
+	status := "error"
+	var actualDataSize int64
+	defer func() {
+		op.End(status)
+		if status == "success" {
+			metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Add(float64(actualDataSize))
+			metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
+			metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Add(float64(actualDataSize))
+		}
+	}()
+
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
 
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
@@ -605,7 +791,7 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int64("lastEntryId", task.lastEntryId))
 
 	// Create index record for this block
-	actualDataSize := w.writtenBytes - blockStartOffset
+	actualDataSize = w.writtenBytes - blockStartOffset
 	indexRecord := &codec.IndexRecord{
 		BlockNumber:  task.blockNumber,
 		StartOffset:  blockStartOffset,
@@ -630,13 +816,14 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int32("blockNumber", task.blockNumber),
 		zap.Int64("firstEntryId", task.firstEntryId),
 		zap.Int64("lastEntryId", task.lastEntryId),
+		zap.Int("entriesCount", len(task.entries)),
+		zap.Int64("bytesWritten", actualDataSize),
+		zap.Uint32("blockCrc", blockCrc),
+		zap.Duration("duration", time.Since(op.StartedAt())),
 		zap.Int64("blockStartOffset", blockStartOffset),
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
 
-	// update metrics
-	metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
-	metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
-	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
+	status = "success"
 
 	// Notify success - notify each entry channel with success
 	w.notifyFlushSuccess(task.entries)
@@ -645,11 +832,17 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 func (f *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 	logger.Ctx(ctx).Info("awaiting completion of all block flush tasks", zap.String("segmentFilePath", f.segmentFilePath))
 
-	// Now wait for the ack goroutine to process all completed tasks
-	// This ensures that blockIndexes are properly populated
-	logger.Ctx(ctx).Info("waiting for ack goroutine to process completed tasks", zap.String("segmentFilePath", f.segmentFilePath))
+	// Fast return if already completed (idempotent for retry)
+	if f.allUploadingTaskDone.Load() {
+		return nil
+	}
 
-	// Send termination signal to ack goroutine
+	// Now wait for a shared flush worker to process all completed tasks
+	// This ensures that blockIndexes are properly populated
+	logger.Ctx(ctx).Info("waiting for shared flush worker to process completed tasks", zap.String("segmentFilePath", f.segmentFilePath))
+
+	// Send termination signal to the writer's flush queue.
+	f.startFlushTasksQueueProcessing(ctx)
 	select {
 	case f.flushTaskChan <- &blockFlushTask{
 		entries:      nil,
@@ -658,23 +851,26 @@ func (f *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 		blockNumber:  -1,
 	}:
 		logger.Ctx(ctx).Info("termination signal sent to ack goroutine", zap.String("segmentFilePath", f.segmentFilePath))
+		f.startFlushTasksQueueProcessing(ctx)
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-f.runCtx.Done():
+		return werr.ErrFileWriterAlreadyClosed
 	}
 
-	// Wait for ack goroutine to set the done flag
+	// Wait for the flush worker to set the done flag
 	ackWaitTime := 15 * time.Second // TODO configurable
 	ackStartTime := time.Now()
 
 	for {
 		if f.allUploadingTaskDone.Load() {
-			logger.Ctx(ctx).Info("ack goroutine completed processing all tasks", zap.String("segmentFilePath", f.segmentFilePath))
+			logger.Ctx(ctx).Info("shared flush worker completed processing all tasks", zap.String("segmentFilePath", f.segmentFilePath))
 			return nil
 		}
 
 		// Check timeout
 		if time.Since(ackStartTime) > ackWaitTime {
-			logger.Ctx(ctx).Warn("timeout waiting for ack goroutine to complete",
+			logger.Ctx(ctx).Warn("timeout waiting for shared flush worker to complete",
 				zap.String("segmentFilePath", f.segmentFilePath),
 				zap.Bool("allUploadingTaskDone", f.allUploadingTaskDone.Load()),
 				zap.Duration("elapsed", time.Since(ackStartTime)))
@@ -685,6 +881,8 @@ func (f *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-f.runCtx.Done():
+			return werr.ErrFileWriterAlreadyClosed
 		case <-time.After(25 * time.Millisecond):
 			continue
 		}
@@ -696,7 +894,7 @@ func (w *StagedFileWriter) notifyFlushError(entries []*cache.BufferEntry, err er
 	// Notify all pending entries result channels in sequential order
 	for _, entry := range entries {
 		if entry.NotifyChan != nil {
-			cache.NotifyPendingEntryDirectly(context.TODO(), w.logId, w.segmentId, entry.EntryId, entry.NotifyChan, entry.EntryId, err, w.nsStr, entry.EnqueueTime)
+			cache.NotifyPendingEntryDirectly(context.TODO(), w.logId, w.segmentId, entry.EntryId, entry.NotifyChan, entry.EntryId, err, w.logNs, entry.EnqueueTime)
 		}
 	}
 }
@@ -706,37 +904,98 @@ func (w *StagedFileWriter) notifyFlushSuccess(entries []*cache.BufferEntry) {
 	// Notify all pending entries result channels in sequential order
 	for _, entry := range entries {
 		if entry.NotifyChan != nil {
-			cache.NotifyPendingEntryDirectly(context.TODO(), w.logId, w.segmentId, entry.EntryId, entry.NotifyChan, entry.EntryId, nil, w.nsStr, entry.EnqueueTime)
+			cache.NotifyPendingEntryDirectly(context.TODO(), w.logId, w.segmentId, entry.EntryId, entry.NotifyChan, entry.EntryId, nil, w.logNs, entry.EnqueueTime)
 		}
 	}
+}
+
+// WriteDataBatchAsync is the batched counterpart of WriteDataAsync: it buffers
+// a run of consecutive entries under a SINGLE w.mu acquisition + a single buffer
+// batch-append + a single sync check, amortizing the per-entry lock churn and
+// plumbing that otherwise dominates the AddEntries handler. entryIds must be in
+// ascending order. Returns the buffered id for each input entry (same order).
+func (w *StagedFileWriter) WriteDataBatchAsync(ctx context.Context, entryIds []int64, datas [][]byte, resultChs []channel.ResultChannel) ([]int64, error) {
+	n := len(entryIds)
+	if n == 0 {
+		return nil, nil
+	}
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryIds[0], len(datas[0])); err != nil {
+		return []int64{id}, err
+	}
+
+	results := make([]int64, n)
+	type directNotify struct {
+		entryId int64
+		ch      channel.ResultChannel
+	}
+	var directs []directNotify
+
+	w.mu.Lock()
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryIds[0], len(datas[0])); err != nil {
+		w.mu.Unlock()
+		return []int64{id}, err
+	}
+	currentBuffer := w.buffer.Load()
+	if currentBuffer == nil {
+		w.mu.Unlock()
+		return results, werr.ErrFileWriterAlreadyClosed
+	}
+	lastWritten := w.lastEntryID.Load()
+	lastFlushing := w.lastSubmittedFlushingEntryID.Load()
+	// Append each fresh entry via the proven per-entry buffer path, but under a
+	// SINGLE w.mu (and a single sync check below). Reusing WriteEntryWithNotify
+	// keeps the exact ExpectedNextEntryId / roll semantics of WriteDataAsync.
+	for i, entryId := range entryIds {
+		results[i] = entryId
+		if len(datas[i]) == 0 {
+			w.mu.Unlock()
+			return results, werr.ErrEmptyPayload
+		}
+		if entryId <= lastWritten {
+			if resultChs[i] != nil {
+				directs = append(directs, directNotify{entryId, resultChs[i]})
+			}
+			continue
+		}
+		if entryId <= lastFlushing {
+			continue
+		}
+		id, err := currentBuffer.WriteEntryWithNotify(entryId, datas[i], resultChs[i])
+		if err != nil {
+			w.mu.Unlock()
+			return results, err
+		}
+		results[i] = id
+	}
+
+	bufferSize := currentBuffer.DataSize.Load()
+	entryCount := currentBuffer.GetExpectedNextEntryId() - currentBuffer.GetFirstEntryId()
+	w.mu.Unlock()
+
+	for _, d := range directs {
+		cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, d.entryId, d.ch, d.entryId, nil, "", time.Time{})
+	}
+
+	if bufferSize >= w.maxFlushSize || entryCount >= w.maxBufferEntries {
+		if triggerSyncErr := w.Sync(ctx); triggerSyncErr != nil {
+			logger.Ctx(ctx).Warn("batch reached max buffer size, but trigger sync failed",
+				zap.Int64("bufferSize", bufferSize), zap.Int64("entryCount", entryCount), zap.Error(triggerSyncErr))
+		}
+	}
+	// The staged writer has no background ticker; the interval-based flush is
+	// driven from the write path. Schedule it for the sub-threshold case so
+	// buffered entries are not stranded (same as WriteDataAsync).
+	w.scheduleDelayedSyncCheck(w.getSyncCheckInterval())
+	return results, nil
 }
 
 // WriteDataAsync writes data asynchronously using buffer
 func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "WriteDataAsync")
 	defer sp.End()
-	logger.Ctx(ctx).Debug("WriteDataAsync called",
-		zap.Int64("entryId", entryId),
-		zap.Int("dataLen", len(data)))
 
-	if w.closed.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
-		return entryId, werr.ErrFileWriterAlreadyClosed
-	}
-
-	if w.finalized.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
-		return entryId, werr.ErrFileWriterFinalized
-	}
-
-	if !w.storageWritable.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
-		return entryId, werr.ErrStorageNotWritable
-	}
-
-	if w.inRecoveryMode.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer in recovery mode")
-		return entryId, werr.ErrFileWriterInRecoveryMode
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
+		return id, err
 	}
 
 	// Validate empty payload
@@ -747,9 +1006,15 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 
 	// Check for duplicates
 	w.mu.Lock()
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
+		w.mu.Unlock()
+		return id, err
+	}
 	if entryId <= w.lastEntryID.Load() {
 		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to storage. Return immediately.
-		cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, entryId, resultCh, entryId, nil, "", time.Time{})
+		if resultCh != nil {
+			cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, entryId, resultCh, entryId, nil, "", time.Time{})
+		}
 		w.mu.Unlock()
 		return entryId, nil
 	}
@@ -785,14 +1050,6 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 	timeSinceLastSync := time.Now().UnixMilli() - w.lastSyncTimestamp.Load()
 	w.mu.Unlock()
 
-	logger.Ctx(ctx).Debug("WriteDataAsync sync check",
-		zap.Int64("bufferSize", bufferSize),
-		zap.Int64("maxFlushSize", w.maxFlushSize),
-		zap.Int64("entryCount", entryCount),
-		zap.Int64("maxBufferEntries", w.maxBufferEntries),
-		zap.Int64("timeSinceLastSync", timeSinceLastSync),
-		zap.Int64("lastSyncTimestamp", w.lastSyncTimestamp.Load()))
-
 	// Immediate sync conditions:
 	// - Buffer size exceeded
 	// - Too many entries
@@ -810,6 +1067,35 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 				zap.Error(triggerSyncErr),
 			)
 		}
+	}
+	w.scheduleDelayedSyncCheck(w.getSyncCheckInterval())
+	return entryId, nil
+}
+
+func (w *StagedFileWriter) checkWritableForWriteDataAsync(ctx context.Context, entryId int64, dataLen int) (int64, error) {
+	if w.closed.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
+		return entryId, werr.ErrFileWriterAlreadyClosed
+	}
+	if w.finalized.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
+		return entryId, werr.ErrFileWriterFinalized
+	}
+	if w.finalizing.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalizing")
+		return entryId, werr.ErrFileWriterFinalizing
+	}
+	if !w.storageWritable.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
+		return entryId, werr.ErrStorageNotWritable
+	}
+	if w.inRecoveryMode.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer in recovery mode")
+		return entryId, werr.ErrFileWriterInRecoveryMode
+	}
+	if w.fenced.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: attempting to write rejected, segment is fenced", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("inst", fmt.Sprintf("%p", w)))
+		return -1, werr.ErrSegmentFenced
 	}
 	return entryId, nil
 }
@@ -847,24 +1133,59 @@ func (w *StagedFileWriter) writeRecord(ctx context.Context, record codec.Record)
 
 	w.writtenBytes += int64(n)
 
-	logger.Ctx(ctx).Debug("record written successfully",
-		zap.Uint8("recordType", record.Type()),
-		zap.Int("bytesWritten", n),
-		zap.Int64("totalWrittenBytes", w.writtenBytes))
-
 	return nil
 }
 
 // Finalize finalizes the writer and writes the footer
-func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (int64, error) {
+func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "finalize", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "finalize", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
+	if lac < -1 {
+		return w.lastEntryID.Load(), werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("invalid finalize LAC %d: must be >= -1", lac))
+	}
 
-	if !w.finalized.CompareAndSwap(false, true) {
-		// if already finalized, return fast
+	w.finalizeMu.Lock()
+	defer w.finalizeMu.Unlock()
+
+	if w.finalized.Load() {
+		// A finalized replica may intentionally be behind lac, but the durable
+		// global target recorded in its footer must match an idempotent retry.
+		if w.recoveredFooter == nil || w.recoveredFooter.LAC != lac {
+			existingLAC := int64(-1)
+			if w.recoveredFooter != nil {
+				existingLAC = w.recoveredFooter.LAC
+			}
+			return w.lastEntryID.Load(), werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+				fmt.Sprintf("finalized footer LAC %d != requested LAC %d", existingLAC, lac))
+		}
+		logger.Ctx(ctx).Info("run: received idempotent finalize signal for existing target, skip",
+			zap.String("SegmentImplInst", fmt.Sprintf("%p", w)),
+			zap.Int64("localLastEntryId", w.lastEntryID.Load()),
+			zap.Int64("lac", lac))
 		return w.lastEntryID.Load(), nil
 	}
+
+	w.finalizing.Store(true)
+	flushDrained := false
+	defer func() {
+		if retErr != nil {
+			if flushDrained {
+				w.storageWritable.Store(false)
+			} else {
+				w.finalizing.Store(false)
+			}
+		}
+	}()
 
 	// Sync all pending data first
 	if err := w.Sync(ctx); err != nil {
@@ -879,6 +1200,7 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (int64, erro
 			zap.Error(waitErr))
 		return -1, waitErr
 	}
+	flushDrained = true
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -891,47 +1213,50 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (int64, erro
 		w.headerWritten.Store(true)
 	}
 
-	// Write all index records
+	// Write the index records and the footer with one write. A segment holds
+	// one index record per block, and a block can be as small as one entry, so
+	// writing them one at a time costs a syscall per block: thousands of them
+	// on a busy disk, which is what completing a segment used to spend its
+	// time on while readers waited for its end.
 	indexStartOffset := w.writtenBytes
-
-	// Lock to read blockIndexes safely
-	blockIndexesCopy := make([]*codec.IndexRecord, len(w.blockIndexes))
-	copy(blockIndexesCopy, w.blockIndexes)
 	blockIndexesLen := len(w.blockIndexes)
 
-	for _, indexRecord := range blockIndexesCopy {
-		if err := w.writeRecord(ctx, indexRecord); err != nil {
-			return w.lastEntryID.Load(), fmt.Errorf("write index record: %w", err)
-		}
+	var tail bytes.Buffer
+	for _, indexRecord := range w.blockIndexes {
+		tail.Write(codec.EncodeRecord(indexRecord))
 	}
-	indexLength := uint32(w.writtenBytes - indexStartOffset)
+	indexLength := uint32(tail.Len())
 
-	// Write footer record
 	footer := &codec.FooterRecord{
 		TotalBlocks:  int32(blockIndexesLen),
-		TotalRecords: uint32(blockIndexesLen),  // Simplified - each block is one record for index
-		TotalSize:    uint64(w.writtenBytes),   // Total size of the file
-		IndexOffset:  uint64(indexStartOffset), // Will be calculated by the codec
-		IndexLength:  indexLength,              // Will be calculated by the codec
+		TotalRecords: uint32(blockIndexesLen),                        // Simplified - each block is one record for index
+		TotalSize:    uint64(indexStartOffset) + uint64(indexLength), // Total size of the file before the footer
+		IndexOffset:  uint64(indexStartOffset),
+		IndexLength:  indexLength,
 		Version:      codec.FormatVersion,
 		Flags:        0,
 		LAC:          lac, // Last add confirmed ID acknowledged by majority of replicas
 	}
+	tail.Write(codec.EncodeRecord(footer))
 
-	if err := w.writeRecord(ctx, footer); err != nil {
-		return w.lastEntryID.Load(), fmt.Errorf("write footer: %w", err)
+	n, err := w.file.Write(tail.Bytes())
+	if err != nil {
+		return w.lastEntryID.Load(), fmt.Errorf("write index and footer: %w", err)
 	}
+	if n != tail.Len() {
+		return w.lastEntryID.Load(), fmt.Errorf("incomplete index and footer write: wrote %d of %d bytes", n, tail.Len())
+	}
+	w.writtenBytes += int64(n)
 
 	// Final sync
 	if err := w.file.Sync(); err != nil {
 		return w.lastEntryID.Load(), fmt.Errorf("final sync: %w", err)
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	logger.Ctx(ctx).Debug("finalized staged file", zap.Int64("lastEntryId", w.lastEntryID.Load()), zap.String("file", w.segmentFilePath), zap.Int64("writtenBytes", w.writtenBytes))
 	w.recoveredFooter = footer
 	w.finalized.Store(true)
+	w.finalizing.Store(false)
 	return w.lastEntryID.Load(), nil
 }
 
@@ -958,8 +1283,26 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("inst", fmt.Sprintf("%p", w)))
 		return nil
 	}
+	if w.compacted.Load() {
+		// Fileless compacted writer: no file, no flush machinery, no WpFileWriters gauge was
+		// registered — nothing to drain or release beyond the run context.
+		w.runCancel()
+		return nil
+	}
+	// Ensure goroutine, file, channel cleanup always runs,
+	// even if awaitAllFlushTasks fails (e.g., timeout or context cancellation).
+	defer func() {
+		w.runCancel()
+		if w.file != nil {
+			w.file.Close()
+			w.file = nil
+		}
+		close(w.flushTaskChan)
+		metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Dec()
+	}()
+
 	logger.Ctx(ctx).Info("Close: trigger sync before close", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId))
-	err := w.Sync(ctx) // manual sync all pending append operation
+	err := w.sync(ctx, true) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",
 			zap.String("segmentFilePath", w.segmentFilePath),
@@ -972,108 +1315,110 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Warn("wait flush error before close",
 			zap.String("segmentFilePath", w.segmentFilePath),
 			zap.Error(waitErr))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "close", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "close", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return waitErr
 	}
 
-	// Cancel async operations
-	w.runCancel()
-	// Close file
-	if w.file != nil {
-		w.file.Close()
-		w.file = nil
-	}
-
-	// Close channels
-	close(w.flushTaskChan)
-
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "close", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
 // Fence marks the writer as fenced
-func (w *StagedFileWriter) Fence(ctx context.Context) (int64, error) {
+func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Fence")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "fence", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "fence", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 
-	// If already fenced, return idempotently
-	if w.fenced.Load() {
-		logger.Ctx(ctx).Debug("StagedFileWriter already fenced, returning idempotently",
-			zap.String("segmentFile", w.segmentFilePath))
+	// Mark as fenced first to reject new AppendAsync calls (idempotent)
+	w.fenced.Store(true)
+
+	// If flush goroutine already terminated, all data is persisted, fast return
+	if w.allUploadingTaskDone.Load() {
 		return w.GetLastEntryId(ctx), nil
 	}
 
-	// Sync all pending data first
+	// Sync remaining buffer data to flush channel.
+	// processFlushTask does not check fenced, so the task will be processed correctly.
 	if err := w.Sync(ctx); err != nil {
 		return w.GetLastEntryId(ctx), err
 	}
 
-	// Mark as fenced and stop accepting writes
-	w.fenced.Store(true)
+	// Wait for all pending flush tasks (including the one just submitted by Sync) to complete.
+	// This also terminates the flush goroutine since no more writes are expected after fence.
+	if err := w.awaitAllFlushTasks(ctx); err != nil {
+		return w.GetLastEntryId(ctx), err
+	}
 
 	lastEntryId := w.GetLastEntryId(ctx)
-	logger.Ctx(ctx).Info("Successfully created fence flag file and marked StagedFileWriter as fenced",
+	logger.Ctx(ctx).Info("Successfully marked StagedFileWriter as fenced",
 		zap.Int64("logId", w.logId),
 		zap.Int64("segmentId", w.segmentId),
 		zap.Int64("lastEntryId", lastEntryId))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
 	return lastEntryId, nil
 }
 
-// Compact performs compaction by reading local file, merging blocks and uploading to minio
-func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
+// Compact publishes exactly the caller-confirmed entry range to object storage.
+// A successful return means the shared compacted footer LAC equals expectedLastEntryId.
+func (w *StagedFileWriter) Compact(ctx context.Context, expectedLastEntryId int64) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Compact")
 	defer sp.End()
-	startTime := time.Now()
+	op := metrics.StartOp("file.compact", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		op.End(status)
+		elapsed := float64(time.Since(op.StartedAt()).Milliseconds())
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "compact", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "compact", status).Observe(elapsed)
+	}()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	logger.Ctx(ctx).Info("starting staged file segment compaction",
 		zap.String("segmentFilePath", w.segmentFilePath),
-		zap.Int("currentBlockCount", len(w.blockIndexes)))
+		zap.Int("currentBlockCount", len(w.blockIndexes)),
+		zap.Int64("expectedLastEntryId", expectedLastEntryId))
 
-	// Ensure segment is finalized before compaction
-	if !w.finalized.Load() {
-		logger.Ctx(ctx).Warn("segment must be finalized before compaction",
-			zap.String("segmentFilePath", w.segmentFilePath))
-		return -1, fmt.Errorf("segment must be finalized before compaction")
+	if expectedLastEntryId < -1 {
+		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("invalid expected last entry id for compaction: %d", expectedLastEntryId))
 	}
 
-	// Check if we have any blocks to compact
-	if len(w.blockIndexes) == 0 {
-		logger.Ctx(ctx).Info("no blocks to compact",
-			zap.String("segmentFilePath", w.segmentFilePath))
-		return -1, nil
+	if totalSize, handled, err := w.compactRemoteFooterIfPresent(ctx, expectedLastEntryId); handled {
+		return totalSize, err
 	}
 
-	// Read and validate footer LAC against segment data for completeness
-	lac, err := w.validateLACAlignment(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Warn("LAC validation failed",
-			zap.String("segmentFilePath", w.segmentFilePath),
-			zap.Error(err))
+	if err := w.requireFinalizedForCompact(ctx); err != nil {
 		return -1, err
 	}
 
-	logger.Ctx(ctx).Info("LAC validation passed for compaction",
-		zap.String("segmentFilePath", w.segmentFilePath),
-		zap.Int64("lac", lac),
-		zap.Int64("firstEntryID", w.firstEntryID.Load()),
-		zap.Int64("lastEntryID", w.lastEntryID.Load()))
-
-	// Get target block size for compaction
-	maxCompactedBlockSize := w.compactPolicyConfig.MaxBytes.Int64()
-	if maxCompactedBlockSize <= 0 {
-		maxCompactedBlockSize = 2 * 1024 * 1024 // Default 2MB
+	if len(w.blockIndexes) == 0 {
+		return w.compactEmptyFinalizedSegment(ctx, expectedLastEntryId)
 	}
 
+	if err := w.validateLocalDataCoversExpected(ctx, expectedLastEntryId); err != nil {
+		return -1, err
+	}
+
+	// Get target block size for compaction
+	maxCompactedBlockSize := w.compactionTargetBytes()
+
 	// Read and merge blocks from local file, then upload to minio
-	newBlockIndexes, fileSizeAfterCompact, err := w.readLocalFileAndUploadToMinio(ctx, maxCompactedBlockSize)
+	newBlockIndexes, fileSizeAfterCompact, err := w.readLocalFileAndUploadToMinio(ctx, maxCompactedBlockSize, expectedLastEntryId)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read local file and upload to minio",
 			zap.String("segmentFilePath", w.segmentFilePath),
@@ -1081,14 +1426,12 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
 		return -1, fmt.Errorf("failed to read local file and upload to minio: %w", err)
 	}
 
-	if len(newBlockIndexes) == 0 {
-		logger.Ctx(ctx).Info("no blocks uploaded during compaction",
-			zap.String("segmentFilePath", w.segmentFilePath))
-		return -1, nil
+	if err := w.validateCompactedIndexesMatchExpected(newBlockIndexes, expectedLastEntryId); err != nil {
+		return -1, err
 	}
 
-	// Create footer with compacted flag and LAC, then upload
-	footerSize, err := w.uploadCompactedFooter(ctx, newBlockIndexes, fileSizeAfterCompact, lac)
+	// Create footer with compacted flag and the exact expected LAC, then upload.
+	footerSize, err := w.uploadCompactedFooter(ctx, newBlockIndexes, fileSizeAfterCompact, expectedLastEntryId)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to upload compacted footer",
 			zap.String("segmentFilePath", w.segmentFilePath),
@@ -1108,299 +1451,252 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
 		zap.Int64("totalSizeAfterCompact", totalSize),
 		zap.Int64("maxCompactedBlockSize", maxCompactedBlockSize),
-		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		zap.Int64("costMs", time.Since(op.StartedAt()).Milliseconds()))
 
 	return totalSize, nil
 }
 
-// mergeBlockTask represents a task to merge multiple blocks into one
-type mergeBlockTask struct {
-	blocks      []*codec.IndexRecord // Original blocks to be merged
-	nextEntryID int64                // Next entry ID after this merge block
-}
-
-// blockReadResult represents the result of reading a block from local file
-type blockReadResult struct {
-	blockIndex *codec.IndexRecord
-	blockData  []byte
-	error      error
-}
-
-// mergedBlockUploadResult represents the result of uploading a merged block
-type mergedBlockUploadResult struct {
-	blockIndex *codec.IndexRecord
-	blockSize  int64
-	error      error
-}
-
-// readLocalFileAndUploadToMinio reads blocks from local file, merges them and uploads to minio
-func (w *StagedFileWriter) readLocalFileAndUploadToMinio(ctx context.Context, targetBlockSize int64) ([]*codec.IndexRecord, int64, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readLocalFileAndUploadToMinio")
-	defer sp.End()
-
-	// Plan merge tasks
-	mergeTasks := w.planMergeBlockTasks(targetBlockSize)
-	if len(mergeTasks) == 0 {
-		return nil, 0, nil
-	}
-
-	logger.Ctx(ctx).Info("planned merge tasks",
-		zap.String("segmentFilePath", w.segmentFilePath),
-		zap.Int("originalBlocks", len(w.blockIndexes)),
-		zap.Int("mergeTasks", len(mergeTasks)))
-
-	// Create pool for concurrent merge block uploads
-	maxConcurrentUploads := w.compactPolicyConfig.MaxParallelUploads
-	if maxConcurrentUploads <= 0 {
-		maxConcurrentUploads = 4 // Default to 4 concurrent uploads
-	}
-
-	uploadPool := conc.NewPool[*mergedBlockUploadResult](maxConcurrentUploads, conc.WithPreAlloc(true))
-	defer uploadPool.Release()
-
-	// Submit all merge tasks to the pool
-	var futures []*conc.Future[*mergedBlockUploadResult]
-	for i, task := range mergeTasks {
-		// Capture variables for closure
-		taskCopy := task
-		mergedBlockID := int64(i)
-
-		future := uploadPool.Submit(func() (*mergedBlockUploadResult, error) {
-			return w.processMergeTask(ctx, taskCopy, mergedBlockID), nil
-		})
-		futures = append(futures, future)
-	}
-
-	// Collect results from all futures
-	var newBlockIndexes []*codec.IndexRecord
-	totalSize := int64(0)
-
-	for _, future := range futures {
-		result := future.Value()
-		if result.error != nil {
-			return nil, 0, fmt.Errorf("merge task failed: %w", result.error)
-		}
-		newBlockIndexes = append(newBlockIndexes, result.blockIndex)
-		totalSize += result.blockSize
-	}
-
-	// Sort blocks by block number to ensure correct order
-	sort.Slice(newBlockIndexes, func(i, j int) bool {
-		return newBlockIndexes[i].BlockNumber < newBlockIndexes[j].BlockNumber
-	})
-
-	return newBlockIndexes, totalSize, nil
-}
-
-// planMergeBlockTasks plans how to group blocks for merging
-func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBlockTask {
-	var tasks []*mergeBlockTask
-	var currentTask *mergeBlockTask
-	var currentSize int64 = 0
-
-	// Initialize entry ID tracking
-	currentEntryID := w.firstEntryID.Load()
-	if currentEntryID == -1 {
-		currentEntryID = 0
-	}
-
-	for _, blockIndex := range w.blockIndexes {
-		// Estimate data size for this block
-		estimatedDataSize := int64(blockIndex.BlockSize)
-
-		// Check if adding this block would exceed target size
-		if currentTask != nil && currentSize+estimatedDataSize >= targetBlockSize {
-			// Complete current task
-			currentTask.nextEntryID = currentEntryID
-			tasks = append(tasks, currentTask)
-
-			// Start new task
-			currentTask = &mergeBlockTask{
-				blocks: []*codec.IndexRecord{blockIndex},
-			}
-			currentSize = estimatedDataSize
-		} else {
-			// Add to current task or start new one
-			if currentTask == nil {
-				currentTask = &mergeBlockTask{
-					blocks: []*codec.IndexRecord{blockIndex},
-				}
-				currentSize = estimatedDataSize
-			} else {
-				currentTask.blocks = append(currentTask.blocks, blockIndex)
-				currentSize += estimatedDataSize
-			}
-		}
-
-		// Update entry ID for next block
-		currentEntryID = blockIndex.LastEntryID + 1
-	}
-
-	// Add the last task if it exists
-	if currentTask != nil {
-		currentTask.nextEntryID = currentEntryID
-		tasks = append(tasks, currentTask)
-	}
-
-	return tasks
-}
-
-// processMergeTask processes a single merge task: read blocks, merge and upload
-func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBlockTask, mergedBlockID int64) *mergedBlockUploadResult {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processMergeTask")
-	defer sp.End()
-	startTime := time.Now()
-
-	logger.Ctx(ctx).Debug("processing merge task",
-		zap.String("segmentFilePath", w.segmentFilePath),
-		zap.Int64("mergedBlockID", mergedBlockID),
-		zap.Int("originalBlocks", len(task.blocks)))
-
-	// Create pool for concurrent block reading
-	maxConcurrentReads := w.compactPolicyConfig.MaxParallelReads
-	if maxConcurrentReads <= 0 {
-		maxConcurrentReads = min(8, len(task.blocks)) // Default to min(8, block count)
-	}
-
-	readPool := conc.NewPool[*blockReadResult](maxConcurrentReads, conc.WithPreAlloc(true))
-	defer readPool.Release()
-
-	// Submit all block read tasks to the pool
-	var readFutures []*conc.Future[*blockReadResult]
-	for _, blockIndex := range task.blocks {
-		// Capture variable for closure
-		blockIndexCopy := blockIndex
-
-		future := readPool.Submit(func() (*blockReadResult, error) {
-			return w.readBlockDataFromLocalFile(ctx, blockIndexCopy), nil
-		})
-		readFutures = append(readFutures, future)
-	}
-
-	// Collect block data from all futures
-	var allBlockData [][]byte
-	firstEntryID := int64(-1)
-	lastEntryID := int64(-1)
-
-	for _, future := range readFutures {
-		result := future.Value()
-		if result.error != nil {
-			return &mergedBlockUploadResult{
-				error: fmt.Errorf("failed to read block data: %w", result.error),
-			}
-		}
-
-		allBlockData = append(allBlockData, result.blockData)
-
-		// Track entry ID range
-		if firstEntryID == -1 || result.blockIndex.FirstEntryID < firstEntryID {
-			firstEntryID = result.blockIndex.FirstEntryID
-		}
-		if lastEntryID == -1 || result.blockIndex.LastEntryID > lastEntryID {
-			lastEntryID = result.blockIndex.LastEntryID
-		}
-	}
-
-	// Merge block data
-	mergedData := make([]byte, 0)
-	for _, blockData := range allBlockData {
-		mergedData = append(mergedData, blockData...)
-	}
-
-	// Create block key for upload
-	blockKey := w.getCompactedBlockKey(mergedBlockID)
-
-	// Upload merged block to minio
-	err := w.storageCli.PutObject(ctx, w.bucket, blockKey, bytes.NewReader(mergedData), int64(len(mergedData)), w.nsStr, w.logIdStr)
+func (w *StagedFileWriter) compactRemoteFooterIfPresent(ctx context.Context, expectedLastEntryId int64) (int64, bool, error) {
+	// The remote compacted footer is the shared commit point. It is idempotent
+	// success only when it exactly matches the caller-confirmed LAC.
+	existingFooter, footerObjSize, err := w.readRemoteFooter(ctx)
 	if err != nil {
-		return &mergedBlockUploadResult{
-			error: fmt.Errorf("failed to upload merged block: %w", err),
-		}
+		return -1, true, err
 	}
-
-	// Create new block index
-	newBlockIndex := &codec.IndexRecord{
-		BlockNumber:  int32(mergedBlockID),
-		StartOffset:  0, // For object storage, offset is not meaningful
-		BlockSize:    uint32(len(mergedData)),
-		FirstEntryID: firstEntryID,
-		LastEntryID:  lastEntryID,
+	if existingFooter == nil || !codec.IsCompacted(existingFooter.Flags) {
+		return 0, false, nil
 	}
-
-	// Update compaction metrics
-	totalTime := time.Since(startTime)
-	blockSize := int64(len(mergedData))
-	metrics.WpFileCompactLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(totalTime.Milliseconds()))
-	metrics.WpFileCompactBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(blockSize))
-	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(blockSize))
-	metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Inc()
-
-	logger.Ctx(ctx).Debug("uploaded merged block",
+	if existingFooter.LAC != expectedLastEntryId {
+		logger.Ctx(ctx).Warn("remote compacted footer LAC does not match expected last entry id",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("remoteFooterLac", existingFooter.LAC),
+			zap.Int64("expectedLastEntryId", expectedLastEntryId))
+		return -1, true, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("remote compacted footer LAC %d != expected %d", existingFooter.LAC, expectedLastEntryId))
+	}
+	totalSize := int64(existingFooter.TotalSize) + footerObjSize
+	logger.Ctx(ctx).Info("segment is already compacted with expected LAC, skipping",
 		zap.String("segmentFilePath", w.segmentFilePath),
-		zap.String("blockKey", blockKey),
-		zap.Int64("blockSize", blockSize),
-		zap.Int64("firstEntryID", firstEntryID),
-		zap.Int64("lastEntryID", lastEntryID),
-		zap.Int64("totalTimeMs", totalTime.Milliseconds()))
-
-	return &mergedBlockUploadResult{
-		blockIndex: newBlockIndex,
-		blockSize:  blockSize,
-		error:      nil,
-	}
-
+		zap.Int64("totalSize", totalSize),
+		zap.Int64("expectedLastEntryId", expectedLastEntryId))
+	return totalSize, true, nil
 }
 
-// readBlockDataFromLocalFile reads data for a specific block from the local file
-func (w *StagedFileWriter) readBlockDataFromLocalFile(ctx context.Context, blockIndex *codec.IndexRecord) *blockReadResult {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readBlockDataFromLocalFile")
-	defer sp.End()
-
-	// Open local file for reading
-	file, err := os.Open(w.segmentFilePath)
-	if err != nil {
-		return &blockReadResult{
-			blockIndex: blockIndex,
-			error:      fmt.Errorf("failed to open local file: %w", err),
-		}
+func (w *StagedFileWriter) requireFinalizedForCompact(ctx context.Context) error {
+	if w.finalized.Load() {
+		return nil
 	}
-	defer file.Close()
-
-	// Read block data from file
-	blockData := make([]byte, blockIndex.BlockSize)
-	_, err = file.ReadAt(blockData, blockIndex.StartOffset)
-	if err != nil {
-		return &blockReadResult{
-			blockIndex: blockIndex,
-			error:      fmt.Errorf("failed to read block data: %w", err),
-		}
-	}
-
-	return &blockReadResult{
-		blockIndex: blockIndex,
-		blockData:  blockData,
-		error:      nil,
-	}
+	logger.Ctx(ctx).Warn("segment must be finalized before compaction",
+		zap.String("segmentFilePath", w.segmentFilePath))
+	return fmt.Errorf("segment must be finalized before compaction")
 }
 
-// uploadCompactedFooter creates and uploads the footer for compacted segment
+func (w *StagedFileWriter) compactEmptyFinalizedSegment(ctx context.Context, expectedLastEntryId int64) (int64, error) {
+	// An empty sealed segment still gets footer.blk, but it is valid only for
+	// the explicit empty target: expected == local footer LAC == -1.
+	if expectedLastEntryId != -1 {
+		logger.Ctx(ctx).Warn("refusing to compact empty local segment with non-empty expected last entry id",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("expectedLastEntryId", expectedLastEntryId))
+		return -1, werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
+			fmt.Sprintf("empty local segment cannot satisfy expected %d", expectedLastEntryId))
+	}
+	if w.storageCli == nil {
+		return -1, fmt.Errorf("cannot compact empty segment without an object storage client")
+	}
+	if w.recoveredFooter == nil || w.recoveredFooter.LAC != -1 {
+		lac := int64(-1)
+		if w.recoveredFooter != nil {
+			lac = w.recoveredFooter.LAC
+		}
+		logger.Ctx(ctx).Warn("refusing to compact empty local segment whose footer LAC is not the empty target",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("footerLac", lac))
+		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("empty local segment footer LAC %d != expected -1", lac))
+	}
+	logger.Ctx(ctx).Info("no blocks to compact; uploading an empty compacted footer",
+		zap.String("segmentFilePath", w.segmentFilePath))
+	footerSize, footerErr := w.uploadCompactedFooter(ctx, nil, 0, -1)
+	if footerErr != nil {
+		logger.Ctx(ctx).Warn("failed to upload empty compacted footer",
+			zap.String("segmentFilePath", w.segmentFilePath), zap.Error(footerErr))
+		return -1, fmt.Errorf("failed to upload empty compacted footer: %w", footerErr)
+	}
+	return footerSize, nil
+}
+
+func (w *StagedFileWriter) validateLocalDataCoversExpected(ctx context.Context, expectedLastEntryId int64) error {
+	if expectedLastEntryId < 0 {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("non-empty compaction requires non-negative expected last entry id, got %d", expectedLastEntryId))
+	}
+	if w.recoveredFooter == nil {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg("segment finalized but footer is not recovered")
+	}
+	if w.recoveredFooter.LAC > expectedLastEntryId {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("local footer LAC %d > expected %d", w.recoveredFooter.LAC, expectedLastEntryId))
+	}
+	firstEntryID := w.firstEntryID.Load()
+	if firstEntryID != 0 {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("non-empty segment does not start from entry 0: firstEntryID=%d", firstEntryID))
+	}
+	localLast := w.lastEntryID.Load()
+	if localLast < expectedLastEntryId {
+		logger.Ctx(ctx).Warn("refusing to compact: local data is behind the expected last entry id",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("localLastEntryId", localLast),
+			zap.Int64("expectedLastEntryId", expectedLastEntryId))
+		return werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
+			fmt.Sprintf("local lastEntryId %d < expected %d", localLast, expectedLastEntryId))
+	}
+	if maxBlockLastEntryID(w.blockIndexes) < expectedLastEntryId {
+		return werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
+			fmt.Sprintf("local block indexes do not cover expected %d", expectedLastEntryId))
+	}
+	return nil
+}
+
+func (w *StagedFileWriter) validateCompactedIndexesMatchExpected(blockIndexes []*codec.IndexRecord, expectedLastEntryId int64) error {
+	if len(blockIndexes) == 0 {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("compaction produced no data blocks for expected %d", expectedLastEntryId))
+	}
+	maxLastEntryID := maxBlockLastEntryID(blockIndexes)
+	if maxLastEntryID != expectedLastEntryId {
+		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
+			fmt.Sprintf("compacted data max last entry id %d != expected %d", maxLastEntryID, expectedLastEntryId))
+	}
+	return nil
+}
+
+func maxBlockLastEntryID(blockIndexes []*codec.IndexRecord) int64 {
+	maxLastEntryID := int64(-1)
+	for _, blockIndex := range blockIndexes {
+		if blockIndex.LastEntryID > maxLastEntryID {
+			maxLastEntryID = blockIndex.LastEntryID
+		}
+	}
+	return maxLastEntryID
+}
+
+func (w *StagedFileWriter) extractCompactedDataRecords(blockIndex *codec.IndexRecord, blockData []byte, expectedLastEntryId int64) ([]byte, int64, error) {
+	if blockIndex.FirstEntryID > expectedLastEntryId {
+		return nil, -1, nil
+	}
+	blockHeader, dataRecords, err := parseLocalBlockForCompaction(blockIndex, blockData)
+	if err != nil {
+		return nil, -1, err
+	}
+
+	recordsToKeep := int(blockHeader.LastEntryID - blockHeader.FirstEntryID + 1)
+	requireEOF := true
+	lastKeptEntryID := blockHeader.LastEntryID
+	if blockHeader.LastEntryID > expectedLastEntryId {
+		recordsToKeep = int(expectedLastEntryId - blockHeader.FirstEntryID + 1)
+		requireEOF = false
+		lastKeptEntryID = expectedLastEntryId
+	}
+	cropped, kept, err := strictDataRecordPrefix(dataRecords, recordsToKeep, requireEOF)
+	if err != nil {
+		return nil, -1, err
+	}
+	if kept != recordsToKeep {
+		return nil, -1, fmt.Errorf("block %d data records kept %d entries, expected %d", blockIndex.BlockNumber, kept, recordsToKeep)
+	}
+	return cropped, lastKeptEntryID, nil
+}
+
+func parseLocalBlockForCompaction(blockIndex *codec.IndexRecord, blockData []byte) (*codec.BlockHeaderRecord, []byte, error) {
+	if uint32(len(blockData)) != blockIndex.BlockSize {
+		return nil, nil, fmt.Errorf("block %d size mismatch: index=%d data=%d", blockIndex.BlockNumber, blockIndex.BlockSize, len(blockData))
+	}
+
+	blockHeaderRecordSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+	if len(blockData) < blockHeaderRecordSize {
+		return nil, nil, fmt.Errorf("block %d too small for block header: %d", blockIndex.BlockNumber, len(blockData))
+	}
+	record, err := codec.DecodeRecord(blockData[:blockHeaderRecordSize])
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode block header: %w", err)
+	}
+	blockHeader, ok := record.(*codec.BlockHeaderRecord)
+	if !ok {
+		return nil, nil, fmt.Errorf("block %d first record is type %d, not block header", blockIndex.BlockNumber, record.Type())
+	}
+	if blockHeader.BlockNumber != blockIndex.BlockNumber {
+		return nil, nil, fmt.Errorf("block number mismatch: header=%d index=%d", blockHeader.BlockNumber, blockIndex.BlockNumber)
+	}
+	if blockHeader.FirstEntryID != blockIndex.FirstEntryID || blockHeader.LastEntryID != blockIndex.LastEntryID {
+		return nil, nil, fmt.Errorf("block %d entry range mismatch: header=[%d,%d] index=[%d,%d]",
+			blockIndex.BlockNumber, blockHeader.FirstEntryID, blockHeader.LastEntryID, blockIndex.FirstEntryID, blockIndex.LastEntryID)
+	}
+
+	dataRecords := blockData[blockHeaderRecordSize:]
+	if uint32(len(dataRecords)) != blockHeader.BlockLength {
+		return nil, nil, fmt.Errorf("block %d data length mismatch: header=%d data=%d", blockIndex.BlockNumber, blockHeader.BlockLength, len(dataRecords))
+	}
+	if err := codec.VerifyBlockDataIntegrity(blockHeader, dataRecords); err != nil {
+		return nil, nil, fmt.Errorf("verify block %d data integrity: %w", blockIndex.BlockNumber, err)
+	}
+	return blockHeader, dataRecords, nil
+}
+
+func strictDataRecordPrefix(dataRecords []byte, recordsToKeep int, requireEOF bool) ([]byte, int, error) {
+	if recordsToKeep < 0 {
+		return nil, 0, fmt.Errorf("negative records to keep: %d", recordsToKeep)
+	}
+	offset := 0
+	for kept := 0; kept < recordsToKeep; kept++ {
+		if offset+codec.RecordHeaderSize > len(dataRecords) {
+			return nil, kept, fmt.Errorf("truncated data record header at offset %d", offset)
+		}
+		payloadLength := int(binary.LittleEndian.Uint32(dataRecords[offset+5 : offset+9]))
+		totalRecordLength := codec.RecordHeaderSize + payloadLength
+		if offset+totalRecordLength > len(dataRecords) {
+			return nil, kept, fmt.Errorf("truncated data record payload at offset %d", offset)
+		}
+		record, err := codec.DecodeRecord(dataRecords[offset : offset+totalRecordLength])
+		if err != nil {
+			return nil, kept, fmt.Errorf("decode data record at offset %d: %w", offset, err)
+		}
+		if record.Type() != codec.DataRecordType {
+			return nil, kept, fmt.Errorf("record at offset %d is type %d, not data", offset, record.Type())
+		}
+		offset += totalRecordLength
+	}
+	if requireEOF && offset != len(dataRecords) {
+		return nil, recordsToKeep, fmt.Errorf("unexpected trailing bytes after %d data records: %d", recordsToKeep, len(dataRecords)-offset)
+	}
+	return dataRecords[:offset], recordsToKeep, nil
+}
+
 func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndexes []*codec.IndexRecord, fileSizeAfterCompact int64, lac int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "uploadCompactedFooter")
 	defer sp.End()
 
-	// Create footer with compacted flag and LAC
+	// Create footer with compacted flag and LAC. The record count is derived from the
+	// compacted indexes, not the local writer tail, because compaction may intentionally
+	// crop unconfirmed local entries beyond expectedLastEntryId.
+	totalRecords := uint32(0)
+	if len(blockIndexes) > 0 {
+		totalRecords = uint32(maxBlockLastEntryID(blockIndexes) - blockIndexes[0].FirstEntryID + 1)
+	}
+	baseFlags := uint16(0)
+	if w.recoveredFooter != nil {
+		baseFlags = w.recoveredFooter.Flags
+	}
 	footer := &codec.FooterRecord{
 		TotalBlocks:  int32(len(blockIndexes)),
-		TotalRecords: uint32(w.lastEntryID.Load() - w.firstEntryID.Load() + 1),
+		TotalRecords: totalRecords,
 		TotalSize:    uint64(fileSizeAfterCompact),
 		IndexOffset:  0,
 		IndexLength:  uint32(len(blockIndexes) * (codec.RecordHeaderSize + codec.IndexRecordSize)),
 		Version:      codec.FormatVersion,
-		Flags:        codec.SetCompacted(0), // Set compacted flag
-		LAC:          lac,                   // Set Last Add Confirmed ID from validation
+		Flags:        codec.SetCompacted(baseFlags), // Preserve existing flags, set compacted bit
+		LAC:          lac,                           // Set Last Add Confirmed ID from validation
 	}
 
 	// Serialize footer and indexes
@@ -1408,12 +1704,12 @@ func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndex
 
 	// Upload footer
 	footerKey := w.getFooterBlockKey()
-	err := w.storageCli.PutObject(ctx, w.bucket, footerKey, bytes.NewReader(footerData), int64(len(footerData)), w.nsStr, w.logIdStr)
+	err := w.storageCli.PutObject(ctx, w.bucket, footerKey, bytes.NewReader(footerData), int64(len(footerData)), w.logNs, w.logIdStr)
 	if err != nil {
 		return 0, fmt.Errorf("failed to upload footer: %w", err)
 	}
-	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(len(footerData)))
-	metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Inc()
+	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Add(float64(len(footerData)))
+	metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Inc()
 
 	logger.Ctx(ctx).Info("uploaded compacted footer",
 		zap.String("segmentFilePath", w.segmentFilePath),
@@ -1438,6 +1734,48 @@ func (w *StagedFileWriter) serializeCompactedFooterAndIndexes(ctx context.Contex
 	serializedData = append(serializedData, encodedFooter...)
 
 	return serializedData
+}
+
+// readRemoteFooter reads and parses the compacted footer from MinIO.
+// Returns the parsed footer and the raw footer object size in bytes.
+// Returns (nil, 0, nil) if the footer object does not exist yet or if storage client is nil.
+func (w *StagedFileWriter) readRemoteFooter(ctx context.Context) (*codec.FooterRecord, int64, error) {
+	if w.storageCli == nil {
+		return nil, 0, nil
+	}
+	footerKey := w.getFooterBlockKey()
+
+	objSize, _, err := w.storageCli.StatObject(ctx, w.bucket, footerKey, w.logNs, w.logIdStr)
+	if err != nil {
+		if w.storageCli.IsObjectNotExistsError(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, fmt.Errorf("stat footer object: %w", err)
+	}
+
+	reader, err := w.storageCli.GetObject(ctx, w.bucket, footerKey, 0, objSize, w.logNs, w.logIdStr)
+	if err != nil {
+		return nil, 0, fmt.Errorf("get footer object: %w", err)
+	}
+	defer reader.Close()
+
+	footerData := make([]byte, objSize)
+	if _, err = io.ReadFull(reader, footerData); err != nil {
+		return nil, 0, fmt.Errorf("read footer data: %w", err)
+	}
+
+	maxFooterSize := codec.GetMaxFooterReadSize()
+	if len(footerData) < maxFooterSize {
+		return nil, 0, fmt.Errorf("footer data too small: %d bytes", len(footerData))
+	}
+
+	footerBytes := footerData[len(footerData)-maxFooterSize:]
+	footer, err := codec.ParseFooterFromBytes(footerBytes)
+	if err != nil {
+		return nil, 0, fmt.Errorf("parse footer: %w", err)
+	}
+
+	return footer, objSize, nil
 }
 
 // getFooterBlockKey generates the object key for the footer block
@@ -1518,107 +1856,37 @@ func (w *StagedFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fi
 		zap.Uint32("indexLength", footerRecord.IndexLength),
 		zap.Int32("totalBlocks", footerRecord.TotalBlocks))
 
-	if footerRecord.IndexLength == 0 {
-		// empty index length, no data blocks at all, fast return
-		w.blockIndexes = make([]*codec.IndexRecord, 0, footerRecord.TotalBlocks)
-		w.recoveredFooter = footerRecord
-		w.recovered.Store(true)
-		logger.Ctx(ctx).Info("Recovered no blocks from footer")
-		return nil
-	}
-
-	// Read index section from file
-	indexData := make([]byte, footerRecord.IndexLength)
-	_, err := file.ReadAt(indexData, int64(footerRecord.IndexOffset))
+	// The footer validation and index parsing are shared with the other
+	// local-file backend (codec.ReadIndexSection), so a segment that was
+	// finalized with zero blocks is accepted the same way everywhere.
+	blockIndexes, err := codec.ReadIndexSection(file, footerRecord)
 	if err != nil {
-		return fmt.Errorf("failed to read index section: %w", err)
+		return err
 	}
-
-	logger.Ctx(ctx).Debug("Read index section",
-		zap.Int("indexDataLength", len(indexData)),
-		zap.Uint64("indexOffset", footerRecord.IndexOffset))
-
-	// Parse index records sequentially
-	offset := 0
-	blockIndexes := make([]*codec.IndexRecord, 0, footerRecord.TotalBlocks)
-
-	for offset < len(indexData) {
-		if offset+codec.RecordHeaderSize > len(indexData) {
-			logger.Ctx(ctx).Warn("Not enough data for complete record header",
-				zap.Int("offset", offset),
-				zap.Int("remaining", len(indexData)-offset))
-			break
-		}
-
-		// Decode the record
-		record, err := codec.DecodeRecord(indexData[offset:])
-		if err != nil {
-			logger.Ctx(ctx).Warn("Failed to decode index record",
-				zap.Int("offset", offset),
-				zap.Error(err))
-			return fmt.Errorf("failed to decode index record at offset %d: %w", offset, err)
-		}
-
-		// Verify it's an index record
-		if record.Type() != codec.IndexRecordType {
-			logger.Ctx(ctx).Warn("Unexpected record type in index section",
-				zap.Int("offset", offset),
-				zap.Uint8("expectedType", codec.IndexRecordType),
-				zap.Uint8("actualType", record.Type()))
-			return fmt.Errorf("expected index record type %d, got %d at offset %d",
-				codec.IndexRecordType, record.Type(), offset)
-		}
-
-		indexRecord := record.(*codec.IndexRecord)
-		blockIndexes = append(blockIndexes, indexRecord)
-
-		logger.Ctx(ctx).Debug("Parsed index record",
-			zap.Int32("blockNumber", indexRecord.BlockNumber),
-			zap.Int64("startOffset", indexRecord.StartOffset),
-			zap.Int64("firstEntryID", indexRecord.FirstEntryID),
-			zap.Int64("lastEntryID", indexRecord.LastEntryID))
-
-		// Move to next record (header + IndexRecord payload size)
-		recordSize := codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
-		offset += recordSize
-	}
-
-	// Validate recovered blocks count
 	if len(blockIndexes) != int(footerRecord.TotalBlocks) {
-		logger.Ctx(ctx).Warn("Block count mismatch",
-			zap.Int("recoveredBlocks", len(blockIndexes)),
-			zap.Int32("expectedBlocks", footerRecord.TotalBlocks))
-		// Continue anyway, use what we recovered
+		logger.Ctx(ctx).Warn("Recovered index record count differs from footer, using recovered records",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int("recovered", len(blockIndexes)),
+			zap.Int32("footerTotalBlocks", footerRecord.TotalBlocks))
 	}
 
-	// Update writer state
 	w.blockIndexes = blockIndexes
 	w.recoveredFooter = footerRecord
-
-	// Update entry ID tracking
 	if len(blockIndexes) > 0 {
 		firstBlock := blockIndexes[0]
 		lastBlock := blockIndexes[len(blockIndexes)-1]
-
 		w.firstEntryID.Store(firstBlock.FirstEntryID)
 		w.lastEntryID.Store(lastBlock.LastEntryID)
 		w.currentBlockNumber.Store(int64(len(blockIndexes))) // Next block number
-
-		logger.Ctx(ctx).Info("Updated entry ID tracking from recovered blocks",
-			zap.Int64("firstEntryID", firstBlock.FirstEntryID),
-			zap.Int64("lastEntryID", lastBlock.LastEntryID),
-			zap.Int64("nextBlockNumber", int64(len(blockIndexes))))
 	}
 
-	logger.Ctx(ctx).Info("Successfully recovered blocks from footer",
+	logger.Ctx(ctx).Info("Recovered blocks from footer",
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.Int("recoveredBlocks", len(blockIndexes)),
 		zap.Int64("firstEntryID", w.firstEntryID.Load()),
 		zap.Int64("lastEntryID", w.lastEntryID.Load()))
-
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "recover_footer", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "recover_footer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "recover_footer", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "recover_footer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	w.recovered.Store(true)
 	return nil
 }
@@ -1645,9 +1913,22 @@ func (w *StagedFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, 
 	var currentBlockLastEntryID int64 = -1
 	var inBlock bool = false
 
+	// Recovery stops at the first damaged or incomplete block and discards what follows. Log each
+	// truncation with the shared context so operators can trace a later reader stall back to the
+	// exact offset and entry where the damage was first seen. The normal scan exits the loop
+	// without hitting any of these paths.
+	recoveryLog := logger.Ctx(ctx).With(
+		zap.String("segmentFilePath", w.segmentFilePath),
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId))
+
 	for offset < len(data) {
 		// Check if we have enough data for a record header
 		if offset+codec.RecordHeaderSize > len(data) {
+			recoveryLog.Warn("segment recovery truncated at an incomplete record header",
+				zap.Int64("offset", int64(offset)),
+				zap.Int64("nextEntryId", currentEntryId),
+				zap.Int64("discardedBytes", int64(len(data)-offset)))
 			break
 		}
 
@@ -1655,6 +1936,11 @@ func (w *StagedFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, 
 		record, err := codec.DecodeRecord(data[offset:])
 		if err != nil {
 			// If we can't decode a record, the file might be truncated
+			recoveryLog.Warn("segment recovery truncated at an undecodable record",
+				zap.Int64("offset", int64(offset)),
+				zap.Int64("nextEntryId", currentEntryId),
+				zap.Int64("discardedBytes", int64(len(data)-offset)),
+				zap.Error(err))
 			break
 		}
 
@@ -1725,6 +2011,10 @@ func (w *StagedFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, 
 
 		default:
 			// Unknown record type, might be corrupted
+			recoveryLog.Warn("segment recovery truncated at an unexpected record type",
+				zap.Int64("offset", int64(offset)),
+				zap.Int64("nextEntryId", currentEntryId),
+				zap.Int64("discardedBytes", int64(len(data)-offset)))
 			goto exitLoop
 		}
 
@@ -1759,8 +2049,8 @@ exitLoop:
 	}
 
 	// update metrics
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "recover_raw", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "recover_raw", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }
@@ -1771,6 +2061,23 @@ func getSegmentDir(baseDir string, logId int64, segmentId int64) string {
 
 func getSegmentFilePath(baseDir string, logId int64, segmentId int64) string {
 	return filepath.Join(baseDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
+}
+
+// CompactedMarkFileName is the empty sentinel file (a sibling of data.log, named to mirror
+// it) marking a staged segment whose data is durably compacted in object storage. Only its
+// existence carries meaning — no content is written or read; its mtime records when the mark
+// was created. It is written when the segment is confirmed compacted and kept as a TOMBSTONE
+// after the local data.log is reclaimed, so a reader can distinguish "compacted -> serve from
+// object storage" from "genuinely no data here" via a local stat instead of an object-storage
+// HEAD. It is removed only when the segment is fully truncated/deleted (see deleteLocalFiles
+// flag=0). This is the single source of truth for the mark filename; server/compacted_mark.go
+// references it.
+const CompactedMarkFileName = "data.compacted"
+
+// HasCompactedMark reports whether segmentDir carries the compacted tombstone mark.
+func HasCompactedMark(segmentDir string) bool {
+	_, err := os.Stat(filepath.Join(segmentDir, CompactedMarkFileName))
+	return err == nil
 }
 
 // validateLACAlignment validates that the segment contains complete data for the LAC range

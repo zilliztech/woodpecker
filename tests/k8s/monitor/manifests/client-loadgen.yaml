@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: wp-loadgen
+  namespace: woodpecker
+  labels:
+    app.kubernetes.io/name: woodpecker
+    app.kubernetes.io/component: client
+    app.kubernetes.io/instance: my-woodpecker
+spec:
+  containers:
+    - name: loadgen
+      image: zilliztech/woodpecker:v0.1.26
+      imagePullPolicy: Never
+      command: ["/bin/bash", "-c", "sleep infinity"]
+      ports:
+        - name: metrics
+          containerPort: 29099
+      resources:
+        requests: { cpu: "500m", memory: "512Mi" }
+  restartPolicy: Never

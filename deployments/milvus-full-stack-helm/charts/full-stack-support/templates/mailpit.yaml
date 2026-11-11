@@ -1,0 +1,41 @@
+{{- if .Values.mailpit.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-mailpit
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: {{ .Release.Name }}-mailpit}
+  template:
+    metadata:
+      labels: {app: {{ .Release.Name }}-mailpit}
+    spec:
+      containers:
+        - name: mailpit
+          image: {{ .Values.mailpit.image | quote }}
+          # No relay/forward configuration. Capture is deliberately ephemeral.
+          env:
+            - {name: MP_MAX_MESSAGES, value: "1000"}
+          ports:
+            - {name: smtp, containerPort: 1025}
+            - {name: http, containerPort: 8025}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+          livenessProbe:
+            httpGet: {path: /livez, port: http}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-mailpit
+spec:
+  type: ClusterIP
+  selector: {app: {{ .Release.Name }}-mailpit}
+  ports:
+    - {name: smtp, port: 1025, targetPort: smtp}
+    - {name: http, port: 8025, targetPort: http}
+{{- end }}

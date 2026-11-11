@@ -264,3 +264,31 @@ func TestBackwardCompatibility(t *testing.T) {
 		assert.Equal(t, int32(i), idx.BlockNumber)
 	}
 }
+
+func TestParseRejectsInvalidSections(t *testing.T) {
+	for name, section := range map[string]Section{
+		"negative offset": {Type: SectionBlockIndexes, Offset: -1, Length: 1},
+		"negative length": {Type: SectionBlockIndexes, Offset: 0, Length: -1},
+		"past end":        {Type: SectionBlockIndexes, Offset: 2, Length: 2},
+		"overflow":        {Type: SectionBlockIndexes, Offset: int(^uint(0) >> 1), Length: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cp := New()
+			cp.SetSection(SectionBlockIndexes, []byte{1, 2, 3})
+			cp.Meta.Sections[0] = section
+			require.NotPanics(t, func() {
+				_, err := cp.GetSectionData(SectionBlockIndexes)
+				require.Error(t, err)
+				_, err = Parse(cp.Serialize())
+				require.Error(t, err)
+			})
+		})
+	}
+}
+
+func TestParseRejectsUnsupportedVersion(t *testing.T) {
+	cp := New()
+	cp.Meta.Version = 2
+	_, err := Parse(cp.Serialize())
+	require.ErrorContains(t, err, "unsupported checkpoint version")
+}

@@ -40,14 +40,13 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
+	"github.com/zilliztech/woodpecker/server/storage/codec/checkpoint"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
-var (
-	testBucket = "a-bucket"
-)
+var testBucket = "a-bucket"
 
 func setupMinioFileWriterTest(t *testing.T) (storageclient.ObjectStorage, *config.Configuration) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -271,7 +270,6 @@ func TestMinioFileWriter_ConcurrentWrites(t *testing.T) {
 }
 
 func TestMinioFileWriter_Finalize(t *testing.T) {
-
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -398,13 +396,12 @@ func TestMinioFileWriter_ErrorHandling(t *testing.T) {
 
 		// Wait for first write with timeout
 		ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		result, err = resultCh1.ReadResult(ctxWithTimeout)
+		_, err = resultCh1.ReadResult(ctxWithTimeout)
 		cancel()
-		//require.NoError(t, err) // TODO maybe handle this notify gracefully
-		//require.NoError(t, result.Err)
+		// require.NoError(t, err) // TODO maybe handle this notify gracefully
+		// require.NoError(t, result.Err)
 		assert.Error(t, err)
 		assert.True(t, errors.IsAny(err, context.Canceled, context.DeadlineExceeded))
-
 	})
 
 	t.Run("DuplicateEntryIdInUploading", func(t *testing.T) {
@@ -767,7 +764,7 @@ func TestMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 
 	// Now read the objects directly and check their content
 	err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-		if strings.HasSuffix(objInfo.FilePath, ".blk") {
+		if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") {
 			t.Logf("Checking object: %s", objInfo.FilePath)
 
 			// Get object size first
@@ -1049,7 +1046,7 @@ func TestMinioFileWriter_HeaderRecordVerification(t *testing.T) {
 	// Now read the first object and verify it starts with HeaderRecord
 	var firstDataObject string
 	err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-		if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "footer.blk") {
+		if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") && !strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 			// This should be the first data object (0.blk)
 			if strings.HasSuffix(objInfo.FilePath, "/0.blk") {
 				firstDataObject = objInfo.FilePath
@@ -1114,8 +1111,8 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
-	logId := int64(50)       // 修改为不同的 logId 避免冲突
-	segmentId := int64(5000) // 修改为不同的 segmentId 避免冲突
+	logId := int64(50)       // use a different logId to avoid conflicts
+	segmentId := int64(5000) // use a different segmentId to avoid conflicts
 	baseDir := fmt.Sprintf("test-recovery-debug-%d", time.Now().Unix())
 	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
@@ -1248,7 +1245,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			t.Logf("  Before compact: %s", objInfo.FilePath)
 
 			// Count original block files (exclude footer and lock)
-			if strings.HasSuffix(objInfo.FilePath, ".blk") &&
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") &&
 				!strings.HasSuffix(objInfo.FilePath, "footer.blk") &&
 				!strings.Contains(objInfo.FilePath, "m_") { // exclude merged files
 				originalBlocks = append(originalBlocks, objInfo.FilePath)
@@ -1266,7 +1263,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		require.NotNil(t, writerForCompact)
 
 		// Perform compaction
-		compactedSize, err := writerForCompact.Compact(ctx)
+		compactedSize, err := writerForCompact.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize, int64(0), "Compacted size should be positive")
 		t.Logf("Compaction completed, compacted size: %d bytes", compactedSize)
@@ -1286,7 +1283,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 
 			if strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 				hasFooter = true
-			} else if strings.HasSuffix(objInfo.FilePath, ".blk") {
+			} else if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") {
 				if strings.Contains(objInfo.FilePath, "m_") {
 					mergedBlocks = append(mergedBlocks, objInfo.FilePath)
 				} else if !strings.HasSuffix(objInfo.FilePath, ".lock") {
@@ -1340,7 +1337,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		writerForCompact1, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId2, minioHdl, cfg, true)
 		require.NoError(t, err)
 
-		compactedSize1, err := writerForCompact1.Compact(ctx)
+		compactedSize1, err := writerForCompact1.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize1, int64(0))
 
@@ -1351,7 +1348,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		writerForCompact2, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId2, minioHdl, cfg, true)
 		require.NoError(t, err)
 
-		compactedSize2, err := writerForCompact2.Compact(ctx)
+		compactedSize2, err := writerForCompact2.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, compactedSize1, compactedSize2, "Idempotent compaction should return same size")
 
@@ -1362,7 +1359,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		segmentPrefix2 := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId2)
 		remainingOriginalBlocks := 0
 		err = minioHdl.WalkWithObjects(ctx, testBucket, segmentPrefix2, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-			if strings.HasSuffix(objInfo.FilePath, ".blk") &&
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") &&
 				!strings.HasSuffix(objInfo.FilePath, "footer.blk") &&
 				!strings.Contains(objInfo.FilePath, "m_") &&
 				!strings.HasSuffix(objInfo.FilePath, ".lock") {
@@ -1414,7 +1411,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		segmentPrefix3 := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId3)
 		originalBlockKeys := make([]string, 0)
 		err = minioHdl.WalkWithObjects(ctx, testBucket, segmentPrefix3, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-			if strings.HasSuffix(objInfo.FilePath, ".blk") &&
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") &&
 				!strings.HasSuffix(objInfo.FilePath, "footer.blk") &&
 				!strings.Contains(objInfo.FilePath, "m_") {
 				originalBlockKeys = append(originalBlockKeys, objInfo.FilePath)
@@ -1424,7 +1421,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		require.NoError(t, err)
 
 		// Complete compaction first
-		compactedSize, err := writerForCompact.Compact(ctx)
+		compactedSize, err := writerForCompact.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize, int64(0))
 
@@ -1447,7 +1444,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		require.NoError(t, err)
 
 		// This should detect the compacted state and clean up residual files
-		recoverySize, err := writerForRecovery.Compact(ctx)
+		recoverySize, err := writerForRecovery.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, compactedSize, recoverySize, "Recovery compaction should return same size")
 
@@ -1459,7 +1456,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		err = minioHdl.WalkWithObjects(ctx, testBucket, segmentPrefix3, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
 			t.Logf("  After recovery: %s", objInfo.FilePath)
 
-			if strings.HasSuffix(objInfo.FilePath, ".blk") &&
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") &&
 				!strings.HasSuffix(objInfo.FilePath, "footer.blk") &&
 				!strings.Contains(objInfo.FilePath, "m_") &&
 				!strings.HasSuffix(objInfo.FilePath, ".lock") {
@@ -1544,7 +1541,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		writerForCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId4, minioHdl, cfg, true)
 		require.NoError(t, err)
 
-		compactedSize, err := writerForCompact.Compact(ctx)
+		compactedSize, err := writerForCompact.Compact(ctx, -1)
 		require.NoError(t, err)
 		assert.Greater(t, compactedSize, int64(0))
 
@@ -1633,10 +1630,10 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 
 			if strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 				hasFooter = true
-			} else if strings.HasSuffix(objInfo.FilePath, ".blk") {
+			} else if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") {
 				if strings.Contains(objInfo.FilePath, "m_") {
 					mergedBlocks++
-				} else if !strings.HasSuffix(objInfo.FilePath, ".lock") && !strings.Contains(objInfo.FilePath, "checkpoint.blk") {
+				} else if !strings.HasSuffix(objInfo.FilePath, ".lock") {
 					originalBlocks++
 				}
 			}
@@ -1691,7 +1688,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			if compactSegment && finalizeSegment {
 				writerForCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 				require.NoError(t, err)
-				_, err = writerForCompact.Compact(ctx)
+				_, err = writerForCompact.Compact(ctx, -1)
 				require.NoError(t, err)
 				err = writerForCompact.Close(ctx)
 				require.NoError(t, err)
@@ -1802,7 +1799,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			require.NoError(t, err)
 			_, err = writerToCompact.Finalize(ctx, -1)
 			require.NoError(t, err)
-			_, err = writerToCompact.Compact(ctx)
+			_, err = writerToCompact.Compact(ctx, -1)
 			require.NoError(t, err)
 			err = writerToCompact.Close(ctx)
 			require.NoError(t, err)
@@ -1874,7 +1871,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			// Now compact the segment (Completed → Compacted)
 			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 			require.NoError(t, err)
-			_, err = writerToCompact.Compact(ctx)
+			_, err = writerToCompact.Compact(ctx, -1)
 			require.NoError(t, err)
 			err = writerToCompact.Close(ctx)
 			require.NoError(t, err)
@@ -1978,7 +1975,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			require.NoError(t, err)
 			_, err = writerToCompact.Finalize(ctx, -1)
 			require.NoError(t, err)
-			_, err = writerToCompact.Compact(ctx)
+			_, err = writerToCompact.Compact(ctx, -1)
 			require.NoError(t, err)
 			err = writerToCompact.Close(ctx)
 			require.NoError(t, err)
@@ -2049,7 +2046,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			// Now compact the segment (Completed -> Compacted)
 			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 			require.NoError(t, err)
-			_, err = writerToCompact.Compact(ctx)
+			_, err = writerToCompact.Compact(ctx, -1)
 			require.NoError(t, err)
 			err = writerToCompact.Close(ctx)
 			require.NoError(t, err)
@@ -2078,148 +2075,100 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 	})
 }
 
-// TestMinioFileWriter_CheckpointRecovery verifies that checkpoint-based
-// recovery is both correct and meaningfully faster than a full block scan.
-//
-// Setup: 909 blocks × ~100 KB each, checkpointThreshold = 10.
-// The last checkpoint covers blocks 0-899, so recovery scans only 9 blocks
-// (900-908) incrementally.
-//
-// Approach:
-//  1. Write 909 blocks (~100 KB each), close without finalize.
-//  2. Verify segment state: checkpoint.blk exists, no footer.blk.
-//  3. Calibrate: sequentially StatObject 909 blocks vs 10 blocks.
-//  4. Time recovery and assert it is on the ~10-block order, not ~909-block.
-//  5. Finalize and verify checkpoint.blk is cleaned up.
+// TestMinioFileWriter_CheckpointRecovery verifies actual checkpoint persistence,
+// writer recovery, fencing, finalization and complete data readback on MinIO.
+// Deterministic recovery request counts are covered by the storage unit tests.
 func TestMinioFileWriter_CheckpointRecovery(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
-
 	minioHdl, cfg := setupMinioFileWriterTest(t)
-	ctx := context.Background()
-
-	logId := int64(10)
-	segmentId := int64(2000)
-	baseDir := fmt.Sprintf("test-checkpoint-%d", time.Now().Unix())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	const logID, segmentID = int64(10), int64(2000)
+	const totalBlocks = 909
+	baseDir := fmt.Sprintf("test-checkpoint-%d", time.Now().UnixNano())
 	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-	// ~100 KB per entry; MaxFlushSize large enough to hold one entry per block.
-	// Use a 10 ms sync interval so blocks are flushed quickly during the write loop.
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 200 * 1024
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold = 10
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = config.NewDurationMillisecondsFromInt(10)
-
-	const totalBlocks = 909
-	const entrySize = 100 * 1024 // 100 KB
-	segmentPrefix := fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId)
-
-	// Pre-generate a reusable 100 KB payload.
-	payload := generateTestData(entrySize)
-
-	// ---- Step 1: write 909 blocks, close without finalize ----
-	t.Run("WriteBlocksAndClose", func(t *testing.T) {
-		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
+	payload := generateTestData(100 * 1024)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logID, segmentID, minioHdl, cfg)
+	require.NoError(t, err)
+	defer func() { _ = writer.Close(context.Background()) }()
+	for i := 0; i < totalBlocks; i++ {
+		ch := channel.NewLocalResultChannel(fmt.Sprintf("cp-%d", i))
+		_, err = writer.WriteDataAsync(ctx, int64(i), payload, ch)
 		require.NoError(t, err)
+		result, readErr := ch.ReadResult(ctx)
+		require.NoError(t, readErr)
+		require.NoError(t, result.Err)
+	}
 
-		for i := 0; i < totalBlocks; i++ {
-			ch := channel.NewLocalResultChannel(fmt.Sprintf("cp-%d", i))
-			_, err := writer.WriteDataAsync(ctx, int64(i), payload, ch)
-			require.NoError(t, err)
-			res, err := ch.ReadResult(ctx)
-			require.NoError(t, err)
-			require.NoError(t, res.Err)
-			require.NoError(t, writer.Sync(ctx))
+	// Wait for a durable checkpoint, rather than assuming an async write
+	// finishes within a fixed sleep. Closing without finalize leaves an
+	// unfinished segment for takeover; this is not a process-crash test.
+	checkpointKey := fmt.Sprintf("%s/%d/%d/checkpoint.blk", baseDir, logID, segmentID)
+	require.Eventually(t, func() bool {
+		size, _, statErr := minioHdl.StatObject(ctx, testBucket, checkpointKey, "test-ns", "0")
+		if statErr != nil {
+			return false
 		}
-
-		// Let the async checkpoint goroutine finish.
-		time.Sleep(2 * time.Second)
-
-		// Close without finalize to simulate a crash.
-		require.NoError(t, writer.Close(ctx))
-	})
-
-	// ---- Step 2: verify segment state ----
-	t.Run("VerifySegmentState", func(t *testing.T) {
-		var hasCheckpoint, hasFooter bool
-		var dataBlockCount int
-		err := minioHdl.WalkWithObjects(ctx, testBucket, segmentPrefix, true, func(obj *storageclient.ChunkObjectInfo) bool {
-			switch {
-			case strings.HasSuffix(obj.FilePath, "checkpoint.blk"):
-				hasCheckpoint = true
-			case strings.HasSuffix(obj.FilePath, "footer.blk"):
-				hasFooter = true
-			case strings.HasSuffix(obj.FilePath, ".blk") && !strings.HasSuffix(obj.FilePath, ".lock"):
-				dataBlockCount++
-			}
-			return true
-		}, "test-ns", "0")
-		require.NoError(t, err)
-
-		assert.True(t, hasCheckpoint, "checkpoint.blk must exist")
-		assert.False(t, hasFooter, "footer.blk must NOT exist (not finalized)")
-		assert.Equal(t, totalBlocks, dataBlockCount, "should have exactly %d data blocks", totalBlocks)
-		t.Logf("Segment state OK: checkpoint=%v footer=%v dataBlocks=%d", hasCheckpoint, hasFooter, dataBlockCount)
-	})
-
-	// ---- Step 3: calibrate per-block latency (StatObject + GetObject) ----
-	// The actual recovery does StatObject + GetObject(partial) per block,
-	// so the calibration must include both to be a fair comparison.
-	var scanAll time.Duration
-	var scan10 time.Duration
-
-	t.Run("CalibrateBlockLatency", func(t *testing.T) {
-		// Stat + read all 909 blocks sequentially.
-		start := time.Now()
-		for i := 0; i < totalBlocks; i++ {
-			key := fmt.Sprintf("%s/%d/%d/%d.blk", baseDir, logId, segmentId, i)
-			size, _, err := minioHdl.StatObject(ctx, testBucket, key, "test-ns", "0")
-			require.NoError(t, err)
-			obj, err := minioHdl.GetObject(ctx, testBucket, key, 0, size, "test-ns", "0")
-			require.NoError(t, err)
-			obj.Close()
+		obj, getErr := minioHdl.GetObject(ctx, testBucket, checkpointKey, 0, size, "test-ns", "0")
+		if getErr != nil {
+			return false
 		}
-		scanAll = time.Since(start)
-
-		// Stat + read 10 blocks sequentially.
-		start = time.Now()
-		for i := 0; i < 10; i++ {
-			key := fmt.Sprintf("%s/%d/%d/%d.blk", baseDir, logId, segmentId, i)
-			size, _, err := minioHdl.StatObject(ctx, testBucket, key, "test-ns", "0")
-			require.NoError(t, err)
-			obj, err := minioHdl.GetObject(ctx, testBucket, key, 0, size, "test-ns", "0")
-			require.NoError(t, err)
-			obj.Close()
+		defer obj.Close()
+		raw, readErr := io.ReadAll(obj)
+		if readErr != nil {
+			return false
 		}
-		scan10 = time.Since(start)
+		cp, parseErr := checkpoint.Parse(raw)
+		if parseErr != nil {
+			return false
+		}
+		section, sectionErr := cp.GetSectionData(checkpoint.SectionBlockIndexes)
+		if sectionErr != nil {
+			return false
+		}
+		footer, footerErr := codec.ParseFooterFromBytes(section)
+		return footerErr == nil && footer.TotalBlocks >= 900
+	}, 10*time.Second, 10*time.Millisecond)
+	require.NoError(t, writer.Close(ctx))
+	footerKey := fmt.Sprintf("%s/%d/%d/footer.blk", baseDir, logID, segmentID)
+	_, _, err = minioHdl.StatObject(ctx, testBucket, footerKey, "test-ns", "0")
+	require.True(t, minioHdl.IsObjectNotExistsError(err))
 
-		t.Logf("Calibration: scan %d blocks (stat+get) = %v, scan 10 blocks = %v", totalBlocks, scanAll, scan10)
-	})
+	start := time.Now()
+	recovered, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logID, segmentID, minioHdl, cfg, true)
+	require.NoError(t, err)
+	defer func() { _ = recovered.Close(context.Background()) }()
+	t.Logf("Recovered %d blocks from checkpoint and tail in %v", totalBlocks, time.Since(start))
+	require.Equal(t, int64(0), recovered.GetFirstEntryId(ctx))
+	require.Equal(t, int64(totalBlocks-1), recovered.GetLastEntryId(ctx))
+	lac, err := recovered.Fence(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(totalBlocks-1), lac)
+	finalizedLAC, err := recovered.Finalize(ctx, lac)
+	require.NoError(t, err)
+	require.Equal(t, lac, finalizedLAC)
+	require.NoError(t, recovered.Close(ctx))
 
-	// ---- Step 4: recovery must be on the ~10-block order, not ~909-block ----
-	t.Run("RecoveryIsFast", func(t *testing.T) {
-		start := time.Now()
-		writer2, err := objectstorage.NewMinioFileWriterWithMode(
-			ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
-		recoveryTime := time.Since(start)
-		require.NoError(t, err)
-
-		// Correctness: all 909 entries recovered.
-		assert.Equal(t, int64(0), writer2.GetFirstEntryId(ctx))
-		assert.Equal(t, int64(totalBlocks-1), writer2.GetLastEntryId(ctx))
-
-		t.Logf("Recovery time: %v  (calibration: 10-blk=%v, %d-blk=%v)", recoveryTime, scan10, totalBlocks, scanAll)
-
-		// The last checkpoint covers blocks 0-899 (909/10*10 = 900).
-		// Recovery reads 1 checkpoint.blk + scans 9 incremental blocks.
-		// It must be significantly less than a full 909-block scan.
-		assert.Less(t, recoveryTime, scanAll/2,
-			"Checkpoint recovery (%v) should be less than half of a full %d-block scan (%v)",
-			recoveryTime, totalBlocks, scanAll)
-
-		require.NoError(t, writer2.Close(ctx))
-	})
-
-	// checkpoint.blk is intentionally retained after finalize so that future
-	// asynchronous tasks (e.g. index building) can add their own sections to it.
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logID, segmentID, minioHdl, 4*1024*1024, 4)
+	require.NoError(t, err)
+	defer func() { _ = reader.Close(context.Background()) }()
+	var state *proto.LastReadState
+	var next int64
+	for next < totalBlocks {
+		batch, readErr := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{StartEntryID: next, MaxBatchEntries: 64}, state)
+		require.NoError(t, readErr)
+		require.NotEmpty(t, batch.Entries)
+		for _, entry := range batch.Entries {
+			require.Equal(t, next, entry.EntryId)
+			require.Equal(t, payload, entry.Values)
+			next++
+		}
+		state = batch.LastReadState
+	}
+	require.Equal(t, int64(totalBlocks), next)
 }

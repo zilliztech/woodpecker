@@ -1,0 +1,71 @@
+codecov:
+  require_ci_to_pass: false
+  notify:
+    # All three primary workflows share triggers and upload disjoint profiles.
+    after_n_builds: 3
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: 80%
+        threshold: 1%
+
+ignore:
+  - "tests/**"
+  - "mocks/**"
+  - "proto/**"
+  - "**/*_mock.go"
+  - "**/*_test.go"
+  - "**/*.pb.go"
+  - "**/*_vtproto.pb.go"
+  - "**/zz_generated*.go"                      # controller-gen generated deepcopy
+  - "deployments/operator/cmd/main.go"         # operator entrypoint wires flags only
+  - "deployments/operator/test/**"             # operator test helpers
+
+comment:
+  layout: "reach, diff, flags, components, files"
+  behavior: default
+  require_changes: false
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+
+  individual_components:
+    - component_id: server
+      name: Server
+      paths:
+        - server/**
+
+    - component_id: client
+      name: Client
+      paths:
+        - woodpecker/**
+
+    - component_id: meta
+      name: Meta
+      paths:
+        - meta/**
+
+    - component_id: common
+      name: Common
+      paths:
+        - common/**
+
+    - component_id: wpcli
+      name: WPCLI
+      paths:
+        - cmd/wpcli/**
+
+    - component_id: diagnostics
+      name: Diagnostics
+      paths:
+        - diagnostics/**
+        - cmd/wpdiag/**

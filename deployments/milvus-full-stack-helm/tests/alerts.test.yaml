@@ -1,0 +1,273 @@
+rule_files:
+- rules.yaml
+evaluation_interval: 15s
+tests:
+- name: Healthy quorum does not alert
+  interval: 15s
+  input_series:
+  - &id001
+    series: up{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0"}
+    values: 1+0x80
+  - &id002
+    series: up{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-1"}
+    values: 1+0x80
+  - series: up{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-2"}
+    values: 1+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="F2",alertstate="firing"}) or vector(0)
+    eval_time: 2m
+    exp_samples:
+    - labels: '{}'
+      value: 0
+- name: No discovered targets still fires F2 after hold
+  interval: 15s
+  input_series: []
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="F2",alertstate="firing"}) or vector(0)
+    eval_time: 30s
+    exp_samples:
+    - labels: '{}'
+      value: 0
+  - expr: count(ALERTS{rule_id="F2",alertstate="firing"}) or vector(0)
+    eval_time: 2m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: One unreachable node fires F1 and F2
+  interval: 15s
+  input_series:
+  - *id001
+  - *id002
+  - series: up{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-2"}
+    values: 0+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="F1",alertstate="firing"}) or vector(0)
+    eval_time: 2m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+  - expr: count(ALERTS{rule_id="F2",alertstate="firing"}) or vector(0)
+    eval_time: 2m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: Idle active segments do not fire write-stall P0
+  interval: 15s
+  input_series:
+  - &id003
+    series: woodpecker_server_logstore_operations_total{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",operation="add_entry",status="success"}
+    values: 0+0x80
+  - &id004
+    series: woodpecker_server_logstore_active_segments{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",log_ns="test",log_id="1"}
+    values: 1+0x80
+  - &id005
+    series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",segment_id="1",node="milvus-woodpecker-0.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_append_requests_total{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1"}
+    values: 0+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="S2",alertstate="firing"}) or vector(0)
+    eval_time: 6m
+    exp_samples:
+    - labels: '{}'
+      value: 0
+- name: Client demand and zero server writes fire S2
+  interval: 15s
+  input_series:
+  - *id003
+  - *id004
+  - *id005
+  - series: woodpecker_client_append_requests_total{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1"}
+    values: 0+10x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="S2",alertstate="firing"}) or vector(0)
+    eval_time: 6m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: Hard disk watermark holds for one minute
+  interval: 15s
+  input_series:
+  - series: woodpecker_server_logstore_write_backpressure_state{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0"}
+    values: 2+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="R5",alertstate="firing"}) or vector(0)
+    eval_time: 30s
+    exp_samples:
+    - labels: '{}'
+      value: 0
+  - expr: count(ALERTS{rule_id="R5",alertstate="firing"}) or vector(0)
+    eval_time: 2m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: Duplicate reporters cannot hide missing replicas
+  interval: 15s
+  input_series:
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-0",segment_id="1",node="milvus-woodpecker-0.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-0",segment_id="1",node="milvus-woodpecker-1.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-1",segment_id="1",node="milvus-woodpecker-0.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-1",segment_id="1",node="milvus-woodpecker-1.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="C9",alertstate="firing"}) or vector(0)
+    eval_time: 6m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: Three distinct replicas remain healthy despite duplicate reporters
+  interval: 15s
+  input_series:
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-0",segment_id="1",node="milvus-woodpecker-0.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-0",segment_id="1",node="milvus-woodpecker-1.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-0",segment_id="1",node="milvus-woodpecker-2.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-1",segment_id="1",node="milvus-woodpecker-0.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-1",segment_id="1",node="milvus-woodpecker-1.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  - series: woodpecker_client_active_segment_node{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",pod="reporter-1",segment_id="1",node="milvus-woodpecker-2.milvus-woodpecker-headless:18080"}
+    values: 1+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="C9",alertstate="firing"}) or vector(0)
+    eval_time: 6m
+    exp_samples:
+    - labels: '{}'
+      value: 0
+- name: Read latency uses exact overflow bucket fraction
+  interval: 15s
+  input_series:
+  - series: woodpecker_client_read_latency_count{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1"}
+    values: 0+100x80
+  - series: woodpecker_client_read_latency_bucket{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1",le="512"}
+    values: 0+98x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="C5",alertstate="firing"}) or vector(0)
+    eval_time: 12m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: Write frontier rollover is not a stalled entry
+  interval: 15s
+  input_series:
+  - series: woodpecker_client_write_frontier_entry{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1"}
+    values: 0+0x80
+  - series: woodpecker_client_write_frontier_segment{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1"}
+    values: 0+1x80
+  - series: woodpecker_client_append_requests_total{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="streamingnode",log_ns="test",log_id="1"}
+    values: 0+100x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="C4",alertstate="firing"}) or vector(0)
+    eval_time: 12m
+    exp_samples:
+    - labels: '{}'
+      value: 0
+- name: Exported soft watermark overrides legacy 0.75
+  interval: 15s
+  input_series:
+  - series: woodpecker_server_logstore_disk_usage_ratio{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",path="/woodpecker/data"}
+    values: 0.8+0x80
+  - series: woodpecker_server_logstore_disk_watermark_soft{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",path="/woodpecker/data"}
+    values: 0.9+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="R4",alertstate="firing"}) or vector(0)
+    eval_time: 12m
+    exp_samples:
+    - labels: '{}'
+      value: 0
+- name: Missing soft watermark falls back to legacy 0.75
+  interval: 15s
+  input_series:
+  - series: woodpecker_server_logstore_disk_usage_ratio{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",path="/woodpecker/data"}
+    values: 0.8+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="R4",alertstate="firing"}) or vector(0)
+    eval_time: 12m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: R4 tolerates duplicate scrape instances after Pod IP changes
+  interval: 15s
+  input_series:
+  - series: woodpecker_server_logstore_disk_usage_ratio{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",instance="10.244.0.10:9091",path="/woodpecker/data"}
+    values: 0.80+0x80
+  - series: woodpecker_server_logstore_disk_usage_ratio{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",instance="10.244.0.20:9091",path="/woodpecker/data"}
+    values: 0.82+0x80
+  - series: woodpecker_server_logstore_disk_watermark_soft{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",instance="10.244.0.10:9091",path="/woodpecker/data"}
+    values: 0.9+0x80
+  - series: woodpecker_server_logstore_disk_watermark_soft{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",instance="10.244.0.20:9091",path="/woodpecker/data"}
+    values: 0.9+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="R4",alertstate="firing"}) or vector(0)
+    eval_time: 12m
+    exp_samples:
+    - labels: '{}'
+      value: 0
+- name: R4 emits one node alert with highest usage and lowest watermark
+  interval: 15s
+  input_series:
+  - series: woodpecker_server_logstore_disk_usage_ratio{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",instance="10.244.0.10:9091",path="/woodpecker/data"}
+    values: 0.80+0x80
+  - series: woodpecker_server_logstore_disk_usage_ratio{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",instance="10.244.0.20:9091",path="/woodpecker/data"}
+    values: 0.86+0x80
+  - series: woodpecker_server_logstore_disk_watermark_soft{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",instance="10.244.0.10:9091",path="/woodpecker/data"}
+    values: 0.95+0x80
+  - series: woodpecker_server_logstore_disk_watermark_soft{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",instance="10.244.0.20:9091",path="/woodpecker/data"}
+    values: 0.90+0x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="R4",alertstate="firing"}) or vector(0)
+    eval_time: 12m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: All five capacity signals work with process-network fallback
+  interval: 15s
+  input_series:
+  - &id006
+    series: woodpecker_server_system_cpu_usage{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",pod="milvus-woodpecker-0"}
+    values: 80+0x80
+  - &id007
+    series: woodpecker_server_system_memory_usage_ratio{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",pod="milvus-woodpecker-0"}
+    values: 0.7+0x80
+  - &id008
+    series: woodpecker_server_system_disk_write_ops_total{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",pod="milvus-woodpecker-0",path="/woodpecker/data"}
+    values: 0+30000x80
+  - &id009
+    series: woodpecker_server_system_disk_write_bytes_total{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",pod="milvus-woodpecker-0",path="/woodpecker/data"}
+    values: 0+750000000x80
+  - &id010
+    series: process_network_receive_bytes_total{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",pod="milvus-woodpecker-0"}
+    values: 0+400000000x80
+  - &id011
+    series: process_network_transmit_bytes_total{cluster="local",namespace="milvus-stack",woodpecker_id="milvus",component="woodpecker",node_id="milvus-woodpecker-0",pod="milvus-woodpecker-0"}
+    values: 0+400000000x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="R2",alertstate="firing"}) or vector(0)
+    eval_time: 16m
+    exp_samples:
+    - labels: '{}'
+      value: 1
+- name: cAdvisor network takes precedence over process fallback
+  interval: 15s
+  input_series:
+  - *id006
+  - *id007
+  - *id008
+  - *id009
+  - *id010
+  - *id011
+  - series: container_network_receive_bytes_total{cluster="local",namespace="milvus-stack",pod="milvus-woodpecker-0",interface="eth0"}
+    values: 0+10x80
+  - series: container_network_transmit_bytes_total{cluster="local",namespace="milvus-stack",pod="milvus-woodpecker-0",interface="eth0"}
+    values: 0+10x80
+  promql_expr_test:
+  - expr: count(ALERTS{rule_id="R2",alertstate="firing"}) or vector(0)
+    eval_time: 16m
+    exp_samples:
+    - labels: '{}'
+      value: 0

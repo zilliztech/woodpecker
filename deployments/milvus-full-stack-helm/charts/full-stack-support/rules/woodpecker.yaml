@@ -1,0 +1,506 @@
+# R1-R7, F1-F9, S1-S6, C1-C9 from the supplied scaling/alerting reference.
+# Constants, placement recording, R2 and R3 execute sequentially in one group.
+groups:
+- name: woodpecker-full-stack
+  interval: 15s
+  rules:
+  - record: wp:vol_iops_limit
+    expr: vector({{ .Values.alerts.limits.volumeIOPS }})
+  - record: wp:vol_bw_limit_bytes
+    expr: vector({{ .Values.alerts.limits.volumeBytesPerSecond }})
+  - record: wp:node_net_limit_bytes
+    expr: vector({{ .Values.alerts.limits.nodeNetworkBytesPerSecond }})
+  - record: wp:replica_factor
+    expr: vector({{ .Values.alerts.limits.replicaFactor }})
+  - record: wp:server_expected_append_rate5m
+    expr: sum by (cluster, namespace, woodpecker_id, node_id) (label_replace(max by (cluster, namespace, woodpecker_id, log_ns,
+      log_id, node) (woodpecker_client_active_segment_node{ {{ include "wp.alertClient" . }} }), "node_id", "$1", "node", "([^.:]+).*")
+      * on (cluster, namespace, woodpecker_id, log_ns, log_id) group_left sum by (cluster, namespace, woodpecker_id, log_ns,
+      log_id) (rate(woodpecker_client_append_requests_total{ {{ include "wp.alertClient" . }} }[5m])))
+  - alert: WoodpeckerNodeResourcePressure
+    expr: (max by (cluster, namespace, woodpecker_id, node_id) (woodpecker_server_system_cpu_usage{ {{ include "wp.alertServer"
+      . }} }) > 70) or (max by (cluster, namespace, woodpecker_id, node_id) (woodpecker_server_system_memory_usage_ratio{ {{
+      include "wp.alertServer" . }} }) > 0.5) or (max by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_system_disk_write_ops_total{ {{
+      include "wp.alertServer" . }},path="/woodpecker/data"}[5m])) > scalar(wp:vol_iops_limit{ {{ include "wp.alertScope" .
+      }} }) * 0.5)
+    labels:
+      rule_id: R1
+      priority: P2
+      severity: info
+      alert_scope: server
+    annotations:
+      summary: Woodpecker node resource pressure
+      description: Inspect placement and workload skew before changing capacity. IOPS limits are reference inputs, not measured
+        local limits.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#r1
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-R1
+    for: 10m
+  - alert: WoodpeckerClusterNeedsScaleUp
+    expr: (avg(woodpecker_server_system_cpu_usage{ {{ include "wp.alertServer" . }} }) > 50) and (avg(woodpecker_server_system_memory_usage_ratio{ {{
+      include "wp.alertServer" . }} }) > 0.5) and (avg(max by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_system_disk_write_ops_total{ {{
+      include "wp.alertServer" . }},path="/woodpecker/data"}[5m]))) > scalar(wp:vol_iops_limit{ {{ include "wp.alertScope"
+      . }} }) * 0.5) and (avg(max by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_system_disk_write_bytes_total{ {{
+      include "wp.alertServer" . }},path="/woodpecker/data"}[5m]))) > scalar(wp:vol_bw_limit_bytes{ {{ include "wp.alertScope"
+      . }} }) * 0.5) and (avg((sum by (cluster, namespace, pod) (max by (cluster, namespace, pod, interface) (rate(container_network_receive_bytes_total{cluster="{{
+      .Values.clusterLabel }}",namespace="{{ .Release.Namespace }}",pod=~"{{ .Values.milvusRelease }}-woodpecker-[0-9]+",interface!="lo"}[5m]))
+      + max by (cluster, namespace, pod, interface) (rate(container_network_transmit_bytes_total{cluster="{{ .Values.clusterLabel
+      }}",namespace="{{ .Release.Namespace }}",pod=~"{{ .Values.milvusRelease }}-woodpecker-[0-9]+",interface!="lo"}[5m])))
+      or on (cluster, namespace, pod) (max by (cluster, namespace, pod) (rate(process_network_receive_bytes_total{ {{ include
+      "wp.alertServer" . }} }[5m])) + max by (cluster, namespace, pod) (rate(process_network_transmit_bytes_total{ {{ include
+      "wp.alertServer" . }} }[5m]))))) > scalar(wp:node_net_limit_bytes{ {{ include "wp.alertScope" . }} }) * 0.5)
+    labels:
+      rule_id: R2
+      priority: P1
+      severity: warning
+      alert_scope: cluster
+    annotations:
+      summary: Woodpecker cluster exceeds all five capacity thresholds
+      description: 'Advisory only: this example never changes node pools, replicas, or PVC sizes automatically.'
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#r2
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-R2
+    for: 10m
+  - alert: WoodpeckerScalePressurePersistent
+    expr: time() - max(ALERTS_FOR_STATE{ {{ include "wp.alertScope" . }},alertname="WoodpeckerClusterNeedsScaleUp"}) > 1800
+    labels:
+      rule_id: R3
+      priority: P1
+      severity: warning
+      alert_scope: cluster
+    annotations:
+      summary: Woodpecker capacity pressure persists for 30 minutes
+      description: Check whether scaling actually relieved the constrained resource. Pending time is included, as in the reference.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#r3
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-R3
+  - alert: WoodpeckerDiskNearSoftWatermark
+    # Deduplicate old/new scrape instances across Pod IP changes. Keep the
+    # highest usage and lowest exported watermark for each node/data path.
+    expr: >-
+      max by (cluster, namespace, woodpecker_id, node_id, path)
+      (woodpecker_server_logstore_disk_usage_ratio{ {{ include "wp.alertServer" . }} })
+      > on (cluster, namespace, woodpecker_id, node_id, path)
+      ((min by (cluster, namespace, woodpecker_id, node_id, path)
+      (woodpecker_server_logstore_disk_watermark_soft{ {{ include "wp.alertServer" . }} }) - 0.05)
+      or on (cluster, namespace, woodpecker_id, node_id, path)
+      (max by (cluster, namespace, woodpecker_id, node_id, path)
+      (woodpecker_server_logstore_disk_usage_ratio{ {{ include "wp.alertServer" . }} }) * 0 + 0.75))
+    labels:
+      rule_id: R4
+      priority: P2
+      severity: info
+      alert_scope: server
+    annotations:
+      summary: Woodpecker disk approaches its soft watermark
+      description: Uses the exported soft watermark minus 5 percentage points, falling back to 0.75 when that metric is unavailable.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#r4
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-R4
+    for: 10m
+  - alert: WoodpeckerDiskHardWatermark
+    expr: woodpecker_server_logstore_write_backpressure_state{ {{ include "wp.alertServer" . }} } == 2
+    labels:
+      rule_id: R5
+      priority: P0
+      severity: critical
+      alert_scope: server
+    annotations:
+      summary: Woodpecker hard disk watermark rejects writes
+      description: All tenants on this node can be rejected. Restore object-store/compaction health before considering disk
+        expansion.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#r5
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-R5
+    for: 1m
+  - alert: WoodpeckerDiskPredictedFull
+    expr: (predict_linear(woodpecker_server_logstore_disk_free_bytes{ {{ include "wp.alertServer" . }} }[1h], 4 * 3600) < 0)
+      and (woodpecker_server_logstore_disk_free_bytes{ {{ include "wp.alertServer" . }} } > 0)
+    labels:
+      rule_id: R6
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker disk predicted to fill within four hours
+      description: Inspect growth, object-store errors, and compaction before expanding storage.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#r6
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-R6
+    for: 15m
+  - alert: WoodpeckerCompactionAdmissionRejected
+    expr: sum by (cluster, namespace, woodpecker_id, node_id, reason) (increase(woodpecker_server_compaction_admission_rejected_total{ {{
+      include "wp.alertServer" . }} }[15m])) > 0
+    labels:
+      rule_id: R7
+      priority: P2
+      severity: info
+      alert_scope: server
+    annotations:
+      summary: Woodpecker compaction admission rejected work
+      description: Separate reservation pressure from memory_pressure using the reason label.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#r7
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-R7
+  - alert: WoodpeckerNodeUnreachable
+    expr: up{ {{ include "wp.alertServer" . }} } == 0
+    labels:
+      rule_id: F1
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker metrics endpoint unreachable
+      description: Check pod readiness, connectivity, and server logs. The scrape target supplies node_id even while down.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f1
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F1
+    for: 1m
+  - alert: WoodpeckerHealthyNodesInsufficient
+    expr: (sum(up{ {{ include "wp.alertServer" . }} } == bool 1) or vector(0)) < scalar(wp:replica_factor{ {{ include "wp.alertScope"
+      . }} })
+    labels:
+      rule_id: F2
+      priority: P0
+      severity: critical
+      alert_scope: cluster
+    annotations:
+      summary: Too few healthy Woodpecker nodes for a quorum
+      description: Includes the zero-discovered-target case. New segments may be unable to select a quorum.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f2
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F2
+    for: 1m
+  - alert: WoodpeckerNodeRestartingFrequently
+    expr: (max by (node_id) (label_replace(increase(kube_pod_container_status_restarts_total{cluster="{{ .Values.clusterLabel
+      }}",namespace="{{ .Release.Namespace }}",pod=~"{{ .Values.milvusRelease }}-woodpecker-[0-9]+",container="woodpecker"}[30m]),
+      "node_id", "$1", "pod", "(.*)")) > 2) or (max by (node_id) (changes(process_start_time_seconds{ {{ include "wp.alertServer"
+      . }} }[30m])) > 2)
+    labels:
+      rule_id: F3
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker node restarted more than twice in 30 minutes
+      description: The Kubernetes restart counter covers process-series replacement after container restarts. Inspect OOM,
+        panic, and probes.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f3
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F3
+  - alert: WoodpeckerFlushLatencyHigh
+    expr: histogram_quantile(0.99, sum by (cluster, namespace, woodpecker_id, node_id, le) (rate(woodpecker_server_file_flush_latency_bucket{ {{
+      include "wp.alertServer" . }} }[5m]))) > 100
+    labels:
+      rule_id: F4
+      priority: P2
+      severity: info
+      alert_scope: server
+    annotations:
+      summary: Woodpecker flush p99 exceeds 100 ms
+      description: Check local storage latency and contention. Woodpecker histogram units are milliseconds.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f4
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F4
+    for: 10m
+  - alert: WoodpeckerFlushLatencySevere
+    expr: histogram_quantile(0.99, sum by (cluster, namespace, woodpecker_id, node_id, le) (rate(woodpecker_server_file_flush_latency_bucket{ {{
+      include "wp.alertServer" . }} }[5m]))) > 500
+    labels:
+      rule_id: F5
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker flush p99 exceeds 500 ms
+      description: Investigate severe local disk degradation; this inhibits the lower flush-latency warning.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f5
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F5
+    for: 5m
+  - alert: WoodpeckerGRPCAppendLatencyHigh
+    expr: histogram_quantile(0.99, sum by (cluster, namespace, woodpecker_id, node_id, grpc_method, le) (rate(grpc_server_handling_seconds_bucket{ {{
+      include "wp.alertServer" . }},grpc_method=~"AddEntry|AddEntries"}[5m]))) > 1
+    labels:
+      rule_id: F6
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker append RPC p99 exceeds one second
+      description: Uses the live AddEntry/AddEntries method names and seconds, not milliseconds.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f6
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F6
+    for: 10m
+  - alert: WoodpeckerObjectStorageErrorRateHigh
+    expr: (sum by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_object_storage_operations_total{ {{
+      include "wp.alertServer" . }},status="error"}[5m])) / sum by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_object_storage_operations_total{ {{
+      include "wp.alertServer" . }} }[5m]))) > 0.05
+    labels:
+      rule_id: F7
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker object-store error ratio exceeds 5%
+      description: Inspect object-store connectivity, credentials, throttling, and the operation label.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f7
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F7
+    for: 5m
+  - alert: WoodpeckerObjectStorageUnavailable
+    expr: (sum by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_object_storage_operations_total{ {{
+      include "wp.alertServer" . }},status="error"}[5m])) / sum by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_object_storage_operations_total{ {{
+      include "wp.alertServer" . }} }[5m]))) > 0.5
+    labels:
+      rule_id: F8
+      priority: P0
+      severity: critical
+      alert_scope: server
+    annotations:
+      summary: Woodpecker object-store error ratio exceeds 50%
+      description: Compaction can stop and local WAL can grow even while short-term writes still succeed.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f8
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F8
+    for: 2m
+  - alert: WoodpeckerObjectStorageLatencyHigh
+    expr: histogram_quantile(0.99, sum by (cluster, namespace, woodpecker_id, node_id, operation, le) (rate(woodpecker_server_object_storage_operation_latency_bucket{ {{
+      include "wp.alertServer" . }} }[5m]))) > 5000
+    labels:
+      rule_id: F9
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker object-store p99 exceeds five seconds
+      description: The threshold is 5000 because the Woodpecker histogram uses milliseconds.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#f9
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-F9
+    for: 10m
+  - alert: WoodpeckerFlushQueueBacklog
+    expr: woodpecker_server_sync_scheduler_waiting{ {{ include "wp.alertServer" . }} } > 2 * woodpecker_server_sync_scheduler_capacity{ {{
+      include "wp.alertServer" . }} }
+    labels:
+      rule_id: S1
+      priority: P2
+      severity: info
+      alert_scope: server
+    annotations:
+      summary: Woodpecker flush queue exceeds twice its capacity
+      description: A busy pool alone is expected; investigate only sustained excessive queueing.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#s1
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-S1
+    for: 15m
+  - alert: WoodpeckerWritesStalled
+    expr: (sum by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_logstore_operations_total{ {{ include
+      "wp.alertServer" . }},operation=~"add_entry|add_entry_batch"}[5m])) == 0) and on (cluster, namespace, woodpecker_id,
+      node_id) (sum by (cluster, namespace, woodpecker_id, node_id) (woodpecker_server_logstore_active_segments{ {{ include
+      "wp.alertServer" . }} }) > 0) and on (cluster, namespace, woodpecker_id, node_id) (wp:server_expected_append_rate5m{ {{
+      include "wp.alertScope" . }} } > 0)
+    labels:
+      rule_id: S2
+      priority: P0
+      severity: critical
+      alert_scope: server
+    annotations:
+      summary: Woodpecker writes stalled despite expected client traffic
+      description: Requires current active-segment placement and positive client append traffic, so idle development clusters
+        do not page.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#s2
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-S2
+    for: 5m
+  - alert: WoodpeckerAppendErrorRateHigh
+    expr: (sum by (cluster, namespace, woodpecker_id, node_id) (rate(woodpecker_server_logstore_operations_total{ {{ include
+      "wp.alertServer" . }},operation=~"add_entry|add_entry_batch",status="error"}[5m])) / sum by (cluster, namespace, woodpecker_id,
+      node_id) (rate(woodpecker_server_logstore_operations_total{ {{ include "wp.alertServer" . }},operation=~"add_entry|add_entry_batch"}[5m])))
+      > 0.01
+    labels:
+      rule_id: S3
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker append error ratio exceeds 1%
+      description: Hard disk-watermark alerts inhibit this expected consequence on the same node.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#s3
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-S3
+    for: 5m
+  - alert: WoodpeckerSlowReplica
+    expr: max(histogram_quantile(0.99, sum by (cluster, namespace, woodpecker_id, node_id, le) (rate(woodpecker_server_file_flush_latency_bucket{ {{
+      include "wp.alertServer" . }} }[5m])))) / quantile(0.5, histogram_quantile(0.99, sum by (cluster, namespace, woodpecker_id,
+      node_id, le) (rate(woodpecker_server_file_flush_latency_bucket{ {{ include "wp.alertServer" . }} }[5m])))) > 5
+    labels:
+      rule_id: S4
+      priority: P1
+      severity: warning
+      alert_scope: cluster
+    annotations:
+      summary: Slowest Woodpecker replica exceeds median flush p99 by 5x
+      description: Inspect per-node flush latencies and the shared device before changing capacity.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#s4
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-S4
+    for: 10m
+  - alert: WoodpeckerSegmentPlacementSkew
+    expr: max(sum by (cluster, namespace, woodpecker_id, node_id) (woodpecker_server_logstore_active_segments{ {{ include "wp.alertServer"
+      . }} })) / avg(sum by (cluster, namespace, woodpecker_id, node_id) (woodpecker_server_logstore_active_segments{ {{ include
+      "wp.alertServer" . }} })) > 3
+    labels:
+      rule_id: S5
+      priority: P2
+      severity: info
+      alert_scope: cluster
+    annotations:
+      summary: Woodpecker active-segment placement skew exceeds 3x
+      description: Active segments are a placement approximation; selection-mode counters cannot identify an individual skewed
+        node.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#s5
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-S5
+    for: 15m
+  - alert: WoodpeckerLocalDataNotReclaimed
+    expr: (sum by (cluster, namespace, woodpecker_id, node_id) (increase(woodpecker_server_compacted_cleanup_reclaimed_bytes_total{ {{
+      include "wp.alertServer" . }} }[1h])) == 0) and (sum by (cluster, namespace, woodpecker_id, node_id) (delta(woodpecker_server_file_stored_bytes{ {{
+      include "wp.alertServer" . }} }[1h])) > 0)
+    labels:
+      rule_id: S6
+      priority: P1
+      severity: warning
+      alert_scope: server
+    annotations:
+      summary: Woodpecker local data grows without reclamation
+      description: Inspect compaction failures and object-store health before increasing storage.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#s6
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-S6
+    for: 15m
+  - alert: WoodpeckerClientAppendLatencyHigh
+    expr: ((sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_latency_count{ {{ include
+      "wp.alertClient" . }} }[5m])) - sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{ {{
+      include "wp.alertClient" . }},le="256"}[5m]))) / sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_latency_count{ {{
+      include "wp.alertClient" . }} }[5m]))) > 0.01
+    labels:
+      rule_id: C1
+      priority: P1
+      severity: warning
+      alert_scope: client
+    annotations:
+      summary: More than 1% of Woodpecker client writes exceed 256 ms
+      description: Counts actual histogram buckets instead of using a threshold outside the histogram range.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c1
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C1
+    for: 10m
+  - alert: WoodpeckerClientAppendLatencyRegression
+    expr: ((sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_latency_count{ {{ include
+      "wp.alertClient" . }} }[5m])) - sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{ {{
+      include "wp.alertClient" . }},le="256"}[5m]))) / sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_latency_count{ {{
+      include "wp.alertClient" . }} }[5m]))) > 3 * ((sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_latency_count{ {{
+      include "wp.alertClient" . }} }[5m] offset 7d)) - sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_latency_bucket{ {{
+      include "wp.alertClient" . }},le="256"}[5m] offset 7d))) / sum by (cluster, namespace, woodpecker_id, log_ns, log_id)
+      (rate(woodpecker_client_append_latency_count{ {{ include "wp.alertClient" . }} }[5m] offset 7d))) + 0.002
+    labels:
+      rule_id: C2
+      priority: P2
+      severity: info
+      alert_scope: client
+    annotations:
+      summary: Woodpecker slow-write ratio regressed against seven days ago
+      description: Requires retained samples for the same log identity seven days ago; missing history is a coverage gap,
+        not a healthy baseline.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c2
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C2
+    for: 10m
+  - alert: WoodpeckerClientPendingAppendsHigh
+    expr: sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (woodpecker_client_segment_handle_pending_append_ops{ {{
+      include "wp.alertClient" . }} }) > 5000
+    labels:
+      rule_id: C3
+      priority: P1
+      severity: warning
+      alert_scope: client
+    annotations:
+      summary: Woodpecker client pending appends exceed 5000
+      description: Inspect client and server backpressure before increasing queue limits.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c3
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C3
+    for: 5m
+  - alert: WoodpeckerClientWriteFrontierStalled
+    expr: (sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (delta(woodpecker_client_write_frontier_entry{ {{ include
+      "wp.alertClient" . }} }[5m])) == 0) and on (cluster, namespace, woodpecker_id, log_ns, log_id) (max by (cluster, namespace,
+      woodpecker_id, log_ns, log_id) (changes(woodpecker_client_write_frontier_segment{ {{ include "wp.alertClient" . }} }[5m]))
+      == 0) and on (cluster, namespace, woodpecker_id, log_ns, log_id) (sum by (cluster, namespace, woodpecker_id, log_ns,
+      log_id) (rate(woodpecker_client_append_requests_total{ {{ include "wp.alertClient" . }} }[5m])) > 0)
+    labels:
+      rule_id: C4
+      priority: P0
+      severity: critical
+      alert_scope: client
+    annotations:
+      summary: Woodpecker write frontier stopped despite write requests
+      description: Checks the gauge with delta and requires no segment rollover, avoiding equal entry IDs across different
+        segments.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c4
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C4
+    for: 5m
+  - alert: WoodpeckerClientReadLatencyHigh
+    expr: ((sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_read_latency_count{ {{ include
+      "wp.alertClient" . }} }[5m])) - sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_read_latency_bucket{ {{
+      include "wp.alertClient" . }},le="512"}[5m]))) / sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_read_latency_count{ {{
+      include "wp.alertClient" . }} }[5m]))) > 0.01
+    labels:
+      rule_id: C5
+      priority: P1
+      severity: warning
+      alert_scope: client
+    annotations:
+      summary: More than 1% of Woodpecker client reads exceed 512 ms
+      description: The maximum finite read bucket is 512 ms; a p99 > 1000 ms rule would never fire.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c5
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C5
+    for: 10m
+  - alert: WoodpeckerClientReadFrontierStalled
+    expr: (sum by (cluster, namespace, woodpecker_id, log_ns, log_id, reader_name) (delta(woodpecker_client_read_frontier_entry{ {{
+      include "wp.alertClient" . }} }[10m])) == 0) and on (cluster, namespace, woodpecker_id, log_ns, log_id, reader_name)
+      (max by (cluster, namespace, woodpecker_id, log_ns, log_id, reader_name) (changes(woodpecker_client_read_frontier_segment{ {{
+      include "wp.alertClient" . }} }[10m])) == 0) and on (cluster, namespace, woodpecker_id, log_ns, log_id) (sum by (cluster,
+      namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_append_requests_total{ {{ include "wp.alertClient"
+      . }} }[10m])) > 0)
+    labels:
+      rule_id: C6
+      priority: P0
+      severity: critical
+      alert_scope: client
+    annotations:
+      summary: Woodpecker reader frontier stopped while writes continue
+      description: Preserves reader_name and matches traffic by log identity. This rule cannot detect stalls if the image
+        exports no read-frontier gauges.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c6
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C6
+    for: 10m
+  - alert: WoodpeckerClientDirectReadErrors
+    expr: sum by (cluster, namespace, woodpecker_id, log_ns, log_id) (rate(woodpecker_client_direct_read_requests_total{ {{
+      include "wp.alertClient" . }},status="error"}[5m])) > 0
+    labels:
+      rule_id: C7
+      priority: P1
+      severity: warning
+      alert_scope: client
+    annotations:
+      summary: Woodpecker direct object-store reads fail
+      description: Direct reads can fall back to quorum reads; investigate the latency impact and object-store errors.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c7
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C7
+    for: 5m
+  - alert: WoodpeckerClientCompactionFailed
+    expr: sum by (cluster, namespace, woodpecker_id, log_ns, log_id, reason) (increase(woodpecker_client_segment_compaction_failures_total{ {{
+      include "wp.alertClient" . }} }[15m])) > 0
+    labels:
+      rule_id: C8
+      priority: P1
+      severity: warning
+      alert_scope: client
+    annotations:
+      summary: Woodpecker segment compaction failed
+      description: Use reason and the log identity to inspect why local WAL data is not being compacted.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c8
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C8
+  - alert: WoodpeckerActiveSegmentUnderReplicated
+    expr: count by (cluster, namespace, woodpecker_id, log_ns, log_id, segment_id) (max by (cluster, namespace, woodpecker_id,
+      log_ns, log_id, segment_id, node) (woodpecker_client_active_segment_node{ {{ include "wp.alertClient" . }} })) < scalar(wp:replica_factor{ {{
+      include "wp.alertScope" . }} })
+    labels:
+      rule_id: C9
+      priority: P0
+      severity: critical
+      alert_scope: client
+    annotations:
+      summary: Woodpecker active segment has too few distinct replicas
+      description: Counts distinct node endpoints, not duplicate reports from multiple client processes. Same-node/AZ deployment
+        is not HA.
+      runbook: deployments/milvus-full-stack-helm/ALERTING.md#c9
+      reference_url: http://remote-localhost:8000/woodpecker_resource_plan_and_scaling_and_altering/wp-scaling-alerting.html#x-C9
+    for: 5m

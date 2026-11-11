@@ -1,0 +1,20 @@
+# Development example. Replace credentials/endpoints for your environment.
+woodpecker:
+  storage:
+    type: minio
+    rootPath: ./quickstart-data
+etcd:
+  endpoints: ["127.0.0.1:12379"]
+  rootPath: quickstart-embedded-host
+minio:
+  address: 127.0.0.1
+  port: 19000
+  accessKeyID: minioadmin
+  secretAccessKey: minioadmin
+  useSSL: false
+  bucketName: quickstart-embedded-host
+  rootPath: wal
+  createBucket: true
+log:
+  level: error
+  stdout: true

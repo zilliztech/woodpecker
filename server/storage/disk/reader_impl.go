@@ -38,9 +38,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	SegmentReaderScope = "LocalFileReader"
-)
+var SegmentReaderScope = "LocalFileReader"
 
 var _ storage.Reader = (*LocalFileReaderAdv)(nil)
 
@@ -49,7 +47,7 @@ type LocalFileReaderAdv struct {
 	logId        int64
 	segId        int64
 	logIdStr     string // for metrics only
-	nsStr        string // for metrics only
+	logNs        string // for metrics only
 	filePath     string
 	maxBatchSize int64
 
@@ -79,7 +77,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
@@ -121,7 +119,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 		logId:        logId,
 		segId:        segId,
 		logIdStr:     strconv.FormatInt(logId, 10),
-		nsStr:        baseDir,
+		logNs:        baseDir,
 		filePath:     filePath,
 		maxBatchSize: maxBatchSize,
 		file:         file,
@@ -142,7 +140,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 		return nil, fmt.Errorf("try parse footer and indexes: %w", parseFooterErr)
 	}
 
-	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.nsStr, reader.logIdStr).Inc()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.logNs, reader.logIdStr).Inc()
 	logger.Ctx(ctx).Debug("local file readerAdv created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("currentFileSize", currentSize),
@@ -294,6 +292,9 @@ func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatchAdv")
 	defer sp.End()
 	logger.Ctx(ctx).Debug("ReadNextBatchAdv called",
+		zap.Int64("logId", r.logId),
+		zap.Int64("segId", r.segId),
+		zap.String("filePath", r.filePath),
 		zap.Int64("startEntryID", opt.StartEntryID),
 		zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 		zap.Bool("isIncompleteFile", r.isIncompleteFile.Load()),
@@ -306,8 +307,8 @@ func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 
 	// set adv options
 	if lastReadBatchInfo != nil {
-		r.flags.Store(uint32(lastReadBatchInfo.Flags))
-		r.version.Store(uint32(lastReadBatchInfo.Version))
+		r.flags.Store(lastReadBatchInfo.Flags)
+		r.version.Store(lastReadBatchInfo.Version)
 	} else {
 		// Try to parse footer and indexes
 		if err := r.tryParseFooterAndIndexesIfExists(ctx); err != nil {
@@ -380,12 +381,6 @@ func (r *LocalFileReaderAdv) readAtUnsafe(ctx context.Context, offset int64, len
 		}
 		return nil, err
 	}
-
-	logger.Ctx(ctx).Debug("data read successfully",
-		zap.String("filePath", r.filePath),
-		zap.Int64("offset", offset),
-		zap.Int("requestedLength", length),
-		zap.Int("actualRead", n))
 
 	return data[:n], nil
 }
@@ -574,8 +569,6 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) erro
 				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
 				zap.Uint32("expectedCrc", blockHeader.BlockCrc),
 				zap.Error(err))
-			currentOffset = blockDataOffset + int64(blockDataLength)
-			blockNumber++
 			break
 		}
 
@@ -615,8 +608,8 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) erro
 		zap.Int64("fileSize", currentFileSize),
 		zap.Int64("scannedOffset", currentOffset))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr, "loadAll", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -657,7 +650,7 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		if readErr != nil {
 			// if EOF, maybe the file is at the beginning or EOF, otherwise it maybe in error state
 			if io.EOF == readErr {
-				logger.Ctx(ctx).Info("no block header to read currently, retry later", zap.String("filePath", r.filePath), zap.Int64("blockNumber", currentBlockID))
+				logger.Ctx(ctx).Debug("no block header to read currently, retry later", zap.String("filePath", r.filePath), zap.Int64("blockNumber", currentBlockID))
 			} else {
 				logger.Ctx(ctx).Warn("Failed to read block header", zap.String("filePath", r.filePath), zap.Int64("blockNumber", currentBlockID), zap.Error(readErr))
 			}
@@ -768,11 +761,20 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	}
 
 	if len(entries) == 0 {
+		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Debug("no entry extracted",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
 			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
-			zap.Int("entriesReturned", len(entries)))
+			zap.Int("entriesReturned", len(entries)),
+			zap.Int64("startBlockID", startBlockID),
+			zap.Int64("startBlockOffset", startBlockOffset),
+			zap.Int64("endOffset", startOffset),
+			zap.Any("lastBlockInfo", lastBlockInfo),
+			zap.Bool("hasDataReadError", hasDataReadError),
+			zap.Duration("duration", time.Since(startTime)))
 		if !hasDataReadError {
 			// only read without dataReadError, determine whether it is an EOF
 			if !r.isIncompleteFile.Load() || r.footer != nil {
@@ -786,15 +788,23 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
 	} else {
 		logger.Ctx(ctx).Debug("read data blocks completed",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
 			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int("entriesReturned", len(entries)),
+			zap.Int64("readBytes", readBytes),
+			zap.Int64("startBlockID", startBlockID),
+			zap.Int64("startBlockOffset", startBlockOffset),
+			zap.Int64("endOffset", startOffset),
+			zap.Bool("hasDataReadError", hasDataReadError),
+			zap.Duration("duration", time.Since(startTime)),
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Add(float64(readBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState
@@ -874,12 +884,6 @@ func (r *LocalFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 		return err // Stop reading on error, return what we have so far
 	}
 
-	logger.Ctx(ctx).Debug("block data integrity verified successfully",
-		zap.String("filePath", r.filePath),
-		zap.Int64("blockNumber", currentBlockID),
-		zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
-		zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
-		zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 	return nil
 }
 
@@ -903,7 +907,7 @@ func (r *LocalFileReaderAdv) Close(ctx context.Context) error {
 		}
 		r.file = nil
 	}
-	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Dec()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }

@@ -20,6 +20,8 @@ import (
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/zilliztech/woodpecker/common/topology"
 )
 
 // Client metrics are initialized at package level so they are always safe to use.
@@ -37,7 +39,63 @@ var (
 		Subsystem: clientRole,
 		Name:      "log_name_id_mapping",
 		Help:      "Mapping between log name and id",
-	}, []string{"namespace", "log_name"})
+	}, []string{"log_ns", "log_name"})
+
+	// Segment state tracking: gauge value = number of segments in that state
+	WpClientSegmentState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_state",
+		Help:      "Number of segments in each state per log",
+	}, []string{"log_ns", "log_id", "state"})
+	WpClientWriteFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "write_frontier_segment",
+		Help:      "Highest segment id acknowledged for writes per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientWriteFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "write_frontier_entry",
+		Help:      "Highest entry id acknowledged in the write frontier segment per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientCompactionFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "compaction_frontier_segment",
+		Help:      "Highest segment id successfully sealed by compaction per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientCompactionFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "compaction_frontier_entry",
+		Help:      "Highest entry id in the highest segment successfully sealed by compaction per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientTruncationFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "truncation_frontier_segment",
+		Help:      "Current truncated segment id per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientTruncationFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "truncation_frontier_entry",
+		Help:      "Current truncated entry id per log",
+	}, []string{"log_ns", "log_id"})
+	WpClientReadFrontierSegment = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_frontier_segment",
+		Help:      "Read position of each reader: the segment it last delivered from, or the one it opened at",
+	}, []string{"log_ns", "log_id", "reader_name"})
+	WpClientReadFrontierEntry = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_frontier_entry",
+		Help:      "Read position of each reader within read_frontier_segment: the entry it last delivered, or the one it opened at",
+	}, []string{"log_ns", "log_id", "reader_name"})
 
 	// client append data to log
 	WpClientAppendRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -45,27 +103,21 @@ var (
 		Subsystem: clientRole,
 		Name:      "append_requests_total",
 		Help:      "Total number of append requests",
-	}, []string{"namespace", "log_id"})
-	WpClientAppendEntriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: woodpeckerNamespace,
-		Subsystem: clientRole,
-		Name:      "append_entries_total",
-		Help:      "Total number of entries appended",
-	}, []string{"namespace", "log_id"})
+	}, []string{"log_ns", "log_id"})
 	WpClientAppendBytes = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "append_bytes",
 		Help:      "Size of append operations in bytes",
 		Buckets:   prometheus.ExponentialBuckets(256, 4, 8), // 256B ~ 4MB
-	}, []string{"namespace", "log_id"})
+	}, []string{"log_ns", "log_id"})
 	WpClientAppendLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "append_latency",
 		Help:      "Latency of append operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"namespace", "log_id"})
+	}, []string{"log_ns", "log_id"})
 
 	// LogHandle metrics
 	WpLogHandleOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -73,14 +125,19 @@ var (
 		Subsystem: clientRole,
 		Name:      "log_handle_operations_total",
 		Help:      "Total number of log handle operations",
-	}, []string{"namespace", "log_id", "operation", "status"})
+	}, []string{"log_ns", "log_id", "operation", "status"})
 	WpLogHandleOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "log_handle_operation_latency",
 		Help:      "Latency of log handle operations",
-		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"namespace", "log_id", "operation", "status"})
+		// 1ms to 512ms. The third argument is the bucket COUNT, not an exponent:
+		// the first bucket's upper bound is `start` itself, so ten buckets run
+		// 1, 2, 4 ... 2^9 = 512 - reaching 1024 would take eleven. Slower samples
+		// land in the implicit +Inf bucket, and a quantile that falls there reads
+		// as a flat 512 however slow the operation actually was.
+		Buckets: prometheus.ExponentialBuckets(1, 2, 10),
+	}, []string{"log_ns", "log_id", "operation", "status"})
 
 	// Client read metrics
 	WpClientReadRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -88,20 +145,20 @@ var (
 		Subsystem: clientRole,
 		Name:      "read_requests_total",
 		Help:      "Total number of read requests",
-	}, []string{"namespace", "log_id"})
+	}, []string{"log_ns", "log_id"})
 	WpClientReadEntriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "read_entries_total",
 		Help:      "Total number of entries read",
-	}, []string{"namespace", "log_id"})
+	}, []string{"log_ns", "log_id"})
 	WpClientReadLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "read_latency",
 		Help:      "Latency of read operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"namespace", "log_id"})
+	}, []string{"log_ns", "log_id"})
 
 	// LogReader metrics
 	WpLogReaderBytesRead = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -109,14 +166,42 @@ var (
 		Subsystem: clientRole,
 		Name:      "reader_bytes_read",
 		Help:      "Total bytes read by log readers",
-	}, []string{"namespace", "log_id", "reader_name"})
+	}, []string{"log_ns", "log_id"})
 	WpLogReaderOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "reader_operation_latency",
 		Help:      "Latency of log reader operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"namespace", "log_id", "operation", "status"})
+	}, []string{"log_ns", "log_id", "operation", "status"})
+	// Failures to maintain a reader's temp info. A sustained non-zero rate means
+	// the reader's read position is going stale in metadata; if its session lease
+	// is also lost, the writer stops protecting the segments it still needs.
+	WpLogReaderTempInfoErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "reader_temp_info_errors_total",
+		Help:      "Total reader temp info maintenance failures, by operation",
+	}, []string{"log_ns", "log_id", "operation"})
+	// Forced read-position moves over physically cleaned (GC'd) segments. This is
+	// an expected outcome of truncation, but it is silent to the application, so
+	// it is counted here: entries in the skipped range are never delivered.
+	WpLogReaderGCSkipsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "reader_gc_skips_total",
+		Help:      "Total times a reader skipped forward over a cleaned(GC'd) segment range",
+	}, []string{"log_ns", "log_id"})
+
+	// Read-position moves over a range an operator declared unreadable. Unlike the GC skip above
+	// this is not an expected outcome of retention: entries in the range are given up on, so it is
+	// counted where an alert can see it.
+	WpLogReaderSkipRangeSkipsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "reader_skip_range_skips_total",
+		Help:      "Total times a reader moved past an operator-declared skip range",
+	}, []string{"log_ns", "log_id"})
 
 	// LogWriter metrics
 	WpLogWriterBytesWritten = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -124,14 +209,14 @@ var (
 		Subsystem: clientRole,
 		Name:      "writer_bytes_written",
 		Help:      "Total bytes written by log writers",
-	}, []string{"namespace", "log_id"})
+	}, []string{"log_ns", "log_id"})
 	WpLogWriterOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "writer_operation_latency",
 		Help:      "Latency of log writer operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"namespace", "log_id", "operation", "status"})
+	}, []string{"log_ns", "log_id", "operation", "status"})
 
 	// SegmentHandle metrics
 	WpSegmentHandleOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -139,20 +224,100 @@ var (
 		Subsystem: clientRole,
 		Name:      "segment_handle_operations_total",
 		Help:      "Total number of segment handle operations",
-	}, []string{"namespace", "log_id", "operation", "status"})
+	}, []string{"log_ns", "log_id", "operation", "status"})
 	WpSegmentHandleOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "segment_handle_operation_latency",
 		Help:      "Latency of segment handle operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"namespace", "log_id", "operation", "status"})
+	}, []string{"log_ns", "log_id", "operation", "status"})
 	WpSegmentHandlePendingAppendOps = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "segment_handle_pending_append_ops",
 		Help:      "Number of pending append operations in segment handles",
-	}, []string{"namespace", "log_id"})
+	}, []string{"log_ns", "log_id"})
+	// WpSegmentRolledTotal counts completed segment rolls by what triggered them. Roll size
+	// drives compaction volume, which is the dominant term in a logstore pod's object-storage
+	// egress, so this is the first place to look when that egress moves (issue #340).
+	WpSegmentRolledTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_rolled_total",
+		Help:      "Segment rolls that completed, by the limit that triggered them",
+	}, []string{"log_ns", "log_id", "reason"})
+	WpSegmentCompactionFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_compaction_failures_total",
+		Help:      "Total number of failed segment compaction operations split by stable reason",
+	}, []string{"log_ns", "log_id", "reason"})
+
+	// Active (writable) segment -> quorum node membership. One series per node of
+	// the current active segment; value is always 1. Series are deleted when the
+	// segment leaves the writable state, so a query reflects only the currently
+	// active segment of each log (used to verify node switching/failover).
+	WpActiveSegmentNode = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "active_segment_node",
+		Help:      "Quorum node membership of each log's current active (writable) segment (value always 1, one series per node)",
+	}, []string{"log_ns", "log_id", "segment_id", "node", "az"})
+
+	// Direct read metrics (client reads sealed segments directly from object storage)
+	WpClientDirectReadRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "direct_read_requests_total",
+		Help:      "Total number of direct read requests from object storage for sealed segments",
+	}, []string{"log_ns", "log_id", "status"})
+	WpClientDirectReadLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "direct_read_latency",
+		Help:      "Latency of direct read operations from object storage for sealed segments",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"log_ns", "log_id"})
+
+	// Replica placement metrics. az_scope is where the peer sits relative to
+	// this client — local / cross_az / cross_region, or unknown when either
+	// side's topology is unset. The node endpoint is deliberately NOT a label:
+	// it would multiply by log_id and explode cardinality, while az_scope stays
+	// at four values and answers the question that costs money.
+	WpClientReplicaAppendTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "replica_append_total",
+		Help:      "Total per-replica append outcomes, by how far the replica sits from this client",
+	}, []string{"log_ns", "log_id", "az_scope", "status"})
+	WpClientReplicaAppendBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "replica_append_bytes_total",
+		Help:      "Total bytes acknowledged per replica, by how far the replica sits from this client",
+	}, []string{"log_ns", "log_id", "az_scope"})
+	// Quorum reads of an active segment. A caught-up tail reader polls
+	// continuously and gets "no entry yet" every time, so that outcome is not
+	// counted here at all — only reads that moved data or genuinely failed.
+	WpClientQuorumReadTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "quorum_read_total",
+		Help:      "Total quorum read outcomes, by how far the serving replica sits from this client",
+	}, []string{"log_ns", "log_id", "az_scope", "status"})
+	WpClientQuorumReadBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "quorum_read_bytes_total",
+		Help:      "Total bytes read from quorum replicas, by how far the serving replica sits from this client",
+	}, []string{"log_ns", "log_id", "az_scope"})
+	WpClientReadFailoverTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_failover_total",
+		Help:      "Total quorum reads served by a replica in a different scope than the preferred one",
+	}, []string{"log_ns", "log_id", "from_scope", "to_scope"})
 
 	// Etcd Meta metrics
 	WpEtcdMetaOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -160,14 +325,14 @@ var (
 		Subsystem: clientRole,
 		Name:      "etcd_meta_operations_total",
 		Help:      "Total number of etcd meta related operations",
-	}, []string{"namespace", "operation", "status"})
+	}, []string{"log_ns", "operation", "status"})
 	WpEtcdMetaOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
 		Name:      "etcd_meta_operation_latency",
 		Help:      "Latency of etcd meta related operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"namespace", "operation", "status"})
+	}, []string{"log_ns", "operation", "status"})
 )
 
 // RegisterClientMetricsWithRegisterer registers all client-side metrics with the given registerer.
@@ -176,10 +341,19 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 	WpClientRegisterOnce.Do(func() {
 		// log name-id mapping
 		registerer.MustRegister(WpLogNameIdMapping)
+		// segment state tracking
+		registerer.MustRegister(WpClientSegmentState)
+		registerer.MustRegister(WpClientWriteFrontierSegment)
+		registerer.MustRegister(WpClientWriteFrontierEntry)
+		registerer.MustRegister(WpClientCompactionFrontierSegment)
+		registerer.MustRegister(WpClientCompactionFrontierEntry)
+		registerer.MustRegister(WpClientTruncationFrontierSegment)
+		registerer.MustRegister(WpClientTruncationFrontierEntry)
+		registerer.MustRegister(WpClientReadFrontierSegment)
+		registerer.MustRegister(WpClientReadFrontierEntry)
 
 		// Client append metrics
 		registerer.MustRegister(WpClientAppendRequestsTotal)
-		registerer.MustRegister(WpClientAppendEntriesTotal)
 		registerer.MustRegister(WpClientAppendBytes)
 		registerer.MustRegister(WpClientAppendLatency)
 		// LogHandle metrics
@@ -192,6 +366,9 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		// LogReader metrics
 		registerer.MustRegister(WpLogReaderBytesRead)
 		registerer.MustRegister(WpLogReaderOperationLatency)
+		registerer.MustRegister(WpLogReaderTempInfoErrorsTotal)
+		registerer.MustRegister(WpLogReaderGCSkipsTotal)
+		registerer.MustRegister(WpLogReaderSkipRangeSkipsTotal)
 		// LogWriter metrics
 		registerer.MustRegister(WpLogWriterBytesWritten)
 		registerer.MustRegister(WpLogWriterOperationLatency)
@@ -199,8 +376,108 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSegmentHandleOperationsTotal)
 		registerer.MustRegister(WpSegmentHandleOperationLatency)
 		registerer.MustRegister(WpSegmentHandlePendingAppendOps)
+		registerer.MustRegister(WpSegmentCompactionFailuresTotal)
+		registerer.MustRegister(WpSegmentRolledTotal)
+		// Active segment node membership
+		registerer.MustRegister(WpActiveSegmentNode)
+		// Direct read metrics
+		registerer.MustRegister(WpClientDirectReadRequestsTotal)
+		registerer.MustRegister(WpClientDirectReadLatency)
+		// Replica placement metrics
+		registerer.MustRegister(WpClientReplicaAppendTotal)
+		registerer.MustRegister(WpClientReplicaAppendBytesTotal)
+		registerer.MustRegister(WpClientQuorumReadTotal)
+		registerer.MustRegister(WpClientQuorumReadBytesTotal)
+		registerer.MustRegister(WpClientReadFailoverTotal)
 		// etcd meta metrics
 		registerer.MustRegister(WpEtcdMetaOperationsTotal)
 		registerer.MustRegister(WpEtcdMetaOperationLatency)
+	})
+}
+
+// UpdateSegmentState transitions the segment state gauge: decrements the old state count
+// and increments the new state count for the given logNs and log.
+func UpdateSegmentState(logNs, logId, oldState, newState string) {
+	WpClientSegmentState.WithLabelValues(logNs, logId, oldState).Dec()
+	WpClientSegmentState.WithLabelValues(logNs, logId, newState).Inc()
+}
+
+// The frontier setters record a position and nothing else, from wherever it is
+// reached. They rely on convergence rather than ordering: each publisher owns the
+// transition it reports, so the last write is the right one, and the write
+// frontier settles again on the next ack. Metrics are per-process, so two writers
+// export two series that never touch.
+//
+// The two halves are separately registered collectors, so a scrape can land
+// between them and see a position torn across a roll. Entry ids restart at zero
+// in every segment, which is also why lag is measured in segments.
+
+func SetWriteFrontier(logNs, logId string, segmentId, entryId int64) {
+	WpClientWriteFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientWriteFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
+}
+
+func SetCompactionFrontier(logNs, logId string, segmentId, entryId int64) {
+	WpClientCompactionFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientCompactionFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
+}
+
+func SetTruncationFrontier(logNs, logId string, segmentId, entryId int64) {
+	WpClientTruncationFrontierSegment.WithLabelValues(logNs, logId).Set(float64(segmentId))
+	WpClientTruncationFrontierEntry.WithLabelValues(logNs, logId).Set(float64(entryId))
+}
+
+// SetReadFrontier records where one reader has got to. It carries reader_name as
+// well, because a log can have several readers at different positions and they
+// are different series - a reader reopened at an earlier position is a different
+// reader_name and legitimately starts lower.
+func SetReadFrontier(logNs, logId, readerName string, segmentId, entryId int64) {
+	WpClientReadFrontierSegment.WithLabelValues(logNs, logId, readerName).Set(float64(segmentId))
+	WpClientReadFrontierEntry.WithLabelValues(logNs, logId, readerName).Set(float64(entryId))
+}
+
+// ClearReadFrontier drops a reader's series when it closes. reader_name carries a
+// unique id, so without this every reader ever opened would leave a series behind
+// with a frozen value -- readers are rebuilt on every scanner restart. Already
+// scraped samples stay in Prometheus, so nothing historical is lost; the series
+// simply stops appearing in instant queries.
+func ClearReadFrontier(logNs, logId, readerName string) {
+	labels := prometheus.Labels{"log_ns": logNs, "log_id": logId, "reader_name": readerName}
+	WpClientReadFrontierSegment.Delete(labels)
+	WpClientReadFrontierEntry.Delete(labels)
+}
+
+// ActiveSegmentNode is one replica of a log's current writable segment: the
+// node's endpoint and the availability zone it sits in (empty when the quorum
+// metadata carries no placement for it, which reaches the metric as "unknown").
+type ActiveSegmentNode struct {
+	Node string
+	AZ   string
+}
+
+// SetActiveSegmentNodes marks each node of an active (writable) segment's quorum
+// with a value of 1 (one series per node). Call when a segment becomes writable.
+//
+// The az label goes through topology.LabelOrUnknown, at the metric boundary
+// rather than at each caller: an unset AZ arrives here from two directions —
+// a server that registered with no placement, and a quorum entry with no
+// placement recorded for that node at all — and `az=""` looks identical to a
+// real value on a dashboard. Normalising here means no future caller can
+// reintroduce the blank label by forgetting to.
+func SetActiveSegmentNodes(logNs, logId, segmentId string, nodes []ActiveSegmentNode) {
+	for _, node := range nodes {
+		WpActiveSegmentNode.WithLabelValues(logNs, logId, segmentId, node.Node, topology.LabelOrUnknown(node.AZ)).Set(1)
+	}
+}
+
+// ClearActiveSegmentNodes deletes the per-node series for an active segment.
+// Call when the segment leaves the writable state (completed / rolling / closed).
+// It matches on the segment alone, so a quorum whose membership or placement
+// changed since it was published is still removed in full.
+func ClearActiveSegmentNodes(logNs, logId, segmentId string) {
+	WpActiveSegmentNode.DeletePartialMatch(prometheus.Labels{
+		"log_ns":     logNs,
+		"log_id":     logId,
+		"segment_id": segmentId,
 	})
 }

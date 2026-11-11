@@ -18,6 +18,7 @@ package tracer
 
 import (
 	"context"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 	"go.opentelemetry.io/otel"
@@ -30,26 +31,38 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdk "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
-	"sync"
 
 	"github.com/zilliztech/woodpecker/common/config"
 )
 
 var (
 	initOnce sync.Once
+	initErr  error
 )
 
+// ResetForTesting resets the tracer initialization state so InitTracer can be called again.
+// This is intended for use in tests only.
+func ResetForTesting() {
+	initOnce = sync.Once{}
+	initErr = nil
+}
+
 func InitTracer(cfg *config.Configuration, serviceName string, nodeID int64) error {
+	// A disabled client exporter must not replace its host application's
+	// provider/propagator or consume initialization for a later enabled exporter.
+	if cfg.Trace.Exporter == "noop" {
+		return nil
+	}
 	initOnce.Do(func() {
-		err := Init(cfg, serviceName, nodeID)
-		if err != nil {
-			panic(err)
-		}
+		initErr = Init(cfg, serviceName, nodeID)
 	})
-	return nil
+	return initErr
 }
 
 func Init(cfg *config.Configuration, serviceName string, nodeID int64) error {
+	if cfg.Trace.Exporter == "noop" {
+		return nil
+	}
 	exp, err := CreateTracerExporter(cfg)
 	if err != nil {
 		return err
@@ -93,7 +106,8 @@ func CreateTracerExporter(cfg *config.Configuration) (sdk.SpanExporter, error) {
 	switch cfg.Trace.Exporter {
 	case "jaeger":
 		exp, err = jaeger.New(jaeger.WithCollectorEndpoint(
-			jaeger.WithEndpoint(cfg.Trace.Jaeger.URL)))
+			jaeger.WithEndpoint(cfg.Trace.Jaeger.URL),
+		))
 	case "otlp":
 		secure := cfg.Trace.Otlp.Secure
 		switch cfg.Trace.Otlp.Method {

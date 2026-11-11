@@ -18,15 +18,19 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestNewConfiguration test new Configuration
 func TestNewConfiguration(t *testing.T) {
 	tempFile, err := os.OpenFile("../../config/woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
 	assert.NoError(t, err)
+	defer tempFile.Close()
 	// load configuration
 	config, err := NewConfiguration(tempFile.Name())
 	if err != nil {
@@ -38,25 +42,41 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, "woodpecker", config.Woodpecker.Meta.Prefix)
 	assert.Equal(t, 10000, config.Woodpecker.Client.SegmentAppend.QueueSize)
 	assert.Equal(t, 3, config.Woodpecker.Client.SegmentAppend.MaxRetries)
+	assert.Equal(t, 1000, config.Woodpecker.Client.SegmentAppend.MaxBatchEntries)
+	assert.Equal(t, int64(2000000), config.Woodpecker.Client.SegmentAppend.MaxBatchBytes.Int64())
 	assert.Equal(t, int64(256000000), config.Woodpecker.Client.SegmentRollingPolicy.MaxSize.Int64())
 	assert.Equal(t, 600, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds())
 	assert.Equal(t, int64(1000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval.Seconds())
-	assert.Equal(t, 1, len(config.Woodpecker.Client.Quorum.BufferPools))
-	assert.Equal(t, "default-region-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
-	assert.Equal(t, []string{}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
-	assert.Equal(t, "soft", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
-	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
-	assert.Equal(t, "random", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
-	assert.Equal(t, 0, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
+	assert.Equal(t, 330, config.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds())
+	assert.Equal(t, 60, config.Woodpecker.Client.Auditor.CompactionPassBudget.Seconds())
+	assert.Equal(t, 1, len(config.Woodpecker.Client.Quorum.BufferPools.Get()))
+	assert.Equal(t, "default-region-pool", config.Woodpecker.Client.Quorum.BufferPools.Get()[0].Name)
+	assert.Equal(t, []string{}, config.Woodpecker.Client.Quorum.BufferPools.Get()[0].Seeds)
+	assert.Equal(t, "soft", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode.Get())
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
+	assert.Equal(t, "random", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy.Get())
+	assert.Equal(t, 0, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()))
 	assert.Equal(t, 3, config.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, config.Woodpecker.Client.SessionMonitor.MaxFailures)
+	// DirectRead config from yaml
+	assert.True(t, config.Woodpecker.Client.DirectRead.Enabled)
+	assert.Equal(t, int64(16777216), config.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
+	assert.Equal(t, 4, config.Woodpecker.Client.DirectRead.MaxFetchThreads)
+	assert.Zero(t, config.Woodpecker.Client.GRPC.ClientMaxSendSize)
+	assert.Zero(t, config.Woodpecker.Client.GRPC.ClientMaxRecvSize)
+	sendSize, recvSize, legacySend, legacyRecv := config.Woodpecker.ResolveClientGRPCMessageSizes()
+	assert.Equal(t, 268435456, sendSize)
+	assert.Equal(t, 536870912, recvSize)
+	assert.False(t, legacySend)
+	assert.False(t, legacyRecv)
 	// Test the getter methods for backward compatibility
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetWriteQuorumSize())
 	assert.Equal(t, 2, config.Woodpecker.Client.Quorum.GetAckQuorumSize())
 	assert.Equal(t, 200, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
 	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
+	assert.Equal(t, 1, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds())
 	assert.Equal(t, 10000, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
 	assert.Equal(t, int64(256000000), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64())
 	assert.Equal(t, 5, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries)
@@ -64,9 +84,13 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
 	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold)
+	assert.Equal(t, 32, config.Woodpecker.Logstore.SyncScheduler.MaxWorkers)
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
+	assert.Equal(t, 300, config.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
+	assert.Equal(t, int64(1000000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxInflightMemory.Int64())
+	assert.InDelta(t, 0.7, config.Woodpecker.Logstore.SegmentCompactionPolicy.MemoryHighWatermark, 1e-9)
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, 259200, config.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
@@ -75,11 +99,18 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 268435456, config.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize())
 	assert.Equal(t, 268435456, config.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize())
 	assert.Equal(t, 536870912, config.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
+	assertDefaultCallBounds(t, config)
 	assert.Equal(t, 60, config.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, config.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, config.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
+	assert.Equal(t, 5, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())            // near-real-time reclaim
+	assert.Equal(t, 2, config.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds())        // near-real-time reclaim
+	assert.Equal(t, 5, config.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Seconds()) // compacted local data.log reclaim scan
+	assert.Equal(t, 1800, config.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
+	assert.Equal(t, 1024, config.Woodpecker.Runtime.OpRegistry.Capacity)
+	assert.Equal(t, 30, config.Woodpecker.Runtime.OpRegistry.WarnAge.Seconds())
 	assert.Equal(t, "info", config.Log.Level)
 	assert.Equal(t, "text", config.Log.Format)
 	assert.True(t, config.Log.Stdout)
@@ -126,30 +157,49 @@ func TestNewConfiguration(t *testing.T) {
 	defaultConfig, err := NewConfiguration()
 	assert.NoError(t, err)
 
+	sendSize, recvSize, legacySend, legacyRecv = defaultConfig.Woodpecker.ResolveClientGRPCMessageSizes()
+	assert.Equal(t, defaultClientMaxSendSize, sendSize)
+	assert.Equal(t, defaultClientMaxRecvSize, recvSize)
+	assert.False(t, legacySend)
+	assert.False(t, legacyRecv)
+	assert.Zero(t, defaultConfig.Woodpecker.Client.GRPC.ClientMaxSendSize)
+	assert.Zero(t, defaultConfig.Woodpecker.Client.GRPC.ClientMaxRecvSize)
+	assert.Zero(t, defaultConfig.Woodpecker.Logstore.GRPCConfig.ClientMaxSendSize)
+	assert.Zero(t, defaultConfig.Woodpecker.Logstore.GRPCConfig.ClientMaxRecvSize)
+
 	// test default configuration
 	assert.Equal(t, "etcd", defaultConfig.Woodpecker.Meta.Type)
 	assert.Equal(t, "woodpecker", defaultConfig.Woodpecker.Meta.Prefix)
 	assert.Equal(t, 100, defaultConfig.Woodpecker.Client.SegmentAppend.QueueSize)
 	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.SegmentAppend.MaxRetries)
+	assert.Equal(t, 1000, config.Woodpecker.Client.SegmentAppend.MaxBatchEntries)
+	assert.Equal(t, int64(2000000), config.Woodpecker.Client.SegmentAppend.MaxBatchBytes.Int64())
 	assert.Equal(t, int64(100000000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxSize.Int64())
 	assert.Equal(t, 800, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds())
 	assert.Equal(t, int64(1000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.Auditor.MaxInterval.Seconds())
-	assert.Equal(t, 1, len(defaultConfig.Woodpecker.Client.Quorum.BufferPools))
-	assert.Equal(t, "default-pool", defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Name)
-	assert.Equal(t, []string{}, defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
-	assert.Equal(t, "soft", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
-	assert.Equal(t, "random", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
-	assert.Equal(t, 0, len(defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
+	assert.Equal(t, 330, defaultConfig.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds())
+	assert.Equal(t, 60, defaultConfig.Woodpecker.Client.Auditor.CompactionPassBudget.Seconds())
+	assert.Equal(t, 1, len(defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()))
+	assert.Equal(t, "default-pool", defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()[0].Name)
+	assert.Equal(t, []string{}, defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()[0].Seeds)
+	assert.Equal(t, "soft", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode.Get())
+	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
+	assert.Equal(t, "random", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Strategy.Get())
+	assert.Equal(t, 0, len(defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()))
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.SessionMonitor.MaxFailures)
+	// DirectRead default config
+	assert.True(t, defaultConfig.Woodpecker.Client.DirectRead.Enabled)
+	assert.Equal(t, int64(16*1024*1024), defaultConfig.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
+	assert.Equal(t, 4, defaultConfig.Woodpecker.Client.DirectRead.MaxFetchThreads)
 	// Test the getter methods for backward compatibility
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetWriteQuorumSize())
 	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.Quorum.GetAckQuorumSize())
 	assert.Equal(t, 1000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
+	assert.Equal(t, 1, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds())
 	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
 	assert.Equal(t, int64(100000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64())
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries)
@@ -157,9 +207,13 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
 	assert.Equal(t, 10, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold)
+	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SyncScheduler.MaxWorkers)
 	assert.Equal(t, int64(32000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
+	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
+	assert.Equal(t, int64(1000000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxInflightMemory.Int64())
+	assert.InDelta(t, 0.7, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MemoryHighWatermark, 1e-9)
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, 259200, defaultConfig.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
@@ -168,11 +222,18 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 268435456, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize())
 	assert.Equal(t, 268435456, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize())
 	assert.Equal(t, 536870912, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
+	assertDefaultCallBounds(t, defaultConfig)
 	assert.Equal(t, 60, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
 	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
 	assert.Equal(t, 15, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
+	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())            // near-real-time reclaim
+	assert.Equal(t, 2, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds())        // near-real-time reclaim
+	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Seconds()) // compacted local data.log reclaim scan
+	assert.Equal(t, 1800, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
+	assert.Equal(t, 1024, defaultConfig.Woodpecker.Runtime.OpRegistry.Capacity)
+	assert.Equal(t, 30, defaultConfig.Woodpecker.Runtime.OpRegistry.WarnAge.Seconds())
 	assert.Equal(t, "info", defaultConfig.Log.Level)
 	assert.Equal(t, "text", defaultConfig.Log.Format)
 	assert.True(t, defaultConfig.Log.Stdout)
@@ -216,10 +277,125 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 0, defaultConfig.Minio.ListObjectsMaxKeys)
 }
 
+func TestResolveClientGRPCMessageSizes(t *testing.T) {
+	tests := []struct {
+		name           string
+		clientSend     ByteSize
+		clientRecv     ByteSize
+		legacySend     ByteSize
+		legacyRecv     ByteSize
+		wantSend       int
+		wantRecv       int
+		wantLegacySend bool
+		wantLegacyRecv bool
+	}{
+		{
+			name:     "defaults when unset",
+			wantSend: defaultClientMaxSendSize,
+			wantRecv: defaultClientMaxRecvSize,
+		},
+		{
+			name:           "legacy values are used when new values are unset",
+			legacySend:     ByteSize(100),
+			legacyRecv:     ByteSize(200),
+			wantSend:       100,
+			wantRecv:       200,
+			wantLegacySend: true,
+			wantLegacyRecv: true,
+		},
+		{
+			name:           "new values override legacy values independently",
+			clientSend:     ByteSize(300),
+			legacySend:     ByteSize(100),
+			legacyRecv:     ByteSize(200),
+			wantSend:       300,
+			wantRecv:       200,
+			wantLegacyRecv: true,
+		},
+		{
+			name:       "new values override both legacy values",
+			clientSend: ByteSize(300),
+			clientRecv: ByteSize(400),
+			legacySend: ByteSize(100),
+			legacyRecv: ByteSize(200),
+			wantSend:   300,
+			wantRecv:   400,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &WoodpeckerConfig{
+				Client: ClientConfig{
+					GRPC: GRPCClientConfig{
+						ClientMaxSendSize: tt.clientSend,
+						ClientMaxRecvSize: tt.clientRecv,
+					},
+				},
+				Logstore: LogstoreConfig{
+					GRPCConfig: GRPCConfig{
+						ClientMaxSendSize: tt.legacySend,
+						ClientMaxRecvSize: tt.legacyRecv,
+					},
+				},
+			}
+			send, recv, legacySend, legacyRecv := cfg.ResolveClientGRPCMessageSizes()
+			assert.Equal(t, tt.wantSend, send)
+			assert.Equal(t, tt.wantRecv, recv)
+			assert.Equal(t, tt.wantLegacySend, legacySend)
+			assert.Equal(t, tt.wantLegacyRecv, legacyRecv)
+		})
+	}
+}
+
+func TestResolveClientGRPCMessageSizesFromYAML(t *testing.T) {
+	configFile := filepath.Join(t.TempDir(), "woodpecker.yaml")
+	yamlConfig := []byte(`woodpecker:
+  client:
+    grpc:
+      clientMaxSendSize: 300
+  logstore:
+    grpc:
+      clientMaxSendSize: 100
+      clientMaxRecvSize: 200
+`)
+	require.NoError(t, os.WriteFile(configFile, yamlConfig, 0o600))
+
+	cfg, err := NewConfiguration(configFile)
+	require.NoError(t, err)
+
+	send, recv, legacySend, legacyRecv := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
+	assert.Equal(t, 300, send)
+	assert.Equal(t, 200, recv)
+	assert.False(t, legacySend)
+	assert.True(t, legacyRecv)
+}
+
+func TestResolveClientGRPCMessageSizesFromLayeredLegacyYAML(t *testing.T) {
+	legacyConfigFile := filepath.Join(t.TempDir(), "legacy.yaml")
+	legacyConfig := []byte(`woodpecker:
+  logstore:
+    grpc:
+      clientMaxSendSize: 1073741824
+      clientMaxRecvSize: 1073741824
+`)
+	require.NoError(t, os.WriteFile(legacyConfigFile, legacyConfig, 0o600))
+
+	cfg, err := NewConfiguration("../../config/woodpecker.yaml", legacyConfigFile)
+	require.NoError(t, err)
+
+	send, recv, legacySend, legacyRecv := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
+	assert.Equal(t, 1073741824, send)
+	assert.Equal(t, 1073741824, recv)
+	assert.True(t, legacySend)
+	assert.True(t, legacyRecv)
+}
+
 func TestConfigurationOverwrite(t *testing.T) {
 	// config file 1
 	cfgFile, err := os.OpenFile("../../config/woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
 	assert.NoError(t, err)
+	defer cfgFile.Close()
 
 	// config file2
 	extraCfgContent := `woodpecker:
@@ -289,27 +465,27 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, 2200, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds())
 	assert.Equal(t, int64(2000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval.Seconds())
-	assert.Equal(t, 2, len(config.Woodpecker.Client.Quorum.BufferPools))
-	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
-	assert.Equal(t, []string{"test-node1", "test-node2"}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
-	assert.Equal(t, "region-b-pool", config.Woodpecker.Client.Quorum.BufferPools[1].Name)
-	assert.Equal(t, []string{"test-node3", "test-node4", "test-node5"}, config.Woodpecker.Client.Quorum.BufferPools[1].Seeds)
-	assert.Equal(t, "hard", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
-	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
-	assert.Equal(t, "custom", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
-	assert.Equal(t, 5, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
-	assert.Equal(t, "replica-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Name)
-	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Region)
-	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Az)
-	assert.Equal(t, "test-rg-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].ResourceGroup)
-	assert.Equal(t, "replica-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Name)
-	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Region)
-	assert.Equal(t, "test-az-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Az)
-	assert.Equal(t, "test-rg-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].ResourceGroup)
-	assert.Equal(t, "replica-3", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Name)
-	assert.Equal(t, "region-b-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Region)
-	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Az)
-	assert.Equal(t, "test-rg-3", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].ResourceGroup)
+	assert.Equal(t, 2, len(config.Woodpecker.Client.Quorum.BufferPools.Get()))
+	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.BufferPools.Get()[0].Name)
+	assert.Equal(t, []string{"test-node1", "test-node2"}, config.Woodpecker.Client.Quorum.BufferPools.Get()[0].Seeds)
+	assert.Equal(t, "region-b-pool", config.Woodpecker.Client.Quorum.BufferPools.Get()[1].Name)
+	assert.Equal(t, []string{"test-node3", "test-node4", "test-node5"}, config.Woodpecker.Client.Quorum.BufferPools.Get()[1].Seeds)
+	assert.Equal(t, "hard", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode.Get())
+	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
+	assert.Equal(t, "custom", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy.Get())
+	assert.Equal(t, 5, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()))
+	assert.Equal(t, "replica-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[0].Name)
+	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[0].Region)
+	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[0].Az)
+	assert.Equal(t, "test-rg-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[0].ResourceGroup)
+	assert.Equal(t, "replica-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[1].Name)
+	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[1].Region)
+	assert.Equal(t, "test-az-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[1].Az)
+	assert.Equal(t, "test-rg-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[1].ResourceGroup)
+	assert.Equal(t, "replica-3", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[2].Name)
+	assert.Equal(t, "region-b-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[2].Region)
+	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[2].Az)
+	assert.Equal(t, "test-rg-3", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()[2].ResourceGroup)
 	// Test the getter methods for backward compatibility with overridden values
 	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.GetWriteQuorumSize())
@@ -330,9 +506,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 			name: "Valid configuration with strategy",
 			config: QuorumConfig{
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     3,
-					Strategy:     "single-az-single-rg",
+					AffinityMode: NewDynamic("soft"),
+					Replicas:     NewDynamic(3),
+					Strategy:     NewDynamic("single-az-single-rg"),
 				},
 			},
 			expectError: false,
@@ -341,9 +517,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 			name: "Valid configuration with replicas=5",
 			config: QuorumConfig{
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     5,
-					Strategy:     "random",
+					AffinityMode: NewDynamic("soft"),
+					Replicas:     NewDynamic(5),
+					Strategy:     NewDynamic("random"),
 				},
 			},
 			expectError: false,
@@ -352,9 +528,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 			name: "Invalid affinity mode",
 			config: QuorumConfig{
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "invalid",
-					Replicas:     3,
-					Strategy:     "single-az-single-rg",
+					AffinityMode: NewDynamic("invalid"),
+					Replicas:     NewDynamic(3),
+					Strategy:     NewDynamic("single-az-single-rg"),
 				},
 			},
 			expectError: true,
@@ -363,11 +539,11 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Empty buffer pools",
 			config: QuorumConfig{
-				BufferPools: []QuorumBufferPool{}, // Empty buffer pools should cause error
+				BufferPools: NewDynamic([]QuorumBufferPool{}), // Empty buffer pools should cause error
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     3,
-					Strategy:     "random",
+					AffinityMode: NewDynamic("soft"),
+					Replicas:     NewDynamic(3),
+					Strategy:     NewDynamic("random"),
 				},
 			},
 			expectError: true,
@@ -376,15 +552,15 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Valid custom placement configuration",
 			config: QuorumConfig{
-				BufferPools: []QuorumBufferPool{
+				BufferPools: NewDynamic([]QuorumBufferPool{
 					{Name: "us-east-1", Seeds: []string{"seed1:8080"}},
 					{Name: "us-west-2", Seeds: []string{"seed2:8080"}},
-				},
+				}),
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "hard",
-					Replicas:     3,
-					Strategy:     "custom",
-					CustomPlacement: []CustomPlacement{
+					AffinityMode: NewDynamic("hard"),
+					Replicas:     NewDynamic(3),
+					Strategy:     NewDynamic("custom"),
+					CustomPlacement: NewDynamic([]CustomPlacement{
 						{
 							Name:          "replica-1",
 							Region:        "us-east-1",
@@ -403,7 +579,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 							Az:            "us-west-2a",
 							ResourceGroup: "rg-3",
 						},
-					},
+					}),
 				},
 			},
 			expectError: false,
@@ -430,7 +606,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 							MaxBlocks:   1000,
 						},
 						Auditor: AuditorConfig{
-							MaxInterval: NewDurationSecondsFromInt(5),
+							MaxInterval:              NewDurationSecondsFromInt(5),
+							CompactionAttemptTimeout: NewDurationSecondsFromInt(330),
+							CompactionPassBudget:     NewDurationSecondsFromInt(60),
 						},
 						Quorum: tt.config,
 					},
@@ -438,6 +616,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 						SegmentSyncPolicy: SegmentSyncPolicyConfig{
 							MaxInterval:                NewDurationMillisecondsFromInt(1000),
 							MaxIntervalForLocalStorage: NewDurationMillisecondsFromInt(5),
+							MaxIntervalForService:      NewDurationMillisecondsFromInt(1),
 							MaxEntries:                 2000,
 							MaxBytes:                   NewByteSize(100000000),
 							MaxFlushRetries:            3,
@@ -446,14 +625,26 @@ func TestQuorumConfigValidation(t *testing.T) {
 							MaxFlushThreads:            8,
 							CheckpointThreshold:        10,
 						},
+						SyncScheduler: SyncSchedulerConfig{
+							MaxWorkers: 32,
+						},
 						SegmentCompactionPolicy: SegmentCompactionPolicy{
-							MaxBytes:           NewByteSize(32000000),
-							MaxParallelUploads: 4,
-							MaxParallelReads:   8,
+							MaxBytes:            NewByteSize(32000000),
+							MaxParallelUploads:  4,
+							MaxParallelReads:    8,
+							Timeout:             NewDurationSecondsFromInt(300),
+							MaxInflightMemory:   NewByteSize(1000000000),
+							MemoryHighWatermark: 0.7,
 						},
 						SegmentReadPolicy: SegmentReadPolicyConfig{
 							MaxBatchSize:    NewByteSize(16000000),
 							MaxFetchThreads: 32,
+						},
+						MaintenanceStrategy: MaintenanceStrategyConfig{
+							DeleteGracePeriod:            NewDurationSecondsFromInt(259200),
+							DeleteReclaimInterval:        NewDurationSecondsFromInt(600),
+							CompactedFileCleanupInterval: NewDurationSecondsFromInt(5),
+							ReconcileMinDataLogAge:       NewDurationSecondsFromInt(1800),
 						},
 					},
 					Storage: StorageConfig{
@@ -468,13 +659,13 @@ func TestQuorumConfigValidation(t *testing.T) {
 
 			// Add required BufferPools for quorum config validation to pass
 			// But skip for the "Empty buffer pools" test case
-			if len(config.Woodpecker.Client.Quorum.BufferPools) == 0 && tt.name != "Empty buffer pools" {
-				config.Woodpecker.Client.Quorum.BufferPools = []QuorumBufferPool{
+			if len(config.Woodpecker.Client.Quorum.BufferPools.Get()) == 0 && tt.name != "Empty buffer pools" {
+				config.Woodpecker.Client.Quorum.BufferPools = NewDynamic([]QuorumBufferPool{
 					{
 						Name:  "test-pool",
 						Seeds: []string{"test-seed:8080"},
 					},
-				}
+				})
 			}
 
 			err := config.Validate()
@@ -488,12 +679,530 @@ func TestQuorumConfigValidation(t *testing.T) {
 	}
 }
 
+func TestFencePolicyConfig(t *testing.T) {
+	t.Run("IsConditionWriteEnabled", func(t *testing.T) {
+		f := &FencePolicyConfig{ConditionWrite: "enable"}
+		assert.True(t, f.IsConditionWriteEnabled())
+		assert.False(t, f.IsConditionWriteDisabled())
+		assert.False(t, f.IsConditionWriteAuto())
+	})
+
+	t.Run("IsConditionWriteDisabled", func(t *testing.T) {
+		f := &FencePolicyConfig{ConditionWrite: "disable"}
+		assert.False(t, f.IsConditionWriteEnabled())
+		assert.True(t, f.IsConditionWriteDisabled())
+		assert.False(t, f.IsConditionWriteAuto())
+	})
+
+	t.Run("IsConditionWriteAuto", func(t *testing.T) {
+		f := &FencePolicyConfig{ConditionWrite: "auto"}
+		assert.False(t, f.IsConditionWriteEnabled())
+		assert.False(t, f.IsConditionWriteDisabled())
+		assert.True(t, f.IsConditionWriteAuto())
+	})
+
+	t.Run("SetConditionWriteEnableOrNot", func(t *testing.T) {
+		f := &FencePolicyConfig{}
+		f.SetConditionWriteEnableOrNot(true)
+		assert.True(t, f.IsConditionWriteEnabled())
+		f.SetConditionWriteEnableOrNot(false)
+		assert.True(t, f.IsConditionWriteDisabled())
+	})
+}
+
+func TestStorageConfig_IsStorageLocal(t *testing.T) {
+	s := &StorageConfig{Type: "local"}
+	assert.True(t, s.IsStorageLocal())
+	assert.False(t, s.IsStorageMinio())
+	assert.False(t, s.IsStorageService())
+}
+
+func TestStorageConfig_IsStorageMinio(t *testing.T) {
+	for _, typ := range []string{"minio", "default", ""} {
+		s := &StorageConfig{Type: typ}
+		assert.True(t, s.IsStorageMinio(), "type=%q should be minio", typ)
+	}
+	s := &StorageConfig{Type: "local"}
+	assert.False(t, s.IsStorageMinio())
+}
+
+// TestMinioCreateBucketConfig verifies createBucket parsing both ways. The default
+// is true (also asserted in TestNewConfiguration); here we additionally cover the
+// false override, used by multi-tenant service deployments that manage their own
+// buckets so the node does not check/create a global bucket at startup.
+func TestMinioCreateBucketConfig(t *testing.T) {
+	t.Run("default is true", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		assert.NoError(t, err)
+		assert.True(t, cfg.Minio.CreateBucket)
+	})
+
+	t.Run("yaml can disable createBucket", func(t *testing.T) {
+		content := `woodpecker:
+  meta:
+    type: etcd
+    prefix: woodpecker
+  storage:
+    type: default
+    rootPath: /tmp/test
+minio:
+  createBucket: false`
+		tmpFile, err := os.CreateTemp("", "create_bucket_*.yaml")
+		assert.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		_, err = tmpFile.WriteString(content)
+		assert.NoError(t, err)
+		tmpFile.Close()
+
+		cfg, err := NewConfiguration(tmpFile.Name())
+		assert.NoError(t, err)
+		assert.False(t, cfg.Minio.CreateBucket)
+	})
+}
+
+func TestNewConfiguration_FileErrors(t *testing.T) {
+	// Non-existent file
+	_, err := NewConfiguration("/nonexistent/path/file.yaml")
+	assert.Error(t, err)
+
+	// Empty file
+	tmpFile, err := os.CreateTemp("", "empty_*.yaml")
+	assert.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+	cfg, err := NewConfiguration(tmpFile.Name())
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+
+	// Invalid YAML
+	tmpBad, err := os.CreateTemp("", "bad_*.yaml")
+	assert.NoError(t, err)
+	defer os.Remove(tmpBad.Name())
+	_, err = tmpBad.WriteString("{{invalid yaml")
+	assert.NoError(t, err)
+	tmpBad.Close()
+	_, err = NewConfiguration(tmpBad.Name())
+	assert.Error(t, err)
+}
+
+func TestNewConfiguration_ValidationFailure(t *testing.T) {
+	// YAML with invalid meta type should fail validation
+	tmpFile, err := os.CreateTemp("", "invalid_meta_*.yaml")
+	assert.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	_, err = tmpFile.WriteString("woodpecker:\n  meta:\n    type: invalid\n    prefix: test\n")
+	assert.NoError(t, err)
+	tmpFile.Close()
+	_, err = NewConfiguration(tmpFile.Name())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid meta type")
+}
+
+func TestValidateMetaConfig_Errors(t *testing.T) {
+	cfg, _ := NewConfiguration()
+
+	// Invalid type
+	cfg.Woodpecker.Meta.Type = "invalid"
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid meta type")
+
+	// Empty prefix
+	cfg.Woodpecker.Meta.Type = "etcd"
+	cfg.Woodpecker.Meta.Prefix = ""
+	err = cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "prefix cannot be empty")
+}
+
+func TestValidateClientConfig_Errors(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	t.Run("QueueSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentAppend.QueueSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "queue size must be positive")
+	})
+
+	t.Run("MaxRetries<0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentAppend.MaxRetries = -1
+		assert.ErrorContains(t, cfg.Validate(), "max retries cannot be negative")
+	})
+
+	t.Run("RollingPolicy MaxSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "max size must be positive")
+	})
+
+	t.Run("RollingPolicy MaxInterval<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "max interval must be positive")
+	})
+
+	t.Run("RollingPolicy MaxBlocks<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks = 0
+		assert.ErrorContains(t, cfg.Validate(), "max blocks must be positive")
+	})
+
+	t.Run("SyncScheduler MaxWorkers<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers = 0
+		assert.ErrorContains(t, cfg.Validate(), "sync scheduler max workers must be positive")
+	})
+	t.Run("SegmentCompactionPolicy MaxInflightMemory<=0", func(t *testing.T) {
+		for _, bytes := range []int64{0, -1} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxInflightMemory = NewByteSize(bytes)
+			assert.ErrorContains(t, cfg.Validate(), "max inflight memory must be positive")
+		}
+	})
+	t.Run("SegmentCompactionPolicy MemoryHighWatermark out of range", func(t *testing.T) {
+		for _, w := range []float64{0, -0.1, 1.5} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MemoryHighWatermark = w
+			assert.ErrorContains(t, cfg.Validate(), "memory high watermark must be in (0,1]")
+		}
+	})
+	t.Run("Auditor MaxInterval<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.Auditor.MaxInterval = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "auditor max interval must be positive")
+	})
+	t.Run("Auditor CompactionAttemptTimeout<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "auditor compaction attempt timeout must be positive")
+	})
+	t.Run("Auditor CompactionPassBudget<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.Auditor.CompactionPassBudget = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "auditor compaction pass budget must be positive")
+	})
+
+	t.Run("DirectRead MaxBatchSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.DirectRead.Enabled = true
+		cfg.Woodpecker.Client.DirectRead.MaxBatchSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "direct read max batch size must be positive")
+	})
+
+	t.Run("DirectRead MaxFetchThreads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.DirectRead.Enabled = true
+		cfg.Woodpecker.Client.DirectRead.MaxFetchThreads = 0
+		assert.ErrorContains(t, cfg.Validate(), "direct read max fetch threads must be positive")
+	})
+}
+
+func TestValidateLogstoreConfig_Errors(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	t.Run("SyncPolicy MaxInterval<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = NewDurationMillisecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "sync policy max interval must be positive")
+	})
+
+	t.Run("SyncPolicy MaxIntervalForLocalStorage<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = NewDurationMillisecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "max interval for local storage must be positive")
+	})
+
+	t.Run("SyncPolicy MaxIntervalForService<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = NewDurationMillisecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "max interval for service must be positive")
+	})
+
+	t.Run("SyncPolicy MaxEntries<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries = 0
+		assert.ErrorContains(t, cfg.Validate(), "max entries must be positive")
+	})
+
+	t.Run("SyncPolicy MaxBytes<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes = 0
+		assert.ErrorContains(t, cfg.Validate(), "max bytes must be positive")
+	})
+
+	t.Run("SyncPolicy MaxFlushRetries<0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries = -1
+		assert.ErrorContains(t, cfg.Validate(), "max flush retries cannot be negative")
+	})
+
+	t.Run("SyncPolicy RetryInterval<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval = NewDurationMillisecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "retry interval must be positive")
+	})
+
+	t.Run("SyncPolicy MaxFlushSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "max flush size must be positive")
+	})
+
+	t.Run("SyncPolicy MaxFlushThreads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads = 0
+		assert.ErrorContains(t, cfg.Validate(), "max flush threads must be positive")
+	})
+
+	t.Run("CompactionPolicy MaxBytes<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes = 0
+		assert.ErrorContains(t, cfg.Validate(), "compaction policy max bytes must be positive")
+	})
+
+	t.Run("CompactionPolicy MaxParallelUploads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 0
+		assert.ErrorContains(t, cfg.Validate(), "max parallel uploads must be positive")
+	})
+
+	t.Run("CompactionPolicy MaxParallelReads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 0
+		assert.ErrorContains(t, cfg.Validate(), "max parallel reads must be positive")
+	})
+
+	t.Run("CompactionPolicy Timeout<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "compaction policy timeout must be positive")
+	})
+
+	t.Run("ReadPolicy MaxBatchSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "max batch size must be positive")
+	})
+
+	t.Run("ReadPolicy MaxFetchThreads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads = 0
+		assert.ErrorContains(t, cfg.Validate(), "max fetch threads must be positive")
+	})
+}
+
+func TestValidateStorageConfig_Errors(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	t.Run("Invalid type", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Storage.Type = "invalid"
+		assert.ErrorContains(t, cfg.Validate(), "invalid storage type")
+	})
+
+	t.Run("Empty root path", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Storage.RootPath = ""
+		assert.ErrorContains(t, cfg.Validate(), "root path cannot be empty")
+	})
+}
+
+func TestValidateMinioRootPath(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	// rootPath is consumed verbatim by every key/dir/label-building site, so canonical values
+	// must be accepted in every storage mode. (ValidateMinioConfig is asserted directly: full
+	// Validate() drags in unrelated per-mode requirements like service-mode quorum seeds.)
+	valid := []string{"", "woodpecker", "wp/data", "a/b/c", "wp-1_x.y"}
+	for _, rp := range valid {
+		for _, mode := range []string{"service", "minio", "local", "default"} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Storage.Type = mode
+			cfg.Minio.RootPath = rp
+			assert.NoError(t, cfg.ValidateMinioConfig(), "rootPath %q should be accepted in %s mode", rp, mode)
+		}
+		// And through the full config gate in the default mode.
+		cfg := newValidCfg()
+		cfg.Minio.RootPath = rp
+		assert.NoError(t, cfg.Validate(), "rootPath %q should pass full validation", rp)
+	}
+
+	invalid := []string{"/wp", "wp/", "/wp/", "wp//data", "a/./b", "a/../b", ".", "..", "../wp", "/"}
+	for _, rp := range invalid {
+		// SERVICE mode hard-fails: the pull-reconcile path re-derives rootPath from the
+		// on-disk layout, so push and pull only agree for a canonical value.
+		cfg := newValidCfg()
+		cfg.Woodpecker.Storage.Type = "service"
+		cfg.Minio.RootPath = rp
+		assert.ErrorContains(t, cfg.ValidateMinioConfig(), "invalid minio rootPath", "rootPath %q should be rejected in service mode", rp)
+
+		// minio/local modes only WARN: the raw value is used verbatim everywhere and stays
+		// self-consistent, exactly as before validation existed — hard-failing would break
+		// existing deployments on upgrade for no correctness gain; and through the full gate
+		// too (default mode), pinning the no-upgrade-break behavior end-to-end.
+		for _, mode := range []string{"minio", "local", "default"} {
+			cfg := newValidCfg()
+			cfg.Woodpecker.Storage.Type = mode
+			cfg.Minio.RootPath = rp
+			assert.NoError(t, cfg.ValidateMinioConfig(), "rootPath %q should be tolerated (warn-only) in %s mode", rp, mode)
+		}
+		full := newValidCfg()
+		full.Minio.RootPath = rp
+		assert.NoError(t, full.Validate(), "rootPath %q must not fail full validation in the default mode", rp)
+	}
+}
+
+func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
+	makeServiceCfg := func(q QuorumConfig) *Configuration {
+		cfg, _ := NewConfiguration()
+		cfg.Woodpecker.Storage.Type = "service"
+		cfg.Woodpecker.Client.Quorum = q
+		return cfg
+	}
+
+	t.Run("BufferPool empty name", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "", Seeds: []string{"s1"}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("random"),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "name cannot be empty")
+	})
+
+	t.Run("BufferPool empty seeds", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("random"),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "must have at least one seed")
+	})
+
+	t.Run("BufferPool empty seed value", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{""}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("random"),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "seed 0 cannot be empty")
+	})
+
+	t.Run("Custom no placement", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"), CustomPlacement: NewDynamic([]CustomPlacement{}),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "requires at least one custom placement")
+	})
+
+	t.Run("Custom placement count mismatch", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
+				CustomPlacement: NewDynamic([]CustomPlacement{
+					{Region: "pool", Az: "az1", ResourceGroup: "rg1"},
+				}),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "must equal ensemble size")
+	})
+
+	t.Run("Custom placement empty region", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
+				CustomPlacement: NewDynamic([]CustomPlacement{
+					{Region: "", Az: "az1", ResourceGroup: "rg1"},
+					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
+					{Region: "pool", Az: "az3", ResourceGroup: "rg3"},
+				}),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "region cannot be empty")
+	})
+
+	t.Run("Custom placement empty az", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
+				CustomPlacement: NewDynamic([]CustomPlacement{
+					{Region: "pool", Az: "", ResourceGroup: "rg1"},
+					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
+					{Region: "pool", Az: "az3", ResourceGroup: "rg3"},
+				}),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "az cannot be empty")
+	})
+
+	t.Run("Custom placement empty resourceGroup", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
+				CustomPlacement: NewDynamic([]CustomPlacement{
+					{Region: "pool", Az: "az1", ResourceGroup: ""},
+					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
+					{Region: "pool", Az: "az3", ResourceGroup: "rg3"},
+				}),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "resource group cannot be empty")
+	})
+
+	t.Run("Custom placement unknown region", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("custom"),
+				CustomPlacement: NewDynamic([]CustomPlacement{
+					{Region: "unknown", Az: "az1", ResourceGroup: "rg1"},
+					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
+					{Region: "pool", Az: "az3", ResourceGroup: "rg3"},
+				}),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "unknown region")
+	})
+
+	t.Run("Cross-region too few pools", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: NewDynamic([]QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}}),
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: NewDynamic(3), Strategy: NewDynamic("cross-region"),
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "requires at least 2 buffer pools")
+	})
+}
+
 // TestQuorumConfigReplicasHandling tests the replica-based configuration
 func TestQuorumConfigReplicasHandling(t *testing.T) {
 	// Test with replicas = 3
 	config3 := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{
-			Replicas: 3,
+			Replicas: NewDynamic(3),
 		},
 	}
 
@@ -504,7 +1213,7 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 	// Test with replicas = 5
 	config5 := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{
-			Replicas: 5,
+			Replicas: NewDynamic(5),
 		},
 	}
 
@@ -515,7 +1224,7 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 	// Test with invalid replicas (should default to 3)
 	configInvalid := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{
-			Replicas: 4, // Invalid value
+			Replicas: NewDynamic(4), // Invalid value
 		},
 	}
 
@@ -528,10 +1237,10 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 func TestCustomPlacementConfiguration(t *testing.T) {
 	config := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{
-			AffinityMode: "hard",
-			Replicas:     5,
-			Strategy:     "custom",
-			CustomPlacement: []CustomPlacement{
+			AffinityMode: NewDynamic("hard"),
+			Replicas:     NewDynamic(5),
+			Strategy:     NewDynamic("custom"),
+			CustomPlacement: NewDynamic([]CustomPlacement{
 				{
 					Name:          "replica-1",
 					Region:        "region-a",
@@ -562,7 +1271,7 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					Az:            "az-1",
 					ResourceGroup: "rg-archive",
 				},
-			},
+			}),
 		},
 	}
 
@@ -584,7 +1293,9 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					MaxBlocks:   1000,
 				},
 				Auditor: AuditorConfig{
-					MaxInterval: NewDurationSecondsFromInt(5),
+					MaxInterval:              NewDurationSecondsFromInt(5),
+					CompactionAttemptTimeout: NewDurationSecondsFromInt(330),
+					CompactionPassBudget:     NewDurationSecondsFromInt(60),
 				},
 				Quorum: config,
 			},
@@ -592,6 +1303,7 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 				SegmentSyncPolicy: SegmentSyncPolicyConfig{
 					MaxInterval:                NewDurationMillisecondsFromInt(1000),
 					MaxIntervalForLocalStorage: NewDurationMillisecondsFromInt(5),
+					MaxIntervalForService:      NewDurationMillisecondsFromInt(1),
 					MaxEntries:                 2000,
 					MaxBytes:                   NewByteSize(100000000),
 					MaxFlushRetries:            3,
@@ -600,14 +1312,26 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					MaxFlushThreads:            8,
 					CheckpointThreshold:        10,
 				},
+				SyncScheduler: SyncSchedulerConfig{
+					MaxWorkers: 32,
+				},
 				SegmentCompactionPolicy: SegmentCompactionPolicy{
-					MaxBytes:           NewByteSize(32000000),
-					MaxParallelUploads: 4,
-					MaxParallelReads:   8,
+					MaxBytes:            NewByteSize(32000000),
+					MaxParallelUploads:  4,
+					MaxParallelReads:    8,
+					Timeout:             NewDurationSecondsFromInt(300),
+					MaxInflightMemory:   NewByteSize(1000000000),
+					MemoryHighWatermark: 0.7,
 				},
 				SegmentReadPolicy: SegmentReadPolicyConfig{
 					MaxBatchSize:    NewByteSize(16000000),
 					MaxFetchThreads: 32,
+				},
+				MaintenanceStrategy: MaintenanceStrategyConfig{
+					DeleteGracePeriod:            NewDurationSecondsFromInt(259200),
+					DeleteReclaimInterval:        NewDurationSecondsFromInt(600),
+					CompactedFileCleanupInterval: NewDurationSecondsFromInt(5),
+					ReconcileMinDataLogAge:       NewDurationSecondsFromInt(1800),
 				},
 			},
 			Storage: StorageConfig{
@@ -621,11 +1345,11 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 	fullConfig.Woodpecker.Storage.Type = "service"
 
 	// Add buffer pools for the custom placement regions
-	fullConfig.Woodpecker.Client.Quorum.BufferPools = []QuorumBufferPool{
+	fullConfig.Woodpecker.Client.Quorum.BufferPools = NewDynamic([]QuorumBufferPool{
 		{Name: "region-a", Seeds: []string{"seed-a:8080"}},
 		{Name: "region-b", Seeds: []string{"seed-b:8080"}},
 		{Name: "region-c", Seeds: []string{"seed-c:8080"}},
-	}
+	})
 
 	err := fullConfig.Validate()
 	assert.NoError(t, err)
@@ -636,10 +1360,10 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 	assert.Equal(t, 3, config.GetAckQuorumSize())
 
 	// Test custom placement structure
-	assert.Equal(t, 5, len(config.SelectStrategy.CustomPlacement))
+	assert.Equal(t, 5, len(config.SelectStrategy.CustomPlacement.Get()))
 
 	// Test specific placement entries
-	placement := config.SelectStrategy.CustomPlacement
+	placement := config.SelectStrategy.CustomPlacement.Get()
 	assert.Equal(t, "replica-1", placement[0].Name)
 	assert.Equal(t, "region-a", placement[0].Region)
 	assert.Equal(t, "az-1", placement[0].Az)
@@ -649,4 +1373,289 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 	assert.Equal(t, "region-c", placement[4].Region)
 	assert.Equal(t, "az-1", placement[4].Az)
 	assert.Equal(t, "rg-archive", placement[4].ResourceGroup)
+}
+
+// TestDirectReadConfig tests the DirectRead configuration defaults and YAML override
+func TestDirectReadConfig(t *testing.T) {
+	t.Run("default values", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		assert.NoError(t, err)
+
+		dr := cfg.Woodpecker.Client.DirectRead
+		assert.True(t, dr.Enabled)
+		assert.Equal(t, int64(16*1024*1024), dr.MaxBatchSize.Int64()) // 16MB
+		assert.Equal(t, 4, dr.MaxFetchThreads)
+	})
+
+	t.Run("yaml override", func(t *testing.T) {
+		content := `woodpecker:
+  meta:
+    type: etcd
+    prefix: woodpecker
+  client:
+    directRead:
+      enabled: true
+      maxBatchSize: 33554432
+      maxFetchThreads: 8
+  storage:
+    type: default
+    rootPath: /tmp/test`
+		tmpFile, err := os.CreateTemp("", "direct_read_*.yaml")
+		assert.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		_, err = tmpFile.WriteString(content)
+		assert.NoError(t, err)
+		tmpFile.Close()
+
+		cfg, err := NewConfiguration(tmpFile.Name())
+		assert.NoError(t, err)
+
+		dr := cfg.Woodpecker.Client.DirectRead
+		assert.True(t, dr.Enabled)
+		assert.Equal(t, int64(33554432), dr.MaxBatchSize.Int64()) // 32MB
+		assert.Equal(t, 8, dr.MaxFetchThreads)
+	})
+
+	t.Run("partial override keeps defaults", func(t *testing.T) {
+		content := `woodpecker:
+  meta:
+    type: etcd
+    prefix: woodpecker
+  client:
+    directRead:
+      enabled: true
+  storage:
+    type: default
+    rootPath: /tmp/test`
+		tmpFile, err := os.CreateTemp("", "direct_read_partial_*.yaml")
+		assert.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		_, err = tmpFile.WriteString(content)
+		assert.NoError(t, err)
+		tmpFile.Close()
+
+		cfg, err := NewConfiguration(tmpFile.Name())
+		assert.NoError(t, err)
+
+		dr := cfg.Woodpecker.Client.DirectRead
+		assert.True(t, dr.Enabled)
+		// Non-overridden fields should keep defaults
+		assert.Equal(t, int64(16*1024*1024), dr.MaxBatchSize.Int64())
+		assert.Equal(t, 4, dr.MaxFetchThreads)
+	})
+}
+
+func TestNodeSelectionPolicyDefaults(t *testing.T) {
+	cfg, err := NewConfiguration()
+	assert.NoError(t, err)
+	p := cfg.Woodpecker.Logstore.NodeSelectionPolicy
+	assert.True(t, p.LoadAwareEnabled, "LoadAwareEnabled should default to true")
+	assert.Equal(t, 10, p.LoadReportInterval.Seconds())
+	assert.Equal(t, 30, p.LoadTTL.Seconds())
+	assert.Equal(t, 0.85, p.MemSoftThreshold)
+	assert.Equal(t, 0.5, p.EWMAAlpha)
+}
+
+func TestNodeSelectionPolicyValidation(t *testing.T) {
+	cfg, err := NewConfiguration()
+	assert.NoError(t, err)
+	cfg.Woodpecker.Logstore.NodeSelectionPolicy.MemSoftThreshold = 1.5
+	assert.Error(t, cfg.validateLogstoreConfig(), "memSoftThreshold > 1 should fail validation")
+}
+
+func TestQuorumConfig_DynamicReplicasAffectsEnsembleSize(t *testing.T) {
+	q := QuorumConfig{
+		SelectStrategy: QuorumSelectStrategy{Replicas: NewDynamic(3)},
+	}
+	assert.Equal(t, 3, q.GetEnsembleSize())
+
+	current := 5
+	q.SelectStrategy.Replicas.WithSource(func() (int, bool) { return current, true })
+	assert.Equal(t, 5, q.GetEnsembleSize())
+
+	current = 4 // invalid -> clamps to 3
+	assert.Equal(t, 3, q.GetEnsembleSize())
+}
+
+func TestDiskWatermarkPolicyConfig_DefaultsAndValidation(t *testing.T) {
+	cfg, err := NewConfiguration()
+	assert.NoError(t, err)
+
+	dw := cfg.Woodpecker.Logstore.DiskWatermarkPolicy
+	assert.True(t, dw.Enabled)
+	assert.Equal(t, 0.80, dw.SoftThresholdRatio)
+	assert.Equal(t, 0.90, dw.HardThresholdRatio)
+	assert.Equal(t, int64(1024*1024*1024), dw.MinFreeBytes.Int64())
+	assert.Equal(t, 10*time.Second, dw.SampleInterval.Duration.Duration())
+	assert.True(t, dw.ThrottleEnabled)
+	assert.NoError(t, cfg.Validate())
+
+	// invalid: soft > hard
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.SoftThresholdRatio = 0.95
+	assert.Error(t, cfg.Validate())
+
+	// invalid: negative minFreeBytes
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.SoftThresholdRatio = 0.80
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.MinFreeBytes = ByteSize(-1)
+	assert.Error(t, cfg.Validate())
+
+	// disabled: validation skipped
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
+	assert.NoError(t, cfg.Validate())
+}
+
+// assertDefaultCallBounds checks the dial configuration and call bounds the
+// shipped woodpecker.yaml and the built-in defaults must agree on.
+func assertDefaultCallBounds(t *testing.T, cfg *Configuration) {
+	t.Helper()
+	dial := cfg.Woodpecker.Client.GRPC
+	assert.Equal(t, time.Second, dial.DialTimeout.Duration.Duration())
+	assert.Equal(t, 100*time.Millisecond, dial.ConnectBackoff.BaseDelay.Duration.Duration())
+	assert.Equal(t, 1.6, dial.ConnectBackoff.Multiplier)
+	assert.Equal(t, 0.2, dial.ConnectBackoff.Jitter)
+	assert.Equal(t, 3*time.Second, dial.ConnectBackoff.MaxDelay.Duration.Duration())
+	assert.Equal(t, 2*time.Second, cfg.Woodpecker.Client.SegmentAppend.SendTimeout.Duration.Duration())
+	assert.Equal(t, 2*time.Second, cfg.Woodpecker.Client.Quorum.SelectNodesTimeout.Duration.Duration())
+}
+
+func TestCallBoundsConfig_ParseAndValidate(t *testing.T) {
+	t.Run("parses plain milliseconds and unit strings", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "wp.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(`
+woodpecker:
+  client:
+    segmentAppend:
+      sendTimeout: 1500
+    quorum:
+      selectNodesTimeout: 3s
+    grpc:
+      dialTimeout: 200
+      connectBackoff:
+        baseDelay: 50ms
+        multiplier: 2
+        jitter: 0.1
+        maxDelay: 1s
+`), 0o644))
+		cfg, err := NewConfiguration(path)
+		require.NoError(t, err)
+		dial := cfg.Woodpecker.Client.GRPC
+		assert.Equal(t, 200*time.Millisecond, dial.DialTimeout.Duration.Duration())
+		assert.Equal(t, 50*time.Millisecond, dial.ConnectBackoff.BaseDelay.Duration.Duration())
+		assert.Equal(t, 2.0, dial.ConnectBackoff.Multiplier)
+		assert.Equal(t, 0.1, dial.ConnectBackoff.Jitter)
+		assert.Equal(t, time.Second, dial.ConnectBackoff.MaxDelay.Duration.Duration())
+		assert.Equal(t, 1500*time.Millisecond, cfg.Woodpecker.Client.SegmentAppend.SendTimeout.Duration.Duration())
+		assert.Equal(t, 3*time.Second, cfg.Woodpecker.Client.Quorum.SelectNodesTimeout.Duration.Duration())
+	})
+
+	invalid := map[string]struct {
+		mutate func(*Configuration)
+		want   string
+	}{
+		"send timeout negative": {func(c *Configuration) {
+			c.Woodpecker.Client.SegmentAppend.SendTimeout = NewDurationMillisecondsFromInt(-1)
+		}, "send timeout cannot be negative"},
+		"select nodes timeout negative": {func(c *Configuration) {
+			c.Woodpecker.Client.Quorum.SelectNodesTimeout = NewDurationMillisecondsFromInt(-1)
+		}, "select nodes timeout cannot be negative"},
+		"dial timeout negative": {func(c *Configuration) {
+			c.Woodpecker.Client.GRPC.DialTimeout = NewDurationMillisecondsFromInt(-1)
+		}, "dial timeout cannot be negative"},
+		"backoff base negative": {func(c *Configuration) {
+			c.Woodpecker.Client.GRPC.ConnectBackoff.BaseDelay = NewDurationMillisecondsFromInt(-1)
+		}, "base delay cannot be negative"},
+		"backoff max below base": {func(c *Configuration) {
+			c.Woodpecker.Client.GRPC.ConnectBackoff.MaxDelay = NewDurationMillisecondsFromInt(10)
+		}, "must not be below its base delay"},
+		"backoff multiplier below 1": {func(c *Configuration) { c.Woodpecker.Client.GRPC.ConnectBackoff.Multiplier = 0.5 }, "multiplier must be at least 1"},
+		"backoff jitter above 1":     {func(c *Configuration) { c.Woodpecker.Client.GRPC.ConnectBackoff.Jitter = 1.5 }, "jitter must be within [0, 1]"},
+	}
+	for name, tc := range invalid {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := NewConfiguration()
+			require.NoError(t, err)
+			tc.mutate(cfg)
+			assert.ErrorContains(t, cfg.Validate(), tc.want)
+		})
+	}
+
+	t.Run("zero leaves the defaults and stays valid", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		require.NoError(t, err)
+		cfg.Woodpecker.Client.SegmentAppend.SendTimeout = DurationMilliseconds{}
+		cfg.Woodpecker.Client.Quorum.SelectNodesTimeout = DurationMilliseconds{}
+		cfg.Woodpecker.Client.GRPC = GRPCClientConfig{}
+		assert.NoError(t, cfg.Validate())
+	})
+}
+
+func TestSegmentReadConfig(t *testing.T) {
+	defaults, err := NewConfiguration()
+	require.NoError(t, err)
+	assert.Equal(t, 3*time.Second, defaults.Woodpecker.Client.SegmentRead.ActiveTimeout.Duration.Duration())
+	assert.Equal(t, 20*time.Second, defaults.Woodpecker.Client.SegmentRead.SettledTimeout.Duration.Duration())
+
+	shipped, err := NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, defaults.Woodpecker.Client.SegmentRead, shipped.Woodpecker.Client.SegmentRead,
+		"the shipped yaml and the built-in defaults must agree")
+
+	path := filepath.Join(t.TempDir(), "wp.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+woodpecker:
+  client:
+    segmentRead:
+      activeTimeout: 1500
+      settledTimeout: 30s
+`), 0o644))
+	cfg, err := NewConfiguration(path)
+	require.NoError(t, err)
+	assert.Equal(t, 1500*time.Millisecond, cfg.Woodpecker.Client.SegmentRead.ActiveTimeout.Duration.Duration())
+	assert.Equal(t, 30*time.Second, cfg.Woodpecker.Client.SegmentRead.SettledTimeout.Duration.Duration())
+
+	t.Run("negative is rejected", func(t *testing.T) {
+		cfg, _ := NewConfiguration()
+		cfg.Woodpecker.Client.SegmentRead.ActiveTimeout = NewDurationMillisecondsFromInt(-1)
+		assert.ErrorContains(t, cfg.Validate(), "segment read timeouts cannot be negative")
+	})
+	t.Run("active above settled is rejected", func(t *testing.T) {
+		cfg, _ := NewConfiguration()
+		cfg.Woodpecker.Client.SegmentRead.ActiveTimeout = NewDurationMillisecondsFromInt(30000)
+		assert.ErrorContains(t, cfg.Validate(), "must not exceed the settled timeout")
+	})
+	t.Run("zero stays valid", func(t *testing.T) {
+		cfg, _ := NewConfiguration()
+		cfg.Woodpecker.Client.SegmentRead = SegmentReadConfig{}
+		assert.NoError(t, cfg.Validate())
+	})
+}
+
+// TestSkipRangeRefreshInterval covers the one knob the skip-range mechanism exposes. Its default
+// matters because it sets how often the record is re-read once a stalled reader starts asking: a
+// newly declared range takes effect on a reader's following report tick, and a withdrawn one stops
+// being acted on once a later stall re-reads the record.
+func TestSkipRangeRefreshInterval(t *testing.T) {
+	cfg, err := NewConfiguration()
+	require.NoError(t, err)
+
+	require.Equal(t, 10*time.Second, cfg.Woodpecker.Client.GetSkipRangeRefreshInterval(),
+		"the shipped configuration has to agree with the documented default")
+
+	var unset ClientConfig
+	require.Equal(t, DefaultSkipRangeRefreshInterval, unset.GetSkipRangeRefreshInterval(),
+		"a configuration built in code without it stays usable")
+
+	configured := ClientConfig{SkipRangeRefreshInterval: DurationSeconds{NewDuration(30*time.Second, time.Second)}}
+	require.Equal(t, 30*time.Second, configured.GetSkipRangeRefreshInterval())
+}
+
+// TestSkipRangeRefreshIntervalRejectsNegative keeps a value that cannot mean anything from being
+// accepted and then silently treated as the default.
+func TestSkipRangeRefreshIntervalRejectsNegative(t *testing.T) {
+	cfg, err := NewConfiguration()
+	require.NoError(t, err)
+	cfg.Woodpecker.Client.SkipRangeRefreshInterval = DurationSeconds{NewDuration(-time.Second, time.Second)}
+
+	require.Error(t, cfg.Validate())
 }

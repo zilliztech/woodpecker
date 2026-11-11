@@ -14,6 +14,7 @@
 - `root`/quorumidgen: key for quorumId Generator.
 - `root`/readers/`<log_id>`/`<reader_unique_name>`: key for opened readers temporary state info.
 - `root`/cleaning/`<log_id>`/`<segment_id>`: key for segments cleaning intermediate state info.
+- `root`/marking/`<log_id>`/`<segment_id>`: key for segment compacted-mark distribution intermediate state info (the Sealed-phase sibling of `cleaning`; driven by the writer's auditor, reaped with the segment by the truncate/delete GC path).
 
 #### Registration Manager
 

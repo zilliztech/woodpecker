@@ -200,6 +200,49 @@ func TestMultiErrors_ErrorChaining(t *testing.T) {
 	assert.False(t, ErrSegmentHandleSegmentClosed.Is(fmt.Errorf("test error")))
 }
 
+func TestMultiErrors_Unwrap(t *testing.T) {
+	// Single error: Unwrap returns nil
+	single := Combine(ErrLogWriterClosed)
+	assert.Nil(t, errors.Unwrap(single))
+
+	// Two errors: Unwrap returns the second error directly
+	two := Combine(ErrLogWriterClosed, ErrStorageNotWritable)
+	unwrapped := errors.Unwrap(two)
+	assert.NotNil(t, unwrapped)
+	assert.True(t, errors.Is(unwrapped, ErrStorageNotWritable))
+
+	// Three errors: Unwrap returns a new multiErrors with the tail
+	three := Combine(ErrLogWriterClosed, ErrStorageNotWritable, ErrInternalError)
+	unwrapped = errors.Unwrap(three)
+	assert.NotNil(t, unwrapped)
+	assert.True(t, errors.Is(unwrapped, ErrStorageNotWritable))
+	assert.True(t, errors.Is(unwrapped, ErrInternalError))
+	assert.False(t, errors.Is(unwrapped, ErrLogWriterClosed))
+
+	// All nil errors: Combine returns nil
+	assert.Nil(t, Combine(nil, nil, nil))
+	assert.Nil(t, Combine())
+}
+
+func TestWoodpeckerError_IsWithNilCause(t *testing.T) {
+	// Base error without cause, Is should return false for non-matching error
+	assert.False(t, ErrLogWriterClosed.Is(ErrInternalError))
+	assert.False(t, ErrLogWriterClosed.Is(fmt.Errorf("random")))
+	assert.False(t, ErrLogWriterClosed.Is(nil))
+
+	// Same error code should match
+	assert.True(t, ErrLogWriterClosed.Is(ErrLogWriterClosed))
+
+	// Different code should not match
+	assert.False(t, ErrLogWriterClosed.Is(ErrLogWriterFinalized))
+}
+
+func TestIsRetryableErr_NonWoodpeckerError(t *testing.T) {
+	// Non-woodpecker errors are not retryable
+	assert.False(t, IsRetryableErr(fmt.Errorf("random")))
+	assert.False(t, IsRetryableErr(nil))
+}
+
 // Helper function to check if a string contains a substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
@@ -214,4 +257,35 @@ func containsSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestErrLogStoreDiskPressure_Retryable(t *testing.T) {
+	if !IsRetryableErr(ErrLogStoreDiskPressure) {
+		t.Error("ErrLogStoreDiskPressure must be retryable")
+	}
+	st := Status(ErrLogStoreDiskPressure)
+	if !st.Retriable {
+		t.Error("Status.Retriable must be true")
+	}
+	if st.Code != 2007 {
+		t.Errorf("expected code 2007, got %d", st.Code)
+	}
+}
+
+// TestErrSegmentCompactionNodeBusy_Retryable pins the property the client's failure accounting
+// rests on. classifyCompactionFailureReason has no case for this error, so it falls to the
+// retryable branch and is labelled "transient" rather than "other". That is the correct reading --
+// the node refused, it did not fail -- and flipping the flag would quietly start reporting a node
+// at its compaction ceiling as an unexplained failure in WpSegmentCompactionFailuresTotal.
+func TestErrSegmentCompactionNodeBusy_Retryable(t *testing.T) {
+	if !IsRetryableErr(ErrSegmentCompactionNodeBusy) {
+		t.Error("ErrSegmentCompactionNodeBusy must be retryable: the caller has another replica to try, and the auditor has another cycle")
+	}
+	st := Status(ErrSegmentCompactionNodeBusy)
+	if !st.Retriable {
+		t.Error("Status.Retriable must be true")
+	}
+	if st.Code != 2112 {
+		t.Errorf("expected code 2112, got %d", st.Code)
+	}
 }

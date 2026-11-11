@@ -1,0 +1,524 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package minio
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"os"
+	"testing"
+
+	minio "github.com/minio/minio-go/v7"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/werr"
+)
+
+// === newMinioClient cloud provider tests ===
+
+func TestNewMinioClient_Azure_ReturnsError(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAzure
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+
+	_, err := newMinioClient(context.Background(), cfg)
+	require.Error(t, err)
+	assert.True(t, werr.ErrConfigError.Is(err))
+	assert.Contains(t, err.Error(), "Azure")
+}
+
+func TestNewMinioClient_GCPNative_ReturnsError(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderGCPNative
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+
+	_, err := newMinioClient(context.Background(), cfg)
+	require.Error(t, err)
+	assert.True(t, werr.ErrConfigError.Is(err))
+	assert.Contains(t, err.Error(), "gcp native")
+}
+
+func TestNewMinioClient_InvalidEndpoint(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAWS
+	cfg.Minio.Address = ""
+	cfg.Minio.Port = 0
+
+	_, err := newMinioClient(context.Background(), cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_Aliyun_StaticCreds_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAliyun
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+// TestNewMinioClient_Aliyun_StaticCreds_UsesCustomClient verifies that Aliyun with AK/SK
+// credentials uses aliyun.NewMinioClient (not standard minio.New), ensuring WrapHTTPTransport
+// is set up for header transformations like conditional write (x-oss-forbid-overwrite).
+func TestNewMinioClient_Aliyun_StaticCreds_UsesCustomClient(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAliyun
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "oss-cn-hangzhou.aliyuncs.com"
+	cfg.Minio.Port = 443
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.Region = "cn-hangzhou"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// The client creation itself should succeed (uses aliyun.NewMinioClient which sets up
+	// WrapHTTPTransport), but the bucket check will fail due to cancelled context.
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+// TestNewMinioClient_InferAliyun_FromAddress_StaticCreds_UsesCustomClient verifies that
+// address-inferred Aliyun with AK/SK credentials also uses aliyun.NewMinioClient.
+func TestNewMinioClient_InferAliyun_FromAddress_StaticCreds_UsesCustomClient(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = "" // default, triggers address inference
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "oss-cn-hangzhou.aliyuncs.com"
+	cfg.Minio.Port = 443
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.Region = "cn-hangzhou"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_GCP_StaticCreds_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderGCP
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "storage.googleapis.com"
+	cfg.Minio.Port = 443
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_Tencent_StaticCreds_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderTencent
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_AWS_StaticCreds_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAWS
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_AWS_IAM_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAWS
+	cfg.Minio.UseIAM = true
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_UseVirtualHost(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAWS
+	cfg.Minio.UseVirtualHost = true
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err) // cancelled ctx → bucket check fails
+}
+
+// === Address-based cloud provider inference tests ===
+
+func TestNewMinioClient_InferGCP_FromAddress_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = "" // default, triggers address inference
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "storage.googleapis.com"
+	cfg.Minio.Port = 443
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_InferAliyun_FromAddress_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = "" // default, triggers address inference
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "oss.aliyuncs.com"
+	cfg.Minio.Port = 443
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_InferAliyun_FromAddress_IAM_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = "" // default, triggers address inference
+	cfg.Minio.UseIAM = true
+	cfg.Minio.Address = "oss.aliyuncs.com"
+	cfg.Minio.Port = 443
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_DefaultProvider_StaticCreds_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = "" // default → matchedDefault stays true
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "my-custom-s3.example.com"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClient_DefaultProvider_IAM_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = "" // default
+	cfg.Minio.UseIAM = true
+	cfg.Minio.Address = "my-custom-s3.example.com"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+// === SSL cert env variable test ===
+
+func TestNewMinioClient_SSL_SetsCertEnv(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAzure // use Azure to get early error return after env is set
+	cfg.Minio.UseSSL = true
+	cfg.Minio.Ssl.TlsCACert = "/tmp/test-cert.pem"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+
+	// Clear any existing value
+	t.Setenv("SSL_CERT_FILE", "")
+
+	_, err := newMinioClient(context.Background(), cfg)
+	// Azure returns config error, but the env should NOT be set because Azure returns before SSL setup
+	require.Error(t, err)
+}
+
+func TestNewMinioClient_SSL_SetsCertEnv_AWS(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAWS
+	cfg.Minio.UseSSL = true
+	cfg.Minio.Ssl.TlsCACert = "/tmp/test-cert-aws.pem"
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	t.Setenv("SSL_CERT_FILE", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err) // cancelled ctx
+
+	// Verify SSL_CERT_FILE was set
+	assert.Equal(t, "/tmp/test-cert-aws.pem", os.Getenv("SSL_CERT_FILE"))
+}
+
+func TestNewMinioClient_SSL_NoCert(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAWS
+	cfg.Minio.UseSSL = true
+	cfg.Minio.Ssl.TlsCACert = "" // empty cert path
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	t.Setenv("SSL_CERT_FILE", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err) // cancelled ctx
+
+	// SSL_CERT_FILE should not be set when TlsCACert is empty
+	assert.Empty(t, os.Getenv("SSL_CERT_FILE"))
+}
+
+// === CreateBucket gating tests ===
+
+// TestNewMinioClient_CreateBucketFalse_SkipsBucketCheck verifies that when
+// CreateBucket is false the client init performs no bucket existence check and no
+// bucket creation. In service mode Woodpecker can be multi-tenant: bucket/rootPath
+// arrive per-request and are owned/pre-provisioned by the caller, so the node must
+// not touch any global bucket at startup. We prove the check is skipped with a
+// cancelled context: if BucketExists ran it would error, so a nil error means the
+// whole check/create block was skipped.
+func TestNewMinioClient_CreateBucketFalse_SkipsBucketCheck(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAWS
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.CreateBucket = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client, err := newMinioClient(ctx, cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+}
+
+// === newMinioClientFromConfig tests ===
+
+func TestNewMinioClientFromConfig_InvalidEndpoint(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.Address = ""
+	cfg.Minio.Port = 0
+
+	_, err := newMinioClientFromConfig(context.Background(), cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClientFromConfig_StaticCreds_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClientFromConfig(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClientFromConfig_IAM_CancelledCtx(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.UseIAM = true
+	cfg.Minio.IamEndpoint = "http://169.254.169.254"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClientFromConfig(ctx, cfg)
+	assert.Error(t, err)
+}
+
+func TestNewMinioClientFromConfig_SSL_SetsCertEnv(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.UseSSL = true
+	cfg.Minio.Ssl.TlsCACert = "/tmp/test-cert-from-config.pem"
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+
+	t.Setenv("SSL_CERT_FILE", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClientFromConfig(ctx, cfg)
+	assert.Error(t, err) // cancelled ctx
+
+	assert.Equal(t, "/tmp/test-cert-from-config.pem", os.Getenv("SSL_CERT_FILE"))
+}
+
+// TestNewMinioClientFromConfig_CreateBucketFalse_SkipsBucketCheck mirrors the
+// active-path gating for the deprecated constructor: CreateBucket=false must skip
+// the bucket existence check/create (proven via cancelled context → nil error).
+func TestNewMinioClientFromConfig_CreateBucketFalse_SkipsBucketCheck(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "localhost"
+	cfg.Minio.Port = 9000
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.CreateBucket = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client, err := newMinioClientFromConfig(ctx, cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+}
+
+// === Constants tests ===
+
+func TestCloudProviderConstants(t *testing.T) {
+	assert.Equal(t, "gcp", CloudProviderGCP)
+	assert.Equal(t, "gcpnative", CloudProviderGCPNative)
+	assert.Equal(t, "aws", CloudProviderAWS)
+	assert.Equal(t, "aliyun", CloudProviderAliyun)
+	assert.Equal(t, "azure", CloudProviderAzure)
+	assert.Equal(t, "tencent", CloudProviderTencent)
+	assert.Equal(t, 20, CheckBucketRetryAttempts)
+}
+
+// TestReadStatus covers how a failed read or probe is labelled on the MinIO backend. A missing
+// object is the expected answer to an existence check -- has this footer been uploaded yet --
+// and counting it as an error made the obvious error ratio read about 80% on a healthy cluster,
+// which in practice means the alert gets silenced (issue #354).
+//
+// minio-go already normalises a 404 on a keyed request to NoSuchKey (api-error-response.go:143),
+// so the predicate needs no widening -- and must not get any: IsObjectNotExists backs
+// IsObjectNotExistsError, which fifteen production call sites branch on, including the cleanup
+// path that decides whether local data may be reclaimed.
+func TestReadStatus(t *testing.T) {
+	t.Run("a missing key is not an error", func(t *testing.T) {
+		err := minio.ErrorResponse{Code: "NoSuchKey", StatusCode: http.StatusNotFound}
+		assert.True(t, IsObjectNotExists(err))
+		assert.Equal(t, "not_found", readStatus(err))
+	})
+
+	// Each of these must stay in "error": relabelling a real failure as a missing object would
+	// silence an outage, which is worse than the ratio this change exists to fix.
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"access denied", minio.ErrorResponse{Code: "AccessDenied", StatusCode: http.StatusForbidden}},
+		{"internal", minio.ErrorResponse{Code: "InternalError", StatusCode: http.StatusInternalServerError}},
+		{"slow down", minio.ErrorResponse{Code: "SlowDown", StatusCode: http.StatusServiceUnavailable}},
+		{"not an S3 error at all", errors.New("dial tcp: connection refused")},
+		// A missing bucket is a misconfiguration, not a not-yet-uploaded object. Treating it as
+		// the latter would let the cleanup path read "footer legitimately absent" off a bucket
+		// that is simply wrong.
+		{"missing bucket", minio.ErrorResponse{Code: "NoSuchBucket", StatusCode: http.StatusNotFound}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.False(t, IsObjectNotExists(tc.err))
+			assert.Equal(t, "error", readStatus(tc.err))
+		})
+	}
+}

@@ -1,0 +1,226 @@
+# Development only: single etcd/MinIO instances and default StorageClass PVCs.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wp-quickstart
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qs-etcd
+  namespace: wp-quickstart
+spec:
+  selector: {app: qs-etcd}
+  ports: [{port: 2379, targetPort: 2379}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qs-etcd-data
+  namespace: wp-quickstart
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qs-etcd
+  namespace: wp-quickstart
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: qs-etcd}
+  template:
+    metadata:
+      labels: {app: qs-etcd}
+    spec:
+      containers:
+        - name: qs-etcd
+          image: quay.io/coreos/etcd:v3.5.25
+          command: [etcd, --advertise-client-urls=http://qs-etcd:2379, --listen-client-urls=http://0.0.0.0:2379, --data-dir=/data]
+          ports: [{containerPort: 2379}]
+          readinessProbe:
+            tcpSocket: {port: 2379}
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: qs-etcd-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qs-minio
+  namespace: wp-quickstart
+spec:
+  selector: {app: qs-minio}
+  ports: [{port: 9000, targetPort: 9000}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qs-minio-data
+  namespace: wp-quickstart
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 2Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qs-minio
+  namespace: wp-quickstart
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: qs-minio}
+  template:
+    metadata:
+      labels: {app: qs-minio}
+    spec:
+      containers:
+        - name: qs-minio
+          image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
+          command: [minio, server, /data]
+          ports: [{containerPort: 9000}]
+          env:
+            - name: MINIO_ROOT_USER
+              value: minioadmin
+            - name: MINIO_ROOT_PASSWORD
+              value: minioadmin
+          readinessProbe:
+            tcpSocket: {port: 9000}
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: qs-minio-data}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wp-server-config
+  namespace: wp-quickstart
+data:
+  server.yaml: |
+    # Development example. Replace credentials/endpoints for your environment.
+    woodpecker:
+      storage:
+        type: service
+        rootPath: /woodpecker/data
+      client:
+        quorum:
+          quorumBufferPools:
+            - name: quickstart
+              seeds:
+                - wp-0.wp-headless:18080
+                - wp-1.wp-headless:18080
+                - wp-2.wp-headless:18080
+    etcd:
+      endpoints: ["qs-etcd:2379"]
+      rootPath: quickstart-k8s
+    minio:
+      address: qs-minio
+      port: 9000
+      accessKeyID: minioadmin
+      secretAccessKey: minioadmin
+      useSSL: false
+      bucketName: quickstart-k8s
+      rootPath: wal
+      createBucket: true
+    log:
+      level: error
+      stdout: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wp-headless
+  namespace: wp-quickstart
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app: wp}
+  ports:
+    - {name: grpc, port: 18080}
+    - {name: gossip-tcp, port: 17946, protocol: TCP}
+    - {name: gossip-udp, port: 17946, protocol: UDP}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wp
+  namespace: wp-quickstart
+spec:
+  serviceName: wp-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {app: wp}
+  template:
+    metadata:
+      labels: {app: wp}
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: woodpecker
+          image: docker.io/milvusdb/woodpecker:v0.1.46
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: NODE_NAME, value: "$(POD_NAME)"}
+            - {name: CONFIG_FILE, value: /config/server.yaml}
+            - {name: SERVICE_PORT, value: "18080"}
+            - {name: GOSSIP_PORT, value: "17946"}
+            - {name: ADVERTISE_SERVICE_ADDR, value: "$(POD_NAME).wp-headless:18080"}
+            - {name: ADVERTISE_GOSSIP_ADDR, value: "$(POD_NAME).wp-headless:17946"}
+            - {name: SEEDS, value: "wp-0.wp-headless:17946,wp-1.wp-headless:17946,wp-2.wp-headless:17946"}
+            - {name: SERVICE_SEEDS, value: "wp-0.wp-headless:18080,wp-1.wp-headless:18080,wp-2.wp-headless:18080"}
+            - {name: MINIO_ADDRESS, value: qs-minio}
+            - {name: MINIO_PORT, value: "9000"}
+            - {name: MINIO_ACCESS_KEY, value: minioadmin}
+            - {name: MINIO_SECRET_KEY, value: minioadmin}
+            - {name: ETCD_ENDPOINTS, value: "qs-etcd:2379"}
+            - {name: METRICS_PORT, value: "9091"}
+            - {name: REGION, value: local}
+            - {name: AVAILABILITY_ZONE, value: local}
+            - {name: RESOURCE_GROUP, value: default}
+          ports:
+            - {name: grpc, containerPort: 18080}
+            - {name: gossip-tcp, containerPort: 17946, protocol: TCP}
+            - {name: gossip-udp, containerPort: 17946, protocol: UDP}
+            - {name: admin, containerPort: 9091}
+          readinessProbe:
+            httpGet: {path: /healthz, port: admin}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: config, mountPath: /config, readOnly: true}
+            - {name: data, mountPath: /woodpecker/data}
+      volumes:
+        - name: config
+          configMap: {name: wp-server-config}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 1Gi}

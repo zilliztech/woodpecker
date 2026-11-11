@@ -22,12 +22,26 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCollectSystemMetrics(t *testing.T) {
-	// Just verify collectSystemMetrics doesn't panic
+	// Collect metrics and verify key gauges are updated
 	collectSystemMetrics("/tmp")
+
+	// Verify that CPU and memory metrics were set (they should be non-zero on any system)
+	metric := &dto.Metric{}
+	err := WpSystemCPUNum.WithLabelValues(NodeID).Write(metric)
+	assert.NoError(t, err)
+	assert.Greater(t, metric.GetGauge().GetValue(), 0.0, "CPU num should be > 0")
+
+	memMetric := &dto.Metric{}
+	err = WpSystemMemoryTotalBytes.WithLabelValues(NodeID).Write(memMetric)
+	assert.NoError(t, err)
+	assert.Greater(t, memMetric.GetGauge().GetValue(), 0.0, "total memory should be > 0")
+
+	// Empty data dir should still not panic
 	collectSystemMetrics("")
 }
 

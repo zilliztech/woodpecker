@@ -89,23 +89,38 @@ var (
 	// ---------------------------------------------
 
 	// logstore errors (2000-2099)
-	ErrLogStoreNotStarted     = newWoodpeckerError("logstore not started", 2000, false)
-	ErrLogStoreAlreadyStarted = newWoodpeckerError("logstore already started", 2001, false)
-	ErrLogStoreShutdown       = newWoodpeckerError("logstore is shutting down", 2002, false)
-	ErrLogStoreRegisterFailed = newWoodpeckerError("failed to register logstore", 2003, true)
-	ErrLogStoreInvalidAddress = newWoodpeckerError("invalid logstore address", 2004, false)
+	ErrLogStoreNotStarted      = newWoodpeckerError("logstore not started", 2000, false)
+	ErrLogStoreAlreadyStarted  = newWoodpeckerError("logstore already started", 2001, false)
+	ErrLogStoreShutdown        = newWoodpeckerError("logstore is shutting down", 2002, false)
+	ErrLogStoreRegisterFailed  = newWoodpeckerError("failed to register logstore", 2003, true)
+	ErrLogStoreInvalidAddress  = newWoodpeckerError("invalid logstore address", 2004, false)
+	ErrLogBeingDeleted         = newWoodpeckerError("log is being deleted", 2005, false)
+	ErrMarkDeleteFailed        = newWoodpeckerError("failed to durably mark log/instance deleted", 2006, true)
+	ErrLogStoreDiskPressure    = newWoodpeckerError("logstore local disk above hard watermark, write backpressure active", 2007, true)
+	ErrLogStoreInvalidRootPath = newWoodpeckerError("invalid rootPath", 2008, false)
+	// ErrLogStoreRetired is returned by a decommissioned node for segment-lifecycle operations.
+	// Non-retryable on purpose: the node is terminally retired, so the caller should drop it from
+	// the quorum and re-discover rather than back off and retry against it.
+	ErrLogStoreRetired = newWoodpeckerError("logstore is retired (node decommissioned)", 2009, false)
 
 	// segment_processor errors (2100-2199)
-	ErrSegmentProcessorNotFound         = newWoodpeckerError("segment processor not found", 2100, false)
-	ErrSegmentProcessorAlreadyExists    = newWoodpeckerError("segment processor already exists", 2101, false)
-	ErrSegmentProcessorFenced           = newWoodpeckerError("segment processor is fenced", 2102, false)
-	ErrSegmentProcessorClosed           = newWoodpeckerError("segment processor is closed", 2103, false)
-	ErrSegmentProcessorNoWriter         = newWoodpeckerError("segment processor no writer", 2104, false)
-	ErrSegmentProcessorWriteFailed      = newWoodpeckerError("segment processor write failed", 2105, true)
-	ErrSegmentProcessorReadFailed       = newWoodpeckerError("segment processor read failed", 2106, true)
-	ErrSegmentProcessorCompactionFailed = newWoodpeckerError("segment processor compaction failed", 2107, true)
-	ErrSegmentProcessorRecoveryFailed   = newWoodpeckerError("segment processor recovery failed", 2108, true)
-	ErrSegmentProcessorCleanupFailed    = newWoodpeckerError("segment processor cleanup failed", 2109, true)
+	ErrSegmentProcessorNotFound          = newWoodpeckerError("segment processor not found", 2100, false)
+	ErrSegmentProcessorAlreadyExists     = newWoodpeckerError("segment processor already exists", 2101, false)
+	ErrSegmentProcessorFenced            = newWoodpeckerError("segment processor is fenced", 2102, false)
+	ErrSegmentProcessorClosed            = newWoodpeckerError("segment processor is closed", 2103, false)
+	ErrSegmentProcessorNoWriter          = newWoodpeckerError("segment processor no writer", 2104, false)
+	ErrSegmentProcessorWriteFailed       = newWoodpeckerError("segment processor write failed", 2105, true)
+	ErrSegmentProcessorReadFailed        = newWoodpeckerError("segment processor read failed", 2106, true)
+	ErrSegmentProcessorCompactionFailed  = newWoodpeckerError("segment processor compaction failed", 2107, true)
+	ErrSegmentProcessorRecoveryFailed    = newWoodpeckerError("segment processor recovery failed", 2108, true)
+	ErrSegmentProcessorCleanupFailed     = newWoodpeckerError("segment processor cleanup failed", 2109, true)
+	ErrSegmentProcessorAlreadyCompacting = newWoodpeckerError("segment processor is already compacting", 2110, false)
+	ErrSegmentCompactionDataBehind       = newWoodpeckerError("segment local data is behind the expected last entry id, refusing to compact", 2111, true)
+	// ErrSegmentCompactionNodeBusy is a refusal, not a failure: the node has as much compaction
+	// running as it will reserve memory for, or its memory is already near its limit for reasons
+	// of its own. Retryable, because the caller has somewhere to go -- the next replica in the
+	// quorum walk, and failing that the next auditor cycle with the segment still Completed.
+	ErrSegmentCompactionNodeBusy = newWoodpeckerError("node declined the compaction, it is at capacity", 2112, true)
 
 	// file writer errors (2200-2299)
 	ErrFileWriterBufferFull           = newWoodpeckerError("writer buffer is full", 2200, true)
@@ -127,6 +142,7 @@ var (
 	ErrFileWriterFinalized            = newWoodpeckerError("writer finalized", 2216, false)
 	ErrFileWriterAlreadyClosed        = newWoodpeckerError("writer already closed", 2217, false)
 	ErrFileWriterInRecoveryMode       = newWoodpeckerError("writer in recovery mode", 2218, false)
+	ErrFileWriterFinalizing           = newWoodpeckerError("writer finalizing", 2219, false)
 
 	// file reader errors (2300-2399)
 	ErrFileReaderNotFound                 = newWoodpeckerError("reader file not found", 2300, false)
@@ -149,19 +165,22 @@ var (
 	// ---------------------------------------------
 
 	// Metadata operations (3000-3099)
-	ErrMetadataInit            = newWoodpeckerError("failed to initialize service metadata", 3000, true)
-	ErrMetadataRead            = newWoodpeckerError("failed to read metadata", 3001, true)
-	ErrMetadataWrite           = newWoodpeckerError("failed to write metadata", 3002, true)
-	ErrMetadataEncode          = newWoodpeckerError("failed to encode metadata", 3003, false)
-	ErrMetadataDecode          = newWoodpeckerError("failed to decode metadata", 3004, false)
-	ErrMetadataCreateLog       = newWoodpeckerError("failed to create log metadata", 3005, true)
-	ErrMetadataCreateLogTxn    = newWoodpeckerError("failed execute create log metadata txn", 3006, true)
-	ErrMetadataCreateSegment   = newWoodpeckerError("failed to create segment metadata", 3007, true)
-	ErrMetadataUpdateSegment   = newWoodpeckerError("failed to update segment metadata", 3008, true)
-	ErrMetadataUpdateQuorum    = newWoodpeckerError("failed to update quorum metadata", 3009, true)
-	ErrMetadataCreateReader    = newWoodpeckerError("failed to create reader temp info", 3010, true)
-	ErrMetadataRevisionInvalid = newWoodpeckerError("metadata revision is invalid or outdated", 3011, false)
-	ErrMetadataKeyNotExists    = newWoodpeckerError("metadata key not exists", 3012, false)
+	ErrMetadataInit                   = newWoodpeckerError("failed to initialize service metadata", 3000, true)
+	ErrMetadataRead                   = newWoodpeckerError("failed to read metadata", 3001, true)
+	ErrMetadataWrite                  = newWoodpeckerError("failed to write metadata", 3002, true)
+	ErrMetadataEncode                 = newWoodpeckerError("failed to encode metadata", 3003, false)
+	ErrMetadataDecode                 = newWoodpeckerError("failed to decode metadata", 3004, false)
+	ErrMetadataCreateLog              = newWoodpeckerError("failed to create log metadata", 3005, true)
+	ErrMetadataCreateLogTxn           = newWoodpeckerError("failed execute create log metadata txn", 3006, true)
+	ErrMetadataCreateSegment          = newWoodpeckerError("failed to create segment metadata", 3007, true)
+	ErrMetadataUpdateSegment          = newWoodpeckerError("failed to update segment metadata", 3008, true)
+	ErrMetadataUpdateQuorum           = newWoodpeckerError("failed to update quorum metadata", 3009, true)
+	ErrMetadataCreateReader           = newWoodpeckerError("failed to create reader temp info", 3010, true)
+	ErrMetadataRevisionInvalid        = newWoodpeckerError("metadata revision is invalid or outdated", 3011, false)
+	ErrMetadataKeyNotExists           = newWoodpeckerError("metadata key not exists", 3012, false)
+	ErrMetadataCreateLogAlreadyExists = newWoodpeckerError("log already exists in metadata", 3013, false)
+	ErrMetadataSegmentAlreadyExists   = newWoodpeckerError("segment already exists in metadata", 3014, false)
+	ErrMetadataDelete                 = newWoodpeckerError("failed to delete metadata", 3015, true)
 
 	// ---------------------------------------------
 	// Service Layer Errors
@@ -188,14 +207,15 @@ var (
 	ErrPersistenceError        = newWoodpeckerError("persistence error", 8008, true)
 
 	// Data state errors (8100-8199)
-	ErrInvalidMessage      = newWoodpeckerError("invalid message", 8100, false)
-	ErrEmptyPayload        = newWoodpeckerError("empty payload", 8101, false)
-	ErrEntryNotFound       = newWoodpeckerError("entry not found", 8102, true)
-	ErrStorageNotWritable  = newWoodpeckerError("storage not writable", 8103, false)
-	ErrSegmentFenced       = newWoodpeckerError("segment fenced", 8104, false)
-	ErrSegmentNotFound     = newWoodpeckerError("segment not found", 8105, true)
-	ErrObjectAlreadyExists = newWoodpeckerError("object already exists", 8106, false)
-	ErrInvalidLACAlignment = newWoodpeckerError("invalid lac alignment", 8107, false)
+	ErrInvalidMessage           = newWoodpeckerError("invalid message", 8100, false)
+	ErrEmptyPayload             = newWoodpeckerError("empty payload", 8101, false)
+	ErrEntryNotFound            = newWoodpeckerError("entry not found", 8102, true)
+	ErrStorageNotWritable       = newWoodpeckerError("storage not writable", 8103, false)
+	ErrSegmentFenced            = newWoodpeckerError("segment fenced", 8104, false)
+	ErrSegmentNotFound          = newWoodpeckerError("segment not found", 8105, true)
+	ErrObjectAlreadyExists      = newWoodpeckerError("object already exists", 8106, false)
+	ErrInvalidLACAlignment      = newWoodpeckerError("invalid lac alignment", 8107, false)
+	ErrMetadataRevisionConflict = newWoodpeckerError("metadata revision conflict", 8108, true)
 
 	// ---------------------------------------------
 	// External Errors
@@ -350,6 +370,9 @@ func Combine(errs ...error) error {
 	errs = lo.Filter(errs, func(err error, _ int) bool { return err != nil })
 	if len(errs) == 0 {
 		return nil
+	}
+	if len(errs) == 1 {
+		return errs[0]
 	}
 	return &multiErrors{
 		errs,

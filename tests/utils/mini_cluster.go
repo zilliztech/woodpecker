@@ -22,6 +22,7 @@ import (
 	"net"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,16 +52,27 @@ type NodeConfig struct {
 	AZ            string
 }
 
-// allocateUniquePort allocates a free port and ensures it's not already allocated in this cluster
+// allocateUniquePort allocates a free port and ensures it's not already allocated in this cluster.
+// It verifies availability on both TCP and UDP (on 0.0.0.0) since memberlist requires both.
 func (cluster *MiniCluster) allocateUniquePort() (int, error) {
 	maxRetries := 50 // Try up to 50 times to find a unique port
 	for i := 0; i < maxRetries; i++ {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		// Listen on TCP to get an OS-assigned free port
+		tcpListener, err := net.Listen("tcp", "0.0.0.0:0")
 		if err != nil {
 			continue
 		}
-		port := listener.Addr().(*net.TCPAddr).Port
-		listener.Close()
+		port := tcpListener.Addr().(*net.TCPAddr).Port
+
+		// Verify UDP is also available on the same port (memberlist binds both)
+		udpAddr := &net.UDPAddr{IP: net.IPv4zero, Port: port}
+		udpConn, err := net.ListenUDP("udp", udpAddr)
+		if err != nil {
+			tcpListener.Close()
+			continue // UDP port occupied, try another
+		}
+		udpConn.Close()
+		tcpListener.Close()
 
 		// Check if this port is already allocated in this cluster
 		if !cluster.allocatedPorts[port] {
@@ -73,6 +85,14 @@ func (cluster *MiniCluster) allocateUniquePort() (int, error) {
 }
 
 // StartMiniCluster starts a test mini cluster of woodpecker servers
+// DisableDiskWatermark turns off the disk-watermark backpressure for tests. The production
+// default rejects new appends under disk pressure (probabilistic throttling between the soft
+// and hard watermarks), which flakes bulk-write integration tests on disk-constrained CI
+// runners. Tests should exercise the read/write paths without that throttle.
+func DisableDiskWatermark(cfg *config.Configuration) {
+	cfg.Woodpecker.Logstore.DiskWatermarkPolicy.Enabled = false
+}
+
 func StartMiniCluster(t *testing.T, nodeCount int, baseDir string) (*MiniCluster, *config.Configuration, []string, []string) {
 	// Load base configuration
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -107,8 +127,15 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 	// Set up staged storage type for quorum testing
 	cfg.Woodpecker.Storage.Type = "service"
 	cfg.Woodpecker.Storage.RootPath = baseDir
-	cfg.Minio.RootPath = baseDir
+	// A RELATIVE object-storage prefix (unique per run via baseDir), as production requires:
+	// config.Validate rejects absolute/non-clean values, and the pull-reconcile path re-derives
+	// rootPath from the on-disk layout — an absolute value here would split push vs pull keys
+	// and silently disable the reconcile backstop in every service-mode test.
+	cfg.Minio.RootPath = strings.TrimPrefix(baseDir, "/")
 	cfg.Log.Level = "debug"
+	// Tests write in bulk; the disk-watermark backpressure would flake them on
+	// disk-constrained CI runners. Disable it for all mini-cluster (service-mode) tests.
+	DisableDiskWatermark(cfg)
 
 	cluster := &MiniCluster{
 		Servers:        make(map[int]*server.Server),
@@ -479,13 +506,12 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 		return "", fmt.Errorf("failed to prepare node: %w", err)
 	}
 
-	// Run server (starts grpc server and log store)
-	go func(srv *server.Server, nodeID int) {
-		if runErr := srv.Run(); runErr != nil {
-			// Use fmt instead of t.Logf to avoid panic if test has already finished
-			fmt.Printf("Node %d server run error: %v\n", nodeID, runErr)
-		}
-	}(nodeServer, nodeIndex)
+	// Run returns after gRPC initialization and log-store startup; serving continues
+	// in background goroutines. Wait here so callers can safely stop the restarted
+	// node immediately without racing gRPC server initialization.
+	if err := nodeServer.Run(); err != nil {
+		return "", fmt.Errorf("failed to run node %d: %w", nodeIndex, err)
+	}
 
 	// Update cluster
 	cluster.Servers[nodeIndex] = nodeServer

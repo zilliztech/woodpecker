@@ -87,3 +87,57 @@ func Test_GetIP(t *testing.T) {
 		}, "input is multicast ip address, panicking")
 	})
 }
+
+func Test_ResolveAdvertiseAddr(t *testing.T) {
+	t.Run("empty_string", func(t *testing.T) {
+		ip := ResolveAdvertiseAddr("")
+		assert.Nil(t, ip)
+	})
+
+	t.Run("valid_ipv4", func(t *testing.T) {
+		ip := ResolveAdvertiseAddr("192.168.1.1")
+		assert.NotNil(t, ip)
+		assert.Equal(t, "192.168.1.1", ip.String())
+	})
+
+	t.Run("valid_ipv6", func(t *testing.T) {
+		ip := ResolveAdvertiseAddr("::1")
+		assert.NotNil(t, ip)
+	})
+
+	t.Run("resolvable_hostname", func(t *testing.T) {
+		ip := ResolveAdvertiseAddr("localhost")
+		assert.NotNil(t, ip)
+	})
+
+	t.Run("unresolvable_hostname", func(t *testing.T) {
+		ip := ResolveAdvertiseAddr("this-hostname-does-not-exist-12345.invalid")
+		assert.Nil(t, ip)
+	})
+
+	t.Run("loopback_ipv4", func(t *testing.T) {
+		ip := ResolveAdvertiseAddr("127.0.0.1")
+		assert.NotNil(t, ip)
+		assert.Equal(t, "127.0.0.1", ip.String())
+	})
+}
+
+func Test_GetIP_LinkLocalMulticast(t *testing.T) {
+	assert.Panics(t, func() {
+		GetIP("ff02::1")
+	}, "link-local multicast ipv6 should panic")
+}
+
+func Test_GetValidLocalIP_EmptyAddrs(t *testing.T) {
+	ip := GetValidLocalIP([]net.Addr{})
+	assert.Equal(t, "", ip)
+}
+
+func Test_GetValidLocalIP_NonIPNetAddr(t *testing.T) {
+	// net.Addr interface - use a type that isn't *net.IPNet
+	addrs := []net.Addr{
+		&net.TCPAddr{IP: net.IPv4(100, 1, 1, 1), Port: 8080},
+	}
+	ip := GetValidLocalIP(addrs)
+	assert.Equal(t, "", ip)
+}

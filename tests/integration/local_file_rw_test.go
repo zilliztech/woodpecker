@@ -51,7 +51,7 @@ func setupLocalFileTest(t *testing.T) string {
 
 	// Create a temporary directory for test files
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("woodpecker-local-test-%d", time.Now().Unix()))
-	err = os.MkdirAll(tempDir, 0755)
+	err = os.MkdirAll(tempDir, 0o755)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -377,13 +377,12 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 
 		// Wait for first write with timeout
 		ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		result, err = resultCh1.ReadResult(ctxWithTimeout)
+		_, err = resultCh1.ReadResult(ctxWithTimeout)
 		cancel()
-		//require.NoError(t, err) // TODO maybe handle this notify gracefully
-		//require.NoError(t, result.Err)
+		// require.NoError(t, err) // TODO maybe handle this notify gracefully
+		// require.NoError(t, result.Err)
 		assert.Error(t, err)
 		assert.True(t, errors.IsAny(err, context.Canceled, context.DeadlineExceeded))
-
 	})
 
 	t.Run("DuplicateEntryIdInFlushing", func(t *testing.T) {
@@ -407,7 +406,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 		// Try to write same entry ID again (should be handled gracefully)
 		resultCh2 := channel.NewLocalResultChannel("test-duplicate-2")
 		_, err = writer.WriteDataAsync(ctx, 0, []byte("duplicate"), resultCh2)
-		//require.NoError(t, err) // TODO maybe handle this notify gracefully
+		// require.NoError(t, err) // TODO maybe handle this notify gracefully
 		require.Error(t, err)
 		assert.True(t, werr.ErrFileWriterInvalidEntryId.Is(err))
 

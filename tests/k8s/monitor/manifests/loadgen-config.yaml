@@ -1,0 +1,36 @@
+woodpecker:
+  meta:
+    type: etcd
+  client:
+    segmentRollingPolicy:
+      maxSize: 1000
+    quorum:
+      replicaCount: 3
+      quorumBufferPools:
+        - name: default-region-pool
+          seeds:
+            - my-woodpecker-server-0.my-woodpecker-server-headless.woodpecker.svc:18080
+            - my-woodpecker-server-1.my-woodpecker-server-headless.woodpecker.svc:18080
+            - my-woodpecker-server-2.my-woodpecker-server-headless.woodpecker.svc:18080
+  logstore:
+    retentionPolicy:
+      ttl: 10
+  storage:
+    type: service
+    rootPath: /tmp/wp-test-data
+log:
+  level: info
+  format: json
+  stdout: true
+etcd:
+  endpoints:
+    - etcd.woodpecker.svc:2379
+  rootPath: by-dev
+minio:
+  address: minio.woodpecker.svc
+  port: 9000
+  accessKeyID: minioadmin
+  secretAccessKey: minioadmin
+  bucketName: woodpecker
+  rootPath: files
+  createBucket: true

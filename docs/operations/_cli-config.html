@@ -1,0 +1,102 @@
+<section id="topic-config">
+<h2>Server configuration</h2>
+<article class="command" id="config-diff">
+<h2>wp config diff</h2>
+<p>Compare configurations across nodes</p>
+<pre>
+<code>wp config diff [node-a] [node-b] [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--all</code>
+</td>
+<td>diff all nodes in the cluster against the first reachable node</td>
+</tr>
+<tr>
+<td>
+<code>--reference string</code>
+</td>
+<td>explicit reference node name</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp config diff --all --strict</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>node-0: (reference)
+node-1: identical
+node-2: identical</code>
+</pre>
+<p>This is server configuration, not client SDK configuration. Compare actual values and failed respondents separately.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>node-1: DRIFT (1 fields differ)
+node-2: UNREACHABLE (not compared)
+Error: YellowFinding: config drift detected</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Compare configurations across nodes
+
+Usage:
+  wp config diff [node-a] [node-b] [flags]
+
+Flags:
+      --all                diff all nodes in the cluster against the first reachable node
+  -h, --help               help for diff
+      --reference string   explicit reference node name</code>
+</pre>
+</details>
+</article>
+<article class="command" id="config-show">
+<h2>wp config show</h2>
+<p>Show the resolved configuration of a single node</p>
+<pre>
+<code>wp config show &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp config show node-0 -o json</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>{&quot;woodpecker&quot;:{&quot;storage&quot;:{&quot;type&quot;:&quot;service&quot;}}}</code>
+</pre>
+<p>This is server configuration, not client SDK configuration. Compare actual values and failed respondents separately.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: Network: /admin/config returned status 503</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show the resolved configuration of a single node
+
+Usage:
+  wp config show &lt;node&gt; [flags]
+
+Flags:
+  -h, --help   help for show</code>
+</pre>
+</details>
+</article>
+</section>

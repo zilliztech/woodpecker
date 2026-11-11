@@ -19,6 +19,7 @@ package codec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"hash/crc32"
 	"testing"
 
@@ -467,25 +468,138 @@ func TestEdgeCases(t *testing.T) {
 }
 
 func TestMagicValidation(t *testing.T) {
-	t.Run("InvalidHeaderMagic", func(t *testing.T) {
-		// Create a payload with invalid magic
-		payload := make([]byte, 16)
-		payload[12] = 0xFF // Invalid magic
-
+	t.Run("InvalidHeaderVersion", func(t *testing.T) {
+		// Create a payload with invalid version (version 0)
+		payload := make([]byte, HeaderRecordSize)
+		// Version=0 triggers "invalid format version" before magic check
 		_, err := ParseHeader(payload)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid format version")
 	})
 
-	t.Run("InvalidFooterMagic", func(t *testing.T) {
-		// Create a payload with invalid magic
-		payload := make([]byte, 36)
-		payload[32] = 0xFF // Invalid magic
+	t.Run("BackwardCompatibleHeaderVersionV5", func(t *testing.T) {
+		// HEAD must still read v5 block headers written by older releases
+		// (v0.1.13), mirroring ParseFooter's v5 acceptance. Without this,
+		// object-storage upgrade reads fail with "block header record not found"
+		// because DecodeRecordList stops at the first (v5) header. Regression
+		// guard for the v0.1.13 -> latest upgrade path (issue #169).
+		payload := make([]byte, HeaderRecordSize)
+		binary.LittleEndian.PutUint16(payload[0:], 5) // legacy v5 version
+		copy(payload[12:], HeaderMagic[:])            // valid magic
+		h, err := ParseHeader(payload)
+		assert.NoError(t, err)
+		assert.Equal(t, uint16(5), h.Version)
+	})
 
+	t.Run("InvalidHeaderMagic", func(t *testing.T) {
+		// Create a payload with correct version but invalid magic
+		payload := make([]byte, HeaderRecordSize)
+		binary.LittleEndian.PutUint16(payload[0:], FormatVersion) // correct version
+		payload[12] = 0xFF                                        // invalid magic
+
+		_, err := ParseHeader(payload)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid header magic")
+	})
+
+	t.Run("InvalidHeaderPayloadLength", func(t *testing.T) {
+		_, err := ParseHeader(make([]byte, 10)) // wrong length
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid header payload length")
+	})
+
+	t.Run("InvalidFooterVersion", func(t *testing.T) {
+		// Create a payload with invalid version (version 0)
+		payload := make([]byte, FooterRecordSizeV5)
 		_, err := ParseFooter(payload)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid format version")
 	})
+
+	t.Run("InvalidFooterMagic", func(t *testing.T) {
+		// Create a payload with correct version but invalid magic
+		payload := make([]byte, FooterRecordSizeV5)
+		binary.LittleEndian.PutUint16(payload[28:], FormatVersion) // correct version
+		payload[32] = 0xFF                                         // invalid magic
+
+		_, err := ParseFooter(payload)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid footer magic")
+	})
+
+	t.Run("InvalidFooterPayloadLength", func(t *testing.T) {
+		_, err := ParseFooter(make([]byte, 10)) // too short
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid footer payload length")
+	})
+}
+
+// TestParseRecord_UnknownType tests unknown record type
+func TestParseRecord_UnknownType(t *testing.T) {
+	_, err := ParseRecord(255, []byte("payload"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown record type")
+}
+
+// TestParseBlockHeader_InvalidLength tests block header with wrong payload length
+func TestParseBlockHeader_InvalidLength(t *testing.T) {
+	_, err := ParseBlockHeader(make([]byte, 10)) // wrong length, expected 28
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid block header payload length")
+}
+
+// TestFooterRecord_SetCompacted_Method tests the method version of SetCompacted on FooterRecord
+func TestFooterRecord_SetCompacted_Method(t *testing.T) {
+	f := &FooterRecord{Version: FormatVersion, Flags: 0}
+
+	assert.False(t, f.IsCompacted())
+
+	f.SetCompacted(true)
+	assert.True(t, f.IsCompacted())
+	assert.Equal(t, uint16(1), f.Flags&FooterFlagCompacted)
+
+	f.SetCompacted(false)
+	assert.False(t, f.IsCompacted())
+	assert.Equal(t, uint16(0), f.Flags&FooterFlagCompacted)
+}
+
+// TestGetFooterRecordSize tests the standalone GetFooterRecordSize function
+func TestGetFooterRecordSize(t *testing.T) {
+	assert.Equal(t, FooterRecordSizeV5, GetFooterRecordSize(5))
+	assert.Equal(t, FooterRecordSizeV6, GetFooterRecordSize(6))
+	assert.Equal(t, FooterRecordSizeV6, GetFooterRecordSize(7)) // future versions
+	assert.Equal(t, FooterRecordSizeV5, GetFooterRecordSize(4)) // older versions
+}
+
+// TestDecodeRecordList_ParseRecordError tests DecodeRecordList when ParseRecord fails
+func TestDecodeRecordList_ParseRecordError(t *testing.T) {
+	// Create a record with unknown type (255) but valid CRC
+	payload := []byte("test")
+	buf := make([]byte, RecordHeaderSize+len(payload))
+	buf[4] = 255 // unknown record type
+	binary.LittleEndian.PutUint32(buf[5:], uint32(len(payload)))
+	copy(buf[RecordHeaderSize:], payload)
+	crc := crc32.ChecksumIEEE(buf[4:])
+	binary.LittleEndian.PutUint32(buf[0:], crc)
+
+	// Prepend a valid data record so we verify partial parsing works
+	validRecord := EncodeRecord(&DataRecord{Payload: []byte("valid")})
+	combined := append(validRecord, buf...)
+
+	records, err := DecodeRecordList(combined)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(records)) // only the valid record parsed
+}
+
+// TestDecodeRecordList_IncompleteHeader tests DecodeRecordList with truncated header
+func TestDecodeRecordList_IncompleteHeader(t *testing.T) {
+	// A valid record followed by a truncated header (less than RecordHeaderSize bytes)
+	validRecord := EncodeRecord(&DataRecord{Payload: []byte("data")})
+	partial := append(validRecord, 0x01, 0x02, 0x03) // 3 bytes, not enough for header
+
+	records, err := DecodeRecordList(partial)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(records))
 }
 
 // TestIsCompacted tests the IsCompacted function
@@ -1245,5 +1359,73 @@ func TestFooterCompatibilityIntegration(t *testing.T) {
 		assert.False(t, parsed.HasLAC())
 		assert.Equal(t, int64(-1), parsed.LAC) // Default value for V5
 		assert.True(t, parsed.IsCompacted())
+	})
+}
+
+func TestExtractDataRecordBytes(t *testing.T) {
+	t.Run("NormalBlock", func(t *testing.T) {
+		// Build a block: BlockHeaderRecord + 2 DataRecords
+		blockHeader := EncodeRecord(&BlockHeaderRecord{
+			BlockNumber: 0, FirstEntryID: 0, LastEntryID: 1, BlockLength: 100, BlockCrc: 0,
+		})
+		data1 := EncodeRecord(&DataRecord{Payload: []byte("hello")})
+		data2 := EncodeRecord(&DataRecord{Payload: []byte("world")})
+
+		blockData := append(blockHeader, data1...)
+		blockData = append(blockData, data2...)
+
+		result, err := ExtractDataRecordBytes(blockData)
+		require.NoError(t, err)
+		assert.Equal(t, append(data1, data2...), result)
+	})
+
+	t.Run("WithHeaderRecord", func(t *testing.T) {
+		// Build: HeaderRecord + BlockHeaderRecord + DataRecord
+		header := EncodeRecord(&HeaderRecord{Version: FormatVersion, FirstEntryID: 0})
+		blockHeader := EncodeRecord(&BlockHeaderRecord{
+			BlockNumber: 0, FirstEntryID: 0, LastEntryID: 0, BlockLength: 50, BlockCrc: 0,
+		})
+		data := EncodeRecord(&DataRecord{Payload: []byte("test")})
+
+		blockData := append(header, blockHeader...)
+		blockData = append(blockData, data...)
+
+		result, err := ExtractDataRecordBytes(blockData)
+		require.NoError(t, err)
+		assert.Equal(t, data, result)
+	})
+
+	t.Run("EmptyInput", func(t *testing.T) {
+		result, err := ExtractDataRecordBytes([]byte{})
+		assert.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("TruncatedHeader", func(t *testing.T) {
+		result, err := ExtractDataRecordBytes([]byte{0x01, 0x02})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "truncated record header at offset 0")
+		assert.Nil(t, result)
+	})
+
+	t.Run("TruncatedPayload", func(t *testing.T) {
+		// Valid header claiming 100 bytes payload but only 2 bytes present
+		buf := make([]byte, RecordHeaderSize+2)
+		buf[4] = BlockHeaderRecordType
+		buf[5] = 100 // payload length = 100
+		result, err := ExtractDataRecordBytes(buf)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "truncated record payload at offset 0")
+		assert.Nil(t, result)
+	})
+
+	t.Run("NoDataRecords", func(t *testing.T) {
+		// Only a BlockHeaderRecord, no DataRecords
+		blockHeader := EncodeRecord(&BlockHeaderRecord{
+			BlockNumber: 0, FirstEntryID: 0, LastEntryID: 0, BlockLength: 0, BlockCrc: 0,
+		})
+		result, err := ExtractDataRecordBytes(blockHeader)
+		assert.NoError(t, err)
+		assert.Nil(t, result)
 	})
 }

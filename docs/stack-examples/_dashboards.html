@@ -1,0 +1,34 @@
+<h1>E2E Operational Dashboards</h1>
+<p class="page-desc">Choose the symptom, then follow numbered processing steps from top to bottom. Each step explains what to inspect and where to continue.</p>
+<p>Install the optional backends first: <code>./stack.sh addons-install --with prometheus,grafana -x</code>, then keep <code>./stack.sh forward -x</code> running.</p>
+
+<h2 id="choose">Choose a chain</h2>
+<p>The Helm stack provisions four focused E2E dashboards alongside the three Milvus/WP reference dashboards. Keep the stack’s forwards running; Grafana defaults to <code>http://127.0.0.1:3000</code>. Use <code>./stack.sh connections</code> for actual ports.</p>
+<table><thead><tr><th>Symptom</th><th>Dashboard / Grafana path</th><th>Ordered steps</th></tr></thead><tbody>
+<tr><td>Slow or failed writes</td><td>Write / Append<br><code>/d/milvus-e2e-write</code></td><td>Proxy → Streaming Client → SN WAL → WP Client → WP services/disk → admission pressure</td></tr>
+<tr><td>Consumption lag or delayed visibility</td><td>WAL Read / Consume<br><code>/d/milvus-e2e-consume</code></td><td>Read source/mode → historical WP reader → SN scanner → subscription → processing/visibility</td></tr>
+<tr><td>Persistence/checkpoints lag</td><td>Flush / Checkpoint<br><code>/d/milvus-e2e-flush</code></td><td>Growing data → sync scheduling → persistence → progress; separate WP background maintenance</td></tr>
+<tr><td>Slow search/query requests</td><td>Search / Query<br><code>/d/milvus-e2e-query</code></td><td>Proxy → Delegator/TSafe → scheduling → segment execution → result return</td></tr>
+</tbody></table>
+<p>Every group includes visible investigation guidance, followed by throughput/status, latency or progress metrics for that step. P50/P95/P99 curves preserve actual Pod/component or node/log identities. The <a href="{{STACK_REPO}}/E2E-DASHBOARDS.md">full guide</a> describes each group, its metric scope, operational limits and maintenance.</p>
+
+<h2 id="write">Follow a slow write</h2>
+<p>Begin with Proxy completion status, mutation latency, DML queue and timestamp/primary-key preparation. Continue to producer availability and produce latency, then compare full SN WAL append with backend append and individual interceptor timers.</p>
+<p>At the WP stages, compare pending appends, writer/replica outcomes and individual server append, buffer-wait and local-flush latency. The final group shows disk admission, usage, scheduler waiting and confirmation progress. Use <a href="#stack-examples-wpcli">wpcli</a> and the component reference dashboards to investigate the identified node/log.</p>
+
+<h2 id="consume">Follow delayed consumption</h2>
+<p>First distinguish real-time memory tailing from historical WAL catchup. A tailing scanner can read the SN write-ahead buffer without WP read RPCs, so zero backend read traffic alone is expected. Historical reads can use WP services or compacted segments in object storage.</p>
+<p>Continue through reader outcomes, scanned/passed messages, ordering/transaction buffers, subscription availability and downstream processing. In the supplied Milvus build, querynode-named consumption metrics can be emitted by the SN delegator, and local subscribers bypass the remote handler. Legends retain the actual emitting process.</p>
+<p>Normal tail EOF is displayed as an outcome. A blocking <code>read_next</code> can wait for new data, so its duration is not pure storage latency. The WP v0.1.46 example does not export per-reader read-frontier metrics; use wpcli for positions instead of assuming an exact backlog count.</p>
+
+<h2 id="persist-query">Separate persistence and query symptoms</h2>
+<p>Use Flush / Checkpoint when consuming works but growing buffers or persistent progress lag. It separates dispatcher waiting, upload/callback execution and progress boundaries. A flusher’s “seen” TimeTick is not a durable checkpoint; idle snapshot/checkpoint age is not automatically a fault. WP compaction/offload is shown as a parallel background path.</p>
+<p>Use Search / Query for request latency. TSafe waiting points back to consumption/visibility; scheduler waiting, segcore/segment execution, loading and result reduction describe other stages. Proxy result wait includes downstream work and transport, rather than only network latency.</p>
+
+<h2 id="validate">Validate coverage and compare a run</h2>
+<pre><code>./stack.sh smoke -x
+# Allow two 15-second scrapes.
+./stack.sh verify
+./stack.sh perf -x</code></pre>
+<p>Verification checks seven provisioned dashboards, their queries and the required metric families in each E2E stage. The report lists optional idle/version-specific coverage gaps separately; an UP panel cannot hide a missing WAL-stage metric. Performance reports and the Jupyter guide include E2E links for the run’s time window.</p>
+<p>Channel and WP log filters are separate identities, resolved with metadata before isolating a log. No data is not a healthy zero, histogram overflow limits quantile resolution, and overlapping timers cannot be added or subtracted. These dashboards correlate operational evidence; live read verification and controlled fault/recovery tests establish different aspects of correctness.</p>

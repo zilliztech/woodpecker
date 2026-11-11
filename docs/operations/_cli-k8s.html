@@ -1,0 +1,333 @@
+<section id="topic-k8s">
+<h2>Kubernetes helpers</h2>
+<article class="command" id="k8s-doctor">
+<h2>wp k8s doctor</h2>
+<p>Diagnose K8s cluster issues (not yet implemented)</p>
+<pre>
+<code>wp k8s doctor [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<p>No additional operation-specific flags. Connection settings come from CLI setup.</p>
+<h3>Demo</h3>
+<pre>
+<code>wp k8s doctor</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>No supported success path: this operation is not implemented.</code>
+</pre>
+<p>Use kubectl and the status/logs helpers for diagnosis; this placeholder does not check prerequisites or cluster health.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Error: NotImplemented: k8s doctor
+# Exit code 10 is expected.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Diagnose K8s cluster issues (not yet implemented)
+
+Usage:
+  wp k8s doctor [flags]
+
+Flags:
+  -h, --help   help for doctor</code>
+</pre>
+</details>
+</article>
+<article class="command" id="k8s-logs">
+<h2>wp k8s logs</h2>
+<p>Tail logs from a Woodpecker pod</p>
+<pre>
+<code>wp k8s logs &lt;node-or-pod&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>-x, --execute</code>
+</td>
+<td>Execute kubectl commands (default: print only)</td>
+</tr>
+<tr>
+<td>
+<code>-f, --follow</code>
+</td>
+<td>Stream logs</td>
+</tr>
+<tr>
+<td>
+<code>--kube-context string</code>
+</td>
+<td>kubectl context name</td>
+</tr>
+<tr>
+<td>
+<code>--kubeconfig string</code>
+</td>
+<td>Path to kubeconfig file</td>
+</tr>
+<tr>
+<td>
+<code>--kubectl string</code>
+</td>
+<td>Path to kubectl binary</td>
+</tr>
+<tr>
+<td>
+<code>-n, --namespace string</code>
+</td>
+<td>Kubernetes namespace</td>
+</tr>
+<tr>
+<td>
+<code>--since string</code>
+</td>
+<td>Only show logs newer than duration (e.g. 1h)</td>
+</tr>
+<tr>
+<td>
+<code>--tail int</code>
+</td>
+<td>Number of recent lines to show (default 100)</td>
+</tr>
+<tr>
+<td>
+<code>--wp-cluster string</code>
+</td>
+<td>WoodpeckerCluster CR name</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp k8s logs milvus-woodpecker-0 --namespace milvus</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>kubectl ... -n milvus logs milvus-woodpecker-0 --tail=100</code>
+</pre>
+<p>status, logs and scale print plans by default; -x executes. scale targets a WoodpeckerCluster CR, not an arbitrary StatefulSet. Set the correct kube context and namespace. doctor checks local prerequisites.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Missing kubectl, kubeconfig or resource / kubectl exit status</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Tail logs from a Woodpecker pod
+
+Usage:
+  wp k8s logs &lt;node-or-pod&gt; [flags]
+
+Flags:
+  -x, --execute               Execute kubectl commands (default: print only)
+  -f, --follow                Stream logs
+  -h, --help                  help for logs
+      --kube-context string   kubectl context name
+      --kubeconfig string     Path to kubeconfig file
+      --kubectl string        Path to kubectl binary
+  -n, --namespace string      Kubernetes namespace
+      --since string          Only show logs newer than duration (e.g. 1h)
+      --tail int              Number of recent lines to show (default 100)
+      --wp-cluster string     WoodpeckerCluster CR name</code>
+</pre>
+</details>
+</article>
+<article class="command" id="k8s-scale">
+<h2>wp k8s scale</h2>
+<p>Scale the cluster via kubectl patch</p>
+<pre>
+<code>wp k8s scale [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>-x, --execute</code>
+</td>
+<td>Execute kubectl commands (default: print only)</td>
+</tr>
+<tr>
+<td>
+<code>--kube-context string</code>
+</td>
+<td>kubectl context name</td>
+</tr>
+<tr>
+<td>
+<code>--kubeconfig string</code>
+</td>
+<td>Path to kubeconfig file</td>
+</tr>
+<tr>
+<td>
+<code>--kubectl string</code>
+</td>
+<td>Path to kubectl binary</td>
+</tr>
+<tr>
+<td>
+<code>-n, --namespace string</code>
+</td>
+<td>Kubernetes namespace</td>
+</tr>
+<tr>
+<td>
+<code>--replicas int</code>
+</td>
+<td>Target replica count (required)</td>
+</tr>
+<tr>
+<td>
+<code>--wp-cluster string</code>
+</td>
+<td>WoodpeckerCluster CR name</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp k8s scale --namespace milvus --wp-cluster wp --replicas 4</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Scaling wp to 4 replicas...
+kubectl ... patch woodpeckercluster wp --type merge -p ...
+# Printed plan only; --execute runs it.</code>
+</pre>
+<p>status, logs and scale print plans by default; -x executes. scale targets a WoodpeckerCluster CR, not an arbitrary StatefulSet. Set the correct kube context and namespace. doctor checks local prerequisites. This targets a WoodpeckerCluster CR, not a Helm release.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Missing kubectl, kubeconfig or resource / kubectl exit status</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Scale the cluster via kubectl patch
+
+Usage:
+  wp k8s scale [flags]
+
+Flags:
+  -x, --execute               Execute kubectl commands (default: print only)
+  -h, --help                  help for scale
+      --kube-context string   kubectl context name
+      --kubeconfig string     Path to kubeconfig file
+      --kubectl string        Path to kubectl binary
+  -n, --namespace string      Kubernetes namespace
+      --replicas int          Target replica count (required)
+      --wp-cluster string     WoodpeckerCluster CR name</code>
+</pre>
+</details>
+</article>
+<article class="command" id="k8s-status">
+<h2>wp k8s status</h2>
+<p>Show cluster status via kubectl</p>
+<pre>
+<code>wp k8s status [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>-x, --execute</code>
+</td>
+<td>Execute kubectl commands (default: print only)</td>
+</tr>
+<tr>
+<td>
+<code>--kube-context string</code>
+</td>
+<td>kubectl context name</td>
+</tr>
+<tr>
+<td>
+<code>--kubeconfig string</code>
+</td>
+<td>Path to kubeconfig file</td>
+</tr>
+<tr>
+<td>
+<code>--kubectl string</code>
+</td>
+<td>Path to kubectl binary</td>
+</tr>
+<tr>
+<td>
+<code>-n, --namespace string</code>
+</td>
+<td>Kubernetes namespace</td>
+</tr>
+<tr>
+<td>
+<code>--wp-cluster string</code>
+</td>
+<td>WoodpeckerCluster CR name</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp k8s status --namespace milvus --wp-cluster woodpecker-prod</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>kubectl ... get woodpeckercluster woodpecker-prod -o wide
+kubectl ... describe woodpeckercluster woodpecker-prod
+# Printed plan only; --execute runs it.</code>
+</pre>
+<p>status, logs and scale print plans by default; -x executes. scale targets a WoodpeckerCluster CR, not an arbitrary StatefulSet. Set the correct kube context and namespace. doctor checks local prerequisites. status/scale require an operator-managed WoodpeckerCluster CR. For a Helm deployment without that CR, use kubectl get pods directly.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Missing kubectl, kubeconfig or resource / kubectl exit status</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Show cluster status via kubectl
+
+Usage:
+  wp k8s status [flags]
+
+Flags:
+  -x, --execute               Execute kubectl commands (default: print only)
+  -h, --help                  help for status
+      --kube-context string   kubectl context name
+      --kubeconfig string     Path to kubeconfig file
+      --kubectl string        Path to kubectl binary
+  -n, --namespace string      Kubernetes namespace
+      --wp-cluster string     WoodpeckerCluster CR name</code>
+</pre>
+</details>
+</article>
+</section>

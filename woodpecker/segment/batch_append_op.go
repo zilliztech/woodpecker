@@ -1,0 +1,247 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package segment
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"sync"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/proto"
+)
+
+var _ Operation = (*BatchAppendOp)(nil)
+
+// batchAckReadTimeout bounds how long the drain waits for a single entry's
+// durability ack. Package var so tests can shrink it. TODO make configurable
+// (like the append-path waits); tracked with the timeout audit.
+var batchAckReadTimeout = 30 * time.Second
+
+// BatchAppendOp groups a run of consecutive AppendOps from the same segment and
+// sends their entries to each quorum replica in a single AddEntries request
+// (client-side group commit). It amortizes the per-entry send round-trip that
+// otherwise caps single-log append throughput.
+//
+// It is a SEND-side grouping only: every entry keeps its own AppendOp, result
+// channel, receivedAckCallback, quorum tracking, and in-order acknowledgement
+// via SendAppendSuccessCallbacks. Partial success therefore falls out of the
+// existing ordered-LAC machinery — the committed prefix is acknowledged in order
+// and promptly, and any not-yet-acked suffix is retried (or fenced/rolled) by
+// the per-entry failure path — without any new out-of-order bookkeeping here.
+type BatchAppendOp struct {
+	ops []*AppendOp
+}
+
+func NewBatchAppendOp(ops []*AppendOp) *BatchAppendOp {
+	return &BatchAppendOp{ops: ops}
+}
+
+func (b *BatchAppendOp) Identifier() string {
+	if len(b.ops) == 0 {
+		return "batch[]"
+	}
+	first := b.ops[0]
+	last := b.ops[len(b.ops)-1]
+	return fmt.Sprintf("batch[%d/%d/%d..%d]", first.logId, first.segmentId, first.entryId, last.entryId)
+}
+
+// Execute sends the batch to every quorum replica concurrently. Per replica, all
+// entries travel in one AddEntries request; the per-entry results are routed
+// back into each op's per-replica result channel, where the op's own
+// receivedAckCallback handles quorum counting and acknowledgement exactly as in
+// the single-entry path.
+func (b *BatchAppendOp) Execute() {
+	if len(b.ops) == 0 {
+		return
+	}
+	// A batch can combine independent requests. Its RPC has one context, so
+	// represent every contributing request with links instead of choosing an
+	// arbitrary request as the parent or changing coalescing/ack semantics.
+	ctx, sp := logger.NewIntentCtxWithOptions(context.Background(), "BatchAppendOp", "Execute",
+		trace.WithLinks(b.traceLinks()...),
+		trace.WithAttributes(attribute.Int("append.entries", len(b.ops)),
+			attribute.String("log_id", strconv.FormatInt(b.ops[0].logId, 10)),
+			attribute.String("segment_id", strconv.FormatInt(b.ops[0].segmentId, 10))))
+	defer sp.End()
+
+	quorumInfo := b.ops[0].quorumInfo
+	nodeCount := len(quorumInfo.Nodes)
+
+	// Pre-size each op's per-replica result-channel slice before fanning out, so
+	// the per-replica goroutines below each write a disjoint index without racing
+	// on the slice header.
+	for _, op := range b.ops {
+		op.mu.Lock()
+		if len(op.resultChannels) == 0 {
+			op.resultChannels = make([]channel.ResultChannel, nodeCount)
+		}
+		op.mu.Unlock()
+	}
+
+	// The entries payload is identical for every replica and immutable once built.
+	entries := make([]*proto.LogEntry, len(b.ops))
+	for i, op := range b.ops {
+		entries[i] = op.toLogEntry()
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(nodeCount)
+	for nodeIdx := 0; nodeIdx < nodeCount; nodeIdx++ {
+		go func(nodeIdx int) {
+			defer wg.Done()
+			b.sendBatchToNode(ctx, entries, nodeIdx)
+		}(nodeIdx)
+	}
+	wg.Wait()
+}
+
+func (b *BatchAppendOp) sendBatchToNode(ctx context.Context, entries []*proto.LogEntry, nodeIdx int) {
+	first := b.ops[0]
+	serverAddr := first.quorumInfo.Nodes[nodeIdx]
+
+	cli, clientErr := first.clientPool.GetLogStoreClient(ctx, serverAddr)
+	if clientErr != nil {
+		b.failNode(ctx, nodeIdx, serverAddr, clientErr)
+		return
+	}
+
+	// Each op gets an in-process result sink for THIS replica; the client routes
+	// the per-entry Synced/Failed responses into them by entry id.
+	resultChs := make([]channel.ResultChannel, len(b.ops))
+	for i, op := range b.ops {
+		lc := channel.NewLocalResultChannel(op.Identifier())
+		op.mu.Lock()
+		op.resultChannels[nodeIdx] = lc
+		op.mu.Unlock()
+		resultChs[i] = lc
+	}
+
+	startRequestTime := time.Now()
+	// The drain goroutine below owns the stream's lifetime: streamCtx is cancelled
+	// when the drain exits (normally or on give-up), so a stalled peer can't leave
+	// the client demux goroutine + gRPC stream + server handler hanging.
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	logger.Ctx(ctx).Debug("batch append send started",
+		zap.Int64("logId", first.logId), zap.Int64("segId", first.segmentId),
+		zap.Int64("firstEntryId", first.entryId), zap.Int64("lastEntryId", b.ops[len(b.ops)-1].entryId),
+		zap.Int("entriesCount", len(entries)), zap.String("serverAddr", serverAddr))
+	_, err := cli.AppendEntries(streamCtx, first.bucketName, first.rootPath, first.logId, entries, resultChs)
+	logger.Ctx(ctx).Debug("batch append send completed",
+		zap.Int64("logId", first.logId), zap.Int64("segId", first.segmentId),
+		zap.Int64("firstEntryId", first.entryId), zap.Int64("lastEntryId", b.ops[len(b.ops)-1].entryId),
+		zap.Int("entriesCount", len(entries)), zap.String("serverAddr", serverAddr),
+		zap.Duration("duration", time.Since(startRequestTime)), zap.Error(err))
+	if err != nil {
+		streamCancel()
+		b.failNode(ctx, nodeIdx, serverAddr, err)
+		return
+	}
+
+	// Send succeeded: ONE goroutine per node drains the per-entry durability
+	// acks IN ORDER (the server streams them in entry-id / flush order) and
+	// applies quorum inline, instead of spawning a receivedAckCallback goroutine
+	// per op. For a batch of N entries this is 1 goroutine per node instead of N.
+	go func() {
+		defer streamCancel()
+		// This goroutine is the only reader of these channels, so it owns retiring
+		// them - the same rule the single-entry path follows, through the same
+		// helper. Without an owner a late send from the client's demux lands in a
+		// one-slot buffer nobody will drain; with one it takes the closed path
+		// instead. Entries the drain gives up on are retired here too: it abandons
+		// them without reading, so nothing else ever will.
+		defer func() {
+			for i, op := range b.ops {
+				op.retireResultChannel(ctx, resultChs[i], serverAddr)
+			}
+		}()
+		for i, op := range b.ops {
+			// Per-entry deadline: a slow early entry must not shrink a later
+			// (still-arriving) entry's budget into a false timeout.
+			readCtx, cancel := context.WithTimeout(context.Background(), batchAckReadTimeout)
+			result, readErr := resultChs[i].ReadResult(readCtx)
+			cancel()
+			op.applyNodeAck(ctx, startRequestTime, result, readErr, nodeIdx, serverAddr)
+			if readErr != nil {
+				// The stream stalled (no ack within the deadline). Acks are ordered,
+				// so entries after i won't arrive either — fail them fast instead of
+				// blocking a full deadline each, and let the deferred streamCancel tear
+				// down the hung stream promptly.
+				for j := i + 1; j < len(b.ops); j++ {
+					b.ops[j].applyNodeAck(ctx, startRequestTime, nil, readErr, nodeIdx, serverAddr)
+				}
+				return
+			}
+		}
+	}()
+}
+
+// failNode marks every op in the batch as failed on the given replica, routing
+// each through the per-entry failure path (which decides retry vs. quorum loss).
+func (b *BatchAppendOp) failNode(ctx context.Context, nodeIdx int, serverAddr string, err error) {
+	for _, op := range b.ops {
+		op.channelErrors[nodeIdx] = err
+		op.recordReplicaResult(nodeIdx, "error")
+	}
+	// Report off this goroutine, and in entry order.
+	//
+	// Off, because Execute waits for sendBatchToNode while AppendAsync holds the
+	// segment handle's lock across a Submit that blocks on a full queue: taking
+	// that lock here would deadlock the executor. sendWriteRequestRetry reports
+	// asynchronously for the same reason.
+	//
+	// In order, because HandleAppendRequestFailure sweeps out every queued entry
+	// above the one that failed. Reporting the batch out of order lets an entry be
+	// resubmitted for retry and then swept by a sibling's later report, so the
+	// retry is sent for an entry that is already abandoned.
+	//
+	// One goroutine for the batch, not one per entry: a full batch failing on
+	// every replica would otherwise spawn MaxBatchEntries x Es goroutines onto one
+	// lock, at the moment the system is least able to absorb it.
+	go func() {
+		for _, op := range b.ops {
+			op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, nodeIdx, serverAddr)
+		}
+	}()
+}
+
+// Links are deduplicated by trace/span identity, not by trace ID alone. SDK
+// sampling and link limits still apply; a retained link is not a durability ack.
+func (b *BatchAppendOp) traceLinks() []trace.Link {
+	type identity struct {
+		traceID trace.TraceID
+		spanID  trace.SpanID
+	}
+	seen := make(map[identity]bool, len(b.ops))
+	links := make([]trace.Link, 0, len(b.ops))
+	for _, op := range b.ops {
+		sc := op.traceParent
+		key := identity{sc.TraceID(), sc.SpanID()}
+		if sc.IsValid() && !seen[key] {
+			seen[key] = true
+			links = append(links, trace.Link{SpanContext: sc})
+		}
+	}
+	return links
+}

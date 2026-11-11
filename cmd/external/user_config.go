@@ -291,19 +291,19 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 	}
 
 	// Quorum
-	if len(src.Client.Quorum.BufferPools) > 0 {
+	if len(src.Client.Quorum.BufferPools.Get()) > 0 {
 		dst.Client.Quorum.BufferPools = src.Client.Quorum.BufferPools
 	}
-	if src.Client.Quorum.SelectStrategy.AffinityMode != "" {
+	if src.Client.Quorum.SelectStrategy.AffinityMode.Get() != "" {
 		dst.Client.Quorum.SelectStrategy.AffinityMode = src.Client.Quorum.SelectStrategy.AffinityMode
 	}
-	if src.Client.Quorum.SelectStrategy.Replicas > 0 {
+	if src.Client.Quorum.SelectStrategy.Replicas.Get() > 0 {
 		dst.Client.Quorum.SelectStrategy.Replicas = src.Client.Quorum.SelectStrategy.Replicas
 	}
-	if src.Client.Quorum.SelectStrategy.Strategy != "" {
+	if src.Client.Quorum.SelectStrategy.Strategy.Get() != "" {
 		dst.Client.Quorum.SelectStrategy.Strategy = src.Client.Quorum.SelectStrategy.Strategy
 	}
-	if len(src.Client.Quorum.SelectStrategy.CustomPlacement) > 0 {
+	if len(src.Client.Quorum.SelectStrategy.CustomPlacement.Get()) > 0 {
 		dst.Client.Quorum.SelectStrategy.CustomPlacement = src.Client.Quorum.SelectStrategy.CustomPlacement
 	}
 
@@ -313,6 +313,9 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 	}
 	if src.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds() > 0 {
 		dst.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = src.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage
+	}
+	if src.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds() > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxIntervalForService = src.Logstore.SegmentSyncPolicy.MaxIntervalForService
 	}
 	if src.Logstore.SegmentSyncPolicy.MaxEntries > 0 {
 		dst.Logstore.SegmentSyncPolicy.MaxEntries = src.Logstore.SegmentSyncPolicy.MaxEntries
@@ -342,6 +345,15 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 	}
 	if src.Logstore.SegmentCompactionPolicy.MaxParallelReads > 0 {
 		dst.Logstore.SegmentCompactionPolicy.MaxParallelReads = src.Logstore.SegmentCompactionPolicy.MaxParallelReads
+	}
+	// Both admission bounds are overridable: a deployment that raises MaxBytes or
+	// MaxParallelUploads raises what one compaction costs, and needs a say in what the node as a
+	// whole will take on.
+	if src.Logstore.SegmentCompactionPolicy.MaxInflightMemory.Int64() > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MaxInflightMemory = src.Logstore.SegmentCompactionPolicy.MaxInflightMemory
+	}
+	if src.Logstore.SegmentCompactionPolicy.MemoryHighWatermark > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MemoryHighWatermark = src.Logstore.SegmentCompactionPolicy.MemoryHighWatermark
 	}
 
 	// Logstore - SegmentReadPolicy

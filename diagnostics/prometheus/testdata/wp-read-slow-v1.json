@@ -1,0 +1,446 @@
+{
+  "schema_version": "wpdiag.report/v1",
+  "run_id": "fixture-460-wrapper",
+  "selection": {
+    "sources": [
+      "prometheus"
+    ],
+    "scope": "wp",
+    "flow": "read",
+    "stage": "wal_read",
+    "profile": "wp.read.metrics",
+    "target": {},
+    "window": {
+      "mode": "historical",
+      "from": "1970-01-01T00:16:40Z",
+      "to": "1970-01-01T00:17:40Z"
+    }
+  },
+  "limits": {
+    "budget_ms": 60000,
+    "max_input_bytes": 8388608,
+    "max_output_bytes": 16777216,
+    "max_targets": 8
+  },
+  "started_at": "1970-01-01T00:33:20Z",
+  "finished_at": "1970-01-01T00:33:30Z",
+  "status": "completed",
+  "results": [
+    {
+      "source": "prometheus",
+      "connection": "fixture",
+      "profile": "wp.read.metrics",
+      "status": "completed",
+      "problems": [],
+      "observations": [
+        {
+          "id": "fixture-460-source:q0",
+          "source_id": "prometheus:wp.wal_read",
+          "kind": "prometheus_matrix",
+          "target": {
+            "deployment": "fixture"
+          },
+          "started_at": "1970-01-01T00:33:21Z",
+          "finished_at": "1970-01-01T00:33:22Z",
+          "status": "observed",
+          "data": {
+            "signal": "wp.wal_read",
+            "from": "1970-01-01T00:16:40Z",
+            "to": "1970-01-01T00:17:40Z",
+            "unit": "milliseconds",
+            "series": [
+              {
+                "series_id": "37fc01c34f0408ae9e4c0ec29caa2e645a8eb71cd0171758e7dcc251a07748a4",
+                "labels": {
+                  "__name__": "woodpecker_server_logstore_operation_latency_count",
+                  "cluster": "test",
+                  "component": "woodpecker",
+                  "instance": "woodpecker:9091",
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "samples": [
+                  {
+                    "time_ms": 1008571,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1017142,
+                    "value": 20
+                  },
+                  {
+                    "time_ms": 1025714,
+                    "value": 40
+                  },
+                  {
+                    "time_ms": 1034285,
+                    "value": 60
+                  },
+                  {
+                    "time_ms": 1042857,
+                    "value": 80
+                  },
+                  {
+                    "time_ms": 1051428,
+                    "value": 100
+                  }
+                ]
+              },
+              {
+                "series_id": "c5a76c44f65977736b2fb3ac4885c461fd86204c5c694572f4dc30ef9fd046ae",
+                "labels": {
+                  "__name__": "woodpecker_server_logstore_operation_latency_sum",
+                  "cluster": "test",
+                  "component": "woodpecker",
+                  "instance": "woodpecker:9091",
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "samples": [
+                  {
+                    "time_ms": 1008571,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1017142,
+                    "value": 60000
+                  },
+                  {
+                    "time_ms": 1025714,
+                    "value": 120000
+                  },
+                  {
+                    "time_ms": 1034285,
+                    "value": 180000
+                  },
+                  {
+                    "time_ms": 1042857,
+                    "value": 240000
+                  },
+                  {
+                    "time_ms": 1051428,
+                    "value": 300000
+                  }
+                ]
+              },
+              {
+                "series_id": "610e606450574bb24e6a88c5f30711931a77c694559fef956e930df9fa3b37fc",
+                "labels": {
+                  "__name__": "woodpecker_server_logstore_operation_latency_bucket",
+                  "cluster": "test",
+                  "component": "woodpecker",
+                  "instance": "woodpecker:9091",
+                  "le": "100",
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "samples": [
+                  {
+                    "time_ms": 1008571,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1017142,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1025714,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1034285,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1042857,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1051428,
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "series_id": "26e9f4998eafd3847c8f04617ad1f54982aedbfe49563dc908d06eeea117ab21",
+                "labels": {
+                  "__name__": "woodpecker_server_logstore_operation_latency_bucket",
+                  "cluster": "test",
+                  "component": "woodpecker",
+                  "instance": "woodpecker:9091",
+                  "le": "256",
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "samples": [
+                  {
+                    "time_ms": 1008571,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1017142,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1025714,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1034285,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1042857,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1051428,
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "series_id": "fe68fba61d272453e8e65e6737cc62e190a7a6ac1f34986b5d994cabfa5b56f1",
+                "labels": {
+                  "__name__": "woodpecker_server_logstore_operation_latency_bucket",
+                  "cluster": "test",
+                  "component": "woodpecker",
+                  "instance": "woodpecker:9091",
+                  "le": "2048",
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "samples": [
+                  {
+                    "time_ms": 1008571,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1017142,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1025714,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1034285,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1042857,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1051428,
+                    "value": 0
+                  }
+                ]
+              },
+              {
+                "series_id": "bc31a9f82814f2d7af03cb689c941141224479db2b018b9f9a8fc69874fb51bc",
+                "labels": {
+                  "__name__": "woodpecker_server_logstore_operation_latency_bucket",
+                  "cluster": "test",
+                  "component": "woodpecker",
+                  "instance": "woodpecker:9091",
+                  "le": "4096",
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "samples": [
+                  {
+                    "time_ms": 1008571,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1017142,
+                    "value": 20
+                  },
+                  {
+                    "time_ms": 1025714,
+                    "value": 40
+                  },
+                  {
+                    "time_ms": 1034285,
+                    "value": 60
+                  },
+                  {
+                    "time_ms": 1042857,
+                    "value": 80
+                  },
+                  {
+                    "time_ms": 1051428,
+                    "value": 100
+                  }
+                ]
+              },
+              {
+                "series_id": "2bca65afe4983306f3d83a56b0d872243ab86a022232c4d5d138bf7723c2ba98",
+                "labels": {
+                  "__name__": "woodpecker_server_logstore_operation_latency_bucket",
+                  "cluster": "test",
+                  "component": "woodpecker",
+                  "instance": "woodpecker:9091",
+                  "le": "+Inf",
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "samples": [
+                  {
+                    "time_ms": 1008571,
+                    "value": 0
+                  },
+                  {
+                    "time_ms": 1017142,
+                    "value": 20
+                  },
+                  {
+                    "time_ms": 1025714,
+                    "value": 40
+                  },
+                  {
+                    "time_ms": 1034285,
+                    "value": 60
+                  },
+                  {
+                    "time_ms": 1042857,
+                    "value": 80
+                  },
+                  {
+                    "time_ms": 1051428,
+                    "value": 100
+                  }
+                ]
+              }
+            ],
+            "notes": [],
+            "facts": [
+              {
+                "population_id": "12926c2b894bbb2df5ffeb65cfaf53fef1ddea228702ba420dc9eb63e5375f8f",
+                "labels": {
+                  "cluster": "test",
+                  "component": "woodpecker",
+                  "instance": "woodpecker:9091",
+                  "log_id": "2",
+                  "log_ns": "tenant-a",
+                  "node_id": "node-1",
+                  "operation": "get_batch_entries",
+                  "status": "success"
+                },
+                "observed_from_ms": 1008571,
+                "observed_to_ms": 1051428,
+                "observed_completions": 100,
+                "completions_per_second": 2.3333411111370372,
+                "mean_ms": 3000,
+                "p95_lower_ms": 2048,
+                "p95_upper_ms": 4096,
+                "threshold_ms": 250
+              }
+            ]
+          },
+          "query": {
+            "language": "promql",
+            "expression": "{__name__=~\"woodpecker_server_logstore_operation_latency_(bucket|count|sum)\",cluster=\"test\",component=\"woodpecker\",operation=~\"get_batch_entries\",status=\"success\"}[60000ms] @ 1060.000",
+            "executed": true
+          }
+        }
+      ],
+      "findings": [
+        {
+          "id": "fixture-460-source:q0:12926c2b894bbb2df5ffeb65cfaf53fef1ddea228702ba420dc9eb63e5375f8f",
+          "rule_id": "wp.wal_read.latency",
+          "rule_version": 1,
+          "flow": "read",
+          "stage": "wal_read",
+          "target": {
+            "deployment": "fixture",
+            "instance": "woodpecker:9091",
+            "node_id": "node-1",
+            "log_id": "2",
+            "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+          },
+          "outcome": "suspected_high_latency",
+          "severity": "warning",
+          "evidence_strength": "suspected",
+          "summary": "woodpecker_server_logstore_operation_latency P95 is at least 2048.000ms, above configured 250.000ms; 100 completions at 2.333/s",
+          "supporting_observations": [
+            "fixture-460-source:q0"
+          ],
+          "contradicting_observations": [],
+          "unknown": [
+            "completed_operations_only",
+            "pending_work_and_error_coverage_not_established",
+            "events_between_scrapes_unobservable"
+          ],
+          "next_read_only_checks": [
+            "Compare the exact exported population and observation window; do not add/subtract unrelated stage quantiles",
+            "Inspect workload demand and the relevant E2E dashboard before assigning a cause"
+          ]
+        }
+      ],
+      "coverage_gaps": [
+        {
+          "code": "completed_operations_only",
+          "observation_id": "fixture-460-source:q0",
+          "detail": "Applies to fixture-460-source:q0:12926c2b894bbb2df5ffeb65cfaf53fef1ddea228702ba420dc9eb63e5375f8f"
+        },
+        {
+          "code": "pending_work_and_error_coverage_not_established",
+          "observation_id": "fixture-460-source:q0",
+          "detail": "Applies to fixture-460-source:q0:12926c2b894bbb2df5ffeb65cfaf53fef1ddea228702ba420dc9eb63e5375f8f"
+        },
+        {
+          "code": "events_between_scrapes_unobservable",
+          "observation_id": "fixture-460-source:q0",
+          "detail": "Applies to fixture-460-source:q0:12926c2b894bbb2df5ffeb65cfaf53fef1ddea228702ba420dc9eb63e5375f8f"
+        }
+      ],
+      "metadata": {
+        "source_schema_version": "wpdiag.prometheus/v1",
+        "source_run_id": "fixture-460-source",
+        "bound_deployment": "fixture",
+        "from": "1970-01-01T00:16:40Z",
+        "to": "1970-01-01T00:17:40Z",
+        "window_semantics": "Raw retained scrapes in (from,to]; deltas cover actual first/last samples, without extrapolation or resampling",
+        "policy": {
+          "max_gap_ms": 30000,
+          "min_observations": 20,
+          "latency_ms": {
+            "milvus.append": 1000,
+            "milvus.query": 1000,
+            "milvus.wal_append": 500,
+            "wp.append": 250,
+            "wp.wal_read": 250
+          },
+          "throughput_drop_ratio": 0.5
+        },
+        "input_bytes": 2847,
+        "returned_series_before_deduplication": 7,
+        "returned_samples_before_deduplication": 42,
+        "executed_queries": 1
+      }
+    }
+  ]
+}

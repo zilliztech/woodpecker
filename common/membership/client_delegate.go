@@ -15,16 +15,35 @@ import "github.com/hashicorp/memberlist"
 
 var _ memberlist.Delegate = (*ClientDelegate)(nil)
 
-// ClientDelegate is the memberlist delegate for client nodes (does not participate in gossip)
-type ClientDelegate struct{}
+// ClientDelegate is the memberlist delegate for client nodes. A client announces
+// nothing of its own, but it does keep a ServiceDiscovery and select on runtime
+// signals, so it has to ingest the snapshots servers gossip.
+type ClientDelegate struct {
+	// discovery receives peer runtime snapshots via NotifyMsg. Optional; nil
+	// disables ingestion. Issue #271.
+	discovery *ServiceDiscovery
+}
 
 func NewClientDelegate() *ClientDelegate { return &ClientDelegate{} }
 
 // NodeMeta client does not provide metadata for gossip
 func (d *ClientDelegate) NodeMeta(limit int) []byte { return []byte{} }
 
-// NotifyMsg client does not handle gossip messages
-func (d *ClientDelegate) NotifyMsg(buf []byte) {}
+// NotifyMsg ingests a user-level gossip message. A client sets PushPullInterval
+// to 0 and its MergeRemoteState is a no-op, so this is its only path to a peer's
+// current runtime state — without it a client would select on whatever each
+// server happened to publish when the client joined. Unknown tags are ignored.
+func (d *ClientDelegate) NotifyMsg(buf []byte) {
+	if len(buf) == 0 {
+		return
+	}
+	switch buf[0] {
+	case msgTypeNodeRuntimeInfo:
+		// Ingest only, no relay: a client runs with GossipNodes 0 and returns
+		// nothing from GetBroadcasts, so it is a leaf in the gossip graph.
+		applyRuntimeInfo(d.discovery, buf[1:])
+	}
+}
 
 // GetBroadcasts client does not broadcast messages
 func (d *ClientDelegate) GetBroadcasts(overhead, limit int) [][]byte { return nil }

@@ -19,22 +19,31 @@ package segment
 import (
 	"container/list"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
@@ -75,14 +84,16 @@ type SegmentHandle interface {
 	// GetBlocksCount get the number of blocks in the segment
 	GetBlocksCount(ctx context.Context) int64
 	// Complete the segment writing
-	// Deprecated, no used in main logic
+	// Deprecated, not used in main logic
 	Complete(ctx context.Context) (int64, error)
 	// FenceAndComplete the segment in all nodes
 	FenceAndComplete(ctx context.Context) (int64, error)
 	// Compact is a recovery or compaction operation
 	Compact(ctx context.Context) error
-	// SetRollingReady set the segment as ready for rolling
-	SetRollingReady(ctx context.Context)
+	// SetRollingReady rejects new appends and schedules background completion
+	// once pending appends drain. Completion failures invalidate the writer
+	// through its notifier; callers need not wait before creating the next segment.
+	SetRollingReady(ctx context.Context) error
 	// IsForceRollingReady check if the segment is ready for rolling
 	IsForceRollingReady(ctx context.Context) bool
 	// GetLastAccessTime get the last access time of the segment
@@ -91,22 +102,29 @@ type SegmentHandle interface {
 	SetWriterInvalidationNotifier(ctx context.Context, f func(ctx context.Context, reason string))
 }
 
-func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
+func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool, objectStorageClient storageclient.ObjectStorage) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
+	maxBatchEntries := cfg.Woodpecker.Client.SegmentAppend.MaxBatchEntries
+	maxBatchBytes := cfg.Woodpecker.Client.SegmentAppend.MaxBatchBytes.Int64()
 	segmentHandle := &segmentHandleImpl{
-		bucketName:       cfg.Minio.BucketName,
-		rootPath:         cfg.Minio.RootPath,
-		logId:            logId,
-		logName:          logName,
-		segmentId:        segmentMeta.Metadata.SegNo,
-		metadata:         metadata,
-		ClientPool:       clientPool,
-		appendOpsQueue:   list.New(),
-		quorumInfo:       segmentMeta.Metadata.Quorum,
-		executor:         NewSequentialExecutor(executeRequestMaxQueueSize),
-		cfg:              cfg,
-		metricsNamespace: metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		bucketName:          cfg.Minio.BucketName,
+		rootPath:            cfg.Minio.RootPath,
+		logId:               logId,
+		logName:             logName,
+		segmentId:           segmentMeta.Metadata.SegNo,
+		metadata:            metadata,
+		ClientPool:          clientPool,
+		appendOpsQueue:      list.New(),
+		quorumInfo:          segmentMeta.Metadata.Quorum,
+		executor:            NewBatchingSequentialExecutor(executeRequestMaxQueueSize, maxBatchEntries, maxBatchBytes),
+		cfg:                 cfg,
+		logNs:               metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		objectStorageClient: objectStorageClient,
+		lacSyncNotify:       make(chan struct{}, 1),
+		lacSyncStop:         make(chan struct{}),
 	}
+	segmentHandle.nodeScopes = quorumNodeScopes(segmentHandle.quorumInfo)
+	segmentHandle.lacSyncLatest.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.commitedSize.Store(segmentMeta.Metadata.Size)
@@ -117,7 +135,23 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
 	if canWrite {
 		segmentHandle.canWriteState.Store(true)
+		metrics.SetWriteFrontier(
+			segmentHandle.logNs,
+			strconv.FormatInt(segmentHandle.logId, 10),
+			segmentHandle.segmentId,
+			segmentMeta.Metadata.LastEntryId,
+		)
+		metrics.SetActiveSegmentNodes(
+			segmentHandle.logNs,
+			strconv.FormatInt(segmentHandle.logId, 10),
+			strconv.FormatInt(segmentHandle.segmentId, 10),
+			activeSegmentNodes(segmentHandle.quorumInfo),
+		)
 		segmentHandle.executor.Start(ctx)
+		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
+		segmentHandle.completionMgr.Start(context.Background())
+		segmentHandle.lacSyncStarted.Store(true)
+		go segmentHandle.lacSyncLoop()
 	}
 	return segmentHandle
 }
@@ -131,14 +165,14 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List, writable bool) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
-		bucketName:       cfg.Minio.BucketName,
-		rootPath:         cfg.Minio.RootPath,
-		logId:            logId,
-		logName:          logName,
-		segmentId:        segmentMeta.Metadata.SegNo,
-		metadata:         metadata,
-		ClientPool:       clientPool,
-		appendOpsQueue:   testAppendOpsQueue,
+		bucketName:     cfg.Minio.BucketName,
+		rootPath:       cfg.Minio.RootPath,
+		logId:          logId,
+		logName:        logName,
+		segmentId:      segmentMeta.Metadata.SegNo,
+		metadata:       metadata,
+		ClientPool:     clientPool,
+		appendOpsQueue: testAppendOpsQueue,
 		quorumInfo: &proto.QuorumInfo{
 			Id: 1,
 			Wq: 1,
@@ -148,10 +182,14 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 				"127.0.0.1",
 			},
 		},
-		executor:         NewSequentialExecutor(executeRequestMaxQueueSize),
-		cfg:              cfg,
-		metricsNamespace: metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		executor:      NewSequentialExecutor(executeRequestMaxQueueSize),
+		cfg:           cfg,
+		logNs:         metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		lacSyncNotify: make(chan struct{}, 1),
+		lacSyncStop:   make(chan struct{}),
 	}
+	segmentHandle.nodeScopes = quorumNodeScopes(segmentHandle.quorumInfo)
+	segmentHandle.lacSyncLatest.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.commitedSize.Store(segmentMeta.Metadata.Size)
@@ -161,6 +199,12 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 	segmentHandle.canWriteState.Store(writable)
 	segmentHandle.rollingState.Store(false)
 	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
+	if writable {
+		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
+		segmentHandle.completionMgr.Start(context.Background())
+		segmentHandle.lacSyncStarted.Store(true)
+		go segmentHandle.lacSyncLoop()
+	}
 	return segmentHandle
 }
 
@@ -176,8 +220,12 @@ type segmentHandleImpl struct {
 	metadata         meta.MetadataProvider
 	ClientPool       client.LogStoreClientPool
 	quorumInfo       *proto.QuorumInfo
-	cfg              *config.Configuration
-	metricsNamespace string
+	// nodeScopes says, per quorum node index, how far that replica sits from
+	// this client. A segment's quorum is fixed, so it is resolved once here
+	// instead of on every append.
+	nodeScopes []string
+	cfg        *config.Configuration
+	logNs      string
 
 	sync.RWMutex
 	lastPushed       atomic.Int64
@@ -191,11 +239,41 @@ type segmentHandleImpl struct {
 	rollingState   atomic.Bool // For rolling ready state: true confirms it is rolling ready, once all appendOPs are completed and the segment is going to close.
 	expiredTrigger func(ctx context.Context, reason string)
 
-	executor *SequentialExecutor
+	executor      *SequentialExecutor
+	completionMgr *completionManager // nil for readonly segments
+
+	// unreachable holds the endpoints of replicas this segment failed to reach,
+	// so the next segment's quorum can be selected without them. Guarded by its
+	// own mutex: it is read by the log handle while it rolls the segment.
+	unreachableMu sync.Mutex
+	unreachable   map[string]struct{}
+
+	// LAC sync coalescing: instead of spawning a fresh syncLACToQuorumAsync
+	// goroutine (which fans out an UpdateLastAddConfirmed RPC per quorum node)
+	// on every ack round, one background syncer pushes only the LATEST LAC.
+	// LAC is monotonic and this path is fire-and-forget/advisory, so pushing
+	// the latest value is observably equivalent to pushing every value, while
+	// collapsing the ~per-entry goroutine+RPC storm to ~one in-flight push.
+	lacSyncLatest   atomic.Int64
+	lacSyncNotify   chan struct{}
+	lacSyncStop     chan struct{}
+	lacSyncStopOnce sync.Once
+	lacSyncStarted  atomic.Bool // false for readonly/test handles: fall back to per-call fan-out
 
 	doingCompact atomic.Bool
 
 	lastAccessTime atomic.Int64
+
+	// slowReadNodes are replicas a quorum read of this segment timed out on,
+	// asked last until one answers again, so a replica that went silent does
+	// not cost every tail poll a full read bound.
+	slowReadMu    sync.Mutex
+	slowReadNodes map[string]struct{}
+
+	// Direct read from object storage for sealed segments
+	objectStorageClient storageclient.ObjectStorage
+	directReader        *objectstorage.MinioFileReaderAdv
+	directReaderMu      sync.Mutex
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -255,9 +333,8 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	s.appendOpsQueue.PushBack(appendOp)
 	s.submittedSize.Add(int64(len(bytes)))
 	logIdStr := strconv.FormatInt(s.logId, 10)
-	metrics.WpClientAppendEntriesTotal.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
-	metrics.WpClientAppendRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
-	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
+	metrics.WpClientAppendRequestsTotal.WithLabelValues(s.logNs, logIdStr).Inc()
+	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, logIdStr).Inc()
 }
 
 func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, entryId int64, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
@@ -271,7 +348,10 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 		callback,
 		s.ClientPool,
 		s,
-		s.quorumInfo)
+		s.quorumInfo,
+		s.nodeScopes,
+	)
+	pendingAppendOp.traceParent = trace.SpanContextFromContext(ctx)
 	return pendingAppendOp
 }
 
@@ -290,10 +370,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 	}
 	newLac := int64(-1)
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
-		op, ok := e.Value.(*AppendOp)
-		if !ok {
-			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks op is not append op", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("op", fmt.Sprintf("%v", e.Value)))
-		}
+		op := e.Value.(*AppendOp)
 		if !op.completed.Load() {
 			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks not completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
@@ -324,22 +401,16 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 	// sync lac for this round
 	if newLac >= 0 {
 		s.syncLAC(ctx, newLac)
+		metrics.SetWriteFrontier(s.logNs, strconv.FormatInt(s.logId, 10), s.segmentId, newLac)
 	}
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
-		op := element.Value.(*AppendOp)
-		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 
-	// when seg rolling state mark, if no pending appendOps, close segment safely
-	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 {
-		completeAndCloseErr := s.doCompleteAndCloseUnsafe(ctx)
-		if completeAndCloseErr != nil && !werr.ErrSegmentHandleSegmentClosed.Is(completeAndCloseErr) {
-			logger.Ctx(ctx).Warn("completeAndCloseUnsafe failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(completeAndCloseErr))
-		} else {
-			logger.Ctx(ctx).Debug("completeAndCloseUnsafe finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-		}
+	// when seg rolling state mark, if no pending appendOps, trigger completion
+	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 && s.completionMgr != nil {
+		s.completionMgr.TriggerCompletion()
 	}
 }
 
@@ -354,7 +425,52 @@ func (s *segmentHandleImpl) findAppendOpById(ctx context.Context, triggerEntryId
 	return nil
 }
 
+// isReplicaUnreachable reports whether an append failure says the replica
+// itself cannot be reached, rather than that it refused the entry.
+func isReplicaUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if werr.IsTransportError(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// A connection torn down because another call to the same replica failed.
+	return strings.Contains(err.Error(), "client connection is closing")
+}
+
+// markUnreachable records a replica this segment could not reach. It is kept
+// for the segment's lifetime only: the next segment is selected without it, and
+// the segment after that sees the membership afresh.
+func (s *segmentHandleImpl) markUnreachable(endpoint string) {
+	s.unreachableMu.Lock()
+	defer s.unreachableMu.Unlock()
+	if s.unreachable == nil {
+		s.unreachable = make(map[string]struct{})
+	}
+	s.unreachable[endpoint] = struct{}{}
+}
+
+// UnreachableReplicas returns the endpoints of replicas this segment failed to
+// reach, for the log handle to exclude when it selects the next segment's
+// quorum.
+func (s *segmentHandleImpl) UnreachableReplicas() []string {
+	s.unreachableMu.Lock()
+	defer s.unreachableMu.Unlock()
+	out := make([]string, 0, len(s.unreachable))
+	for endpoint := range s.unreachable {
+		out = append(out, endpoint)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, triggerEntryId int64, err error, serverIndex int, serverAddr string) {
+	// Recorded before anything else, including for an entry that has already
+	// completed on the other replicas: a replica that cannot be reached is worth
+	// avoiding in the next segment however its failure arrived.
+	if isReplicaUnreachable(err) && serverAddr != "" {
+		s.markUnreachable(serverAddr)
+	}
 	s.Lock()
 	defer s.Unlock()
 	s.updateAccessTime()
@@ -375,7 +491,7 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 	op := element.Value.(*AppendOp)
 	channelErr := op.channelErrors[serverIndex]
 	if op.channelAttempts[serverIndex]+1 < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries &&
-		(channelErr == nil || channelErr != nil && werr.IsRetryableErr(channelErr)) &&
+		(channelErr == nil || werr.IsRetryableErr(channelErr)) &&
 		(err == nil || !werr.IsSegmentNotWritableErr(err)) {
 		logger.Ctx(ctx).Debug("appendOp should retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.channelAttempts[serverIndex]), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
 		op.channelAttempts[serverIndex]++
@@ -405,7 +521,7 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 				zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
 			s.appendOpsQueue.Remove(element)
 			op.FastFail(ctx, werr.ErrAppendOpRetrySubmitFailed)
-			metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
+			metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 			continue
 		}
 		logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
@@ -428,7 +544,7 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 		op := element.Value.(*AppendOp)
 		op.FastFail(ctx, err)
 		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 
 	// mark rolling to prevent later append, and trigger rolling segment before all appendOps in queue
@@ -438,14 +554,9 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 		s.rollingState.Store(true)
 	}
 
-	// when seg rolling state mark, if no pending appendOps, close segment safely
-	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 {
-		completeAndCloseErr := s.doCompleteAndCloseUnsafe(ctx)
-		if completeAndCloseErr != nil && !werr.ErrSegmentHandleSegmentClosed.Is(completeAndCloseErr) {
-			logger.Ctx(ctx).Warn("rolling completeAndCloseUnsafe failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(completeAndCloseErr))
-		} else {
-			logger.Ctx(ctx).Debug("rolling completeAndCloseUnsafe finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-		}
+	// when seg rolling state mark, if no pending appendOps, trigger completion
+	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 && s.completionMgr != nil {
+		s.completionMgr.TriggerCompletion()
 	}
 }
 
@@ -453,48 +564,355 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxEntries", maxEntries))
-	// write data to quorum
-	quorumInfo, err := s.GetQuorumInfo(ctx)
+
+	// Use direct read from object storage for sealed segments when enabled
+	if s.canDirectRead() {
+		logIdStr := strconv.FormatInt(s.logId, 10)
+		start := time.Now()
+		result, err := s.directReadBatch(ctx, from, maxEntries, lastReadState)
+		if err != nil {
+			status := "error"
+			if werr.ErrFileReaderEndOfFile.Is(err) {
+				status = "eof"
+				logger.Ctx(ctx).Debug("direct read batch reached EOF",
+					zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+					zap.Int64("segId", s.segmentId), zap.Int64("from", from),
+					zap.Error(err))
+			} else {
+				logger.Ctx(ctx).Warn("direct read batch failed",
+					zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+					zap.Int64("segId", s.segmentId), zap.Int64("from", from),
+					zap.Error(err))
+			}
+			metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.logNs, logIdStr, status).Inc()
+			return nil, err
+		}
+		metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.logNs, logIdStr, "success").Inc()
+		metrics.WpClientDirectReadLatency.WithLabelValues(s.logNs, logIdStr).Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Debug("direct read batch success",
+			zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segmentId), zap.Int64("from", from),
+			zap.Int("count", len(result.Entries)))
+		return result, nil
+	}
+
+	return s.quorumReadBatch(ctx, from, maxEntries, lastReadState)
+}
+
+// canDirectRead returns true if the segment can be read directly from object storage.
+// This requires: objectStorageClient is available, direct read is enabled in config,
+// and the segment is in the Sealed state.
+func (s *segmentHandleImpl) canDirectRead() bool {
+	if s.objectStorageClient == nil {
+		return false
+	}
+	if !s.cfg.Woodpecker.Client.DirectRead.Enabled {
+		return false
+	}
+	currentMeta := s.segmentMetaCache.Load()
+	return currentMeta.Metadata.State == proto.SegmentState_Sealed
+}
+
+// getOrCreateDirectReader lazily creates and caches a MinioFileReaderAdv for direct reads.
+func (s *segmentHandleImpl) getOrCreateDirectReader(ctx context.Context) (*objectstorage.MinioFileReaderAdv, error) {
+	s.directReaderMu.Lock()
+	defer s.directReaderMu.Unlock()
+
+	if s.directReader != nil {
+		return s.directReader, nil
+	}
+
+	maxBatchSize := s.cfg.Woodpecker.Client.DirectRead.MaxBatchSize.Int64()
+	maxFetchThreads := s.cfg.Woodpecker.Client.DirectRead.MaxFetchThreads
+	reader, err := objectstorage.NewMinioFileReaderAdv(
+		ctx, s.bucketName, s.rootPath, s.logId, s.segmentId,
+		s.objectStorageClient, maxBatchSize, maxFetchThreads,
+	)
+	if err != nil {
+		return nil, err
+	}
+	s.directReader = reader
+	return reader, nil
+}
+
+// directReadBatch reads a batch of entries directly from object storage.
+func (s *segmentHandleImpl) directReadBatch(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	reader, err := s.getOrCreateDirectReader(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// quorum read with intelligent node selection
-	// Try to continue from the last successful node first, then try others
-	nodeCount := len(quorumInfo.Nodes)
-	var lastError error
+	opt := storage.ReaderOpt{
+		StartEntryID:    from,
+		MaxBatchEntries: maxEntries,
+	}
 
-	// Find the starting node index from lastReadState
-	var startNodeIndex int = 0
+	result, err := reader.ReadNextBatchAdv(ctx, opt, lastReadState)
+	if werr.ErrFileReaderEndOfFile.Is(err) {
+		if closeErr := s.closeDirectReader(ctx, reader); closeErr != nil {
+			logger.Ctx(ctx).Warn("failed to close direct reader after EOF",
+				zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+				zap.Int64("segId", s.segmentId), zap.Error(closeErr))
+		}
+	}
+	return result, err
+}
+
+type quorumReadCandidate struct {
+	node          string
+	originalIndex int
+	azScope       string
+}
+
+// quorumPlacements maps each quorum endpoint to the replica metadata that says
+// where it sits. Endpoints absent from the replica list — quorum metadata
+// written before placement was recorded — are simply missing from the map.
+func quorumPlacements(quorumInfo *proto.QuorumInfo) map[string]*proto.QuorumNode {
+	replicas := quorumInfo.GetReplicas()
+	placements := make(map[string]*proto.QuorumNode, len(replicas))
+	for _, replica := range replicas {
+		if replica != nil && replica.Endpoint != "" {
+			placements[replica.Endpoint] = replica
+		}
+	}
+	return placements
+}
+
+func scopeOfReplica(localRegion, localAZ string, replica *proto.QuorumNode) string {
+	if replica == nil {
+		return topology.ScopeUnknown
+	}
+	return topology.Scope(localRegion, localAZ, replica.Region, replica.Az)
+}
+
+// quorumNodeScopes returns, per quorum node index, how far that replica sits
+// from this client, for the per-replica traffic metrics.
+func quorumNodeScopes(quorumInfo *proto.QuorumInfo) []string {
+	nodes := quorumInfo.GetNodes()
+	placements := quorumPlacements(quorumInfo)
+	localRegion := topology.GetCurrentRegion()
+	localAZ := topology.GetCurrentAvailabilityZone()
+
+	scopes := make([]string, len(nodes))
+	for i, node := range nodes {
+		scopes[i] = scopeOfReplica(localRegion, localAZ, placements[node])
+	}
+	return scopes
+}
+
+// activeSegmentNodes pairs each quorum endpoint with its availability zone for
+// the active-segment membership gauge.
+func activeSegmentNodes(quorumInfo *proto.QuorumInfo) []metrics.ActiveSegmentNode {
+	nodes := quorumInfo.GetNodes()
+	placements := quorumPlacements(quorumInfo)
+
+	members := make([]metrics.ActiveSegmentNode, 0, len(nodes))
+	for _, node := range nodes {
+		member := metrics.ActiveSegmentNode{Node: node}
+		if placement := placements[node]; placement != nil {
+			member.AZ = placement.Az
+		}
+		members = append(members, member)
+	}
+	return members
+}
+
+// batchReadBytes is the payload size a quorum read actually moved.
+func batchReadBytes(result *proto.BatchReadResult) int {
+	total := 0
+	for _, entry := range result.GetEntries() {
+		total += len(entry.GetValues())
+	}
+	return total
+}
+
+func orderedQuorumReadCandidates(quorumInfo *proto.QuorumInfo, lastReadState *proto.LastReadState) []quorumReadCandidate {
+	nodes := quorumInfo.GetNodes()
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	startNodeIndex := 0
 	if lastReadState != nil && lastReadState.Node != "" {
-		for i, node := range quorumInfo.Nodes {
+		for i, node := range nodes {
 			if node == lastReadState.Node {
 				startNodeIndex = i
 				break
 			}
 		}
-		logger.Ctx(ctx).Debug("prioritizing last read node",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.String("lastReadNode", lastReadState.Node),
-			zap.Int("startNodeIndex", startNodeIndex))
 	}
 
-	// Cycle through nodes starting from the preferred index
-	for i := 0; i < nodeCount; i++ {
-		nodeIndex := (startNodeIndex + i) % nodeCount
-		node := quorumInfo.Nodes[nodeIndex]
-		logger.Ctx(ctx).Debug("attempting to read from node",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.String("node", node),
-			zap.Int("nodeIndex", nodeIndex),
-			zap.Int("attempt", i+1),
-			zap.Bool("isLastReadNode", i == 0 && lastReadState != nil && lastReadState.Node == node))
+	placements := quorumPlacements(quorumInfo)
+	localRegion := topology.GetCurrentRegion()
+	localAZ := topology.GetCurrentAvailabilityZone()
 
+	ordered := make([]quorumReadCandidate, 0, len(nodes))
+	for i := 0; i < len(nodes); i++ {
+		nodeIndex := (startNodeIndex + i) % len(nodes)
+		node := nodes[nodeIndex]
+		ordered = append(ordered, quorumReadCandidate{
+			node:          node,
+			originalIndex: nodeIndex,
+			azScope:       scopeOfReplica(localRegion, localAZ, placements[node]),
+		})
+	}
+
+	// Prefer a replica in this client's own zone. A replica only counts as
+	// local when both sides know their placement, so a client without
+	// REGION / AVAILABILITY_ZONE keeps the original order.
+	localCandidates := make([]quorumReadCandidate, 0, len(ordered))
+	remainingCandidates := make([]quorumReadCandidate, 0, len(ordered))
+	for _, candidate := range ordered {
+		if candidate.azScope == topology.ScopeLocal {
+			localCandidates = append(localCandidates, candidate)
+			continue
+		}
+		remainingCandidates = append(remainingCandidates, candidate)
+	}
+	if len(localCandidates) == 0 {
+		return ordered
+	}
+	return append(localCandidates, remainingCandidates...)
+}
+
+// Default bounds on one quorum read call; see config.SegmentReadConfig.
+const (
+	defaultActiveReadTimeout  = 3 * time.Second
+	defaultSettledReadTimeout = 20 * time.Second
+)
+
+// readTimeouts returns the bounds for successive passes over the replicas.
+//
+// The short bound only applies in service mode, to an active segment: there
+// the replicas serve it from a buffer or local disk, and there are other
+// replicas to move to. In the embedded modes the one "replica" is this
+// process's own logstore, which may read an active segment from object storage,
+// and a short bound would only repeat the same read.
+//
+// The segment state is this handle's cached view and can lag: a segment it
+// still believes active may already have been compacted and be served from
+// object storage. So a pass that the short bound cut short is retried once
+// with the long one.
+func (s *segmentHandleImpl) readTimeouts() []time.Duration {
+	active, settled := defaultActiveReadTimeout, defaultSettledReadTimeout
+	if s.cfg != nil {
+		if d := s.cfg.Woodpecker.Client.SegmentRead.ActiveTimeout.Duration.Duration(); d > 0 {
+			active = d
+		}
+		if d := s.cfg.Woodpecker.Client.SegmentRead.SettledTimeout.Duration.Duration(); d > 0 {
+			settled = d
+		}
+	}
+	if s.cfg == nil || !s.cfg.Woodpecker.Storage.IsStorageService() {
+		return []time.Duration{settled}
+	}
+	if meta := s.segmentMetaCache.Load(); meta != nil && meta.Metadata.GetState() == proto.SegmentState_Active {
+		return []time.Duration{active, settled}
+	}
+	return []time.Duration{settled}
+}
+
+// quorumReadBatch reads a batch of entries from quorum nodes with intelligent node selection.
+func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	candidates := s.slowReadNodesLast(orderedQuorumReadCandidates(quorumInfo, lastReadState))
+	nodeCount := len(candidates)
+	var lastError error
+	for _, timeout := range s.readTimeouts() {
+		result, retryLonger, passErr := s.quorumReadPass(ctx, candidates, notFoundQuorum(len(candidates), quorumInfo.GetAq()), timeout, from, maxEntries, lastReadState)
+		if result != nil {
+			return result, nil
+		}
+		lastError = passErr
+		if !retryLonger || ctx.Err() != nil {
+			break
+		}
+	}
+
+	if !werr.ErrEntryNotFound.Is(lastError) {
+		logger.Ctx(ctx).Warn("read batch failed on all quorum nodes",
+			zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("totalNodes", nodeCount), zap.Error(lastError))
+	}
+
+	if lastError != nil {
+		return nil, lastError
+	}
+	return nil, werr.ErrFileReaderNoBlockFound.WithCauseErrMsg("all quorum nodes failed to read batch")
+}
+
+// notFoundQuorum is how many replicas must answer that they do not have an
+// entry before that answer stands for the segment. An acked entry is on at
+// least ackQuorum of the nodes replicas, so it can be missing from at most
+// nodes-ackQuorum of them; one more "not here" rules it out.
+func notFoundQuorum(nodes int, ackQuorum int32) int {
+	if ackQuorum <= 0 || int(ackQuorum) > nodes {
+		return nodes
+	}
+	return nodes - int(ackQuorum) + 1
+}
+
+// slowReadNodesLast moves the replicas a read timed out on to the end, keeping
+// the order of the rest.
+func (s *segmentHandleImpl) slowReadNodesLast(candidates []quorumReadCandidate) []quorumReadCandidate {
+	s.slowReadMu.Lock()
+	defer s.slowReadMu.Unlock()
+	if len(s.slowReadNodes) == 0 {
+		return candidates
+	}
+	ordered := make([]quorumReadCandidate, 0, len(candidates))
+	var slow []quorumReadCandidate
+	for _, c := range candidates {
+		if _, ok := s.slowReadNodes[c.node]; ok {
+			slow = append(slow, c)
+			continue
+		}
+		ordered = append(ordered, c)
+	}
+	return append(ordered, slow...)
+}
+
+func (s *segmentHandleImpl) markReadNodeSlow(node string, slow bool) {
+	s.slowReadMu.Lock()
+	defer s.slowReadMu.Unlock()
+	if !slow {
+		delete(s.slowReadNodes, node)
+		return
+	}
+	if s.slowReadNodes == nil {
+		s.slowReadNodes = make(map[string]struct{})
+	}
+	s.slowReadNodes[node] = struct{}{}
+}
+
+// quorumReadPass tries each replica in order, bounding every call by timeout.
+// It returns the first successful batch; otherwise, having asked every
+// replica, whether the pass should be repeated with a longer bound, and the
+// error that describes it.
+//
+// "Not found" describes the pass only once notFoundQuorum replicas said so.
+// At the tail of an active segment that is the normal answer, and reporting an
+// unreachable replica's error instead would turn "no new data yet" into a read
+// failure. With fewer, a replica that did not answer in time may hold the
+// entry (a restarted replica answers "not found" for entries it never
+// received), so the pass is repeated with the longer bound, and if that one
+// ends the same way it is reported as the timeout it is rather than as "not
+// found", which the reader would take as "no data yet" and poll on silently.
+func (s *segmentHandleImpl) quorumReadPass(ctx context.Context, candidates []quorumReadCandidate, notFoundNeeded int, timeout time.Duration, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, bool, error) {
+	var lastError, notFoundErr, timeoutErr error
+	notFoundCount, timedOutCount := 0, 0
+
+	logIdStr := strconv.FormatInt(s.logId, 10)
+	preferredScope := topology.ScopeUnknown
+	if len(candidates) > 0 {
+		preferredScope = candidates[0].azScope
+	}
+
+	for i, candidate := range candidates {
+		node := candidate.node
 		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
 		if err != nil {
 			logger.Ctx(ctx).Warn("failed to get client for node, trying next",
@@ -503,36 +921,67 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 				zap.Int64("segId", s.segmentId),
 				zap.String("node", node),
 				zap.Error(err))
+			metrics.WpClientQuorumReadTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope, "error").Inc()
 			lastError = err
 			continue
 		}
 
-		// Only pass lastReadState if it's from the same node
 		var nodeLastReadState *proto.LastReadState
 		if lastReadState != nil && lastReadState.Node == node {
 			nodeLastReadState = lastReadState
 		}
 
-		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		batchResult, err := cli.ReadEntriesBatchAdv(callCtx, s.bucketName, s.rootPath, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
+		timedOut := err != nil && ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded)
+		cancel()
+		if timedOut {
+			// The replica did not answer within the bound. Its connection is left
+			// alone: it is shared with this process's writers, and a replica that is
+			// merely slow must not cost them their streams. A transport error still
+			// evicts it; here the replica is only asked last from now on.
+			logger.Ctx(ctx).Warn("read batch timed out on node, trying next",
+				zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId),
+				zap.String("node", node), zap.Duration("timeout", timeout), zap.Error(err))
+			s.markReadNodeSlow(node, true)
+			metrics.WpClientQuorumReadTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope, "error").Inc()
+			timedOutCount++
+			timeoutErr = werr.ErrTimeoutError.WithCauseErrMsg(fmt.Sprintf("read batch from %s timed out after %v: %v", node, timeout, err))
+			continue
+		}
 		if err != nil {
-			if werr.ErrEntryNotFound.Is(err) {
-				logger.Ctx(ctx).Debug("read batch empty on node",
-					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node))
-			} else {
+			if !werr.ErrEntryNotFound.Is(err) {
 				logger.Ctx(ctx).Warn("read batch failed on node",
 					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node), zap.Error(err))
 			}
+			if werr.ErrEntryNotFound.Is(err) {
+				// Not an early answer: a replica only serves entries up to its own
+				// LAC, so one that holds the entry but has not learned it is
+				// committed yet also answers "not found". Keep asking the rest.
+				notFoundErr = err
+				notFoundCount++
+				continue
+			}
 			lastError = err
 			if werr.ErrFileReaderEndOfFile.Is(err) {
-				// encounter EOF, stop reading immediately
 				break
+			}
+			if !werr.ErrEntryNotFound.Is(err) {
+				metrics.WpClientQuorumReadTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope, "error").Inc()
 			}
 			continue
 		}
 
-		// Success! Update the LastReadState with current node and return the result
+		s.markReadNodeSlow(node, false)
 		if batchResult.LastReadState != nil {
 			batchResult.LastReadState.Node = node
+		}
+
+		metrics.WpClientQuorumReadTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope, "success").Inc()
+		metrics.WpClientQuorumReadBytesTotal.WithLabelValues(s.logNs, logIdStr, candidate.azScope).
+			Add(float64(batchReadBytes(batchResult)))
+		if candidate.azScope != preferredScope {
+			metrics.WpClientReadFailoverTotal.WithLabelValues(s.logNs, logIdStr, preferredScope, candidate.azScope).Inc()
 		}
 
 		logger.Ctx(ctx).Debug("finish read batch successfully",
@@ -544,22 +993,22 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 			zap.String("successfulNode", node),
 			zap.Int("attempt", i+1),
 			zap.Int("count", len(batchResult.Entries)))
-		return batchResult, nil
+		return batchResult, false, nil
 	}
-
-	// All nodes failed
-	if werr.ErrEntryNotFound.Is(lastError) {
-		logger.Ctx(ctx).Debug("read batch empty on all quorum nodes",
-			zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("totalNodes", nodeCount))
-	} else {
-		logger.Ctx(ctx).Warn("read batch failed on all quorum nodes",
-			zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("totalNodes", nodeCount), zap.Error(lastError))
+	switch {
+	case werr.ErrFileReaderEndOfFile.Is(lastError):
+		return nil, false, lastError
+	case notFoundErr != nil && notFoundCount >= notFoundNeeded:
+		return nil, false, notFoundErr
+	case timedOutCount > 0:
+		return nil, true, timeoutErr
+	case lastError != nil:
+		return nil, false, lastError
+	default:
+		// Only "not found", from too few replicas to stand for the segment,
+		// and no other answer at all.
+		return nil, false, notFoundErr
 	}
-
-	if lastError != nil {
-		return nil, lastError
-	}
-	return nil, werr.ErrFileReaderNoBlockFound.WithCauseErrMsg("all quorum nodes failed to read batch")
 }
 
 // GetLastAddConfirmed call by reader
@@ -610,8 +1059,8 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 			continue
 		}
 
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "get_lac", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "get_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "get_lac", "success").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "get_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return lac, nil
 	}
 
@@ -622,8 +1071,8 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 		zap.Int64("segId", s.segmentId),
 		zap.Int("totalNodes", nodeCount),
 		zap.Error(lastError))
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "get_lac", "error").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "get_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "get_lac", "error").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "get_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
 	return -1, lastError
 }
 
@@ -657,13 +1106,13 @@ func (s *segmentHandleImpl) refreshAndGetMetadataUnsafe(ctx context.Context) err
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId),
 			zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "refresh_meta", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "refresh_meta", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "refresh_meta", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "refresh_meta", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 	s.segmentMetaCache.Store(newMeta)
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "refresh_meta", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "refresh_meta", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "refresh_meta", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "refresh_meta", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
@@ -695,31 +1144,36 @@ func (s *segmentHandleImpl) IsWritable(ctx context.Context) (bool, error) {
 }
 
 func (s *segmentHandleImpl) ForceCompleteAndClose(ctx context.Context) error {
-	// complete this segment and close
-	s.Lock()
-	defer s.Unlock()
-	if s.canWriteState.Load() == false {
-		// no need to complete this readonly segment
+	if !s.canWriteState.Load() {
 		return nil
 	}
-	return s.doCompleteAndCloseUnsafe(ctx)
+	if s.completionMgr == nil {
+		return nil
+	}
+	s.completionMgr.TriggerCompletion()
+	return s.completionMgr.WaitForCompletion()
+}
+
+func (s *segmentHandleImpl) closeDirectReader(ctx context.Context, expectedReader *objectstorage.MinioFileReaderAdv) error {
+	s.directReaderMu.Lock()
+	reader := s.directReader
+	if reader == nil || reader != expectedReader {
+		s.directReaderMu.Unlock()
+		return nil
+	}
+	s.directReader = nil
+	s.directReaderMu.Unlock()
+
+	return reader.Close(ctx)
 }
 
 func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx context.Context, lastFlushedEntryId int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
 	defer sp.End()
 	s.updateAccessTime()
-	if !s.canWriteState.CompareAndSwap(true, false) {
+	if !s.stopWritingUnsafe(ctx, lastFlushedEntryId) {
 		return nil
 	}
-
-	start := time.Now()
-	logIdStr := strconv.FormatInt(s.logId, 10)
-	// fast fail all pending append operations
-	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
-
-	// shutdown segment executor
-	s.executor.Stop(ctx)
 
 	// update metadata as completed
 	currentSegmentMeta := s.segmentMetaCache.Load()
@@ -733,6 +1187,8 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		return nil
 	}
 
+	start := time.Now()
+	logIdStr := strconv.FormatInt(s.logId, 10)
 	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()
 	newSegmentMetadata.State = proto.SegmentState_Completed
 	newSegmentMetadata.Size = s.commitedSize.Load() // Update with approximate segment file size, only use for metrics
@@ -742,64 +1198,63 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		Metadata: newSegmentMetadata,
 		Revision: currentSegmentMeta.Revision,
 	}
-	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
+	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.logId, newSegMeta, currentSegmentMeta.Metadata.State)
 	if err != nil && werr.ErrMetadataRevisionInvalid.Is(err) {
 		// metadata revision is invalid or outdated, some one updated it, trigger fence this segmentHandle to let client reopen new writer
 		// new append will fail with ErrSegmentFenced, and application client should reopen new logWriter instead.
 		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d meta update revision invalid", s.segmentId))
 		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime), zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "close", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "close", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 
 	if err != nil {
 		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime), zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "close", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "close", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
 		logger.Ctx(ctx).Info("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime))
 		s.segmentMetaCache.Store(newSegMeta)
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "close", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "close", "success").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
 }
 
-func (s *segmentHandleImpl) doCompleteAndCloseUnsafe(ctx context.Context) error {
-	var lastError error
-	// complete this segment and close
-	lastFlushedEntryId, err := s.doCompleteUnsafe(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Info("Complete segment failed when closing logHandle",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-			zap.Error(err))
-		lastError = err
-		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d complete failed", s.segmentId))
-	}
-	err = s.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx, lastFlushedEntryId)
-	if err != nil {
-		logger.Ctx(ctx).Info("close segment failed when closing logHandle",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-			zap.Error(err))
-		if lastError == nil {
-			lastError = err
-		} else {
-			lastError = werr.Combine(err, lastError)
-		}
-	}
+// doCloseWritingWithoutMetaUnsafe stops the local writable handle after completion
+// fails, but deliberately leaves coordinator metadata Active. Publishing Completed is
+// only valid after Aq replicas have finalized and locally cover the fixed target LAC.
+func (s *segmentHandleImpl) doCloseWritingWithoutMetaUnsafe(ctx context.Context, lastFlushedEntryId int64) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "CloseWithoutMeta")
+	defer sp.End()
+	s.updateAccessTime()
+	s.stopWritingUnsafe(ctx, lastFlushedEntryId)
+}
 
-	// mark segment as readonly
-	if lastError == nil {
-		s.canWriteState.Store(false)
+// stopWritingUnsafe performs the local, metadata-independent half of closing a
+// writable segment. The caller must hold s.Lock().
+func (s *segmentHandleImpl) stopWritingUnsafe(ctx context.Context, lastFlushedEntryId int64) bool {
+	if !s.canWriteState.CompareAndSwap(true, false) {
+		return false
 	}
-	return lastError
+	// Segment is leaving the writable state -- drop its active-segment node series
+	// so the metric only ever reflects the current active segment of each log.
+	metrics.ClearActiveSegmentNodes(
+		s.logNs,
+		strconv.FormatInt(s.logId, 10),
+		strconv.FormatInt(s.segmentId, 10),
+	)
+
+	// fast fail all pending append operations
+	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
+
+	// shutdown segment executor
+	s.executor.Stop(ctx)
+
+	// stop the background LAC syncer (idempotent)
+	s.lacSyncStopOnce.Do(func() { close(s.lacSyncStop) })
+	return true
 }
 
 func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEntryId int64, err error) {
@@ -831,7 +1286,7 @@ func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEnt
 	// Clear the queue
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 	logger.Ctx(ctx).Debug("fastFailAppendOps finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("fastFailOps", len(elementsToRemove)), zap.Int("successCount", successCount), zap.Int("failCount", failCount), zap.Error(err))
 }
@@ -855,12 +1310,6 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 		return 0
 	}
 
-	if len(s.quorumInfo.Nodes) > 1 {
-		// In service mode, writes go to local disk and are not limited by block count,
-		// rolling is only controlled by size and time constraints
-		return 0
-	}
-
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -869,6 +1318,12 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(err))
+		return 0
+	}
+
+	if len(quorumInfo.Nodes) > 1 {
+		// In service mode, writes go to local disk and are not limited by block count,
+		// rolling is only controlled by size and time constraints
 		return 0
 	}
 
@@ -903,8 +1358,8 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 			zap.Error(err))
 		return 0
 	}
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "get_blocks_count", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "get_blocks_count", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "get_blocks_count", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "get_blocks_count", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return currentBlockCounts
 }
 
@@ -913,12 +1368,23 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Complete")
 	defer sp.End()
-	s.Lock()
-	defer s.Unlock()
-	return s.doCompleteUnsafe(ctx)
+	return s.doComplete(ctx)
 }
 
-func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error) {
+// doComplete runs Phase 1 of segment completion (fence + complete quorum RPCs)
+// without holding the segment lock. These are idempotent network calls.
+func (s *segmentHandleImpl) doComplete(ctx context.Context) (int64, error) {
+	quorumInfo, lastAddConfirmed, err := s.prepareComplete(ctx)
+	if err != nil {
+		return -1, err
+	}
+	return lastAddConfirmed, s.completePrepared(ctx, quorumInfo, lastAddConfirmed)
+}
+
+// prepareComplete fences the quorum and fixes the authoritative target LAC for
+// one completion lifecycle. Callers that retry Complete RPCs must reuse the
+// returned target rather than fencing again and changing the target mid-flight.
+func (s *segmentHandleImpl) prepareComplete(ctx context.Context) (*proto.QuorumInfo, int64, error) {
 	// Get quorum information for complete operation
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -927,7 +1393,7 @@ func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error)
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(err))
-		return -1, err
+		return nil, -1, err
 	}
 
 	// fence before complete
@@ -938,23 +1404,45 @@ func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error)
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(fencedErr))
-		return -1, fencedErr
+		return nil, -1, fencedErr
 	}
+	lastAddConfirmed = s.preserveKnownCompletionLAC(ctx, lastAddConfirmed)
+	return quorumInfo, lastAddConfirmed, nil
+}
 
+func (s *segmentHandleImpl) preserveKnownCompletionLAC(ctx context.Context, fenceLAC int64) int64 {
+	knownConfirmed := s.lastAddConfirmed.Load()
+	if knownConfirmed <= fenceLAC {
+		return fenceLAC
+	}
+	logger.Ctx(ctx).Warn("Fence result is behind the locally confirmed LAC; preserving the confirmed completion target",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("fenceLAC", fenceLAC),
+		zap.Int64("knownConfirmedLAC", knownConfirmed))
+	return knownConfirmed
+}
+
+func (s *segmentHandleImpl) completePrepared(ctx context.Context, quorumInfo *proto.QuorumInfo, lastAddConfirmed int64) error {
 	logger.Ctx(ctx).Info("Starting quorum complete segment operation",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("quorumId", quorumInfo.Id),
 		zap.Int("nodeCount", len(quorumInfo.Nodes)),
-		zap.Int32("ackQuorum", quorumInfo.Aq))
+		zap.Int32("ackQuorum", quorumInfo.Aq),
+		zap.Int64("targetLAC", lastAddConfirmed))
 
 	// Send CompleteSegment requests to all quorum nodes in parallel
-	return lastAddConfirmed, s.completeSegmentQuorum(ctx, quorumInfo, lastAddConfirmed)
+	return s.completeSegmentQuorum(ctx, quorumInfo, lastAddConfirmed)
 }
 
-// completeSegmentQuorum sends CompleteSegment requests to all quorum nodes
-// and calculates the Log All Committed (LAC) based on majority consensus
+// completeSegmentQuorum sends CompleteSegment requests to all quorum nodes and requires
+// ackQuorum of them to finalize at lac before Completed metadata may be published. A
+// replica whose local tail stops below lac still counts: it has durably recorded the
+// boundary, which is what stops a competing writer from closing the segment elsewhere.
+// How many replicas locally cover lac is tracked separately and reported, not enforced.
 func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, lac int64) error {
 	nodeCount := len(quorumInfo.Nodes)
 	ackQuorum := int(quorumInfo.Aq)
@@ -968,7 +1456,8 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	}
 
 	// Collect results from nodes
-	var successResults []int64
+	var finalizedResults []int64
+	var qualifiedResults []int64
 	var lastError error
 
 	for i := 0; i < nodeCount; i++ {
@@ -983,57 +1472,155 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 					zap.Error(result.err))
 				lastError = result.err
 			} else {
-				successResults = append(successResults, result.lastEntryId)
+				finalizedResults = append(finalizedResults, result.lastEntryId)
 				logger.Ctx(ctx).Info("Successfully completed segment on node",
 					zap.String("logName", s.logName),
 					zap.Int64("logId", s.logId),
 					zap.Int64("segmentId", s.segmentId),
 					zap.String("node", result.node),
-					zap.Int64("lastEntryId", result.lastEntryId))
+					zap.Int64("lastEntryId", result.lastEntryId),
+					zap.Int64("targetLAC", lac))
+				if result.lastEntryId >= lac {
+					qualifiedResults = append(qualifiedResults, result.lastEntryId)
+				} else {
+					logger.Ctx(ctx).Warn("Replica finalized but does not cover target LAC; excluding it from completion quorum",
+						zap.String("logName", s.logName),
+						zap.Int64("logId", s.logId),
+						zap.Int64("segmentId", s.segmentId),
+						zap.String("node", result.node),
+						zap.Int64("localLastEntryId", result.lastEntryId),
+						zap.Int64("targetLAC", lac))
+				}
 			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 
-	// Check if we have enough successful responses for ack quorum
-	if len(successResults) < ackQuorum {
-		logger.Ctx(ctx).Warn("Insufficient successful responses for quorum complete",
+	// Require the boundary to be durably recorded by an ack quorum of replicas, not to be
+	// covered by one.
+	//
+	// Aq is the threshold a write had to clear to be acknowledged. It says nothing about how the
+	// data is distributed once the writer is gone, and treating it as a requirement on coverage
+	// at recovery time is what made this check unsatisfiable: resolveFenceLAC returns the highest
+	// tail that cannot be shown to be below the acknowledged boundary, and when a fence reply is
+	// missing that tail may be held by a single replica. The entries in question were never
+	// acknowledged, so nothing is owed on them; they become durable when compaction moves the
+	// segment to object storage.
+	//
+	// What completion does have to establish is that enough replicas durably recorded this
+	// boundary, so a competing writer cannot close the segment at a different one. That is
+	// finalizedResults. qualifiedResults is kept for the operator-facing count below: a
+	// completion covered by fewer than ackQuorum replicas is worth seeing, but it is not a
+	// failure -- failing here would leave the log unable to open a writer at all, since
+	// OpenLogWriter fences and completes every active segment first.
+	if len(finalizedResults) < ackQuorum {
+		logger.Ctx(ctx).Warn("Insufficient finalized responses for quorum complete",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
-			zap.Int("successCount", len(successResults)),
+			zap.Int("finalizedCount", len(finalizedResults)),
+			zap.Int("qualifiedCount", len(qualifiedResults)),
 			zap.Int("requiredAckQuorum", ackQuorum))
-		if lastError != nil {
-			return lastError
-		}
-		return werr.ErrAppendOpQuorumFailed.WithCauseErrMsg("insufficient successful complete responses")
+		return werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
+			fmt.Sprintf("insufficient finalized complete responses: finalized=%d qualified=%d required=%d lastError=%v",
+				len(finalizedResults), len(qualifiedResults), ackQuorum, lastError),
+		)
 	}
 
-	// Calculate LAC (Log All Committed) from successful results
-	completedLAC := s.calculateLAC(successResults, ackQuorum)
-	logger.Ctx(ctx).Info("Calculated LAC from quorum complete responses",
+	if len(qualifiedResults) < ackQuorum {
+		logger.Ctx(ctx).Warn("Segment completed with fewer covering replicas than the ack quorum; "+
+			"the tail is durable on those replicas until compaction uploads the segment",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("targetLAC", lac),
+			zap.Int("finalizedCount", len(finalizedResults)),
+			zap.Int("qualifiedCount", len(qualifiedResults)),
+			zap.Int("ackQuorum", ackQuorum))
+	}
+
+	logger.Ctx(ctx).Info("Quorum complete responses collected",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("lac", lac),
-		zap.Int("successCount", len(successResults)),
+		zap.Int("finalizedCount", len(finalizedResults)),
+		zap.Int("qualifiedCount", len(qualifiedResults)),
 		zap.Int("ackQuorum", ackQuorum),
-		zap.Int64s("allResults", successResults),
-		zap.Int64("completedLAC", completedLAC))
+		zap.Int64s("allFinalizedResults", finalizedResults),
+		zap.Int64s("qualifiedResults", qualifiedResults))
 	s.lastAddConfirmed.Store(lac)
 	return nil
 }
 
 func (s *segmentHandleImpl) syncLAC(ctx context.Context, lac int64) {
-	// Asynchronously sync LAC updates to all quorum nodes
-	go s.syncLACToQuorumAsync(ctx, lac)
+	if !s.lacSyncStarted.Load() {
+		// Readonly/test handle with no background syncer: preserve the legacy
+		// per-call fan-out so behavior is unchanged for those paths.
+		go s.syncLACToQuorumAsync(ctx, lac)
+		return
+	}
+	// Coalesce: record the highest LAC (monotonic) and wake the single background
+	// syncer, instead of spawning a fresh fan-out goroutine per ack round. A
+	// full notify channel means a push is already pending/in-flight and will pick
+	// up this newer value, so dropping the extra wake is safe.
+	for {
+		cur := s.lacSyncLatest.Load()
+		if lac <= cur {
+			break
+		}
+		if s.lacSyncLatest.CompareAndSwap(cur, lac) {
+			break
+		}
+	}
+	select {
+	case s.lacSyncNotify <- struct{}{}:
+	default:
+	}
 }
+
+// lacSyncLoop is the single background LAC syncer for a writable segment. It
+// runs one syncLACToQuorumAsync at a time for the latest LAC; while a push is
+// in flight, newer LAC values coalesce into lacSyncLatest and trigger exactly
+// one follow-up push. Exits when lacSyncStop is closed (segment close).
+func (s *segmentHandleImpl) lacSyncLoop() {
+	var lastPushed int64 = -1
+	for {
+		select {
+		case <-s.lacSyncStop:
+			// No final push needed: the authoritative final LAC is recorded via
+			// segment completion (CompleteSegment); this advisory path is best-effort.
+			return
+		case <-s.lacSyncNotify:
+			lac := s.lacSyncLatest.Load()
+			if lac <= lastPushed {
+				continue
+			}
+			lastPushed = lac
+			s.syncLACToQuorumAsync(context.Background(), lac)
+		}
+	}
+}
+
+// lacSyncTimeout bounds a single LAC-sync fan-out so a hung node (connected but
+// unresponsive) can't wedge the single background LAC syncer forever. Package var
+// so tests can shrink it. TODO make configurable (like the 30s waits in the
+// append path).
+var lacSyncTimeout = 30 * time.Second
 
 // syncLACToQuorumAsync asynchronously syncs LAC to all quorum nodes
 func (s *segmentHandleImpl) syncLACToQuorumAsync(ctx context.Context, lac int64) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "syncLACToQuorumAsync")
 	defer sp.End()
+
+	// Bound the fan-out: the caller (lacSyncLoop) passes a deadline-less context,
+	// so without this a node that is connected but unresponsive would block the
+	// collection loop forever and stall LAC for the whole segment. On timeout the
+	// collection loop's ctx.Done() case unblocks and cancel() releases any
+	// still-in-flight per-node RPCs (their results land in the buffered channel).
+	ctx, cancel := context.WithTimeout(ctx, lacSyncTimeout)
+	defer cancel()
 
 	// Get quorum info
 	quorumInfo, err := s.GetQuorumInfo(ctx)
@@ -1149,37 +1736,71 @@ func (s *segmentHandleImpl) completeSegmentOnNode(ctx context.Context, node stri
 	}
 }
 
-// calculateLAC calculates the Log All Committed (LAC) based on the quorum responses.
-// LAC is the highest entry ID that is guaranteed to be committed on a majority of nodes.
-// For example: if nodes return [4, 6, 7] and ackQuorum is 2, then LAC is 6
-// because entries 1-6 are committed on at least 2 nodes (majority).
-func (s *segmentHandleImpl) calculateLAC(results []int64, ackQuorum int) int64 {
-	if len(results) == 0 {
-		return -1
+// resolveFenceLAC picks the completion target from the fence responses: the highest entry ID that
+// cannot be shown to be below the acknowledged boundary. Sorted ascending, that is the element at
+// index writeQuorum-ackQuorum -- skipping the replies that may legitimately be missing an
+// acknowledged entry.
+//
+// The boundary is a fact about the replicas, not about the replies. An entry is acknowledged once
+// at least ackQuorum replicas hold it, so at most writeQuorum-ackQuorum of them can be without it.
+// A replica that did not answer is unknown, not empty, so the count of possibly-missing replies is
+// that same tolerance whatever the reply count -- which is why the index does not depend on it.
+//
+// Every element is a successful fence response -- failed nodes take the result.err branch and never
+// reach here -- so a -1 is an honest "I hold nothing" and must be counted like any other value.
+//
+// Fewer replies than the tolerance leaves nothing to conclude: even the highest reply could be the
+// one stale replica. That is a failure to prove rather than a reason to pick a smaller element.
+func (s *segmentHandleImpl) resolveFenceLAC(results []int64, writeQuorum, ackQuorum int) (int64, error) {
+	// The tolerance is the same one the append path spends before giving up, at Wq-Aq+1 failures.
+	//
+	// This used to index by len(results)-ackQuorum, which equals it only when every replica
+	// replied; one missing reply shifted it down a position and published a boundary below
+	// acknowledged data. With tails [0,0,-1] and Aq=2, a failed fence reply from the second
+	// replica left [0,-1] and selected -1, dropping an entry the client had been told was durable
+	// (#320).
+	//
+	// Because a missing reply is not evidence, a target chosen this way may turn out to be held by
+	// fewer than ackQuorum replicas. That is allowed: completeSegmentQuorum requires ackQuorum
+	// replicas to finalize at the target, not to cover it, precisely so this target can be used.
+	// The entries above the covered tail were never acknowledged, so nothing is owed on them;
+	// publishing a boundary below acknowledged data, by contrast, is unrecoverable.
+	// A quorum where Aq exceeds Wq is not satisfiable -- no entry can ever collect more acks than
+	// the replicas it was written to -- and would make the index below negative. Config derives
+	// Aq as Wq/2+1 so this cannot arise from a valid configuration, but recovery must not panic
+	// its way through a malformed one.
+	if writeQuorum < ackQuorum || ackQuorum <= 0 {
+		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
+			fmt.Sprintf("inconsistent quorum for fence resolution: writeQuorum %d, ackQuorum %d", writeQuorum, ackQuorum),
+		)
 	}
 
-	// Sort results in ascending order
-	sortedResults := make([]int64, len(results))
-	copy(sortedResults, results)
-	sort.Slice(sortedResults, func(i, j int) bool {
-		return sortedResults[i] < sortedResults[j]
+	missingTolerated := writeQuorum - ackQuorum
+	if len(results) <= missingTolerated {
+		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg(
+			fmt.Sprintf("insufficient successful fence responses: got %d, need more than %d (writeQuorum %d - ackQuorum %d)",
+				len(results), missingTolerated, writeQuorum, ackQuorum),
+		)
+	}
+
+	// Sort a copy in ascending order, leaving the caller's slice untouched.
+	sorted := make([]int64, len(results))
+	copy(sorted, results)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
 	})
 
-	// LAC is the (len(results) - ackQuorum + 1)th smallest value
-	// This ensures that at least ackQuorum nodes have committed up to this entry
-	lacIndex := len(sortedResults) - ackQuorum
-	if lacIndex < 0 {
-		lacIndex = 0
-	}
-
-	return sortedResults[lacIndex]
+	return sorted[missingTolerated], nil
 }
 
 // fenceSegmentQuorum sends FenceSegment requests to all quorum nodes
 // and calculates the Log All Committed (LAC) based on majority consensus
 func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo) (int64, error) {
-	nodeCount := len(quorumInfo.Nodes)                         // always es=len(nodes)
-	ensembleCoverage := int(quorumInfo.Es - quorumInfo.Aq + 1) // currently always es=3=wq,aq=2, so ec=es-aq+1=2=aq
+	nodeCount := len(quorumInfo.Nodes) // always es=len(nodes)
+	// Requiring aq responses subsumes the ensemble-coverage bound ec=es-aq+1: aq >= ec
+	// always holds, so the fence still intersects every possible ack quorum. For the
+	// reachable ensemble sizes (3 and 5) the two are equal, so the threshold is unchanged.
+	ackQuorum := int(quorumInfo.Aq)
 
 	// Channel to collect results from all nodes
 	resultChan := make(chan nodeFenceResult, nodeCount)
@@ -1218,22 +1839,21 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 		}
 	}
 
-	// Check if we have enough successful responses for ack quorum
-	if len(successResults) < ensembleCoverage {
+	// Resolve the completion target from the successful responses. This also enforces
+	// that enough nodes responded to prove quorum coverage in the first place.
+	lac, resolveErr := s.resolveFenceLAC(successResults, int(quorumInfo.Wq), ackQuorum)
+	if resolveErr != nil {
 		logger.Ctx(ctx).Warn("Insufficient successful responses for quorum fence",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Int("successCount", len(successResults)),
-			zap.Int("requiredEC", ensembleCoverage))
+			zap.Int("requiredAckQuorum", ackQuorum))
 		if lastError != nil {
 			return -1, lastError
 		}
-		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg("insufficient successful fence responses")
+		return -1, resolveErr
 	}
-
-	// Calculate LAC (Log All Committed) from successful results
-	lac := s.calculateLAC(successResults, ensembleCoverage)
 
 	logger.Ctx(ctx).Info("Calculated LAC from quorum fence responses",
 		zap.String("logName", s.logName),
@@ -1241,7 +1861,7 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("lac", lac),
 		zap.Int("successCount", len(successResults)),
-		zap.Int("ensembleCoverage", ensembleCoverage),
+		zap.Int("ackQuorum", ackQuorum),
 		zap.Int64s("allResults", successResults))
 
 	return lac, nil
@@ -1275,11 +1895,25 @@ func (s *segmentHandleImpl) fenceSegmentOnNode(ctx context.Context, node string,
 
 // compactSegmentQuorum tries SegmentCompact on each quorum node sequentially
 // until one succeeds. Returns the result from the first successful node.
-func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo) (*proto.SegmentMetadata, error) {
+func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, expectedLastEntryId int64) (*proto.SegmentMetadata, error) {
 	var lastError error
+	nodeFailures := make([]string, 0, len(quorumInfo.Nodes))
+	failureReasons := make([]string, 0, len(quorumInfo.Nodes))
+	logIdStr := strconv.FormatInt(s.logId, 10)
 
 	// Try each node sequentially until one succeeds
 	for i, node := range quorumInfo.Nodes {
+		// Stop once the caller is done, and report the cancellation rather than falling through
+		// to the all-nodes-failed path. Without this the walk keeps going: GetLogStoreClient
+		// returns a cached client without consulting the context, and WithTimeout on a context
+		// that is already done yields an immediately-expired child, so every remaining node
+		// "fails" instantly and is recorded in nodeFailures. That would count replicas which
+		// were never contacted into WpSegmentCompactionFailuresTotal and the "all quorum nodes
+		// failed" warning -- the signal operators use to find a broken node. Any node that did
+		// fail before the cancellation has already been logged inside this loop.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		logger.Ctx(ctx).Info("Attempting compaction on node",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -1290,6 +1924,9 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 
 		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
 		if err != nil {
+			reason := classifyCompactionFailureReason(err)
+			nodeFailures = append(nodeFailures, fmt.Sprintf("%s:%s", node, reason))
+			failureReasons = append(failureReasons, reason)
 			logger.Ctx(ctx).Warn("Failed to get logstore client for compaction",
 				zap.String("logName", s.logName),
 				zap.Int64("logId", s.logId),
@@ -1300,9 +1937,35 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 			continue
 		}
 
-		// Try compaction on this node
-		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId)
+		// Try compaction on this node. The node refuses (returns ErrSegmentCompactionDataBehind)
+		// if its local data is behind expectedLastEntryId, so we fall through to the next node.
+		//
+		// The attempt carries this client's deadline, which gRPC sends to the node. The node
+		// applies its own ceiling (logstore.segmentCompactionPolicy.timeout) on top and the
+		// shorter wins; the two are separate because one node serves many tenants from one
+		// configuration, so its ceiling cannot express what any single tenant wants.
+		//
+		// This side is also the only bound that survives a node that stops answering at all: the
+		// node's ceiling is enforced by the node, so a wedged or black-holed one never reaches
+		// it, and the auditor's context carries no deadline of its own. The pass budget cannot
+		// stand in for it either -- that is checked between segments, and a call that never
+		// returns never gets back to the check. It keeps this sequential walk moving too: one
+		// hung node costs one attempt instead of the segment never reaching its healthy replicas.
+		//
+		// Guard against a non-positive value, which validation rejects but a Configuration
+		// assembled programmatically can still carry. It must not become WithTimeout(ctx, 0):
+		// that expires immediately and would fail every attempt on every node rather than
+		// bounding one.
+		attemptCtx, cancelAttempt := ctx, context.CancelFunc(func() {})
+		if attemptTimeout := s.cfg.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Duration.Duration(); attemptTimeout > 0 {
+			attemptCtx, cancelAttempt = context.WithTimeout(ctx, attemptTimeout)
+		}
+		compactSegMetaInfo, compactErr := cli.SegmentCompact(attemptCtx, s.bucketName, s.rootPath, s.logId, s.segmentId, expectedLastEntryId)
+		cancelAttempt()
 		if compactErr != nil {
+			reason := classifyCompactionFailureReason(compactErr)
+			nodeFailures = append(nodeFailures, fmt.Sprintf("%s:%s", node, reason))
+			failureReasons = append(failureReasons, reason)
 			logger.Ctx(ctx).Warn("Segment compaction failed on node, trying next",
 				zap.String("logName", s.logName),
 				zap.Int64("logId", s.logId),
@@ -1330,17 +1993,83 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 	}
 
 	// All nodes failed
+	failureReason := summarizeCompactionFailureReasons(failureReasons)
+	metrics.WpSegmentCompactionFailuresTotal.WithLabelValues(s.logNs, logIdStr, failureReason).Inc()
 	logger.Ctx(ctx).Warn("Compaction failed on all quorum nodes",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
-		zap.Int("totalNodes", len(quorumInfo.Nodes)))
+		zap.Int64("expectedLastEntryId", expectedLastEntryId),
+		zap.String("failureReason", failureReason),
+		zap.Int("totalNodes", len(quorumInfo.Nodes)),
+		zap.Strings("nodeFailures", nodeFailures))
 
 	if lastError != nil {
 		return nil, lastError
 	}
 	return nil, werr.ErrSegmentHandleCompactionFailed.WithCauseErrMsg("all quorum nodes failed compaction")
 }
+
+const (
+	compactionFailureReasonNone                = "none"
+	compactionFailureReasonDataBehind          = "data_behind"
+	compactionFailureReasonInvalidLACAlignment = "invalid_lac_alignment"
+	compactionFailureReasonTransient           = "transient"
+	compactionFailureReasonOther               = "other"
+	compactionFailureReasonMixed               = "mixed"
+)
+
+// isDeadlineExceeded reports whether err is an expired deadline, from either side of the RPC.
+//
+// A local expiry is context.DeadlineExceeded, but once the deadline reaches the node over gRPC the
+// client sees status.Error(codes.DeadlineExceeded, ...), which does not wrap the sentinel, is not a
+// woodpeckerError, and is not codes.Unavailable -- so none of errors.Is, IsRetryableErr or
+// IsTransportError match it. Only embedded mode returns the native error. Without the status check
+// a node that stops responding is classified as "other" in exactly the deployment where the
+// per-attempt deadline is what detects it.
+func isDeadlineExceeded(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded
+}
+
+func classifyCompactionFailureReason(err error) string {
+	switch {
+	case err == nil:
+		return compactionFailureReasonNone
+	case errors.Is(err, werr.ErrSegmentCompactionDataBehind):
+		return compactionFailureReasonDataBehind
+	case errors.Is(err, werr.ErrInvalidLACAlignment):
+		return compactionFailureReasonInvalidLACAlignment
+	case werr.IsTransportError(err), werr.IsRetryableErr(err), isDeadlineExceeded(err):
+		return compactionFailureReasonTransient
+	default:
+		return compactionFailureReasonOther
+	}
+}
+
+func summarizeCompactionFailureReasons(reasons []string) string {
+	var first string
+	for _, reason := range reasons {
+		if reason == "" || reason == compactionFailureReasonNone {
+			continue
+		}
+		if first == "" {
+			first = reason
+			continue
+		}
+		if reason != first {
+			return compactionFailureReasonMixed
+		}
+	}
+	if first == "" {
+		return compactionFailureReasonOther
+	}
+	return first
+}
+
+// notifySegmentCompactedTimeout bounds each per-node NotifySegmentCompacted RPC so a node
+// that connects but stalls cannot hold a distribution pass beyond this (used by
+// SegmentCompactedNotifyManager; the next auditor cycle retries the node).
+const notifySegmentCompactedTimeout = 10 * time.Second
 
 func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
@@ -1390,8 +2119,8 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 	// Send FenceSegment requests to all quorum nodes in parallel
 	lastEntryId, fencedErr := s.fenceSegmentQuorum(ctx, quorumInfo)
 	if fencedErr != nil {
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "fence", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "fence", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("quorum fence segment failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -1399,11 +2128,12 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 			zap.Error(fencedErr))
 		return -1, fencedErr
 	}
+	lastEntryId = s.preserveKnownCompletionLAC(ctx, lastEntryId)
 
 	completeErr := s.completeSegmentQuorum(ctx, quorumInfo, lastEntryId)
 	if completeErr != nil {
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "complete", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "complete", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "complete", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "complete", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("quorum complete segment failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -1422,7 +2152,7 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 		Metadata: newSegmentMetadata,
 		Revision: currentMeta.Revision,
 	}
-	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.logId, newSegMeta, currentMeta.Metadata.State)
 	if updateMetaErr != nil {
 		logger.Ctx(ctx).Warn("Failed to update segment metadata after fence",
 			zap.String("logName", s.logName),
@@ -1457,6 +2187,9 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 			zap.Int64("newLastAddConfirmed", lastEntryId))
 		s.lastAddConfirmed.Store(lastEntryId)
 	}
+	if lastEntryId >= 0 {
+		metrics.SetWriteFrontier(s.logNs, logIdStr, s.segmentId, lastEntryId)
+	}
 	// Use the actual lastEntryId returned from FenceSegment, even in error cases
 	// because these "errors" indicate the segment was already fenced, not a failure
 	s.fastFailAppendOpsUnsafe(ctx, lastEntryId, werr.ErrSegmentFenced)
@@ -1467,8 +2200,8 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 		zap.Int64("lastEntryId", lastEntryId),
 		zap.Duration("duration", time.Since(start)))
 	s.fencedState.Store(true) // Set fenced state to prevent new append operations
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "fence", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "fence", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return lastEntryId, nil
 }
 
@@ -1478,7 +2211,11 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	defer sp.End()
 	s.updateAccessTime()
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() {
-		logger.Ctx(ctx).Info("Local storage detected, skipping compaction (not yet implemented)",
+		// Defensive: the auditor already skips the whole compaction pass on local storage
+		// (see compactCompletedSegments), so reaching here means a caller bypassed that gate.
+		// Debug, not Info -- at Info this fires once per Completed segment per auditor cycle,
+		// which is O(segments) lines every cycle for work that does nothing.
+		logger.Ctx(ctx).Debug("Local storage detected, skipping compaction (not yet implemented)",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId))
@@ -1513,6 +2250,10 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		zap.Int64("currentLastEntryId", currentSegmentMeta.Metadata.LastEntryId),
 		zap.Int64("currentSize", currentSegmentMeta.Metadata.Size))
 
+	// A repeated request after another handle completed compaction is already done.
+	if currentSegmentMeta.Metadata.State == proto.SegmentState_Sealed {
+		return nil
+	}
 	if currentSegmentMeta.Metadata.State != proto.SegmentState_Completed {
 		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return werr.ErrSegmentHandleSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
@@ -1550,8 +2291,9 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		zap.Int("nodeCount", len(quorumInfo.Nodes)),
 		zap.Int64("lastEntryId", currentSegmentMeta.Metadata.LastEntryId))
 
-	// Try compaction on each node sequentially until one succeeds
-	compactSegMetaInfo, compactErr := s.compactSegmentQuorum(ctx, quorumInfo)
+	// Try compaction on each node sequentially until one succeeds. Pass the confirmed
+	// LastEntryId so a lagging node refuses instead of sealing a short segment.
+	compactSegMetaInfo, compactErr := s.compactSegmentQuorum(ctx, quorumInfo, currentSegmentMeta.Metadata.LastEntryId)
 	if compactErr != nil {
 		logger.Ctx(ctx).Warn("All nodes failed compaction operation",
 			zap.String("logName", s.logName),
@@ -1559,8 +2301,8 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 			zap.Int64("segmentId", s.segmentId),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(compactErr))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "compact_to_sealed", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "compact_to_sealed", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return compactErr
 	}
 
@@ -1574,13 +2316,13 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	// update segment state and meta
 	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()
 	newSegmentMetadata.State = proto.SegmentState_Sealed
-	newSegmentMetadata.SealedTime = compactSegMetaInfo.CompletionTime
+	newSegmentMetadata.SealedTime = compactSegMetaInfo.SealedTime
 	newSegmentMetadata.Size = compactSegMetaInfo.Size
 	newSegMeta := &meta.SegmentMeta{
 		Metadata: newSegmentMetadata,
 		Revision: currentSegmentMeta.Revision,
 	}
-	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.logId, newSegMeta, currentSegmentMeta.Metadata.State)
 	if updateMetaErr != nil {
 		logger.Ctx(ctx).Warn("Failed to update segment metadata after compaction",
 			zap.String("logName", s.logName),
@@ -1588,6 +2330,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(updateMetaErr))
 	} else {
+		metrics.SetCompactionFrontier(s.logNs, logIdStr, s.segmentId, compactSegMetaInfo.LastEntryId)
 		logger.Ctx(ctx).Info("Successfully updated segment metadata after compaction",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -1605,6 +2348,22 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 			zap.Error(refreshErr))
 	}
 
+	// Concurrent handles can both publish the same deterministic result. A lost
+	// metadata CAS is success only if the winner sealed the same confirmed range.
+	// Truncation/deletion, different LACs and unrelated failures must stay visible.
+	if werr.ErrMetadataRevisionInvalid.Is(updateMetaErr) && refreshErr == nil {
+		latest := s.GetMetadata(ctx)
+		if latest.Metadata.State == proto.SegmentState_Sealed &&
+			latest.Metadata.LastEntryId == currentSegmentMeta.Metadata.LastEntryId {
+			updateMetaErr = nil
+		}
+	}
+	if updateMetaErr != nil {
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "error").Observe(float64(time.Since(start).Milliseconds()))
+		return updateMetaErr
+	}
+
 	compactionDuration := time.Since(start)
 	logger.Ctx(ctx).Info("Segment compaction operation completed successfully",
 		zap.String("logName", s.logName),
@@ -1615,26 +2374,35 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		zap.Int64("finalSize", compactSegMetaInfo.Size),
 		zap.String("finalState", "Sealed"))
 
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "compact_to_sealed", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "compact_to_sealed", "success").Observe(float64(compactionDuration.Milliseconds()))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "compact_to_sealed", "success").Observe(float64(compactionDuration.Milliseconds()))
+
+	// Note: compacted-mark distribution (NotifySegmentCompacted fanout) is deliberately NOT
+	// done here. The writer's auditor drives it asynchronously for Sealed segments via
+	// SegmentCompactedNotifyManager, with durable per-node progress (root/marking/...), so
+	// compaction is never gated by mark distribution; the server-side pull reconcile remains
+	// the backstop for nodes the push never reaches.
+
 	return updateMetaErr
 }
 
 // SetRollingReady set the segment as ready for rolling
-func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
+func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) error {
 	s.Lock()
 	defer s.Unlock()
 	logger.Ctx(ctx).Info("setting segment to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Int("queueSize", s.appendOpsQueue.Len()))
 	s.rollingState.Store(true)
 	if s.appendOpsQueue.Len() > 0 {
 		logger.Ctx(ctx).Info("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
-		return
+		return nil
 	}
-	// trigger immediately
-	err := s.doCompleteAndCloseUnsafe(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to complete segment after setting to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Error(err))
+	if s.completionMgr != nil {
+		// An empty append queue is already drained. Complete it in the same
+		// background lifecycle used when the last pending append finishes, so
+		// fencing (including fallback waits) does not block the next segment.
+		s.completionMgr.TriggerCompletion()
 	}
+	return nil
 }
 
 // IsForceRollingReady check if the segment is ready for rolling

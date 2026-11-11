@@ -1,0 +1,543 @@
+package cmd
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"net"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"gopkg.in/yaml.v3"
+
+	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
+	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
+	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
+)
+
+// The marking command family operates on the compacted-mark distribution records
+// (root/marking/<logId>/<segId> in etcd). These records live in cluster metadata rather
+// than on a node, so the commands connect to etcd directly.
+//
+// The LogStore server does not connect to etcd, so the etcd section of its /admin/config is
+// unvalidated, and by default points at loopback. Discovery from it is attempted as a
+// convenience and refused when the address is unlikely to work; --etcd and --meta-prefix are
+// the reliable path, for these commands and for any metadata command added later.
+
+func newMarkingCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "marking",
+		Short: "Inspect and resolve compacted-mark distribution records (root/marking)",
+		Long: `Inspect and resolve compacted-mark distribution records.
+
+After a segment is compacted, the writer's auditor distributes a "compacted" mark to
+every quorum node so each can reclaim its local data.log. Per-node progress is durable
+in etcd under root/marking/<logId>/<segId>. A node that keeps failing past the retry
+budget parks its record as NOTIFY_PENDING_MANUAL — excluded from auto-retry and waiting
+for an operator: verify the node (usually dead or removed), then 'confirm' to mark the
+record NOTIFY_OPERATOR_CONFIRMED (settled; physical removal happens when the segment is
+truncated). Unhandled records are also reaped automatically at truncation.
+A confirmed-away mark costs little: data-holding nodes self-heal via the server-side
+pull reconcile; nodes that never held the segment only lose a read optimization.`,
+	}
+	cmd.AddCommand(newMarkingListCommand(), newMarkingConfirmCommand())
+	return cmd
+}
+
+// metaEtcdFlags are shared connection overrides for metadata and raw etcd commands.
+type metaEtcdFlags struct {
+	parametersFile string
+	clientMeta     string
+	command        *cobra.Command
+	etcdEndpoints  string // comma-separated override; with --meta-prefix, skips /admin/config discovery
+	metaPrefix     string // full meta prefix override (e.g. "woodpecker" or "by-dev/woodpecker")
+	standalone     bool   // explicit authority, independent of WP context/discovery
+	// TLS/auth values are explicit local settings or come from the private parameter file.
+	etcdCert          string
+	etcdKey           string
+	etcdCACert        string
+	etcdTLSMinVersion string
+	etcdUsername      string
+	etcdPassword      string
+}
+
+func (f *metaEtcdFlags) register(cmd *cobra.Command) {
+	f.command = cmd
+	cmd.Flags().StringVar(&f.parametersFile, "client-parameters-file", "", "Private temporary etcd parameters file; not cli.yaml or a candidate profile")
+	cmd.Flags().StringVar(&f.clientMeta, "client-meta", "", "Deprecated; pass explicit --etcd and --meta-prefix")
+	_ = cmd.Flags().MarkHidden("client-meta")
+	cmd.Flags().BoolVar(&f.standalone, "standalone", false, "Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery")
+	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "Required client etcd endpoints (comma-separated); independent of server context")
+	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "Required full client metadata prefix")
+	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "Local etcd TLS client cert file; explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdKey, "etcd-key", "", "Local etcd TLS client key file; explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdCACert, "etcd-cacert", "", "Local etcd TLS CA cert file; explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdTLSMinVersion, "etcd-tls-min-version", "", "Etcd TLS min version (1.0/1.1/1.2/1.3); explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdUsername, "etcd-username", "", "Etcd auth username; explicit per-run setting")
+	cmd.Flags().StringVar(&f.etcdPassword, "etcd-password", "", "Etcd auth password; explicit per-run setting")
+}
+
+// metaEtcdConn is the fully resolved etcd connection spec for the marking commands:
+// endpoints + key prefix + explicit host-local TLS/auth material.
+type metaEtcdConn struct {
+	endpoints                             []string
+	kb                                    *meta.KeyBuilder
+	useSSL                                bool
+	tlsCert, tlsKey, tlsCACert, tlsMinVer string
+	username, password                    string
+}
+
+// isSet also supports callers that construct flags directly without Cobra.
+func (f *metaEtcdFlags) isSet(name, value string) bool {
+	return value != "" || (f.command != nil && f.command.Flags().Changed(name))
+}
+
+// resolveMetaEtcd requires an explicit client metadata authority.
+func resolveMetaEtcd(f *metaEtcdFlags) (*metaEtcdConn, error) {
+	return resolveEtcd(f, true)
+}
+
+func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
+	// Client metadata is an explicit per-request authority. A server context
+	// cannot identify the tenant which owns this log.
+	if f.clientMeta != "" {
+		return nil, wperrors.NewConfigError("--client-meta profiles are no longer used; pass --etcd and --meta-prefix explicitly")
+	}
+	ctx := config.EtcdConfig{}
+	if f.parametersFile != "" {
+		info, err := os.Stat(f.parametersFile)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<10 {
+			return nil, wperrors.NewConfigError("invalid client parameters file")
+		}
+		body, err := os.ReadFile(f.parametersFile)
+		if err != nil {
+			return nil, err
+		}
+		decoder := yaml.NewDecoder(bytes.NewReader(body))
+		decoder.KnownFields(true)
+		if decoder.Decode(&ctx) != nil {
+			return nil, wperrors.NewConfigError("invalid client parameters file")
+		}
+	}
+	prefix := ctx.MetaPrefix
+	if f.isSet("meta-prefix", f.metaPrefix) {
+		prefix = f.metaPrefix
+	}
+	endpoints := ctx.Endpoints
+	if f.isSet("etcd", f.etcdEndpoints) {
+		endpoints = strings.Split(f.etcdEndpoints, ",")
+	}
+	if len(endpoints) == 0 {
+		return nil, wperrors.NewConfigError("client metadata requires --etcd; server contexts do not select client metadata")
+	}
+	if discover && strings.TrimSpace(prefix) == "" {
+		return nil, wperrors.NewConfigError("client metadata requires --meta-prefix")
+	}
+	conn := &metaEtcdConn{endpoints: endpoints}
+
+	// Explicit flags override the private parameter file, including empty flags.
+	if ctx.TLSEnabled != nil {
+		conn.useSSL = *ctx.TLSEnabled
+	}
+	apply := func(dst *string, configured, flag, name string) {
+		if configured != "" {
+			*dst = configured
+		}
+		if f.isSet(name, flag) {
+			*dst = flag
+		}
+	}
+	apply(&conn.tlsCert, ctx.Cert, f.etcdCert, "etcd-cert")
+	apply(&conn.tlsKey, ctx.Key, f.etcdKey, "etcd-key")
+	apply(&conn.tlsCACert, ctx.CACert, f.etcdCACert, "etcd-cacert")
+	apply(&conn.tlsMinVer, ctx.TLSMinVersion, f.etcdTLSMinVersion, "etcd-tls-min-version")
+	apply(&conn.username, ctx.Username, f.etcdUsername, "etcd-username")
+	apply(&conn.password, ctx.Password, f.etcdPassword, "etcd-password")
+	// The private parameter file's TLS switch controls its certificate settings.
+	// Explicit certificate flags still take precedence and enable TLS.
+	inferredTLS := conn.tlsCert != "" || conn.tlsKey != "" || conn.tlsCACert != ""
+	flagTLS := f.etcdCert != "" || f.etcdKey != "" || f.etcdCACert != ""
+	if (ctx.TLSEnabled == nil && inferredTLS) || flagTLS {
+		conn.useSSL = true
+	}
+	for i, endpoint := range conn.endpoints {
+		conn.endpoints[i] = strings.TrimSpace(endpoint)
+		if conn.endpoints[i] == "" {
+			return nil, wperrors.NewUsageError("empty etcd endpoint")
+		}
+	}
+
+	if len(conn.endpoints) == 0 {
+		return nil, wperrors.NewUsageError("no etcd endpoints; pass --etcd")
+	}
+	conn.kb = meta.NewKeyBuilder(prefix)
+	return conn, nil
+}
+
+// metaEtcdClient uses host-local TLS/auth material, including server-auth TLS
+// without a client certificate and mutual TLS when a cert/key pair is supplied.
+func metaEtcdClient(conn *metaEtcdConn) (*clientv3.Client, error) {
+	return metaEtcdClientForContext(context.Background(), conn, Globals.Timeout)
+}
+
+func metaEtcdClientForContext(ctx context.Context, conn *metaEtcdConn, timeout time.Duration) (*clientv3.Client, error) {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	cfg := clientv3.Config{Context: ctx, Endpoints: conn.endpoints, DialTimeout: timeout}
+	if conn.username != "" {
+		cfg.Username, cfg.Password = conn.username, conn.password
+	}
+	if conn.useSSL {
+		var err error
+		cfg.TLS, err = metaEtcdTLSConfig(conn)
+		if err != nil {
+			return nil, wperrors.NewConfigError(err.Error())
+		}
+	}
+	cli, err := clientv3.New(cfg)
+	if err != nil {
+		return nil, wperrors.NewNetworkError(fmt.Sprintf("connect etcd %v: %v", conn.endpoints, err))
+	}
+	return cli, nil
+}
+
+func metaEtcdTLSConfig(conn *metaEtcdConn) (*tls.Config, error) {
+	versions := map[string]uint16{"": tls.VersionTLS12, "1.0": tls.VersionTLS10, "1.1": tls.VersionTLS11, "1.2": tls.VersionTLS12, "1.3": tls.VersionTLS13}
+	version, ok := versions[conn.tlsMinVer]
+	if !ok {
+		return nil, fmt.Errorf("unknown etcd TLS minimum version %q", conn.tlsMinVer)
+	}
+	// #nosec G402 -- TLS defaults to 1.2; older versions require the existing explicit operator setting.
+	cfg := &tls.Config{MinVersion: version}
+	if (conn.tlsCert == "") != (conn.tlsKey == "") {
+		return nil, fmt.Errorf("etcd TLS client cert and key must be provided together")
+	}
+	if conn.tlsCert != "" {
+		cert, err := tls.LoadX509KeyPair(conn.tlsCert, conn.tlsKey)
+		if err != nil {
+			return nil, fmt.Errorf("load local etcd client cert/key: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+	if conn.tlsCACert != "" {
+		data, err := os.ReadFile(conn.tlsCACert)
+		if err != nil {
+			return nil, fmt.Errorf("read local etcd CA certificate: %w", err)
+		}
+		cfg.RootCAs = x509.NewCertPool()
+		if !cfg.RootCAs.AppendCertsFromPEM(data) {
+			return nil, fmt.Errorf("local etcd CA file contains no valid PEM certificates")
+		}
+	}
+	return cfg, nil
+}
+
+func metaCtx() (context.Context, context.CancelFunc) {
+	timeout := Globals.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+// markingRow is one record rendered by `wp marking list`.
+type markingRow struct {
+	LogId        int64    `json:"log_id"`
+	SegmentId    int64    `json:"segment_id"`
+	State        string   `json:"state"`
+	UnackedNodes []string `json:"unacked_nodes"`
+	StartTime    string   `json:"start_time"`
+	LastUpdate   string   `json:"last_update"`
+	Error        string   `json:"error,omitempty"`
+}
+
+func newMarkingListCommand() *cobra.Command {
+	var flags metaEtcdFlags
+	var logID int64
+	var allStates bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List compacted-mark distribution records (default: only NOTIFY_PENDING_MANUAL)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			conn, err := resolveMetaEtcd(&flags)
+			if err != nil {
+				return err
+			}
+			cli, err := metaEtcdClient(conn)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+			return runMarkingList(cmd, cli, conn.kb, logID, cmd.Flags().Changed("log"), allStates)
+		},
+	}
+	flags.register(cmd)
+	cmd.Flags().Int64Var(&logID, "log", 0, "restrict to one log id (default: all logs)")
+	cmd.Flags().BoolVar(&allStates, "all-states", false, "include IN_PROGRESS and COMPLETED records, not just PENDING_MANUAL")
+	return cmd
+}
+
+// runMarkingList is the etcd-facing core of `wp marking list`, separated from the
+// resolve/dial plumbing so tests can drive it against an embedded etcd client.
+func runMarkingList(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder, logID int64, logScoped bool, allStates bool) error {
+	// One prefix scan covers all logs; --log narrows to marking/<logId>/.
+	prefix := kb.SegmentCompactedNotifyStatusPrefix() + "/"
+	if logScoped {
+		prefix = kb.BuildLogCompactedNotifyStatusPrefix(logID)
+	}
+
+	ctx, cancel := metaCtx()
+	defer cancel()
+	resp, err := cli.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return wperrors.NewNetworkError(fmt.Sprintf("etcd get %s: %v", prefix, err))
+	}
+
+	rows := make([]markingRow, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		status := &proto.SegmentCompactedNotifyStatus{}
+		if err := proto.UnmarshalSegmentCompactedNotifyStatus(kv.Value, status); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warn: skipping unparseable record %s: %v\n", string(kv.Key), err)
+			continue
+		}
+		if !allStates && status.State != proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL {
+			continue
+		}
+		var unacked []string
+		for node, acked := range status.QuorumNotifyStatus {
+			if !acked {
+				unacked = append(unacked, node)
+			}
+		}
+		sort.Strings(unacked)
+		rows = append(rows, markingRow{
+			LogId:        status.LogId,
+			SegmentId:    status.SegmentId,
+			State:        strings.TrimPrefix(status.State.String(), "NOTIFY_"),
+			UnackedNodes: unacked,
+			StartTime:    formatMarkingTime(status.StartTime),
+			LastUpdate:   formatMarkingTime(status.LastUpdateTime),
+			Error:        status.ErrorMessage,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].LogId != rows[j].LogId {
+			return rows[i].LogId < rows[j].LogId
+		}
+		return rows[i].SegmentId < rows[j].SegmentId
+	})
+
+	w := cmd.OutOrStdout()
+	switch Globals.Output {
+	case "json":
+		return output.RenderJSON(w, rows)
+	case "yaml":
+		return output.RenderYAML(w, rows)
+	default:
+		if len(rows) == 0 {
+			// Name the keyspace: the prefix is discovered from /admin/config unless --meta-prefix
+			// is given, and without it "nothing is stuck" and "I scanned the wrong place" print
+			// the same line.
+			if allStates {
+				fmt.Fprintf(w, "no marking records under %s\n", prefix)
+			} else {
+				fmt.Fprintf(w, "no records pending manual handling under %s (use --all-states to list every record)\n", prefix)
+			}
+			return nil
+		}
+		headers := []string{"LOG", "SEGMENT", "STATE", "UNACKED_NODES", "START", "LAST_UPDATE", "ERROR"}
+		table := make([][]string, len(rows))
+		for i, r := range rows {
+			table[i] = []string{
+				strconv.FormatInt(r.LogId, 10),
+				strconv.FormatInt(r.SegmentId, 10),
+				r.State,
+				strings.Join(r.UnackedNodes, ","),
+				r.StartTime,
+				r.LastUpdate,
+				r.Error,
+			}
+		}
+		return output.RenderRowTable(w, headers, table)
+	}
+}
+
+func newMarkingConfirmCommand() *cobra.Command {
+	var flags metaEtcdFlags
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "confirm <logId> <segmentId>",
+		Short: "Confirm a PENDING_MANUAL marking record after operator triage",
+		Long: `Confirm one compacted-mark distribution record.
+
+Meant for records parked as NOTIFY_PENDING_MANUAL: after verifying the unacked node
+(typically permanently dead or removed from the cluster), confirm transitions the record
+to NOTIFY_OPERATOR_CONFIRMED, which settles it (the auditor stops retrying and stops
+counting it against the log). The etcd record itself is intentionally NOT deleted here;
+it is reaped when the segment is truncated, like every other marking record.
+Refuses records still IN_PROGRESS or COMPLETED unless --force is given (those are
+managed automatically and normally need no operator action).`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			logID, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return wperrors.NewUsageError(fmt.Sprintf("invalid logId %q", args[0]))
+			}
+			segID, err := strconv.ParseInt(args[1], 10, 64)
+			if err != nil {
+				return wperrors.NewUsageError(fmt.Sprintf("invalid segmentId %q", args[1]))
+			}
+
+			conn, err := resolveMetaEtcd(&flags)
+			if err != nil {
+				return err
+			}
+			cli, err := metaEtcdClient(conn)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+			return runMarkingConfirm(cmd, cli, conn.kb, logID, segID, force)
+		},
+	}
+	flags.register(cmd)
+	cmd.Flags().BoolVar(&force, "force", false, "confirm (transition to OPERATOR_CONFIRMED) even if the record is not PENDING_MANUAL; IN_PROGRESS/COMPLETED are normally managed automatically")
+	return cmd
+}
+
+// runMarkingConfirm is the etcd-facing core of `wp marking confirm`, separated from the
+// resolve/dial plumbing so tests can drive it against an embedded etcd client.
+func runMarkingConfirm(cmd *cobra.Command, cli *clientv3.Client, kb *meta.KeyBuilder, logID int64, segID int64, force bool) error {
+	key := kb.BuildSegmentCompactedNotifyStatusKey(logID, segID)
+	ctx, cancel := metaCtx()
+	defer cancel()
+
+	resp, err := cli.Get(ctx, key)
+	if err != nil {
+		return wperrors.NewNetworkError(fmt.Sprintf("etcd get %s: %v", key, err))
+	}
+	if len(resp.Kvs) == 0 {
+		return wperrors.NewTargetNotFoundError(fmt.Sprintf("marking record %d/%d", logID, segID))
+	}
+	status := &proto.SegmentCompactedNotifyStatus{}
+	if err := proto.UnmarshalSegmentCompactedNotifyStatus(resp.Kvs[0].Value, status); err != nil {
+		return fmt.Errorf("unparseable marking record %s: %w", key, err)
+	}
+	if status.State == proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED {
+		fmt.Fprintf(cmd.OutOrStdout(), "already confirmed: marking record log %d segment %d\n", logID, segID)
+		return nil
+	}
+	if status.State != proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL && !force {
+		return wperrors.NewStateConflictError(fmt.Sprintf(
+			"record %d/%d is %s, not PENDING_MANUAL — it is managed automatically; use --force to confirm anyway",
+			logID, segID, status.State.String(),
+		))
+	}
+
+	// Confirm by transitioning to a durable terminal state, NOT by physical delete: the segment
+	// is still Sealed, so a physical delete would let the writer's auditor rebuild the record on
+	// restart and re-enter PENDING_MANUAL after another retry cycle. OPERATOR_CONFIRMED is
+	// re-seeded as settled across restarts; physical deletion is left to truncate-reap.
+	prevState := status.State
+	status.State = proto.SegmentCompactedNotifyState_NOTIFY_OPERATOR_CONFIRMED
+	status.LastUpdateTime = uint64(time.Now().UnixMilli())
+	newVal, err := proto.MarshalSegmentCompactedNotifyStatus(status)
+	if err != nil {
+		return fmt.Errorf("marshal marking record %s: %w", key, err)
+	}
+	// Compare-and-put against the revision we read: if a concurrent deleter (orphan sweep /
+	// truncate reap) or the manager touched the key in between, the delete/update wins and we
+	// must NOT resurrect a reaped record with an unconditional Put.
+	ok, err := casPutMarkingRecord(ctx, cli, key, string(newVal), resp.Kvs[0].ModRevision)
+	if err != nil {
+		return wperrors.NewNetworkError(fmt.Sprintf("etcd txn %s: %v", key, err))
+	}
+	if !ok {
+		return wperrors.NewStateConflictError(fmt.Sprintf(
+			"marking record %d/%d changed or was reaped concurrently; re-run `wp marking list` and retry if it still shows",
+			logID, segID,
+		))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "confirmed: marking record log %d segment %d set to OPERATOR_CONFIRMED (was %s); it will be reaped when the segment is truncated\n",
+		logID, segID, prevState.String())
+	return nil
+}
+
+// casPutMarkingRecord writes val to key only if the key still exists at exactly modRev — a
+// compare-and-put honoring the manager's update-if-present invariant. Returns false when the
+// key was deleted or rewritten concurrently (the other writer wins).
+func casPutMarkingRecord(ctx context.Context, cli *clientv3.Client, key, val string, modRev int64) (bool, error) {
+	txnResp, err := cli.Txn(ctx).
+		If(clientv3.Compare(clientv3.ModRevision(key), "=", modRev)).
+		Then(clientv3.OpPut(key, val)).
+		Commit()
+	if err != nil {
+		return false, err
+	}
+	return txnResp.Succeeded, nil
+}
+
+func formatMarkingTime(unixMilli uint64) string {
+	if unixMilli == 0 {
+		return "-"
+	}
+	return time.UnixMilli(int64(unixMilli)).UTC().Format("2006-01-02T15:04:05Z")
+}
+
+// rejectUnusableDiscoveredEtcd refuses a discovered endpoint that is unlikely to be the
+// cluster's etcd.
+//
+// The server does not connect to etcd, so that section of /admin/config is unvalidated; by
+// default it points at loopback, which resolves to whichever host runs the command. Dialing it
+// spends the full timeout and ends in a raw etcd client error, so an empty or loopback-only list
+// is refused here. The meta prefix comes from the same section, so the message names
+// --meta-prefix alongside --etcd.
+func rejectUnusableDiscoveredEtcd(endpoints []string) error {
+	if len(endpoints) == 0 {
+		return wperrors.NewConfigError(
+			"no etcd endpoint could be discovered from /admin/config; pass --etcd <host:port> " +
+				"together with --meta-prefix <prefix> (the server reports both as defaults, not " +
+				"as values it uses)",
+		)
+	}
+	for _, ep := range endpoints {
+		if !isLoopbackEndpoint(ep) {
+			return nil
+		}
+	}
+	return wperrors.NewConfigError(fmt.Sprintf(
+		"discovered etcd endpoint %v is loopback and may not be the cluster's etcd; pass --etcd "+
+			"<host:port> together with --meta-prefix <prefix> (the server reports both as defaults, "+
+			"not as values it uses). If etcd does run on this host, pass --etcd to proceed.", endpoints,
+	))
+}
+
+// isLoopbackEndpoint reports whether an endpoint names the local host, with or without a port.
+func isLoopbackEndpoint(endpoint string) bool {
+	host := strings.TrimSpace(endpoint)
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}

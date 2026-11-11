@@ -58,18 +58,18 @@ func TestMinioReadPerformance(t *testing.T) {
 		go func(ch chan int) {
 			start := time.Now()
 			getOpts := minio.GetObjectOptions{}
-			//optErr := getOpts.SetRange(0, 10) // start
-			//optErr := getOpts.SetRange(0, 1_000_000) // start
-			//optErr := getOpts.SetRange(0, 4_000_000) // start
+			// optErr := getOpts.SetRange(0, 10) // start
+			// optErr := getOpts.SetRange(0, 1_000_000) // start
+			// optErr := getOpts.SetRange(0, 4_000_000) // start
 
-			//optErr := getOpts.SetRange(8_000_000, 8_000_010) // mid
-			//optErr := getOpts.SetRange(8_000_000, 9_000_010) // mid
-			//optErr := getOpts.SetRange(6_000_000, 10_000_010) // mid
-			//optErr := getOpts.SetRange(128_000_000, 129_000_000) // mid
-			//optErr := getOpts.SetRange(128_000_000, 132_000_000) // mid
+			// optErr := getOpts.SetRange(8_000_000, 8_000_010) // mid
+			// optErr := getOpts.SetRange(8_000_000, 9_000_010) // mid
+			// optErr := getOpts.SetRange(6_000_000, 10_000_010) // mid
+			// optErr := getOpts.SetRange(128_000_000, 129_000_000) // mid
+			// optErr := getOpts.SetRange(128_000_000, 132_000_000) // mid
 
-			//optErr := getOpts.SetRange(0, -10) // last
-			//optErr := getOpts.SetRange(0, -1000000) // last
+			// optErr := getOpts.SetRange(0, -10) // last
+			// optErr := getOpts.SetRange(0, -1000000) // last
 			optErr := getOpts.SetRange(0, -4000000) // last
 			assert.NoError(t, optErr)
 
@@ -86,7 +86,7 @@ func TestMinioReadPerformance(t *testing.T) {
 			assert.NoError(t, err)
 			readSize := len(readData)
 			cost := time.Now().Sub(start)
-			//t.Logf("Get test_object_%d completed,read %d bytes cost: %d ms \n", i, readSize, cost.Milliseconds())
+			// t.Logf("Get test_object_%d completed,read %d bytes cost: %d ms \n", i, readSize, cost.Milliseconds())
 			<-ch
 			utils.MinioIOBytes.WithLabelValues("0").Observe(float64(readSize))
 			utils.MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))

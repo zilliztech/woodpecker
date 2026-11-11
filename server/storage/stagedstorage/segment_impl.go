@@ -58,7 +58,7 @@ type StagedSegmentImpl struct {
 	segmentFileKey string
 	client         objectstorage.ObjectStorage
 	logIdStr       string // for metrics label only
-	nsStr          string // for metrics namespace label
+	logNs          string // for metrics log_ns label
 }
 
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
@@ -84,7 +84,7 @@ func NewStagedSegmentImpl(ctx context.Context, bucket string, rootPath string, l
 		segmentFileKey:  segmentFileKey,
 		client:          storageCli,
 		logIdStr:        strconv.FormatInt(logId, 10),
-		nsStr:           bucket + "/" + rootPath,
+		logNs:           bucket + "/" + rootPath,
 	}
 	return segmentImpl
 }
@@ -130,11 +130,11 @@ func (rs *StagedSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int,
 
 	// Update metrics
 	if len(allErrors) > 0 {
-		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 	} else {
-		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "success").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "success").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	}
 
 	logger.Ctx(ctx).Info("Completed quorum segment deletion",
@@ -159,7 +159,9 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 		zap.String("bucket", rs.bucket),
 		zap.Int("flag", flag))
 
-	// List all objects in the segment directory
+	// List all objects in the segment directory. The prefix is built verbatim from rootPath —
+	// exactly how the writer built the object keys — so the walk covers everything the writer
+	// stored. rootPath is validated clean at startup (config.Validate); no normalization here.
 	listPrefix := fmt.Sprintf("%s/%s", rs.rootPath, rs.segmentFileKey)
 	type objectToDelete struct {
 		path string
@@ -201,7 +203,7 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 			objectsToDelete = append(objectsToDelete, objectToDelete{path: objInfo.FilePath, size: objInfo.Size})
 		}
 		return true // continue walking
-	}, rs.nsStr, rs.logIdStr)
+	}, rs.logNs, rs.logIdStr)
 	if walkErr != nil {
 		logger.Ctx(ctx).Warn("error listing blocks during deletion",
 			zap.String("segmentFileKey", rs.segmentFileKey),
@@ -216,7 +218,7 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 
 	// Delete objects
 	for _, obj := range objectsToDelete {
-		err := rs.client.RemoveObject(ctx, rs.bucket, obj.path, rs.nsStr, rs.logIdStr)
+		err := rs.client.RemoveObject(ctx, rs.bucket, obj.path, rs.logNs, rs.logIdStr)
 		if err != nil {
 			// Log error but continue with other deletions
 			logger.Ctx(ctx).Warn("failed to delete block",
@@ -225,12 +227,13 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 				zap.Error(err))
 			errorCount++
 		} else {
-			logger.Ctx(ctx).Debug("successfully deleted block",
+			logger.Ctx(ctx).Info("successfully deleted block",
 				zap.String("segmentFileKey", rs.segmentFileKey),
-				zap.String("objectKey", obj.path))
+				zap.String("objectKey", obj.path),
+				zap.Int64("size", obj.size))
 			deletedCount++
-			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Sub(float64(obj.size))
-			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Dec()
+			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(obj.size))
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
 		}
 	}
 
@@ -282,10 +285,13 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 		// Determine what to delete based on flag and file type
 		switch flag {
 		case 0:
-			// Delete all segment-related files
+			// Delete all segment-related files, including the compacted tombstone mark.
+			// This truncate/delete path is the only place that removes the mark; the
+			// compacted-file-cleanup GC keeps it as a tombstone after dropping data.log.
 			shouldDelete = strings.HasSuffix(fileName, ".log") ||
 				strings.HasSuffix(fileName, ".lock") ||
-				strings.HasSuffix(fileName, ".fence")
+				strings.HasSuffix(fileName, ".fence") ||
+				fileName == CompactedMarkFileName
 		case 1, 2:
 			// For partial deletion, only delete .log files (main segment data)
 			shouldDelete = strings.HasSuffix(fileName, ".log")
@@ -313,12 +319,12 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 					zap.Error(err))
 				deleteErrors = append(deleteErrors, err)
 			} else {
-				logger.Ctx(ctx).Debug("Successfully deleted local file",
+				logger.Ctx(ctx).Info("Successfully deleted local file",
 					zap.String("filePath", filePath))
 				deletedCount++
 				if isDataFile {
-					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Sub(float64(fileSize))
-					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Dec()
+					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Sub(float64(fileSize))
+					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.logNs, rs.logIdStr).Dec()
 				}
 			}
 		}
@@ -328,6 +334,13 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 		zap.String("segmentDir", rs.segmentDir),
 		zap.Int("deletedCount", deletedCount),
 		zap.Int("errorCount", len(deleteErrors)))
+
+	// On a full delete (flag 0), best-effort prune the now-empty segment directory so a
+	// compacted-tombstone dir (mark removed just above) does not linger. Ignore a
+	// "not empty" or any other error.
+	if flag == 0 && len(deleteErrors) == 0 {
+		_ = os.Remove(rs.segmentDir)
+	}
 
 	if len(deleteErrors) > 0 {
 		return deletedCount, fmt.Errorf("failed to delete %d local files", len(deleteErrors))

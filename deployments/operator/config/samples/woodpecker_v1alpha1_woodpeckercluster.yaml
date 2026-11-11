@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: woodpecker-config
+data:
+  woodpecker.yaml: |
+    woodpecker:
+      meta:
+        type: etcd
+      client:
+        quorum:
+          replicaCount: 3
+      storage:
+        type: service
+        rootPath: /woodpecker/data
+      logstore:
+        segmentSyncPolicy:
+          syncInterval: 1000
+          syncMaxBytes: 4194304
+    log:
+      level: info
+      format: json
+      stdout: true
+    etcd:
+      endpoints:
+        - etcd.default.svc:2379
+      rootPath: by-dev
+    minio:
+      address: minio.default.svc
+      port: 9000
+      accessKeyID: minioadmin
+      secretAccessKey: minioadmin
+      bucketName: woodpecker
+      rootPath: files
+---
+apiVersion: woodpecker.zilliz.io/v1alpha1
+kind: WoodpeckerCluster
+metadata:
+  name: woodpecker-sample
+spec:
+  image: zilliztech/woodpecker:v0.1.26
+  # Image for the init-topology init container, which reads the node's zone/region
+  # labels. Override it when Docker Hub is unreachable.
+  # initImage: my-registry.internal/curl:8.7.1
+  replicas: 3
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  storageSize: 10Gi
+  servicePort: 18080
+  gossipPort: 17946
+  metricsPort: 9091
+  configRef:
+    name: woodpecker-config

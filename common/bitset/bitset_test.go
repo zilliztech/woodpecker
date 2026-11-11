@@ -53,3 +53,31 @@ func TestBitSetPanic(t *testing.T) {
 		bs.Set(20)
 	})
 }
+
+func TestBitSetSetAndCount(t *testing.T) {
+	bs := BitSet{}
+
+	// First set returns 1
+	assert.Equal(t, 1, bs.SetAndCount(0))
+
+	// Setting a different bit returns 2
+	assert.Equal(t, 2, bs.SetAndCount(3))
+
+	// Setting same bit again doesn't increase count
+	assert.Equal(t, 2, bs.SetAndCount(3))
+
+	// Setting another bit returns 3
+	assert.Equal(t, 3, bs.SetAndCount(15))
+}
+
+func TestBitSetSetAndCountPanic(t *testing.T) {
+	bs := BitSet{}
+
+	assert.Panics(t, func() {
+		bs.SetAndCount(-1)
+	})
+
+	assert.Panics(t, func() {
+		bs.SetAndCount(16)
+	})
+}

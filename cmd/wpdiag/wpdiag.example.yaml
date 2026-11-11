@@ -1,0 +1,107 @@
+schema_version: wpdiag.config/v1
+sources:
+  wpcli:
+    connections:
+      local:
+        enabled: true
+        settings:
+          # A bare executable name uses PATH. Relative paths containing a path
+          # separator and cli_config resolve relative to this file's directory.
+          executable: wp
+          context: wp-ops-v0146/milvus-stack
+          # Optional: omit to let wpcli use its default ~/.woodpecker/cli.yaml.
+          # An ambient WOODPECKER_CLI_CONFIG/WOODPECKER_ENDPOINT is not inherited.
+          cli_config: ./cli.yaml
+          native_limits:
+            max_samples: 121
+            max_ops: 100
+            max_series: 500
+            max_response_bytes: 2097152
+            concurrency: 8
+            timeout_ms: 30000
+  # Prometheus works independently of wpcli/Admin, trace and Loki.
+  prometheus:
+    connections:
+      local:
+        enabled: true
+        settings:
+          endpoint: http://127.0.0.1:9090
+          deployment: milvus-stack
+          match_labels:
+            cluster: wp-ops-v0146
+            namespace: milvus-stack
+            woodpecker_id: milvus-stack
+          # bearer_token_env: PROMETHEUS_TOKEN
+          # Consume-stage defaults: 15 (milvus) / 20 (e2e) bounded queries;
+          # max_queries defaults to 24 for that stage. Explicit smaller limits fail.
+          # Optional stage policy (examples, not product SLOs):
+          # policy:
+          #   latency_ms:
+          #     milvus.append.quota: 250
+          #     wp.flush: 100
+          #     milvus.persistence.queue: 250
+          #     wp.compaction: 1000
+          #     milvus.consume.processing: 250
+  # Optional independent Jaeger source. Enable only with reachable Query/UI.
+  trace:
+    connections:
+      local:
+        enabled: false
+        settings:
+          endpoint: http://127.0.0.1:16686
+          deployment: milvus-stack
+          services:
+            proxy: proxy
+            streamingnode: streamingnode
+            segcore: segcore
+            mixture: other
+            milvus-woodpecker-0: wp_server
+            milvus-woodpecker-1: wp_server
+            milvus-woodpecker-2: wp_server
+          search:
+            service: proxy
+          # request_id_tag: request_id
+          # bearer_token_env: JAEGER_TOKEN
+          policy:
+            slow_span_ms: 1000
+  # Loki is independently usable; these are the Alloy labels, not metric labels.
+  loki:
+    connections:
+      local:
+        enabled: true
+        settings:
+          endpoint: http://127.0.0.1:3100
+          deployment: milvus-stack
+          match_labels:
+            cluster: wp-ops-v0146
+            namespace: milvus-stack
+          # bearer_token_env: LOKI_TOKEN
+          # tenant_env: LOKI_TENANT
+
+# Optional problem-oriented WAL WebUI. Existing CLI connections above are reused.
+# See diagnostics/wal/README.md for binding, policies and optional Agent setup.
+# workbench:
+#   targets:
+#     my-log:
+#       label: My WP log / mapped replica
+#       prometheus: local
+#       log_namespace: your-bucket/your-client-root
+#       log_id: "1001"
+#       node_id: your-mapped-wp-node
+#       wpcli: local
+#       log_name: your-log-name
+#       metadata:
+#         etcd: http://127.0.0.1:2379
+#         prefix: your-milvus-client-prefix/woodpecker
+#       # milvus: {prometheus: local, channel: your-explicit-channel}
+#   policy: {latency_ms: 100, min_observations: 100, sustain_ms: 180000, max_gap_ms: 30000}
+#   agent:
+#     enabled: false
+#     provider: codex
+#     auth: cli
+#     executable: codex
+#     timeout_ms: 120000
+#     # Reuse the login of the OS user running wpdiag.
+#     # API-key alternative: auth: api_key, api_key_env: CODEX_API_KEY
+#     # Claude: provider: claude, auth: api_key, executable: claude,
+#     #         api_key_env: ANTHROPIC_API_KEY

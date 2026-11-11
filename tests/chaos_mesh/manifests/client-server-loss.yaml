@@ -1,0 +1,16 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata: { name: client-server-loss, namespace: default }
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces: [default]
+    labelSelectors: { role: wp-client }
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces: [default]
+      labelSelectors: { app.kubernetes.io/instance: my-woodpecker, app.kubernetes.io/component: server }
+  loss: { loss: "10", correlation: "25" }

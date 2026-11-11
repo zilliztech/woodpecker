@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -72,10 +73,6 @@ func (r *RemoteResultChannel) SendResult(ctx context.Context, result *AppendResu
 		return fmt.Errorf("remote result channel %s is closed", r.identifier)
 	}
 	r.result = result
-	logger.Ctx(ctx).Debug("sent result to remote channel directly",
-		zap.String("identifier", r.identifier),
-		zap.Int64("syncedID", result.SyncedId),
-		zap.Error(result.Err))
 	return nil
 }
 
@@ -107,7 +104,7 @@ func (r *RemoteResultChannel) ReadResult(ctx context.Context) (*AppendResult, er
 		for {
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, readBudgetExhausted(ctx.Err())
 			case <-ticker.C:
 				r.mu.RLock()
 				if r.closed {
@@ -127,10 +124,39 @@ func (r *RemoteResultChannel) ReadResult(ctx context.Context) (*AppendResult, er
 	// If gRPC stream is available, read from it
 	r.mu.RLock()
 	ch := r.ch
+	cancel := r.cancel
 	r.mu.RUnlock()
+
+	// Recv observes only the stream's own context, which carries no deadline, so
+	// the caller's budget has to be enforced by cancelling that stream when it
+	// runs out - the same device AppendEntry already uses to bound the first
+	// response. Without this ctx is decorative on this path: a peer that accepts
+	// the entry and then goes silent blocks the read for as long as the
+	// connection survives.
+	budgetExpired := &atomic.Bool{}
+	if deadline, ok := ctx.Deadline(); ok && cancel != nil {
+		budgetTimer := time.AfterFunc(time.Until(deadline), func() {
+			budgetExpired.Store(true)
+			cancel()
+		})
+		defer budgetTimer.Stop()
+	}
 
 	resultResponse, readErr := ch.Recv()
 	if readErr != nil {
+		if budgetExpired.Load() {
+			// The read ran out of its own budget. Recv reports that as a bare gRPC
+			// status, which nothing downstream can classify: errors.Is against
+			// context.DeadlineExceeded does not match it, and werr.IsRetryableErr
+			// extracts a woodpeckerError and so returns false - so the caller would
+			// treat a timeout as a terminal failure and spend none of its retries
+			// on it. Report the timeout as what it is, and keep the transport
+			// detail in the log.
+			logger.Ctx(ctx).Warn("append result read exceeded its budget",
+				zap.String("identifier", r.identifier),
+				zap.Error(readErr))
+			return nil, readBudgetExhausted(context.DeadlineExceeded)
+		}
 		logger.Ctx(ctx).Warn("failed to read result from remote channel",
 			zap.String("identifier", r.identifier),
 			zap.Error(readErr))
@@ -161,7 +187,6 @@ func (r *RemoteResultChannel) Close(ctx context.Context) error {
 		// Cancel the stream context first
 		if r.cancel != nil {
 			r.cancel()
-			logger.Ctx(ctx).Debug("cancelled remote result channel context", zap.String("identifier", r.identifier))
 		}
 
 		// Then close the stream
@@ -169,12 +194,25 @@ func (r *RemoteResultChannel) Close(ctx context.Context) error {
 			closeErr := r.ch.CloseSend()
 			if closeErr != nil {
 				logger.Ctx(ctx).Warn("closed remote result channel failed", zap.String("identifier", r.identifier), zap.Error(closeErr))
-			} else {
-				logger.Ctx(ctx).Debug("closed remote result channel", zap.String("identifier", r.identifier))
 			}
 		}
 	}
 	return nil
+}
+
+// String renders the channel without exposing its fields to reflection.
+//
+// This type is mutable and mutex-guarded, so anything that renders it by walking
+// its fields - fmt's default struct formatting, and through it testify's
+// argument diffing - reads `closed` and `ch` with no lock and races a concurrent
+// Close. A result channel is handed to LogStoreClient.AppendEntry and is
+// therefore held, and printed, by code this package does not control, so
+// controlling the rendering here is what makes that safe.
+func (r *RemoteResultChannel) String() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return fmt.Sprintf("RemoteResultChannel{identifier:%s closed:%v streamed:%v}",
+		r.identifier, r.closed, r.ch != nil)
 }
 
 func (r *RemoteResultChannel) IsClosed() bool {

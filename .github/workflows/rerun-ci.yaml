@@ -1,0 +1,110 @@
+name: Rerun Failed CI
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  rerun:
+    name: Rerun Failed Checks
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/rerun')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Rerun workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A ${{ }} expression is substituted into the script before bash parses
+          # it, so anything interpolated straight into `run:` is executed as shell
+          # source. A comment body is written by whoever comments -- it has to
+          # arrive as an environment variable, which bash reads as data. Only the
+          # first word of it is ever a command; the rest is prose.
+          # (issue.number and github.repository below are supplied by GitHub, not
+          # by the commenter, so they are not attacker-controlled.)
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          PR=${{ github.event.issue.number }}
+          REPO=${{ github.repository }}
+          COMMENT="$COMMENT_BODY"
+
+          # Map comment keywords to workflow file names
+          declare -A WORKFLOW_MAP
+          WORKFLOW_MAP["/rerun-lint"]="code-checker.yaml"
+          WORKFLOW_MAP["/rerun-mod-tidy"]="code-checker.yaml"
+          WORKFLOW_MAP["/rerun-unit-test"]="unit-test.yaml"
+          WORKFLOW_MAP["/rerun-wpcli"]="wpcli-ci.yaml"
+          WORKFLOW_MAP["/rerun-diagnostics"]="diagnostics-ci.yaml"
+          WORKFLOW_MAP["/rerun-e2e-local"]="integration-test-e2e-local.yaml"
+          WORKFLOW_MAP["/rerun-e2e-objectstorage"]="integration-test-e2e-objectstorage.yaml"
+          WORKFLOW_MAP["/rerun-embed-minio-without-conditionwrite"]="integration-test-embed-minio-without-conditionwrite.yaml"
+          WORKFLOW_MAP["/rerun-e2e-service"]="integration-test-e2e-service.yaml"
+          WORKFLOW_MAP["/rerun-e2e-service-corruption"]="integration-test-e2e-service-corruption.yaml"
+          WORKFLOW_MAP["/rerun-issue-commands"]="issue-commands-test.yaml"
+          WORKFLOW_MAP["/rerun-upgrade-local"]="integration-test-upgrade-local.yaml"
+          WORKFLOW_MAP["/rerun-upgrade-objectstorage"]="integration-test-upgrade-objectstorage.yaml"
+          WORKFLOW_MAP["/rerun-upgrade-service"]="integration-test-upgrade-service.yaml"
+          WORKFLOW_MAP["/rerun-component-test"]="integration-test-components.yaml"
+          WORKFLOW_MAP["/rerun-chaos"]="integration-test-chaos.yaml"
+          WORKFLOW_MAP["/rerun-service-stability-process"]="integration-test-service-stability-process.yaml"
+          WORKFLOW_MAP["/rerun-service-stability-docker"]="integration-test-service-stability-docker.yaml"
+          WORKFLOW_MAP["/rerun-operator"]="operator-test.yaml"
+
+          HEAD_SHA=$(gh pr view $PR --repo $REPO --json headRefOid -q '.headRefOid')
+
+          # Extract the first word as the command
+          CMD=$(echo "$COMMENT" | awk '{print $1}')
+
+          if [ "$CMD" = "/rerun" ]; then
+            # Rerun all failed workflows
+            FAILED_RUNS=$(gh api "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}&status=failure" \
+              --jq '.workflow_runs[].id')
+
+            if [ -z "$FAILED_RUNS" ]; then
+              gh pr comment $PR --repo $REPO --body "No failed workflow runs found for the latest commit."
+              exit 0
+            fi
+
+            COUNT=0
+            for run_id in $FAILED_RUNS; do
+              gh api "repos/${REPO}/actions/runs/${run_id}/rerun-failed-jobs" -X POST || true
+              COUNT=$((COUNT + 1))
+            done
+
+            gh pr comment $PR --repo $REPO --body "Rerunning $COUNT failed workflow(s). Check the [Actions tab](https://github.com/${REPO}/actions) for progress."
+
+          elif [ "$CMD" = "/rerun-all" ]; then
+            # Internal command: rerun ALL workflows (not just failed), no comment posted
+            ALL_RUNS=$(gh api "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}" \
+              --jq '.workflow_runs[].id')
+
+            for run_id in $ALL_RUNS; do
+              gh api "repos/${REPO}/actions/runs/${run_id}/rerun" -X POST || true
+            done
+
+          elif [ -n "${WORKFLOW_MAP[$CMD]+x}" ]; then
+            # Rerun a specific workflow
+            WORKFLOW_FILE="${WORKFLOW_MAP[$CMD]}"
+
+            RUN_ID=$(gh api "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}" \
+              --jq ".workflow_runs[] | select(.path == \".github/workflows/${WORKFLOW_FILE}\") | .id" | head -1)
+
+            if [ -z "$RUN_ID" ]; then
+              gh pr comment $PR --repo $REPO --body "No workflow run found for \`${CMD}\` on the latest commit."
+              exit 0
+            fi
+
+            gh api "repos/${REPO}/actions/runs/${RUN_ID}/rerun" -X POST
+            gh pr comment $PR --repo $REPO --body "Rerunning **${CMD#/rerun-}** workflow. Check the [Actions tab](https://github.com/${REPO}/actions) for progress."
+
+          else
+            AVAILABLE=$(printf '%s\n' /rerun "${!WORKFLOW_MAP[@]}" | sort | paste -sd "," -)
+            gh pr comment "$PR" --repo "$REPO" --body "Unknown command \`${CMD}\`. Available commands: ${AVAILABLE}."
+          fi

@@ -1,0 +1,44 @@
+name: Service Stability (K8s)
+
+# Service stability suite, K8s tier (nightly): the process tier's cases against
+# a 5-pod WoodpeckerCluster on minikube, with pods deleted, killed, failed
+# (Chaos Mesh PodChaos) and partitioned (NetworkChaos) while a client pod runs
+# the workload. A replaced pod comes back with a new IP behind the same name.
+# The stall budget is reported, not enforced, until nightly baselines exist.
+
+on:
+  workflow_call:
+  workflow_dispatch:        # manual only; deliberately NO pull_request trigger -> never PR-gating
+
+concurrency:
+  group: nightly-service-stability-k8s-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  Service-Stability-K8s:
+    name: Service Stability (K8s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25", cache: true }
+      - name: Install minikube, helm
+        run: |
+          curl -Lo minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+          sudo install minikube /usr/local/bin/
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          kubectl version --client
+      - name: Run service stability suite (K8s tier)
+        env:
+          MK_CPUS: "4"      # hosted runners have 4 vCPU
+          WP_STABILITY_LATENCY: report
+        run: ./tests/k8s/stability/run_service_stability.sh
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-stability-k8s-artifacts
+          path: tests/k8s/stability/artifacts/
+          retention-days: 7
+          if-no-files-found: ignore

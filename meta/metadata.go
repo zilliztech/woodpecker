@@ -19,6 +19,7 @@ package meta
 import (
 	"context"
 	"io"
+	"unicode/utf8"
 
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -39,12 +40,42 @@ type MetadataProvider interface {
 	CheckExists(ctx context.Context, logName string) (bool, error)
 	// ListLogs returns a list of all logs in the metadata provider.
 	ListLogs(ctx context.Context) ([]string, error)
+	// ListParkedLogIds returns the log ids of soft-deleted logs still parked under
+	// logs-deleted/. ListLogs does not cover them, and nothing else in the codebase reads
+	// that prefix, so this is the only way to learn which objects a parked record still
+	// accounts for before the record itself is dropped.
+	ListParkedLogIds(ctx context.Context) ([]int64, error)
 	// ListLogsWithPrefix returns a list of all logs in the metadata provider with a given prefix.
 	ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error)
 	// GetLogMeta returns the metadata for a specific log.
 	GetLogMeta(ctx context.Context, logName string) (*LogMeta, error)
 	// UpdateLogMeta updates the metadata for a specific log.
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error
+	// GetAllSkipRanges reads the record holding every log's declared skip ranges, with the revision
+	// it was read at. An absent record reads as an empty one rather than as an error: most clusters
+	// never have one, and a read that failed for the normal case is how a real signal gets ignored.
+	GetAllSkipRanges(ctx context.Context) (*AllSkipRanges, error)
+	// UpdateAllSkipRanges stores the record, refusing it if it moved since it was read. One key holds
+	// every log's ranges, so a blind write would drop whatever another operator added in between.
+	UpdateAllSkipRanges(ctx context.Context, ranges *AllSkipRanges) error
+	// RemoveAllSkipRanges drops the record under the same revision compare, for when the last range
+	// has been lifted and the cluster should look like one that never declared any.
+	RemoveAllSkipRanges(ctx context.Context, ranges *AllSkipRanges) error
+	// GetLogSkipRanges returns one log's ranges from the copy this provider holds, without waiting on
+	// etcd. A stalled reader consults it on every report tick, so it must cost nothing; the copy is
+	// refreshed in the background once it is older than woodpecker.client.skipRangeRefreshInterval.
+	GetLogSkipRanges(ctx context.Context, logID int64) *proto.LogSkipRanges
+	// ClearMeta removes all content metadata for this instance (logs, segments, quorums,
+	// node registrations, reader sessions, cleanup and compacted-mark records) and re-seeds
+	// the instance-level keys. clearLogIdGen decides whether the log id counter restarts;
+	// keeping it is what makes a reused instance safe against object-storage residue.
+	ClearMeta(ctx context.Context, clearLogIdGen bool) error
+	// DeleteLogMetadata removes a log's active metadata. When force is true the
+	// log meta, its segments, and its orphan reader/cleanup keys are hard-deleted.
+	// When force is false the log meta and its segments are first copied to the
+	// logs-deleted/<name>-<ts> namespace (for recovery) and then removed. Either
+	// way the name is freed immediately and the call is idempotent.
+	DeleteLogMetadata(ctx context.Context, logName string, force bool) error
 	// AcquireLogWriterLock acquires a lock for writing to a specific log.
 	// Returns a SessionLock that encapsulates the mutex and session, with validity tracking.
 	AcquireLogWriterLock(ctx context.Context, logName string) (*SessionLock, error)
@@ -54,11 +85,15 @@ type MetadataProvider interface {
 	CheckSessionLockAlive(ctx context.Context, sessionLock *SessionLock) (bool, error)
 
 	// StoreSegmentMetadata stores the metadata for a specific segment.
-	StoreSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error
+	// logId is used for metrics labeling. The new segment's state is read from segmentMeta.
+	StoreSegmentMetadata(ctx context.Context, logName string, logId int64, segmentMeta *SegmentMeta) error
 	// UpdateSegmentMetadata updates the metadata for a specific segment.
-	UpdateSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error
+	// logId is used for metrics labeling. oldState is the segment's state before this update;
+	// the new state is read from segmentMeta.
+	UpdateSegmentMetadata(ctx context.Context, logName string, logId int64, segmentMeta *SegmentMeta, oldState proto.SegmentState) error
 	// DeleteSegmentMetadata deletes the metadata for a specific segment.
-	DeleteSegmentMetadata(ctx context.Context, logName string, segmentId int64) error
+	// logId is used for metrics labeling. oldState is the segment's state before deletion.
+	DeleteSegmentMetadata(ctx context.Context, logName string, logId int64, segmentId int64, oldState proto.SegmentState) error
 	// GetSegmentMetadata returns the metadata for a specific segment.
 	GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*SegmentMeta, error)
 	// GetAllSegmentMetadata returns all segment metadata for a specific log.
@@ -71,16 +106,26 @@ type MetadataProvider interface {
 	// GetQuorumInfo returns the quorum information for a specific quorum.
 	GetQuorumInfo(ctx context.Context, quorumId int64) (*proto.QuorumInfo, error)
 
-	// CreateReaderTempInfo creates a new reader temporary information record.
-	CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, segmentId int64, entryId int64) error
+	// CreateReaderTempInfo creates a new reader temporary information record and
+	// returns the session that keeps it alive. The caller (the reader) owns the
+	// returned session for its whole lifetime and must retire it with
+	// DeleteReaderTempInfo on close.
+	CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, segmentId int64, entryId int64) (ReaderTempInfoSession, error)
 	// GetReaderTempInfo returns the temporary information for a specific reader
 	GetReaderTempInfo(ctx context.Context, logId int64, readerName string) (*proto.ReaderTempInfo, error)
 	// GetAllReaderTempInfoForLog returns all reader temporary information for a given log
 	GetAllReaderTempInfoForLog(ctx context.Context, logId int64) ([]*proto.ReaderTempInfo, error)
-	// UpdateReaderTempInfo updates the reader's recent read position
-	UpdateReaderTempInfo(ctx context.Context, logId int64, readerName string, recentReadSegmentId int64, recentReadEntryId int64) error
-	// DeleteReaderTempInfo deletes the temporary information for a reader when it closes
-	DeleteReaderTempInfo(ctx context.Context, logId int64, readerName string) error
+	// UpdateReaderTempInfo updates the recent read position of the reader owning
+	// the given session. A retired session is rejected: only a live reader may
+	// write (and, after a lease loss, recreate) its own temp info.
+	// UpdateReaderTempInfo publishes where a reader has read to. reportedAtMs is the caller's own
+	// clock reading for this report rather than one taken here, so a test can assert the exact
+	// value that lands in the record, and so the reader's view of when it last reported is the
+	// same number the record carries.
+	UpdateReaderTempInfo(ctx context.Context, session ReaderTempInfoSession, reportedAtMs int64, recentReadSegmentId int64, recentReadEntryId int64) error
+	// DeleteReaderTempInfo retires the session and deletes the temporary
+	// information for its reader. It is idempotent.
+	DeleteReaderTempInfo(ctx context.Context, session ReaderTempInfoSession) error
 
 	// CreateSegmentCleanupStatus creates a new segment cleanup status record
 	CreateSegmentCleanupStatus(ctx context.Context, status *proto.SegmentCleanupStatus) error
@@ -93,11 +138,36 @@ type MetadataProvider interface {
 	// ListSegmentCleanupStatus lists all cleanup statuses for a log
 	ListSegmentCleanupStatus(ctx context.Context, logId int64) ([]*proto.SegmentCleanupStatus, error)
 
+	// CreateSegmentCompactedNotifyStatus creates a new compacted-mark distribution status record.
+	// Returns the created record's etcd ModRevision for use as UpdateSegmentCompactedNotifyStatus's
+	// expectedRevision.
+	// (root/marking/<logId>/<segId> — the Sealed-phase sibling of the cleanup status).
+	CreateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus) (int64, error)
+	// UpdateSegmentCompactedNotifyStatus updates an existing compacted-mark distribution status,
+	// guarded by a compare-and-swap on the record's ModRevision: the write succeeds only if the
+	// record has not been modified since it was read at expectedRevision. A concurrent writer
+	// (e.g. "wp marking confirm" transitioning the record to NOTIFY_OPERATOR_CONFIRMED) makes
+	// the update fail with ErrMetadataRevisionConflict instead of being silently overwritten.
+	UpdateSegmentCompactedNotifyStatus(ctx context.Context, status *proto.SegmentCompactedNotifyStatus, expectedRevision int64) error
+	// GetSegmentCompactedNotifyStatus retrieves the compacted-mark distribution status for a
+	// segment along with its etcd ModRevision (0 when the record does not exist).
+	GetSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCompactedNotifyStatus, int64, error)
+	// DeleteSegmentCompactedNotifyStatus deletes the compacted-mark distribution status for a segment
+	DeleteSegmentCompactedNotifyStatus(ctx context.Context, logId, segmentId int64) error
+	// ListSegmentCompactedNotifyStatus lists all compacted-mark distribution statuses for a log
+	ListSegmentCompactedNotifyStatus(ctx context.Context, logId int64) ([]*proto.SegmentCompactedNotifyStatus, error)
+
 	// StoreOrGetConditionWriteResult attempts to store the condition write detection result.
 	// If the key doesn't exist, it stores the value and returns it.
 	// If the key already exists, it retrieves and returns the existing value.
 	// This ensures all nodes agree on the same condition write capability.
 	StoreOrGetConditionWriteResult(ctx context.Context, detected bool) (bool, error)
+
+	// StoreConditionWriteEnabled overwrites the cluster condition write result to enabled.
+	// This is used after strict enable-style capability verification succeeds: either explicit
+	// enable mode, or legacy auto mode with no persisted cluster decision. It is safe because
+	// callers verify support before writing, and the write is idempotent.
+	StoreConditionWriteEnabled(ctx context.Context) error
 
 	// GetConditionWriteResult retrieves the condition write detection result.
 	// Returns the stored value if the key exists.
@@ -105,10 +175,84 @@ type MetadataProvider interface {
 	GetConditionWriteResult(ctx context.Context) (bool, error)
 }
 
+// ReaderTempInfoSession is one open reader's registration of its temp info.
+//
+// It owns the lease keepalive that keeps the reader's metadata — and with it
+// the protection of truncated segments the reader still needs — alive in the
+// metadata store, independently of read progress. Its lifetime is exactly the
+// reader's: CreateReaderTempInfo hands it out, the reader holds it as a field
+// and passes it back on every UpdateReaderTempInfo, and DeleteReaderTempInfo
+// retires it when the reader closes. Passing a retired session back is
+// rejected rather than honoured, so a closed reader can never resurrect its
+// key with a live keepalive and pin the cleanup low-watermark forever.
+type ReaderTempInfoSession interface {
+	// LogId returns the log this reader reads from.
+	LogId() int64
+	// ReaderName returns the name of the reader owning this session.
+	ReaderName() string
+	// IsActive reports whether the session still holds its reader temp info.
+	IsActive() bool
+}
+
 // LogMeta is a wrapper of proto.LogMeta with revision.
 type LogMeta struct {
 	Metadata *proto.LogMeta
 	Revision int64
+}
+
+// AllSkipRanges is a wrapper of proto.AllSkipRanges with the revision it was read at,
+// so a writer can refuse to overwrite a record that moved under it.
+type AllSkipRanges struct {
+	Metadata *proto.AllSkipRanges
+	Revision int64
+}
+
+// For returns one log's ranges, or nil when it has none. Safe on a nil receiver, so the
+// caller never has to check whether any skip range exists at all.
+func (a *AllSkipRanges) For(logID int64) *proto.LogSkipRanges {
+	if a == nil {
+		return nil
+	}
+	return a.Metadata.GetByLogId()[logID]
+}
+
+// MaxSkipRangeReasonBytes and MaxAllSkipRangesBytes bound the one record that holds every log's skip
+// ranges. The bound is on the encoded size rather than on a count of ranges because reason is free
+// text, so a count gets the arithmetic wrong. The ceiling is a third of etcd's default 1.5MB request
+// limit, which also keeps the one thing a single record leaks -- an entry a deleted log left behind
+// -- bounded rather than unbounded.
+const (
+	MaxSkipRangeReasonBytes = 256
+	MaxAllSkipRangesBytes   = 512 * 1024
+)
+
+// SkipRangeCovering returns the range covering an entry, or nil when the entry is readable. Entry ids
+// restart at 0 in every segment, so a range means nothing without the segment it belongs to.
+//
+// The ranges within a segment are kept sorted and non-overlapping by whatever writes the record, but
+// this does not rely on that: scanning a handful answers the same however they are ordered. A record
+// written by an older tool, or edited by hand, must not make a reader pass over the wrong entries.
+func SkipRangeCovering(ranges *proto.LogSkipRanges, segmentID, entryID int64) *proto.SkipRange {
+	for _, r := range ranges.GetBySegmentId()[segmentID].GetRanges() {
+		if entryID >= r.GetFromEntryId() && entryID <= r.GetToEntryId() {
+			return r
+		}
+	}
+	return nil
+}
+
+// TruncateSkipRangeReason keeps a reason within the field's budget without cutting a character in
+// half. protobuf refuses to marshal a string field that is not valid UTF-8, so a cut by byte count
+// through a multi-byte character fails the write after an operator has already confirmed it.
+func TruncateSkipRangeReason(s string) string {
+	if len(s) <= MaxSkipRangeReasonBytes {
+		return s
+	}
+	cut := s[:MaxSkipRangeReasonBytes]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }
 
 // SegmentMeta is a wrapper of proto.SegmentMetadata with revision.

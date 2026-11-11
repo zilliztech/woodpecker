@@ -12,8 +12,11 @@
 package membership
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	ml "github.com/hashicorp/memberlist"
@@ -40,12 +43,19 @@ type ServerNode struct {
 	meta *proto.NodeMeta
 	// server cfg
 	serverConfig *ServerConfig
+	// load reporter lifecycle
+	loadCtx    context.Context
+	loadCancel context.CancelFunc
+	loadWG     sync.WaitGroup
+	sampler    LoadSampler
 }
 
 // ServerConfig Server configuration
 type ServerConfig struct {
 	// node info
 	NodeID        string
+	ClusterName   string
+	Region        string
 	ResourceGroup string
 	AZ            string
 	Tags          map[string]string
@@ -59,6 +69,14 @@ type ServerConfig struct {
 	ServicePort          int
 	AdvertiseServiceAddr string
 	AdvertiseServicePort int
+
+	// Load-aware selection (issue #114). LoadAwareEnabled is the master switch for
+	// both load reporting and load-aware selection.
+	LoadAwareEnabled   bool
+	LoadReportInterval time.Duration // how often this node samples & publishes its load
+	LoadTTL            time.Duration // load older than this is treated as unknown by selectors
+	MemSoftThreshold   float64       // memory ratio above which memory escalates load; default 0.85
+	EWMAAlpha          float64       // EWMA weight on newest sample; default 0.5
 }
 
 func NewServerNode(config *ServerConfig) (*ServerNode, error) {
@@ -77,17 +95,25 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		endpointPort = config.AdvertiseServicePort
 	}
 
+	tags := make(map[string]string, len(config.Tags))
+	for k, v := range config.Tags {
+		tags[k] = v
+	}
+
 	meta := &proto.NodeMeta{
 		NodeId:        config.NodeID,
 		ResourceGroup: config.ResourceGroup,
 		Az:            config.AZ,
 		Endpoint:      fmt.Sprintf("%s:%d", endpointAddr, endpointPort),
-		Tags:          config.Tags,
-		LastUpdate:    time.Now().UnixMilli(), // Convert to Unix timestamp in milliseconds
+		Tags:          tags,
+		LastUpdate:    time.Now().UnixMilli(),
 		Version:       NodeMetaVersion,
+		ClusterName:   config.ClusterName,
+		Region:        config.Region,
 	}
-	discovery := NewServiceDiscovery()
+	discovery := NewServiceDiscovery(WithLoadAware(config.LoadAwareEnabled, config.LoadTTL))
 	delegate := NewServerDelegate(meta)
+	delegate.discovery = discovery // ingest peer metas (load hint) via push/pull MergeRemoteState
 	eventDel := NewEventDelegate(discovery, RoleServer, fmt.Sprintf("%s:%d", endpointAddr, endpointPort))
 
 	mlConfig := ml.DefaultLocalConfig()
@@ -112,20 +138,40 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	mlConfig.GossipInterval = 200 * time.Millisecond // gossip interval time
 	mlConfig.GossipNodes = 3                         // number of randomly selected chat nodes for one gossip round
 
+	// A server that dies without leaving and comes back at another address is
+	// readmitted as soon as its old entry is declared dead (#395), and that
+	// entry is declared dead within suspicionMaxTimeoutMult suspicion timeouts
+	// even when no other peer confirms the suspicion.
+	mlConfig.DeadNodeReclaimTime = deadNodeReclaimTime
+	mlConfig.SuspicionMaxTimeoutMult = suspicionMaxTimeoutMult
+	var list *ml.Memberlist
+	readmit := newReadmitter(func(addrs []string) (int, error) { return list.Join(addrs) })
+	mlConfig.Conflict = readmit
+	eventDel.onLeave = readmit.nodeLeft
+
 	list, err := ml.Create(mlConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create memberlist: %w", err)
 	}
-	discovery.UpdateServer(config.NodeID, meta) // cache for known node meta information list
+	delegate.AttachMemberlist(list)                                // lets the load broadcast queue size its retransmits by cluster size
+	discovery.UpdateServer(config.NodeID, delegate.SnapshotMeta()) // store a snapshot, not the live meta pointer
 
-	return &ServerNode{
+	loadCtx, loadCancel := context.WithCancel(context.Background())
+	node := &ServerNode{
 		memberlist:   list,
 		delegate:     delegate,
 		eventDel:     eventDel,
 		discovery:    discovery,
 		meta:         meta,
 		serverConfig: config,
-	}, nil
+		loadCtx:      loadCtx,
+		loadCancel:   loadCancel,
+	}
+	if config.LoadAwareEnabled && config.LoadReportInterval > 0 {
+		node.sampler = NewSystemLoadSampler(config.MemSoftThreshold, config.EWMAAlpha)
+		node.startLoadReporter(config.LoadReportInterval)
+	}
+	return node, nil
 }
 
 func (n *ServerNode) Join(existing []string) error {
@@ -175,8 +221,102 @@ func (n *ServerNode) PrintStatus() {
 	}
 }
 
-func (n *ServerNode) Leave() error    { return n.memberlist.Leave(5 * time.Second) }
-func (n *ServerNode) Shutdown() error { return n.memberlist.Shutdown() }
+// startLoadReporter periodically samples local load, publishes it into the
+// gossip meta, and refreshes the local discovery copy so this node's own
+// load is visible to its own selections too.
+func (n *ServerNode) startLoadReporter(interval time.Duration) {
+	n.loadWG.Add(1)
+	go func() {
+		defer n.loadWG.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		n.reportLoadOnce()
+		for {
+			select {
+			case <-n.loadCtx.Done():
+				return
+			case <-ticker.C:
+				n.reportLoadOnce()
+			}
+		}
+	}()
+}
+
+func (n *ServerNode) reportLoadOnce() {
+	if n.sampler == nil {
+		return
+	}
+	// Stamp the fresh load onto our own meta, then keep our own discovery copy
+	// current for local selections. Store a snapshot, not the live meta pointer,
+	// so the reporter's writes don't race with selectors.
+	n.publishLoad()
+	snap := n.delegate.SnapshotMeta()
+	n.discovery.UpdateServer(snap.GetNodeId(), snap)
+	n.announceRuntimeInfo(n.collectRuntimeInfo(snap))
+}
+
+// collectRuntimeInfo assembles this node's runtime snapshot. Everything in it
+// comes from one sampling pass, which is why NodeRuntimeInfo carries a single
+// updated_at. Further runtime signals belong here.
+func (n *ServerNode) collectRuntimeInfo(snap *proto.NodeMeta) *proto.NodeRuntimeInfo {
+	return &proto.NodeRuntimeInfo{
+		NodeId:     snap.GetNodeId(),
+		UpdatedAt:  snap.GetLoadUpdatedAt(),
+		LoadFactor: snap.GetLoadFactor(),
+	}
+}
+
+// publishLoad samples load and writes it into the gossip meta (no I/O).
+func (n *ServerNode) publishLoad() {
+	if n.sampler == nil {
+		return
+	}
+	n.delegate.SetLoadFactor(n.sampler.Sample())
+}
+
+// announceRuntimeInfo puts the freshly sampled snapshot on memberlist's
+// user-level broadcast channel, where it spreads to the whole cluster and lands
+// in each peer's discovery via ServerDelegate.NotifyMsg (issue #271).
+//
+// Publishing above is purely local. The only other path that carries the value
+// off this node is push/pull's user state (LocalState/MergeRemoteState), which
+// sends just this node's own meta to ONE randomly chosen peer per
+// PushPullInterval — a pairwise channel, not a gossip one. The expected wait for
+// any specific peer therefore grows with cluster size (~PushPullInterval*(N-1)/2)
+// while loadTTL stays fixed, so beyond a handful of nodes most peers hold an
+// expired reading and score this node at the neutral `unknownLoad` placeholder.
+//
+// The obvious way to reach everyone — memberlist.UpdateNode(), which republishes
+// NodeMeta as an alive message — is the wrong tool here. Runtime signals move
+// every report interval, and UpdateNode bumps this node's incarnation and makes
+// every peer rewrite its node-table entry, so a routine sample would look like
+// an identity change to the whole cluster. It also blocks the reporter goroutine
+// waiting for the broadcast, and it writes fields that Members() readers observe
+// without a lock — which is exactly the data race this replaced.
+//
+// Queuing here is non-blocking. The message goes out on the next gossip round
+// and is retransmitted for a few more, so loadReportInterval stays the announce
+// cadence and loadTTL keeps its meaning: with the shipped 10s/30s pair a peer
+// must miss three consecutive announces before treating this node's load as
+// unknown.
+func (n *ServerNode) announceRuntimeInfo(info *proto.NodeRuntimeInfo) {
+	n.delegate.BroadcastRuntimeInfo(info)
+}
+
+func (n *ServerNode) Leave() error {
+	if n.loadCancel != nil {
+		n.loadCancel()
+	}
+	return n.memberlist.Leave(5 * time.Second)
+}
+
+func (n *ServerNode) Shutdown() error {
+	if n.loadCancel != nil {
+		n.loadCancel()
+	}
+	n.loadWG.Wait()
+	return n.memberlist.Shutdown()
+}
 
 func (n *ServerNode) GetMemberlist() *ml.Memberlist {
 	return n.memberlist
@@ -207,4 +347,52 @@ func (n *ServerNode) GetMemberlistStatus() string {
 		}
 	}
 	return result
+}
+
+// GetMemberlistJSON returns the memberlist as a JSON blob matching the
+// schema consumed by the wp CLI's client/memberlist.go. This is the
+// structured counterpart of GetMemberlistStatus (which returns text).
+func (n *ServerNode) GetMemberlistJSON() []byte {
+	type memberJSON struct {
+		ID          string            `json:"id"`
+		GossipAddr  string            `json:"gossip_addr"`
+		ServiceAddr string            `json:"service_addr"`
+		ClusterName string            `json:"cluster_name"`
+		Region      string            `json:"region"`
+		AZ          string            `json:"az"`
+		RG          string            `json:"rg"`
+		State       int               `json:"state"`
+		Incarnation uint32            `json:"incarnation"`
+		LastSeenMS  int64             `json:"last_seen_ms"`
+		Tags        map[string]string `json:"tags,omitempty"`
+	}
+	type listJSON struct {
+		Members []memberJSON `json:"members"`
+	}
+
+	members := n.memberlist.Members()
+	allMeta := n.discovery.GetAllServers()
+	out := listJSON{Members: make([]memberJSON, 0, len(members))}
+	for _, m := range members {
+		mj := memberJSON{
+			ID:         m.Name,
+			GossipAddr: fmt.Sprintf("%s:%d", m.Addr.String(), m.Port),
+			State:      int(m.State),
+			LastSeenMS: time.Now().UnixMilli(),
+		}
+		if meta, ok := allMeta[m.Name]; ok {
+			mj.ClusterName = meta.ClusterName
+			mj.Region = meta.Region
+			mj.AZ = meta.Az
+			mj.RG = meta.ResourceGroup
+			mj.ServiceAddr = meta.Endpoint
+			mj.Tags = meta.Tags
+		}
+		out.Members = append(out.Members, mj)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return []byte(`{"members":[]}`)
+	}
+	return b
 }

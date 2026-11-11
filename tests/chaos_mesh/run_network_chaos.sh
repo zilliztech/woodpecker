@@ -1,0 +1,161 @@
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Chaos knobs (override lib.sh defaults) — spec Layer 1 + Correction #8.
+export CLUSTER_NAME="wp-chaos"
+export CR_NAME="my-woodpecker"
+export NAMESPACE="default"
+export REPLICAS=3
+# Empty MK_RUNTIME leaves the choice to minikube's default, which is NOT a fixed value: it was
+# docker up to minikube v1.38.1 and is containerd from v1.39.0 on. Chaos Mesh supports both, and
+# install_chaos_mesh() reads the node's actual runtime rather than assuming one, so either is fine.
+# Pin MK_RUNTIME=docker on constrained/offline hosts: the containerd runtime forces a kindnet CNI
+# whose image (kindest/kindnetd:<ver>) frequently cannot be pulled there, leaving the cluster with
+# no pod networking ("failed to find network info for sandbox").
+export MK_CPUS="${MK_CPUS:-6}" MK_MEMORY="${MK_MEMORY:-8192}" MK_RUNTIME="${MK_RUNTIME:-}"
+export WP_IMG="zilliztech/woodpecker:v0.1.26"
+export CLIENT_POD="wp-client-test"
+
+source "$PROJECT_ROOT/deployments/operator/test/lib.sh"
+source "$SCRIPT_DIR/chaos_mesh_lib.sh"
+
+WORKLOAD_BIN_IN_POD=/root/workload.test
+RECORD_FILE=/tmp/wp-chaos-acked.jsonl
+
+# External dependency images (keep etcd/minio in sync with deployments/operator/test/lib.sh).
+ETCD_IMG="quay.io/coreos/etcd:v3.5.18"
+MINIO_IMG="milvusdb/minio:RELEASE.2024-12-18T13-15-44Z"
+
+bringup() {
+  wp_minikube_start
+  # Single-node minikube has no zone label, but the operator's StatefulSet sets a topology
+  # spread constraint (topologyKey=topology.kubernetes.io/zone, whenUnsatisfiable=DoNotSchedule),
+  # so server pods stay Pending ("didn't match pod topology spread constraints"). Give the node a
+  # synthetic zone/region so all replicas can schedule (we don't test physical AZ separation).
+  kubectl label node "$CLUSTER_NAME" topology.kubernetes.io/zone=zone-a topology.kubernetes.io/region=region-local --overwrite
+  preload_image "$ETCD_IMG"
+  preload_image "$MINIO_IMG"
+  wp_deploy_operator; wp_build_wp_image
+  wp_deploy_deps; wp_create_cr; wp_wait_healthy
+  wp_launch_client_pod; wp_write_client_config "$REPLICAS"
+}
+
+# Build the workload test binary ON THE HOST (it has the Go module cache + a working proxy) and
+# copy the static linux/<arch> binary into the pod. The pod can't reach the Go module proxy (the
+# same host-loopback-proxy limit that blocks registries), so an in-pod `go build` can't fetch deps.
+# Host arch == minikube-node arch (the node is a container on the host's Docker), so go env GOARCH
+# is correct for the node.
+push_workload() {
+  local bin=/tmp/workload.test
+  log "building workload test binary on host (GOOS=linux GOARCH=$(go env GOARCH) CGO_ENABLED=0)"
+  ( cd "$PROJECT_ROOT" && GOOS=linux GOARCH="$(go env GOARCH)" CGO_ENABLED=0 \
+      go test -c -o "$bin" ./tests/chaos_mesh/workload ) || fail "host build of workload test binary failed"
+  kubectl cp "$bin" "$CLIENT_POD:$WORKLOAD_BIN_IN_POD"
+  kubectl exec "$CLIENT_POD" -- chmod +x "$WORKLOAD_BIN_IN_POD"
+  log "workload binary delivered to $CLIENT_POD:$WORKLOAD_BIN_IN_POD"
+}
+
+# Spec Layer 2 / Risk #1: prove injection is NOT a silent no-op before trusting any result.
+injection_smoke_check() {
+  local ip; ip=$(kubectl get pod ${CR_NAME}-server-0 -o jsonpath='{.status.podIP}')
+  local probe="S=\$(date +%s%N); (exec 3<>/dev/tcp/$ip/18080) 2>/dev/null; echo \$(( (\$(date +%s%N)-S)/1000000 ))"
+  local before; before=$(kubectl exec "$CLIENT_POD" -- bash -c "$probe")
+  kubectl apply -f "$SCRIPT_DIR/manifests/client-server-delay.yaml"
+  kubectl wait --for=condition=AllInjected networkchaos/client-server-delay -n "$NAMESPACE" --timeout=60s \
+    || { kubectl describe networkchaos client-server-delay -n "$NAMESPACE"; fail "chaos never reached AllInjected"; }
+  local after; after=$(kubectl exec "$CLIENT_POD" -- bash -c "$probe")
+  kubectl delete -f "$SCRIPT_DIR/manifests/client-server-delay.yaml" --ignore-not-found
+  log "smoke-check connect ms: before=$before after=$after"
+  if [ "$after" -lt $(( before + 200 )) ]; then
+    kubectl logs -n chaos-mesh -l app.kubernetes.io/component=chaos-daemon --tail=200 || true
+    fail "INJECTION SMOKE-CHECK FAILED (before=${before}ms after=${after}ms) — likely runtime/socket mismatch; chaos is a silent no-op. Aborting before false-green."
+  fi
+  log "Injection smoke-check PASSED (${before}ms -> ${after}ms)"
+}
+
+run_phase() {  # $1 = phase ; $2 = optional extra workload flags (e.g. "-window 60")
+  # Run the prebuilt test binary (compiled flags take the -test. prefix; the workload's own
+  # flags -config-file/-phase/-record-file/-window do not).
+  kubectl exec -i "$CLIENT_POD" -- "$WORKLOAD_BIN_IN_POD" \
+    -test.v -test.count=1 -test.timeout=16m -test.run=TestNetworkChaosWorkload \
+    -config-file /tmp/test-config.yaml -phase "$1" -record-file "$RECORD_FILE" ${2:-}
+}
+
+# I6: total server container restarts (host-side; client pod is itself under chaos).
+# Prints the sum on stdout; returns non-zero (and reports the raw kubectl output) when the
+# counts can't be read, so callers can tell "no restarts" apart from "couldn't measure".
+#
+# This used to pipe a '0+0+0'-style expression into bc. bc rejected its input, restart_sum
+# printed nothing, and `[ "" -eq "$rc0" ]` then failed as a bash error — which the caller
+# read as a restart violation. Nightly was red 60/60 on a fault that never happened (#255).
+restart_sum() {
+  local raw
+  raw=$(kubectl get pod -l app.kubernetes.io/instance=${CR_NAME},app.kubernetes.io/component=server \
+          -o jsonpath='{range .items[*]}{.status.containerStatuses[*].restartCount}{"\n"}{end}') \
+    || { warn "restart_sum: kubectl failed" >&2; return 1; }
+  # One line per pod. Demand exactly $REPLICAS lines, each holding only integers, so a
+  # missing pod or an unreadable status surfaces instead of silently undercounting.
+  awk -v want="$REPLICAS" '
+    { if (NF == 0) { bad = 1; next }
+      for (i = 1; i <= NF; i++) { if ($i ~ /^[0-9]+$/) s += $i; else bad = 1 }
+      n++ }
+    END { if (bad || n != want) exit 1; print s + 0 }' <<<"$raw" \
+    || { warn "restart_sum: unreadable counts for $REPLICAS pods, raw kubectl output: [$raw]" >&2; return 1; }
+}
+
+collect_artifacts() {  # mirror integration-test-chaos.yaml log collection
+  local scen="$1" out="$SCRIPT_DIR/artifacts/$1"; mkdir -p "$out"
+  for i in $(seq 0 $((REPLICAS-1))); do kubectl logs "${CR_NAME}-server-$i" >"$out/server-$i.log" 2>&1 || true; done
+  kubectl get networkchaos -A -o yaml            >"$out/networkchaos.yaml" 2>&1 || true
+  kubectl get events -A --sort-by=.lastTimestamp >"$out/events.txt" 2>&1 || true
+  kubectl get pods -o wide                        >"$out/pods.txt" 2>&1 || true
+  kubectl logs etcd  >"$out/etcd.log"  2>&1 || true
+  kubectl logs minio >"$out/minio.log" 2>&1 || true
+  kubectl cp "$CLIENT_POD:$RECORD_FILE" "$out/acked.jsonl" 2>/dev/null || true
+  echo "restarts: $(restart_sum || echo unreadable)" >"$out/restartcounts.txt"
+}
+
+run_steady() {  # $1 = manifest basename
+  local m="$SCRIPT_DIR/manifests/$1.yaml" rc0
+  rc0=$(restart_sum) || { warn "SCENARIO $1 SKIPPED: no baseline restart count"; return 1; }
+  run_phase warmup || { collect_artifacts "$1"; return 1; }
+  kubectl apply -f "$m" || { collect_artifacts "$1"; return 1; }
+  kubectl wait --for=condition=AllInjected "networkchaos/$1" -n "$NAMESPACE" --timeout=60s \
+      || { collect_artifacts "$1"; kubectl delete -f "$m" --ignore-not-found; return 1; }
+  run_phase under-chaos || { collect_artifacts "$1"; kubectl delete -f "$m" --ignore-not-found; return 1; }
+  kubectl delete -f "$m" --ignore-not-found
+  run_phase recovery || { collect_artifacts "$1"; return 1; }
+  run_phase verify   || { collect_artifacts "$1"; return 1; }
+  local rc1; rc1=$(restart_sum) || { collect_artifacts "$1"; return 1; }
+  [ "$rc1" -eq "$rc0" ] || { collect_artifacts "$1"; warn "I6 VIOLATION: server restarted during $1 ($rc0 -> $rc1)"; return 1; }
+  log "SCENARIO $1 PASSED"
+}
+
+run_blip() {  # $1 = manifest basename (N3/N5)
+  local m="$SCRIPT_DIR/manifests/$1.yaml" rc0
+  rc0=$(restart_sum) || { warn "SCENARIO $1 SKIPPED: no baseline restart count"; return 1; }
+  run_phase warmup || { collect_artifacts "$1"; return 1; }
+  ( run_phase under-chaos "-window 60" ) & local wl=$!
+  for _ in $(seq 1 6); do kubectl apply -f "$m" || warn "blip apply failed for $1"; sleep 5; kubectl delete -f "$m" --ignore-not-found; sleep 5; done
+  wait "$wl" || { collect_artifacts "$1"; return 1; }
+  run_phase recovery && run_phase verify || { collect_artifacts "$1"; return 1; }
+  local rc1; rc1=$(restart_sum) || { collect_artifacts "$1"; return 1; }
+  [ "$rc1" -eq "$rc0" ] || { collect_artifacts "$1"; warn "I6 VIOLATION: server restarted during $1 ($rc0 -> $rc1)"; return 1; }
+  log "SCENARIO $1 PASSED"
+}
+
+main() {
+  bringup; install_chaos_mesh; injection_smoke_check; push_workload
+  local rc=0
+  for s in server-minio-delay server-minio-loss server-etcd-delay client-server-delay client-server-loss; do
+    run_steady "$s" || rc=1
+  done
+  for s in server-minio-blip server-etcd-blip; do run_blip "$s" || rc=1; done
+  [ "$rc" -eq 0 ] && log "ALL SCENARIOS PASSED" || warn "SOME SCENARIOS FAILED (see artifacts/)"
+  exit $rc
+}
+
+trap 'rc=$?; [ -n "${KEEP:-}" ] || { helm uninstall chaos-mesh -n chaos-mesh 2>/dev/null || true; minikube delete -p "$CLUSTER_NAME" 2>/dev/null || true; }; exit $rc' EXIT
+main "$@"

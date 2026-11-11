@@ -1,0 +1,5 @@
+apiVersion: v2
+name: full-stack-support
+description: Local persistent dependencies and dashboard provisioning for Milvus + Woodpecker
+type: application
+version: 0.1.0

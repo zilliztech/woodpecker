@@ -1,0 +1,111 @@
+version: "2"
+run:
+  go: "1.24"
+  modules-download-mode: readonly
+linters:
+  default: none
+  enable:
+    - durationcheck
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unconvert
+    - whitespace
+  settings:
+    gosec:
+      excludes:
+        - G102
+        - G108
+        - G114
+        - G115
+        - G404
+        - G118
+        - G602
+        - G706
+    govet:
+      disable:
+        - fieldalignment
+        - shadow
+      enable-all: true
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    staticcheck:
+      checks:
+        - all
+        - -ST*
+        - -QF*
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - gosec
+          - revive
+        path: _test\.go
+      - linters:
+          - staticcheck
+        text: 'SA1019:'
+    paths:
+      - .*\.pb\.go$
+      - .*_vtproto\.pb\.go$
+      - proto
+      - mocks
+      - tests/benchmark
+      - tests/docker
+      - tests/k8s
+      - tests/stability
+      - bin
+      - build
+      - deployments
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/zilliztech/woodpecker)
+    gofumpt:
+      module-path: github.com/zilliztech/woodpecker
+      extra-rules: false
+    goimports:
+      local-prefixes:
+        - github.com/zilliztech/woodpecker
+  exclusions:
+    generated: lax
+    paths:
+      - .*\.pb\.go$
+      - .*_vtproto\.pb\.go$
+      - proto
+      - mocks
+      - tests/benchmark
+      - tests/docker
+      - tests/k8s
+      - tests/stability
+      - bin
+      - build
+      - deployments
+      - third_party$
+      - builtin$
+      - examples$

@@ -1,0 +1,13 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata: { name: server-minio-blip, namespace: default }
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces: [default]
+    labelSelectors: { app.kubernetes.io/instance: my-woodpecker, app.kubernetes.io/component: server }
+  direction: both
+  target:
+    mode: all
+    selector: { namespaces: [default], labelSelectors: { app: minio } }

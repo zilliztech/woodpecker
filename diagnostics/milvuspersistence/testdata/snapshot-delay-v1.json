@@ -1,0 +1,505 @@
+{
+  "assessment_profile": "milvus.persistence",
+  "assessment_version": 1,
+  "description": "One selected finding with its original source findings and executed observations, projected from a complete fixture report",
+  "finding": {
+    "id": "fixture-persistence-source:q11:90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c:milvus-persistence",
+    "rule_id": "milvus.persistence.step.milvus.persistence.persisted",
+    "rule_version": 1,
+    "flow": "write",
+    "stage": "persistence",
+    "target": {
+      "deployment": "fixture",
+      "instance": "streamingnode:9091",
+      "node_id": "streamingnode",
+      "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+    },
+    "outcome": "suspected_recovery_snapshot_persistence_delay",
+    "severity": "warning",
+    "evidence_strength": "suspected",
+    "summary": "4 Persisted frontier / checkpoint: milvus_wal_recovery_persisted_time_tick: first=980.000 last=980.000 peak=980.000 unix_seconds; no causal inference [component=\"streamingnode\", channel_name=\"channel-a\", term=\"1\"]",
+    "supporting_observations": [
+      "fixture-persistence-source:q11",
+      "fixture-persistence-source:q10",
+      "fixture-persistence-source:q12"
+    ],
+    "contradicting_observations": [],
+    "unknown": [
+      "sampled_exporter_state_not_request_specific",
+      "events_between_scrapes_unobservable",
+      "independent_metric_populations_not_one_request",
+      "overlapping_timers_do_not_add_or_subtract_quantiles",
+      "client_latency_and_crash_durability_not_measured",
+      "snapshot_frontier_not_user_acknowledgement_or_payload_verification",
+      "idle_or_snapshot_cadence_can_explain_unchanged_frontier",
+      "snapshot_duration_and_configured_cadence_not_established",
+      "not_a_stall_or_storage_failure_verdict"
+    ],
+    "next_read_only_checks": [
+      "Check expected data, snapshot cadence and channel/term ownership. Flusher-seen and in-memory markers are not durable checkpoints; idle age and missing lazy metrics are not stalls"
+    ],
+    "derived_from_findings": [
+      "fixture-persistence-source:q11:90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+      "fixture-persistence-source:q10:90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+      "fixture-persistence-source:q12:90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c"
+    ]
+  },
+  "observations": [
+    {
+      "id": "fixture-persistence-source:q10",
+      "source_id": "prometheus:milvus.persistence.memory",
+      "kind": "prometheus_matrix",
+      "target": {
+        "deployment": "fixture"
+      },
+      "started_at": "1970-01-01T00:33:20Z",
+      "finished_at": "1970-01-01T00:33:21Z",
+      "status": "observed",
+      "data": {
+        "signal": "milvus.persistence.memory",
+        "from": "1970-01-01T00:16:40Z",
+        "to": "1970-01-01T00:17:40Z",
+        "unit": "unix_seconds",
+        "series": [
+          {
+            "series_id": "28c619cda7b53381835be0de4e8fecd0d31ee04c51cd34b1d161ae1f81121b94",
+            "labels": {
+              "__name__": "milvus_wal_recovery_in_mem_time_tick",
+              "channel_name": "channel-a",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "node_id": "streamingnode",
+              "term": "1"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 990
+              },
+              {
+                "time_ms": 1015000,
+                "value": 992
+              },
+              {
+                "time_ms": 1025000,
+                "value": 994
+              },
+              {
+                "time_ms": 1035000,
+                "value": 996
+              },
+              {
+                "time_ms": 1045000,
+                "value": 998
+              },
+              {
+                "time_ms": 1055000,
+                "value": 1000
+              }
+            ]
+          }
+        ],
+        "notes": [],
+        "facts": [
+          {
+            "population_id": "90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+            "labels": {
+              "__name__": "milvus_wal_recovery_in_mem_time_tick",
+              "channel_name": "channel-a",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "node_id": "streamingnode",
+              "term": "1"
+            },
+            "observed_from_ms": 1005000,
+            "observed_to_ms": 1055000,
+            "observed_completions": 0,
+            "completions_per_second": 0,
+            "exporter_identity": "90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+            "gauge": {
+              "retained_samples": [
+                {
+                  "time_ms": 1005000,
+                  "value": 990
+                },
+                {
+                  "time_ms": 1015000,
+                  "value": 992
+                },
+                {
+                  "time_ms": 1025000,
+                  "value": 994
+                },
+                {
+                  "time_ms": 1035000,
+                  "value": 996
+                },
+                {
+                  "time_ms": 1045000,
+                  "value": 998
+                },
+                {
+                  "time_ms": 1055000,
+                  "value": 1000
+                }
+              ],
+              "first": 990,
+              "last": 1000,
+              "peak": 1000,
+              "minimum": 990,
+              "last_two_zero": false
+            }
+          }
+        ]
+      },
+      "query": {
+        "language": "promql",
+        "expression": "{__name__=\"milvus_wal_recovery_in_mem_time_tick\",cluster=\"test\",component=\"streamingnode\"}[60000ms] @ 1060.000",
+        "executed": true
+      }
+    },
+    {
+      "id": "fixture-persistence-source:q11",
+      "source_id": "prometheus:milvus.persistence.persisted",
+      "kind": "prometheus_matrix",
+      "target": {
+        "deployment": "fixture"
+      },
+      "started_at": "1970-01-01T00:33:20Z",
+      "finished_at": "1970-01-01T00:33:21Z",
+      "status": "observed",
+      "data": {
+        "signal": "milvus.persistence.persisted",
+        "from": "1970-01-01T00:16:40Z",
+        "to": "1970-01-01T00:17:40Z",
+        "unit": "unix_seconds",
+        "series": [
+          {
+            "series_id": "4a3c42f9b10e800beee2e6dd8e799629ac1591b3a602e5dead52f1bdf18963ff",
+            "labels": {
+              "__name__": "milvus_wal_recovery_persisted_time_tick",
+              "channel_name": "channel-a",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "node_id": "streamingnode",
+              "term": "1"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 980
+              },
+              {
+                "time_ms": 1015000,
+                "value": 980
+              },
+              {
+                "time_ms": 1025000,
+                "value": 980
+              },
+              {
+                "time_ms": 1035000,
+                "value": 980
+              },
+              {
+                "time_ms": 1045000,
+                "value": 980
+              },
+              {
+                "time_ms": 1055000,
+                "value": 980
+              }
+            ]
+          }
+        ],
+        "notes": [],
+        "facts": [
+          {
+            "population_id": "90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+            "labels": {
+              "__name__": "milvus_wal_recovery_persisted_time_tick",
+              "channel_name": "channel-a",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "node_id": "streamingnode",
+              "term": "1"
+            },
+            "observed_from_ms": 1005000,
+            "observed_to_ms": 1055000,
+            "observed_completions": 0,
+            "completions_per_second": 0,
+            "exporter_identity": "90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+            "gauge": {
+              "retained_samples": [
+                {
+                  "time_ms": 1005000,
+                  "value": 980
+                },
+                {
+                  "time_ms": 1015000,
+                  "value": 980
+                },
+                {
+                  "time_ms": 1025000,
+                  "value": 980
+                },
+                {
+                  "time_ms": 1035000,
+                  "value": 980
+                },
+                {
+                  "time_ms": 1045000,
+                  "value": 980
+                },
+                {
+                  "time_ms": 1055000,
+                  "value": 980
+                }
+              ],
+              "first": 980,
+              "last": 980,
+              "peak": 980,
+              "minimum": 980,
+              "last_two_zero": false
+            }
+          }
+        ]
+      },
+      "query": {
+        "language": "promql",
+        "expression": "{__name__=\"milvus_wal_recovery_persisted_time_tick\",cluster=\"test\",component=\"streamingnode\"}[60000ms] @ 1060.000",
+        "executed": true
+      }
+    },
+    {
+      "id": "fixture-persistence-source:q12",
+      "source_id": "prometheus:milvus.persistence.busy",
+      "kind": "prometheus_matrix",
+      "target": {
+        "deployment": "fixture"
+      },
+      "started_at": "1970-01-01T00:33:20Z",
+      "finished_at": "1970-01-01T00:33:21Z",
+      "status": "observed",
+      "data": {
+        "signal": "milvus.persistence.busy",
+        "from": "1970-01-01T00:16:40Z",
+        "to": "1970-01-01T00:17:40Z",
+        "unit": "state_indicator",
+        "series": [
+          {
+            "series_id": "d2d79a2c50c5454bc52babdeeeb8d355b41f82d4561bed585d6e2b126936aa04",
+            "labels": {
+              "__name__": "milvus_wal_recovery_is_on_persisting",
+              "channel_name": "channel-a",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "node_id": "streamingnode",
+              "term": "1"
+            },
+            "samples": [
+              {
+                "time_ms": 1005000,
+                "value": 1
+              },
+              {
+                "time_ms": 1015000,
+                "value": 1
+              },
+              {
+                "time_ms": 1025000,
+                "value": 1
+              },
+              {
+                "time_ms": 1035000,
+                "value": 1
+              },
+              {
+                "time_ms": 1045000,
+                "value": 1
+              },
+              {
+                "time_ms": 1055000,
+                "value": 1
+              }
+            ]
+          }
+        ],
+        "notes": [],
+        "facts": [
+          {
+            "population_id": "90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+            "labels": {
+              "__name__": "milvus_wal_recovery_is_on_persisting",
+              "channel_name": "channel-a",
+              "cluster": "test",
+              "component": "streamingnode",
+              "instance": "streamingnode:9091",
+              "job": "streamingnode",
+              "node_id": "streamingnode",
+              "term": "1"
+            },
+            "observed_from_ms": 1005000,
+            "observed_to_ms": 1055000,
+            "observed_completions": 0,
+            "completions_per_second": 0,
+            "exporter_identity": "90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+            "gauge": {
+              "retained_samples": [
+                {
+                  "time_ms": 1005000,
+                  "value": 1
+                },
+                {
+                  "time_ms": 1015000,
+                  "value": 1
+                },
+                {
+                  "time_ms": 1025000,
+                  "value": 1
+                },
+                {
+                  "time_ms": 1035000,
+                  "value": 1
+                },
+                {
+                  "time_ms": 1045000,
+                  "value": 1
+                },
+                {
+                  "time_ms": 1055000,
+                  "value": 1
+                }
+              ],
+              "first": 1,
+              "last": 1,
+              "peak": 1,
+              "minimum": 1,
+              "last_two_zero": false
+            }
+          }
+        ]
+      },
+      "query": {
+        "language": "promql",
+        "expression": "{__name__=\"milvus_wal_recovery_is_on_persisting\",cluster=\"test\",component=\"streamingnode\"}[60000ms] @ 1060.000",
+        "executed": true
+      }
+    }
+  ],
+  "schema_version": "wpdiag.persistence.example/v1",
+  "selection": {
+    "sources": [
+      "prometheus"
+    ],
+    "scope": "milvus",
+    "flow": "write",
+    "stage": "persistence",
+    "profile": "milvus.persistence.steps.metrics",
+    "target": {},
+    "window": {
+      "mode": "historical",
+      "from": "1970-01-01T00:16:40Z",
+      "to": "1970-01-01T00:17:40Z"
+    }
+  },
+  "source_findings": [
+    {
+      "id": "fixture-persistence-source:q10:90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+      "rule_id": "milvus.persistence.memory.gauge",
+      "rule_version": 1,
+      "flow": "write",
+      "stage": "persistence",
+      "target": {
+        "deployment": "fixture",
+        "instance": "streamingnode:9091",
+        "node_id": "streamingnode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "gauge_observations_only",
+      "severity": "unknown",
+      "evidence_strength": "inconclusive",
+      "summary": "milvus_wal_recovery_in_mem_time_tick: first=990.000 last=1000.000 peak=1000.000 unix_seconds; no causal inference",
+      "supporting_observations": [
+        "fixture-persistence-source:q10"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "sampled_exporter_state_not_request_specific",
+        "events_between_scrapes_unobservable"
+      ],
+      "next_read_only_checks": [
+        "Compare the exact exported population and observation window; do not add/subtract unrelated stage quantiles",
+        "Inspect workload demand and the relevant E2E dashboard before assigning a cause"
+      ]
+    },
+    {
+      "id": "fixture-persistence-source:q11:90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+      "rule_id": "milvus.persistence.persisted.gauge",
+      "rule_version": 1,
+      "flow": "write",
+      "stage": "persistence",
+      "target": {
+        "deployment": "fixture",
+        "instance": "streamingnode:9091",
+        "node_id": "streamingnode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "gauge_observations_only",
+      "severity": "unknown",
+      "evidence_strength": "inconclusive",
+      "summary": "milvus_wal_recovery_persisted_time_tick: first=980.000 last=980.000 peak=980.000 unix_seconds; no causal inference",
+      "supporting_observations": [
+        "fixture-persistence-source:q11"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "sampled_exporter_state_not_request_specific",
+        "events_between_scrapes_unobservable"
+      ],
+      "next_read_only_checks": [
+        "Compare the exact exported population and observation window; do not add/subtract unrelated stage quantiles",
+        "Inspect workload demand and the relevant E2E dashboard before assigning a cause"
+      ]
+    },
+    {
+      "id": "fixture-persistence-source:q12:90765611a75de67a38faa2ca5e44a57aeb7fb92f026b76dc3835e35976b9fb1c",
+      "rule_id": "milvus.persistence.busy.gauge",
+      "rule_version": 1,
+      "flow": "write",
+      "stage": "persistence",
+      "target": {
+        "deployment": "fixture",
+        "instance": "streamingnode:9091",
+        "node_id": "streamingnode",
+        "tenant_association": "unresolved: exporter labels do not establish client metadata authority"
+      },
+      "outcome": "gauge_observations_only",
+      "severity": "unknown",
+      "evidence_strength": "inconclusive",
+      "summary": "milvus_wal_recovery_is_on_persisting: first=1.000 last=1.000 peak=1.000 state_indicator; no causal inference",
+      "supporting_observations": [
+        "fixture-persistence-source:q12"
+      ],
+      "contradicting_observations": [],
+      "unknown": [
+        "sampled_exporter_state_not_request_specific",
+        "events_between_scrapes_unobservable"
+      ],
+      "next_read_only_checks": [
+        "Compare the exact exported population and observation window; do not add/subtract unrelated stage quantiles",
+        "Inspect workload demand and the relevant E2E dashboard before assigning a cause"
+      ]
+    }
+  ]
+}

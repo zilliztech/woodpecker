@@ -18,6 +18,7 @@ package metrics
 
 import (
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -39,9 +40,14 @@ var NodeID = func() string {
 	return "embed"
 }()
 
-// BuildMetricsNamespace returns the metrics namespace string from bucket name and root path.
-func BuildMetricsNamespace(bucketName, rootPath string) string {
+// BuildLogNs returns the metrics log_ns string from bucket name and root path.
+func BuildLogNs(bucketName, rootPath string) string {
 	return bucketName + "/" + rootPath
+}
+
+// BuildLogLabels returns the common metrics labels for a log.
+func BuildLogLabels(bucketName, rootPath string, logID int64) (logNs, logIDStr string) {
+	return BuildLogNs(bucketName, rootPath), strconv.FormatInt(logID, 10)
 }
 
 // Server metrics are initialized at package level so they are always safe to use.
@@ -57,19 +63,19 @@ var (
 		Subsystem: serverRole,
 		Name:      "logstore_active_logs",
 		Help:      "Number of active logs in the log store",
-	}, []string{"node_id", "namespace"})
+	}, []string{"node_id", "log_ns"})
 	WpLogStoreActiveSegments = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "logstore_active_segments",
 		Help:      "Number of active segments in the log store",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 	WpFileReaders = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "file_reader",
 		Help:      "Number of active segment file readers for log",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 
 	// LogStore metrics
 	WpLogStoreRunningTotal = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -83,20 +89,66 @@ var (
 		Subsystem: serverRole,
 		Name:      "logstore_operations_total",
 		Help:      "Total number of log store operations",
-	}, []string{"node_id", "namespace", "log_id", "operation", "status"})
+	}, []string{"node_id", "log_ns", "log_id", "operation", "status"})
 	WpLogStoreOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "logstore_operation_latency",
 		Help:      "Latency of log store operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"node_id", "namespace", "log_id", "operation", "status"})
+	}, []string{"node_id", "log_ns", "log_id", "operation", "status"})
 	WpLogStoreActiveSegmentProcessors = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "logstore_active_segment_processors",
 		Help:      "Number of active segment processors in log store",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
+
+	// Disk watermark backpressure metrics (issue #215)
+	WpLogStoreDiskUsageRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_disk_usage_ratio",
+		Help:      "Local WAL disk usage ratio, used/(used+free) (df semantics)",
+	}, []string{"node_id", "path"})
+	WpLogStoreDiskFreeBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_disk_free_bytes",
+		Help:      "Local WAL disk free bytes available to the process (statfs Bavail)",
+	}, []string{"node_id", "path"})
+	WpLogStoreWriteBackpressureState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_write_backpressure_state",
+		Help:      "Disk watermark backpressure state: 0=normal, 1=warn, 2=blocked",
+	}, []string{"node_id"})
+	WpLogStoreWriteRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_write_rejected_total",
+		Help:      "Total writes rejected by node-level admission gates",
+	}, []string{"node_id", "reason"})
+	WpLogStoreWriteRejectProbability = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_write_reject_probability",
+		Help:      "Current probability that a new append is rejected by the disk watermark policy (0..1)",
+	}, []string{"node_id"})
+	// Configured thresholds, exported so alert rules and dashboards can read the line
+	// instead of hardcoding it and silently drifting when the config changes (issue #338).
+	WpLogStoreDiskWatermarkSoft = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_disk_watermark_soft",
+		Help:      "Configured soft disk watermark ratio, above which a warning is raised; 0 when the policy is disabled",
+	}, []string{"node_id"})
+	WpLogStoreDiskWatermarkHard = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "logstore_disk_watermark_hard",
+		Help:      "Configured hard disk watermark ratio, above which appends are rejected; 0 when the policy is disabled",
+	}, []string{"node_id"})
 
 	// Buffer wait latency
 	WpServerBufferWaitLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -105,7 +157,7 @@ var (
 		Name:      "buffer_wait_latency",
 		Help:      "Time entries spend waiting in the buffer before being notified (ms)",
 		Buckets:   prometheus.ExponentialBuckets(0.1, 2, 15), // 0.1ms ~ ~1638ms
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 
 	// Segment File Impl metrics
 	WpFileOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -113,20 +165,20 @@ var (
 		Subsystem: serverRole,
 		Name:      "file_operations_total",
 		Help:      "Total number of file operations",
-	}, []string{"node_id", "namespace", "log_id", "operation", "status"})
+	}, []string{"node_id", "log_ns", "log_id", "operation", "status"})
 	WpFileOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "file_operation_latency",
 		Help:      "Latency of file operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-	}, []string{"node_id", "namespace", "log_id", "operation", "status"})
+	}, []string{"node_id", "log_ns", "log_id", "operation", "status"})
 	WpFileWriters = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "file_writer",
 		Help:      "Number of segment file writer for log",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 
 	WpFileReadBatchLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
@@ -134,13 +186,13 @@ var (
 		Name:      "read_batch_latency",
 		Help:      "Latency of read batch operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to 1024ms
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 	WpFileReadBatchBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "read_batch_bytes_total",
 		Help:      "Total bytes read in batch operations",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 
 	WpFileFlushLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
@@ -148,13 +200,13 @@ var (
 		Name:      "file_flush_latency",
 		Help:      "Latency of flush blocks operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to 1024ms
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 	WpFileFlushBytesWritten = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "flush_bytes_written",
 		Help:      "Total block bytes flushed",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 
 	WpFileCompactLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
@@ -162,13 +214,13 @@ var (
 		Name:      "file_compaction_latency",
 		Help:      "Latency of compaction blocks operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to 1024ms
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 	WpFileCompactBytesWritten = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "compact_bytes_written",
 		Help:      "Total block bytes written by compaction",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 
 	// Object storage metrics
 	WpObjectStorageOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -176,27 +228,27 @@ var (
 		Subsystem: serverRole,
 		Name:      "object_storage_operations_total",
 		Help:      "Total number of object storage operations",
-	}, []string{"node_id", "namespace", "log_id", "operation", "status"})
+	}, []string{"node_id", "log_ns", "log_id", "operation", "status"})
 	WpObjectStorageOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "object_storage_operation_latency",
 		Help:      "Latency of object storage operations",
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to ~16s
-	}, []string{"node_id", "namespace", "log_id", "operation", "status"})
+	}, []string{"node_id", "log_ns", "log_id", "operation", "status"})
 	WpObjectStorageRequestBytes = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "object_storage_request_bytes",
 		Help:      "Size of individual object storage requests in bytes",
 		Buckets:   prometheus.ExponentialBuckets(1024, 4, 8), // 1KB ~ 16MB
-	}, []string{"node_id", "namespace", "log_id", "operation"})
+	}, []string{"node_id", "log_ns", "log_id", "operation"})
 	WpObjectStorageBytesTransferred = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "object_storage_bytes_transferred",
 		Help:      "Total bytes transferred to/from object storage",
-	}, []string{"node_id", "namespace", "log_id", "operation"})
+	}, []string{"node_id", "log_ns", "log_id", "operation"})
 
 	// Stored data size gauges
 	WpObjectStorageStoredBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -204,25 +256,165 @@ var (
 		Subsystem: serverRole,
 		Name:      "object_storage_stored_bytes",
 		Help:      "Current total bytes stored in object storage",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 	WpObjectStorageStoredObjects = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "object_storage_stored_objects",
 		Help:      "Current number of objects stored in object storage",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 	WpFileStoredBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "file_stored_bytes",
 		Help:      "Current total bytes stored in local files",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
 	WpFileStoredCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "file_stored_count",
 		Help:      "Current number of local segment files",
-	}, []string{"node_id", "namespace", "log_id"})
+	}, []string{"node_id", "log_ns", "log_id"})
+	WpCompactedCleanupFooterFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compacted_cleanup_footer_failures_total",
+		Help:      "Total number of compacted-file cleanup footer confirmation failures split by stable reason",
+	}, []string{"node_id", "log_ns", "log_id", "reason"})
+	WpCompactedCleanupMarksTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compacted_cleanup_marks_total",
+		Help:      "Total number of compacted marks created by source",
+	}, []string{"node_id", "log_ns", "log_id", "source"})
+	WpCompactedCleanupReclaimedFilesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compacted_cleanup_reclaimed_files_total",
+		Help:      "Total number of local data.log files reclaimed after durable compaction",
+	}, []string{"node_id", "log_ns", "log_id", "source"})
+	WpCompactedCleanupReclaimedBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compacted_cleanup_reclaimed_bytes_total",
+		Help:      "Total bytes reclaimed from local data.log files after durable compaction",
+	}, []string{"node_id", "log_ns", "log_id", "source"})
+	WpNodeLifecycleState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "node_lifecycle_state",
+		Help:      "Node lifecycle state as a one-hot gauge: 1 for the current state, 0 for other known states",
+	}, []string{"node_id", "state"})
+	WpNodeDecommissionRemainingProcessors = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "node_decommission_remaining_processors",
+		Help:      "Active segment processors remaining while draining a node",
+	}, []string{"node_id"})
+	WpNodeDecommissionHasLocalData = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "node_decommission_has_local_data",
+		Help:      "Whether local segment data remains on the node: 1=true, 0=false",
+	}, []string{"node_id"})
+	WpNodeDecommissionSafeToTerminate = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "node_decommission_safe_to_terminate",
+		Help:      "Whether the node is safe to terminate according to the decommission drain gate: 1=true, 0=false",
+	}, []string{"node_id"})
+
+	WpSyncSchedulerScheduled = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_scheduled",
+		Help:      "Number of delayed staged-writer sync checks scheduled",
+	}, []string{"node_id"})
+	WpSyncSchedulerRunning = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_running",
+		Help:      "Number of running staged-writer sync scheduler workers",
+	}, []string{"node_id"})
+	WpSyncSchedulerWaiting = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_waiting",
+		Help:      "Number of staged-writer sync scheduler jobs waiting",
+	}, []string{"node_id"})
+	WpSyncSchedulerCapacity = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_capacity",
+		Help:      "Worker capacity of the staged-writer sync scheduler",
+	}, []string{"node_id"})
+
+	WpCompactionAdmissionRunning = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_running",
+		Help:      "Number of segment compactions holding a slot on this node",
+	}, []string{"node_id"})
+	WpCompactionAdmissionMaxInflightBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_max_inflight_bytes",
+		Help:      "Memory this node will reserve for concurrent segment compactions, 0 when unbounded",
+	}, []string{"node_id"})
+	WpCompactionAdmissionReservedBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_reserved_bytes",
+		Help:      "Estimated memory currently reserved by running segment compactions",
+	}, []string{"node_id"})
+	// WpCompactionAdmissionPeakReservedBytes is what says whether the budget is close to binding. The
+	// budget and the instantaneous in-flight value do not: a scrape every 15s misses the peaks.
+	WpCompactionAdmissionPeakReservedBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_peak_reserved_bytes",
+		Help:      "Highest reserved compaction memory seen on this node since start",
+	}, []string{"node_id"})
+	// WpCompactionAdmissionRejectedTotal counts compactions this node declined, by which gate
+	// declined them. A refusal is not a failure -- the caller tries another replica, or the
+	// auditor retries next cycle -- so a nonzero rate means the node is at capacity, not broken.
+	//
+	// The reason is the actionable part and the two call for different responses: "reservation"
+	// means compaction itself is at its ceiling and more of it would not fit, "memory_pressure"
+	// means the node is near its limit for reasons that may have nothing to do with compaction.
+	WpCompactionAdmissionMemoryWatermark = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_memory_watermark",
+		Help:      "Configured memory usage fraction above which this node stops taking on new compactions",
+	}, []string{"node_id"})
+	WpCompactionAdmissionRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "compaction_admission_rejected_total",
+		Help:      "Segment compactions this node declined, by the gate that declined them",
+	}, []string{"node_id", "reason"})
+
+	// WpQuorumSelectionSkew counts node-selection outcomes by mode, to observe
+	// how often load actually changed the selection (issue #114).
+	// mode: "weighted" (load-ranked), "random_no_load" (no fresh load data,
+	// fell back to random).
+	// WpQuorumNodeSelected counts each node the selector actually returned, which is what
+	// makes skew localizable. WpQuorumSelectionSkew below counts selection *calls* by mode
+	// and cannot say which node is over-picked -- in the weighted branch it is incremented
+	// before the sample is drawn, where the chosen nodes are not yet known (issue #339).
+	WpQuorumNodeSelected = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "quorum_node_selected_total",
+		Help:      "Nodes returned by load-aware selection, counted once per node per selection. node_id is the node that ran the selection, selected_node_id the node it picked",
+	}, []string{"node_id", "selected_node_id", "mode"})
+	WpQuorumSelectionSkew = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "quorum_selection_skew_total",
+		Help:      "Count of quorum node selections by mode (weighted/random_no_load)",
+	}, []string{"mode"})
 )
 
 // RegisterServerMetricsWithRegisterer registers all server-side metrics and system metrics.
@@ -238,6 +430,12 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpLogStoreOperationsTotal)
 		registerer.MustRegister(WpLogStoreOperationLatency)
 		registerer.MustRegister(WpLogStoreActiveSegmentProcessors)
+		// Disk watermark backpressure metrics (issue #215)
+		registerer.MustRegister(WpLogStoreDiskUsageRatio)
+		registerer.MustRegister(WpLogStoreDiskFreeBytes)
+		registerer.MustRegister(WpLogStoreWriteBackpressureState)
+		registerer.MustRegister(WpLogStoreWriteRejectedTotal)
+		registerer.MustRegister(WpLogStoreWriteRejectProbability)
 		// Buffer wait latency
 		registerer.MustRegister(WpServerBufferWaitLatency)
 		// Segment File Impl metrics
@@ -260,5 +458,53 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpObjectStorageStoredObjects)
 		registerer.MustRegister(WpFileStoredBytes)
 		registerer.MustRegister(WpFileStoredCount)
+		registerer.MustRegister(WpCompactedCleanupFooterFailuresTotal)
+		registerer.MustRegister(WpCompactedCleanupMarksTotal)
+		registerer.MustRegister(WpCompactedCleanupReclaimedFilesTotal)
+		registerer.MustRegister(WpCompactedCleanupReclaimedBytesTotal)
+		registerer.MustRegister(WpNodeLifecycleState)
+		registerer.MustRegister(WpNodeDecommissionRemainingProcessors)
+		registerer.MustRegister(WpNodeDecommissionHasLocalData)
+		registerer.MustRegister(WpNodeDecommissionSafeToTerminate)
+		registerer.MustRegister(WpLogStoreDiskWatermarkSoft)
+		registerer.MustRegister(WpLogStoreDiskWatermarkHard)
+		registerer.MustRegister(WpSyncSchedulerScheduled)
+		registerer.MustRegister(WpSyncSchedulerRunning)
+		registerer.MustRegister(WpSyncSchedulerWaiting)
+		registerer.MustRegister(WpSyncSchedulerCapacity)
+		registerer.MustRegister(WpCompactionAdmissionRunning)
+		registerer.MustRegister(WpCompactionAdmissionMaxInflightBytes)
+		registerer.MustRegister(WpCompactionAdmissionReservedBytes)
+		registerer.MustRegister(WpCompactionAdmissionPeakReservedBytes)
+		registerer.MustRegister(WpCompactionAdmissionRejectedTotal)
+		registerer.MustRegister(WpCompactionAdmissionMemoryWatermark)
+		// Quorum selection skew (load-aware node selection, issue #114)
+		registerer.MustRegister(WpQuorumSelectionSkew)
+		registerer.MustRegister(WpQuorumNodeSelected)
 	})
 }
+
+func SetNodeDecommissionProgress(nodeID, state string, remainingProcessors int, hasLocalData bool) {
+	for _, known := range []string{"active", "decommissioning", "decommissioned"} {
+		WpNodeLifecycleState.WithLabelValues(nodeID, known).Set(0)
+	}
+	WpNodeLifecycleState.WithLabelValues(nodeID, state).Set(1)
+	WpNodeDecommissionRemainingProcessors.WithLabelValues(nodeID).Set(float64(remainingProcessors))
+	WpNodeDecommissionHasLocalData.WithLabelValues(nodeID).Set(boolGauge(hasLocalData))
+	WpNodeDecommissionSafeToTerminate.WithLabelValues(nodeID).Set(boolGauge(!hasLocalData))
+}
+
+func boolGauge(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+// Reasons for WpCompactionAdmissionRejectedTotal. They are separate because the responses differ:
+// a reservation refusal says compaction is at its own ceiling, a pressure refusal says the node is
+// near its memory limit for reasons that may have nothing to do with compaction.
+const (
+	CompactionRejectReservation    = "reservation"
+	CompactionRejectMemoryPressure = "memory_pressure"
+)

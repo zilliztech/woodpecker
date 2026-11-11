@@ -18,138 +18,681 @@ package segment
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
-func TestCleanupSegment_AllNodesRequiredForSuccess(t *testing.T) {
-	// Setup mocks
-	mockMetadataProvider := mocks_meta.NewMetadataProvider(t)
-	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+// mockSegmentMetaWithQuorum sets up GetSegmentMetadata to return metadata with
+// the given quorum nodes. Used by tests that reach past GetSegmentCleanupStatus.
+func mockSegmentMetaWithQuorum(mockMeta *mocks_meta.MetadataProvider, logName string, segmentId int64, nodes []string) {
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, logName, segmentId).Return(&meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			Quorum: &proto.QuorumInfo{
+				Id: 1, Es: int32(len(nodes)), Wq: int32(len(nodes)), Aq: int32(len(nodes)),
+				Nodes: nodes,
+			},
+		},
+	}, nil).Maybe()
+}
 
-	// Test data
-	logId := int64(123)
-	segmentId := int64(456)
+// === updateCleanupStatusWithResults tests ===
 
-	// Test when 2 out of 3 nodes succeed - should still be considered failed
-	t.Run("PartialSuccess", func(t *testing.T) {
-		// We'll check the final status where some nodes succeeded but not all
-		mockMetadataProvider.EXPECT().
-			GetSegmentCleanupStatus(mock.Anything, logId, segmentId).
-			Return(&proto.SegmentCleanupStatus{
-				LogId:     logId,
-				SegmentId: segmentId,
-				State:     proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
-				QuorumCleanupStatus: map[string]bool{
-					"node1": true,  // Succeeded
-					"node2": true,  // Succeeded
-					"node3": false, // Failed
-				},
-			}, nil)
+func TestUpdateCleanupStatusWithResults_AllSuccess(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 
-		// Should update to FAILED state since not all nodes succeeded
-		mockMetadataProvider.EXPECT().
-			UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(status *proto.SegmentCleanupStatus) bool {
-				return status.LogId == logId &&
-					status.SegmentId == segmentId &&
-					status.State == proto.SegmentCleanupState_CLEANUP_FAILED &&
-					len(status.ErrorMessage) > 0
-			})).
-			Return(nil)
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
 
-		// Test just the updateFinalCleanupStatus method
-		cleanupManager := NewSegmentCleanupManager("a-bucket", "files", mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
-		finalStatus, err := cleanupManager.updateFinalCleanupStatus(context.Background(), logId, segmentId)
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"node1": false, "node2": false, "node3": false},
+	}, nil)
 
-		assert.NoError(t, err, "Update should succeed")
-		assert.Equal(t, proto.SegmentCleanupState_CLEANUP_FAILED, finalStatus.State, "State should be FAILED with partial success")
-		assert.Contains(t, finalStatus.ErrorMessage, "Not all quorum nodes succeeded")
-	})
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_COMPLETED &&
+			s.QuorumCleanupStatus["node1"] == true &&
+			s.QuorumCleanupStatus["node2"] == true &&
+			s.QuorumCleanupStatus["node3"] == true
+	})).Return(nil)
 
-	// Test behavior when all nodes succeed
-	// NOTE: Currently the implementation seems to always set state to CLEANUP_FAILED (3)
-	// This is likely a bug, but we match the current behavior in our test
-	t.Run("AllSuccess", func(t *testing.T) {
-		// Set up a mocked response that has all nodes successful
-		mockMetadataProvider.EXPECT().
-			GetSegmentCleanupStatus(mock.Anything, logId, segmentId).
-			Return(&proto.SegmentCleanupStatus{
-				LogId:     logId,
-				SegmentId: segmentId,
-				State:     proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
-				QuorumCleanupStatus: map[string]bool{
-					"node1": true, // All nodes succeeded
-					"node2": true,
-					"node3": true,
-				},
-			}, nil)
+	results := []nodeCleanupResult{
+		{nodeAddress: "node1", success: true},
+		{nodeAddress: "node2", success: true},
+		{nodeAddress: "node3", success: true},
+	}
+	status, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, results)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCleanupState_CLEANUP_COMPLETED, status.State)
+}
 
-		// Implementation currently updates to FAILED state regardless
-		// TODO: This should be fixed to update to CLEANUP_COMPLETED when all succeeded
-		mockMetadataProvider.EXPECT().
-			UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(status *proto.SegmentCleanupStatus) bool {
-				return status.LogId == logId &&
-					status.SegmentId == segmentId &&
-					status.State == proto.SegmentCleanupState_CLEANUP_FAILED // Value 3
-			})).
-			Return(nil)
+func TestUpdateCleanupStatusWithResults_PartialSuccess(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 
-		// Test the updateFinalCleanupStatus method
-		cleanupManager := NewSegmentCleanupManager("a-bucket", "files", mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
-		finalStatus, err := cleanupManager.updateFinalCleanupStatus(context.Background(), logId, segmentId)
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
 
-		assert.NoError(t, err, "Update should succeed")
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"node1": false, "node2": false, "node3": false},
+	}, nil)
 
-		// EXPECTED BUG: Currently even successful completions return CLEANUP_FAILED
-		assert.Equal(t, proto.SegmentCleanupState_CLEANUP_FAILED, finalStatus.State,
-			"Current implementation always returns CLEANUP_FAILED (3)")
-		assert.Contains(t, finalStatus.ErrorMessage, "succeeded",
-			"Error message should indicate partial success")
-	})
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_FAILED &&
+			s.QuorumCleanupStatus["node1"] == true &&
+			s.QuorumCleanupStatus["node2"] == true &&
+			s.QuorumCleanupStatus["node3"] == false &&
+			s.ErrorMessage != ""
+	})).Return(nil)
 
-	// Test when not all nodes succeed - should be considered failed
-	t.Run("PartialSuccess_WithCorrectSuccessCount", func(t *testing.T) {
-		// Create a mock with 2 out of 3 nodes successful to test count-based logic
-		mockMetadataProvider.EXPECT().
-			GetSegmentCleanupStatus(mock.Anything, logId, segmentId).
-			Return(&proto.SegmentCleanupStatus{
-				LogId:     logId,
-				SegmentId: segmentId,
-				State:     proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
-				QuorumCleanupStatus: map[string]bool{
-					"node1": true,  // Succeeded
-					"node2": true,  // Succeeded
-					"node3": false, // Failed
-				},
-				// Empty error message initially
-			}, nil)
+	results := []nodeCleanupResult{
+		{nodeAddress: "node1", success: true},
+		{nodeAddress: "node2", success: true},
+		{nodeAddress: "node3", success: false, errorMsg: "connection refused"},
+	}
+	status, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, results)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCleanupState_CLEANUP_FAILED, status.State)
+	assert.Contains(t, status.ErrorMessage, "node3")
+}
 
-		// Should update to FAILED state since not all nodes succeeded
-		mockMetadataProvider.EXPECT().
-			UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(status *proto.SegmentCleanupStatus) bool {
-				return status.LogId == logId &&
-					status.SegmentId == segmentId &&
-					status.State == proto.SegmentCleanupState_CLEANUP_FAILED && // Value 3
-					len(status.ErrorMessage) > 0
-			})).
-			Return(nil)
+func TestUpdateCleanupStatusWithResults_WithPreviouslyCompletedNodes(t *testing.T) {
+	// Simulates resume: node1 already completed, only node2 was retried
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 
-		// Test the updateFinalCleanupStatus method
-		cleanupManager := NewSegmentCleanupManager("a-bucket", "files", mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
-		finalStatus, err := cleanupManager.updateFinalCleanupStatus(context.Background(), logId, segmentId)
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
 
-		assert.NoError(t, err, "Update should succeed")
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"node1": true, "node2": false},
+	}, nil)
 
-		// Check the result is using the right enum
-		assert.Equal(t, proto.SegmentCleanupState_CLEANUP_FAILED, finalStatus.State,
-			"State should be CLEANUP_FAILED when not all nodes succeed")
-		assert.Contains(t, finalStatus.ErrorMessage, "succeeded",
-			"Error message should indicate partial success")
-	})
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_COMPLETED &&
+			s.QuorumCleanupStatus["node1"] == true &&
+			s.QuorumCleanupStatus["node2"] == true
+	})).Return(nil)
+
+	// Only node2 was retried
+	results := []nodeCleanupResult{
+		{nodeAddress: "node2", success: true},
+	}
+	status, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, results)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCleanupState_CLEANUP_COMPLETED, status.State)
+}
+
+func TestUpdateCleanupStatusWithResults_GetStatusError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil, werr.ErrInternalError)
+
+	_, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, nil)
+	assert.Error(t, err)
+}
+
+func TestUpdateCleanupStatusWithResults_NilStatus(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil, nil)
+
+	_, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "nil")
+}
+
+func TestUpdateCleanupStatusWithResults_NilQuorumMap(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: nil,
+	}, nil)
+
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.QuorumCleanupStatus["node1"] == true && s.State == proto.SegmentCleanupState_CLEANUP_COMPLETED
+	})).Return(nil)
+
+	results := []nodeCleanupResult{
+		{nodeAddress: "node1", success: true},
+	}
+	status, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, results)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCleanupState_CLEANUP_COMPLETED, status.State)
+}
+
+func TestUpdateCleanupStatusWithResults_UpdateError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"node1": false},
+	}, nil)
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.Anything).Return(werr.ErrInternalError)
+
+	results := []nodeCleanupResult{
+		{nodeAddress: "node1", success: true},
+	}
+	_, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, results)
+	assert.Error(t, err)
+}
+
+func TestUpdateCleanupStatusWithResults_EmptyResults_NoNodes(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{},
+	}, nil)
+
+	// totalNodes == 0 → FAILED
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_FAILED
+	})).Return(nil)
+
+	status, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCleanupState_CLEANUP_FAILED, status.State)
+}
+
+func TestUpdateCleanupStatusWithResults_ErrorMessageAppending(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"node1": false, "node2": false},
+	}, nil)
+
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_FAILED &&
+			s.ErrorMessage != ""
+	})).Return(nil)
+
+	results := []nodeCleanupResult{
+		{nodeAddress: "node1", success: false, errorMsg: "timeout"},
+		{nodeAddress: "node2", success: false, errorMsg: "refused"},
+	}
+	status, err := mgr.updateCleanupStatusWithResults(context.Background(), 1, 2, results)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCleanupState_CLEANUP_FAILED, status.State)
+	assert.Contains(t, status.ErrorMessage, "node1")
+}
+
+// === sendCleanupRequestToNode tests ===
+
+func TestSendCleanupRequestToNode_GetClientError(t *testing.T) {
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", nil, mockPool).(*segmentCleanupManagerImpl)
+
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("connection failed"))
+
+	err := mgr.sendCleanupRequestToNode(context.Background(), "test-log", 1, 2, "node1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "connection failed")
+}
+
+func TestSendCleanupRequestToNode_SegmentCleanError(t *testing.T) {
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", nil, mockPool).(*segmentCleanupManagerImpl)
+
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().SegmentClean(mock.Anything, "bucket", "root", int64(1), int64(2), 0).Return(errors.New("clean failed"))
+
+	err := mgr.sendCleanupRequestToNode(context.Background(), "test-log", 1, 2, "node1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "clean failed")
+}
+
+func TestSendCleanupRequestToNode_Success(t *testing.T) {
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", nil, mockPool).(*segmentCleanupManagerImpl)
+
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().SegmentClean(mock.Anything, "bucket", "root", int64(1), int64(2), 0).Return(nil)
+
+	err := mgr.sendCleanupRequestToNode(context.Background(), "test-log", 1, 2, "node1")
+	assert.NoError(t, err)
+}
+
+// === CleanupSegment entry point tests ===
+
+func TestCleanupSegment_AlreadyInProgress(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// Mark cleanup as in progress
+	mgr.cleanupMutex.Lock()
+	mgr.inProgressCleanups["1-2"] = true
+	mgr.cleanupMutex.Unlock()
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.NoError(t, err)
+}
+
+func TestCleanupSegment_GetCleanupStatusError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil, werr.ErrInternalError)
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.Error(t, err)
+
+	// Verify in-progress flag was cleaned up
+	mgr.cleanupMutex.Lock()
+	assert.False(t, mgr.inProgressCleanups["1-2"])
+	mgr.cleanupMutex.Unlock()
+}
+
+func TestCleanupSegment_NewCleanupTask_Success(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// No existing cleanup status
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil, nil).Once()
+
+	// Segment metadata with quorum info
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+
+	// Create cleanup status
+	mockMeta.EXPECT().CreateSegmentCleanupStatus(mock.Anything, mock.Anything).Return(nil)
+
+	// Get client and cleanup
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().SegmentClean(mock.Anything, "bucket", "root", int64(1), int64(2), 0).Return(nil)
+
+	// updateCleanupStatusWithResults: read status, update with results, write back
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"127.0.0.1": false},
+	}, nil).Once()
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_COMPLETED &&
+			s.QuorumCleanupStatus["127.0.0.1"] == true
+	})).Return(nil).Once()
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.NoError(t, err)
+}
+
+func TestCleanupSegment_NewCleanupTask_CreateStatusError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+	mockMeta.EXPECT().CreateSegmentCleanupStatus(mock.Anything, mock.Anything).Return(werr.ErrInternalError)
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrLogHandleTruncateFailed.Is(err))
+}
+
+func TestCleanupSegment_ExistingStatus_Completed(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// Existing status is COMPLETED
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:     1,
+		SegmentId: 2,
+		State:     proto.SegmentCleanupState_CLEANUP_COMPLETED,
+	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+
+	// Should delete segment metadata, cleanup status, AND the sibling marking record.
+	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(2), proto.SegmentState_Truncated).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(nil)
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.NoError(t, err)
+}
+
+// TestCleanupSegment_ExistingStatus_Completed_ReapsMarkingRecord_BestEffort verifies the
+// last-segment orphan fix: on CLEANUP_COMPLETED the sibling marking record is deleted, and a
+// failure to delete it is best-effort — it does not fail the cleanup (the auditor's marking
+// orphan sweep still covers non-last segments).
+func TestCleanupSegment_ExistingStatus_Completed_ReapsMarkingRecord_BestEffort(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(9)).Return(&proto.SegmentCleanupStatus{
+		LogId: 1, SegmentId: 9, State: proto.SegmentCleanupState_CLEANUP_COMPLETED,
+	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(9), []string{"127.0.0.1"})
+	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(9), proto.SegmentState_Truncated).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(9)).Return(nil)
+	// Marking-record delete fails: cleanup must still succeed.
+	mockMeta.EXPECT().DeleteSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(9)).Return(errors.New("etcd down"))
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 9)
+	assert.NoError(t, err)
+}
+
+func TestCleanupSegment_ExistingStatus_Completed_DeleteMetadataError_ReturnsError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:     1,
+		SegmentId: 2,
+		State:     proto.SegmentCleanupState_CLEANUP_COMPLETED,
+	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+
+	// DeleteSegmentMetadata fails with non-NotFound error (e.g. etcd timeout)
+	// Should return error immediately without deleting cleanup status
+	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(2), proto.SegmentState_Truncated).Return(werr.ErrInternalError)
+	// DeleteSegmentCleanupStatus should NOT be called
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrInternalError.Is(err))
+}
+
+func TestCleanupSegment_ExistingStatus_Completed_SegmentNotFoundIgnored(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:     1,
+		SegmentId: 2,
+		State:     proto.SegmentCleanupState_CLEANUP_COMPLETED,
+	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+
+	// Delete returns ErrSegmentNotFound - should be ignored
+	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(2), proto.SegmentState_Truncated).Return(werr.ErrSegmentNotFound)
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCompactedNotifyStatus(mock.Anything, int64(1), int64(2)).Return(nil)
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.NoError(t, err)
+}
+
+func TestCleanupSegment_ExistingStatus_Failed_Resume(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// Existing status is FAILED
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:          1,
+		SegmentId:      2,
+		State:          proto.SegmentCleanupState_CLEANUP_FAILED,
+		ErrorMessage:   "previous error",
+		LastUpdateTime: uint64(time.Now().Add(-20 * time.Minute).UnixMilli()),
+		QuorumCleanupStatus: map[string]bool{
+			"127.0.0.1": false,
+		},
+	}, nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+
+	// handleExistingCleanupStatus updates status to IN_PROGRESS
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_IN_PROGRESS
+	})).Return(nil).Once()
+
+	// Continue cleanup - RPC succeeds
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().SegmentClean(mock.Anything, "bucket", "root", int64(1), int64(2), 0).Return(nil)
+
+	// updateCleanupStatusWithResults: read status, apply results, set COMPLETED
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"127.0.0.1": false},
+	}, nil).Once()
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_COMPLETED &&
+			s.QuorumCleanupStatus["127.0.0.1"] == true
+	})).Return(nil).Once()
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.NoError(t, err)
+}
+
+func TestCleanupSegment_ExistingStatus_UpdateStatusError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:          1,
+		SegmentId:      2,
+		State:          proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		LastUpdateTime: uint64(time.Now().UnixMilli()),
+		QuorumCleanupStatus: map[string]bool{
+			"127.0.0.1": false,
+		},
+	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+
+	// Update status fails
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.Anything).Return(werr.ErrInternalError)
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.Error(t, err)
+}
+
+func TestCleanupSegment_ExistingStatus_AllNodesAlreadyCompleted(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// Existing status with the only node already completed
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:          1,
+		SegmentId:      2,
+		State:          proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		LastUpdateTime: uint64(time.Now().UnixMilli()),
+		QuorumCleanupStatus: map[string]bool{
+			"127.0.0.1": true, // Already completed
+		},
+	}, nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+
+	// handleExistingCleanupStatus updates to IN_PROGRESS
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_IN_PROGRESS
+	})).Return(nil).Once()
+
+	// No goroutines launched (all nodes done), updateCleanupStatusWithResults called with empty results
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"127.0.0.1": true},
+	}, nil).Once()
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_COMPLETED
+	})).Return(nil).Once()
+
+	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
+	assert.NoError(t, err)
+}
+
+// === sendCleanupRequestsToQuorumNodes tests ===
+
+func TestSendCleanupRequestsToQuorumNodes_NodeFailure(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// GetLogStoreClient fails
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn failed"))
+
+	// updateCleanupStatusWithResults: read status, apply failed result, set FAILED
+	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(&proto.SegmentCleanupStatus{
+		LogId:               1,
+		SegmentId:           2,
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		QuorumCleanupStatus: map[string]bool{"node1": false},
+	}, nil)
+	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
+		return s.State == proto.SegmentCleanupState_CLEANUP_FAILED
+	})).Return(nil)
+
+	quorum := &proto.QuorumInfo{Id: 0, Nodes: []string{"node1"}}
+	err := mgr.sendCleanupRequestsToQuorumNodes(context.Background(), "test-log", 1, 2, quorum)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "segment cleanup failed")
+}
+
+// === CleanupOrphanedStatuses tests ===
+
+func TestCleanupOrphanedStatuses_NoStatuses(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return(nil, nil)
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.NoError(t, err)
+}
+
+func TestCleanupOrphanedStatuses_ListError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return(nil, werr.ErrInternalError)
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.Error(t, err)
+}
+
+func TestCleanupOrphanedStatuses_DeletesOrphans(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// Segment 3 and 5 are orphans (< minSegmentId=10), segment 10 and 15 are not
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCleanupStatus{
+		{LogId: 1, SegmentId: 3, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+		{LogId: 1, SegmentId: 5, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+		{LogId: 1, SegmentId: 10, State: proto.SegmentCleanupState_CLEANUP_IN_PROGRESS},
+		{LogId: 1, SegmentId: 15, State: proto.SegmentCleanupState_CLEANUP_IN_PROGRESS},
+	}, nil)
+
+	// Should only delete segments 3 and 5
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(3)).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(5)).Return(nil)
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.NoError(t, err)
+}
+
+func TestCleanupOrphanedStatuses_DeleteFailureContinues(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCleanupStatus{
+		{LogId: 1, SegmentId: 3, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+		{LogId: 1, SegmentId: 5, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+	}, nil)
+
+	// First delete fails, second succeeds — should continue
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(3)).Return(werr.ErrInternalError)
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(5)).Return(nil)
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.NoError(t, err)
+}
+
+func TestCleanupOrphanedStatuses_NoOrphans(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// All statuses are >= minSegmentId, no orphans
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCleanupStatus{
+		{LogId: 1, SegmentId: 10, State: proto.SegmentCleanupState_CLEANUP_IN_PROGRESS},
+		{LogId: 1, SegmentId: 15, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+	}, nil)
+
+	// No DeleteSegmentCleanupStatus calls expected
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.NoError(t, err)
 }

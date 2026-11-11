@@ -102,7 +102,6 @@ tests/monitor/
 | Metric Name | Type | Labels | Description | Key Design Metric |
 |---|---|---|---|---|
 | `woodpecker_client_append_requests_total` | Counter | log_id | Total append requests | Write QPS |
-| `woodpecker_client_append_entries_total` | Counter | log_id | Total entries appended | Write throughput (entries) |
 | `woodpecker_client_append_bytes` | Histogram | log_id | Append bytes distribution | Message size distribution P50/P99 |
 | `woodpecker_client_append_latency` | Histogram | log_id | Append latency | Write latency P50/P99 |
 
@@ -112,7 +111,7 @@ tests/monitor/
 |---|---|---|---|---|
 | `woodpecker_client_read_requests_total` | Counter | log_id | Total read requests | Read QPS |
 | `woodpecker_client_read_entries_total` | Counter | log_id | Total entries read | Read throughput (entries) |
-| `woodpecker_client_reader_bytes_read` | Counter | log_id, reader_name | Bytes read | Read throughput (bytes) |
+| `woodpecker_client_reader_bytes_read` | Counter | log_id | Bytes read | Read throughput (bytes) |
 | `woodpecker_client_reader_operation_latency` | Histogram | log_id, operation, status | Reader operation latency | Read latency P50/P99 |
 
 ### LogHandle / SegmentHandle Module
@@ -120,9 +119,44 @@ tests/monitor/
 | Metric Name | Type | Labels | Description | Key Design Metric |
 |---|---|---|---|---|
 | `woodpecker_client_log_handle_operations_total` | Counter | log_id, operation, status | LogHandle operation count | Metadata operation success rate |
+| `woodpecker_client_log_handle_operation_latency` | Histogram | log_id, operation, status | LogHandle operation latency | Cost of the writable-segment handoff every append passes through |
 | `woodpecker_client_segment_handle_operations_total` | Counter | log_id, operation, status | Segment operation count | Segment rolling/close frequency |
 | `woodpecker_client_segment_handle_pending_append_ops` | Gauge | log_id | Pending append operations | Write backpressure observation |
 | `woodpecker_client_writer_bytes_written` | Counter | log_id | Writer bytes written | Per-writer throughput |
+
+### Progress Frontiers Module
+
+Four positions along one log, plotted together so the gaps between them are the
+signal. `read_frontier` is per reader; the other three describe the log itself.
+Entry ids restart at every segment, so compare entry values only within the same
+segment — the `Reader Segment Lag` panel exists because segment distance stays
+meaningful across boundaries.
+
+| Metric Name | Type | Labels | Description | Key Design Metric |
+|---|---|---|---|---|
+| `woodpecker_client_write_frontier_{segment,entry}` | Gauge | log_id | Highest position acknowledged for writes | How far the writer has committed |
+| `woodpecker_client_read_frontier_{segment,entry}` | Gauge | log_id, reader_name | Highest position delivered to the caller | Whether a reader is behind, or the log is simply idle |
+| `woodpecker_client_compaction_frontier_{segment,entry}` | Gauge | log_id | Highest position sealed by compaction | Compaction keeping up with writes |
+| `woodpecker_client_truncation_frontier_{segment,entry}` | Gauge | log_id | Current truncation point | Retention progress |
+
+### Client Replica Placement Module
+
+`az_scope` is where the peer replica sits relative to the client: `local`,
+`cross_az`, `cross_region`, or `unknown` when either side's placement is not
+configured. The client learns its own placement from the `REGION` /
+`AVAILABILITY_ZONE` environment variables and each replica's from the quorum
+metadata — **without them every sample is `unknown`, and the read path's
+local-replica preference is inert as well.** The replica endpoint is
+deliberately not a label: it would multiply by `log_id`.
+
+| Metric Name | Type | Labels | Description | Key Design Metric |
+|---|---|---|---|---|
+| `woodpecker_client_replica_append_total` | Counter | log_id, az_scope, status | Per-replica append outcomes | Which replicas a write actually reached |
+| `woodpecker_client_replica_append_bytes_total` | Counter | log_id, az_scope | Bytes acknowledged per replica | Cross-AZ write traffic |
+| `woodpecker_client_quorum_read_total` | Counter | log_id, az_scope, status | Quorum read outcomes (a caught-up tail reader's "no entry yet" is not counted) | Which replica serves reads |
+| `woodpecker_client_quorum_read_bytes_total` | Counter | log_id, az_scope | Bytes read from quorum replicas | Cross-AZ read traffic |
+| `woodpecker_client_read_failover_total` | Counter | log_id, from_scope, to_scope | Reads served by a different scope than the preferred one | Local-replica preference effectiveness |
+| `woodpecker_client_active_segment_node` | Gauge | log_id, segment_id, node, az | Quorum membership of the current writable segment | AZ spread of the write quorum |
 
 ### Client Etcd Meta Module
 

@@ -99,4 +99,13 @@ else
     exit 1
 fi
 
+if [ -f "bin/wp" ]; then
+    echo "Success: wp CLI built successfully: bin/wp"
+    file bin/wp
+    ls -lh bin/wp
+else
+    echo "Error: Build failed: bin/wp not found"
+    exit 1
+fi
+
 echo "   Build completed successfully!"

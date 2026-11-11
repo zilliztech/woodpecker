@@ -1,0 +1,14 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata: { name: server-minio-delay, namespace: default }
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [default]
+    labelSelectors: { app.kubernetes.io/instance: my-woodpecker, app.kubernetes.io/component: server }
+  direction: to
+  target:
+    mode: all
+    selector: { namespaces: [default], labelSelectors: { app: minio } }
+  delay: { latency: "300ms", jitter: "100ms", correlation: "50" }

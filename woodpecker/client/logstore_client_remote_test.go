@@ -1,0 +1,1232 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package client
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
+)
+
+// ============================================================================
+// Mock types for proto.LogStoreClient (gRPC client interface)
+// ============================================================================
+
+// mockProtoLogStoreClient mocks the proto.LogStoreClient gRPC interface
+type mockProtoLogStoreClient struct {
+	mock.Mock
+}
+
+func (m *mockProtoLogStoreClient) AddEntry(ctx context.Context, in *proto.AddEntryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[proto.AddEntryResponse], error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(grpc.ServerStreamingClient[proto.AddEntryResponse]), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) AddEntries(ctx context.Context, in *proto.AddEntriesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[proto.AddEntriesResponse], error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(grpc.ServerStreamingClient[proto.AddEntriesResponse]), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) GetBatchEntriesAdv(ctx context.Context, in *proto.GetBatchEntriesAdvRequest, opts ...grpc.CallOption) (*proto.GetBatchEntriesAdvResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.GetBatchEntriesAdvResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) FenceSegment(ctx context.Context, in *proto.FenceSegmentRequest, opts ...grpc.CallOption) (*proto.FenceSegmentResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.FenceSegmentResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) CompleteSegment(ctx context.Context, in *proto.CompleteSegmentRequest, opts ...grpc.CallOption) (*proto.CompleteSegmentResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.CompleteSegmentResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) CompactSegment(ctx context.Context, in *proto.CompactSegmentRequest, opts ...grpc.CallOption) (*proto.CompactSegmentResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.CompactSegmentResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) CompactSegmentWithExpected(ctx context.Context, in *proto.CompactSegmentWithExpectedRequest, opts ...grpc.CallOption) (*proto.CompactSegmentResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.CompactSegmentResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) NotifySegmentCompacted(ctx context.Context, in *proto.NotifySegmentCompactedRequest, opts ...grpc.CallOption) (*proto.NotifySegmentCompactedResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.NotifySegmentCompactedResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) GetSegmentLastAddConfirmed(ctx context.Context, in *proto.GetSegmentLastAddConfirmedRequest, opts ...grpc.CallOption) (*proto.GetSegmentLastAddConfirmedResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.GetSegmentLastAddConfirmedResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) GetSegmentBlockCount(ctx context.Context, in *proto.GetSegmentBlockCountRequest, opts ...grpc.CallOption) (*proto.GetSegmentBlockCountResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.GetSegmentBlockCountResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) UpdateLastAddConfirmed(ctx context.Context, in *proto.UpdateLastAddConfirmedRequest, opts ...grpc.CallOption) (*proto.UpdateLastAddConfirmedResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.UpdateLastAddConfirmedResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) CleanSegment(ctx context.Context, in *proto.CleanSegmentRequest, opts ...grpc.CallOption) (*proto.CleanSegmentResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.CleanSegmentResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) SelectNodes(ctx context.Context, in *proto.SelectNodesRequest, opts ...grpc.CallOption) (*proto.SelectNodesResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.SelectNodesResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) MarkLogDeleted(ctx context.Context, in *proto.MarkLogDeletedRequest, opts ...grpc.CallOption) (*proto.MarkLogDeletedResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.MarkLogDeletedResponse), args.Error(1)
+}
+
+func (m *mockProtoLogStoreClient) MarkInstanceDeleted(ctx context.Context, in *proto.MarkInstanceDeletedRequest, opts ...grpc.CallOption) (*proto.MarkInstanceDeletedResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*proto.MarkInstanceDeletedResponse), args.Error(1)
+}
+
+// mockAddEntryStream mocks grpc.ServerStreamingClient[proto.AddEntryResponse]
+type mockAddEntryStream struct {
+	responses []*proto.AddEntryResponse
+	index     int
+}
+
+func (s *mockAddEntryStream) Recv() (*proto.AddEntryResponse, error) {
+	if s.index >= len(s.responses) {
+		return nil, io.EOF
+	}
+	resp := s.responses[s.index]
+	s.index++
+	return resp, nil
+}
+
+func (s *mockAddEntryStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *mockAddEntryStream) Trailer() metadata.MD         { return nil }
+func (s *mockAddEntryStream) CloseSend() error             { return nil }
+func (s *mockAddEntryStream) Context() context.Context     { return context.Background() }
+func (s *mockAddEntryStream) SendMsg(m any) error          { return nil }
+func (s *mockAddEntryStream) RecvMsg(m any) error          { return nil }
+
+func newRemoteClientWithMock(_ *testing.T) (*logStoreClientRemote, *mockProtoLogStoreClient) {
+	mockClient := &mockProtoLogStoreClient{}
+	client := &logStoreClientRemote{innerClient: mockClient}
+	return client, mockClient
+}
+
+// silentAddEntryStream models a server that accepted the AddEntry stream but
+// never sends the first response. Like real gRPC, Recv unblocks only when the
+// stream's context is cancelled. The stream context is captured from the
+// AddEntry call via the mock's Run hook.
+type silentAddEntryStream struct {
+	ctx context.Context
+}
+
+func (s *silentAddEntryStream) Recv() (*proto.AddEntryResponse, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *silentAddEntryStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *silentAddEntryStream) Trailer() metadata.MD         { return nil }
+func (s *silentAddEntryStream) CloseSend() error             { return nil }
+func (s *silentAddEntryStream) Context() context.Context     { return s.ctx }
+func (s *silentAddEntryStream) SendMsg(m any) error          { return nil }
+func (s *silentAddEntryStream) RecvMsg(m any) error          { return nil }
+
+// silentAddEntriesStream is the AddEntries counterpart of silentAddEntryStream.
+type silentAddEntriesStream struct {
+	ctx context.Context
+}
+
+func (s *silentAddEntriesStream) Recv() (*proto.AddEntriesResponse, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *silentAddEntriesStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *silentAddEntriesStream) Trailer() metadata.MD         { return nil }
+func (s *silentAddEntriesStream) CloseSend() error             { return nil }
+func (s *silentAddEntriesStream) Context() context.Context     { return s.ctx }
+func (s *silentAddEntriesStream) SendMsg(m any) error          { return nil }
+func (s *silentAddEntriesStream) RecvMsg(m any) error          { return nil }
+
+// TestRemoteClient_AppendEntry_FirstResponseTimeout is a regression test for
+// issue #232: the synchronous wait for the first AddEntry response must be
+// bounded. With a deadline-less caller context (which is what the append path
+// passes) and a server that accepts the stream but stays silent, AppendEntry
+// previously blocked forever — wedging the per-segment executor worker.
+func TestRemoteClient_AppendEntry_FirstResponseTimeout(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	client.timeouts.AppendSend = 200 * time.Millisecond
+	stream := &silentAddEntryStream{}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { stream.ctx = args.Get(0).(context.Context) }).
+		Return(stream, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.AppendEntry(context.Background(), "bucket", "root", 1,
+			&proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("v")},
+			channel.NewRemoteResultChannel("ch"))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		assert.Error(t, err, "a silent first response must surface as an error")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AppendEntry is not bounded: still blocked on a silent server")
+	}
+}
+
+// TestRemoteClient_AppendEntries_FirstResponseTimeout is the batched (group
+// commit) counterpart: the phase-1 wait for the batch's Buffered frame must be
+// bounded as well.
+func TestRemoteClient_AppendEntries_FirstResponseTimeout(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	client.timeouts.AppendSend = 200 * time.Millisecond
+	stream := &silentAddEntriesStream{}
+	mockClient.On("AddEntries", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { stream.ctx = args.Get(0).(context.Context) }).
+		Return(stream, nil)
+
+	entries := []*proto.LogEntry{
+		{SegId: 1, EntryId: 0, Values: []byte("v0")},
+		{SegId: 1, EntryId: 1, Values: []byte("v1")},
+	}
+	resultChs := []channel.ResultChannel{
+		channel.NewLocalResultChannel("e0"),
+		channel.NewLocalResultChannel("e1"),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.AppendEntries(context.Background(), "bucket", "root", 1, entries, resultChs)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		assert.Error(t, err, "a silent buffered frame must surface as an error")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AppendEntries is not bounded: still blocked on a silent server")
+	}
+}
+
+// ============================================================================
+// logStoreClientRemote Tests
+// ============================================================================
+
+func TestRemoteClient_IsRemoteClient(t *testing.T) {
+	client := &logStoreClientRemote{}
+	assert.True(t, client.IsRemoteClient())
+}
+
+func TestRemoteClient_Close(t *testing.T) {
+	client := &logStoreClientRemote{}
+
+	err := client.Close(context.Background())
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_Close_Idempotent(t *testing.T) {
+	client := &logStoreClientRemote{}
+	ctx := context.Background()
+
+	err1 := client.Close(ctx)
+	assert.NoError(t, err1)
+
+	err2 := client.Close(ctx)
+	assert.NoError(t, err2)
+}
+
+func TestRemoteClient_ImplementsInterface(t *testing.T) {
+	var _ LogStoreClient = (*logStoreClientRemote)(nil)
+}
+
+func TestRemoteClient_CompleteSegment_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("CompleteSegment", ctx, mock.AnythingOfType("*proto.CompleteSegmentRequest")).
+		Return(&proto.CompleteSegmentResponse{LastEntryId: 99}, nil)
+
+	lastEntryId, err := client.CompleteSegment(ctx, "bucket", "root", 1, 0, 99)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(99), lastEntryId)
+}
+
+func TestRemoteClient_CompleteSegment_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("CompleteSegment", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("grpc error"))
+
+	_, err := client.CompleteSegment(ctx, "bucket", "root", 1, 0, 99)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "grpc error")
+}
+
+func TestRemoteClient_CompleteSegment_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("CompleteSegment", ctx, mock.Anything).
+		Return(&proto.CompleteSegmentResponse{
+			Status:      werr.Status(werr.ErrSegmentNotFound),
+			LastEntryId: -1,
+		}, nil)
+
+	_, err := client.CompleteSegment(ctx, "bucket", "root", 1, 0, 99)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_ReadEntriesBatchAdv_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	expectedResult := &proto.BatchReadResult{
+		Entries: []*proto.LogEntry{{EntryId: 0}, {EntryId: 1}},
+	}
+	mockClient.On("GetBatchEntriesAdv", ctx, mock.AnythingOfType("*proto.GetBatchEntriesAdvRequest")).
+		Return(&proto.GetBatchEntriesAdvResponse{Result: expectedResult}, nil)
+
+	result, err := client.ReadEntriesBatchAdv(ctx, "bucket", "root", 1, 0, 0, 100, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResult, result)
+}
+
+func TestRemoteClient_ReadEntriesBatchAdv_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("GetBatchEntriesAdv", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("read error"))
+
+	result, err := client.ReadEntriesBatchAdv(ctx, "bucket", "root", 1, 0, 0, 100, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestRemoteClient_ReadEntriesBatchAdv_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("GetBatchEntriesAdv", ctx, mock.Anything).
+		Return(&proto.GetBatchEntriesAdvResponse{
+			Status: werr.Status(werr.ErrEntryNotFound),
+		}, nil)
+
+	result, err := client.ReadEntriesBatchAdv(ctx, "bucket", "root", 1, 0, 0, 100, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestRemoteClient_FenceSegment_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", ctx, mock.AnythingOfType("*proto.FenceSegmentRequest")).
+		Return(&proto.FenceSegmentResponse{LastEntryId: 50}, nil)
+
+	lastEntryId, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(50), lastEntryId)
+}
+
+func TestRemoteClient_FenceSegment_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("fence error"))
+
+	_, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_FenceSegment_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", ctx, mock.Anything).
+		Return(&proto.FenceSegmentResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	_, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_GetLastAddConfirmed_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("GetSegmentLastAddConfirmed", ctx, mock.AnythingOfType("*proto.GetSegmentLastAddConfirmedRequest")).
+		Return(&proto.GetSegmentLastAddConfirmedResponse{LastEntryId: 42}, nil)
+
+	lac, err := client.GetLastAddConfirmed(ctx, "bucket", "root", 1, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(42), lac)
+}
+
+func TestRemoteClient_GetLastAddConfirmed_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("GetSegmentLastAddConfirmed", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("lac error"))
+
+	_, err := client.GetLastAddConfirmed(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_GetLastAddConfirmed_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("GetSegmentLastAddConfirmed", ctx, mock.Anything).
+		Return(&proto.GetSegmentLastAddConfirmedResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	_, err := client.GetLastAddConfirmed(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_GetBlockCount_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("GetSegmentBlockCount", ctx, mock.AnythingOfType("*proto.GetSegmentBlockCountRequest")).
+		Return(&proto.GetSegmentBlockCountResponse{BlockCount: 5}, nil)
+
+	count, err := client.GetBlockCount(ctx, "bucket", "root", 1, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(5), count)
+}
+
+func TestRemoteClient_GetBlockCount_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("GetSegmentBlockCount", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("block count error"))
+
+	_, err := client.GetBlockCount(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_GetBlockCount_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("GetSegmentBlockCount", ctx, mock.Anything).
+		Return(&proto.GetSegmentBlockCountResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	_, err := client.GetBlockCount(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_SegmentCompact_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	expectedMeta := &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Sealed}
+	mockClient.On("CompactSegmentWithExpected", ctx, mock.MatchedBy(func(request *proto.CompactSegmentWithExpectedRequest) bool {
+		return request.BucketName == "bucket" && request.RootPath == "root" &&
+			request.LogId == 1 && request.SegmentId == 0 && request.ExpectedLastEntryId == 99
+	})).
+		Return(&proto.CompactSegmentResponse{Metadata: expectedMeta}, nil)
+
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, 99)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedMeta, meta)
+}
+
+func TestRemoteClient_SegmentCompact_OldServerUnimplementedDoesNotFallback(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("CompactSegmentWithExpected", ctx, mock.Anything).
+		Return(nil, status.Error(codes.Unimplemented, "method CompactSegmentWithExpected not found"))
+
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, 99)
+	assert.Error(t, err)
+	assert.Equal(t, codes.Unimplemented, status.Code(err))
+	assert.Nil(t, meta)
+	mockClient.AssertNotCalled(t, "CompactSegment", mock.Anything, mock.Anything)
+}
+
+func TestRemoteClient_SegmentCompact_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("CompactSegmentWithExpected", ctx, mock.Anything).
+		Return(&proto.CompactSegmentResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	meta, err := client.SegmentCompact(ctx, "bucket", "root", 1, 0, -1)
+	assert.Error(t, err)
+	assert.Nil(t, meta)
+}
+
+func TestRemoteClient_NotifySegmentCompacted_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("NotifySegmentCompacted", ctx, mock.AnythingOfType("*proto.NotifySegmentCompactedRequest")).
+		Return(&proto.NotifySegmentCompactedResponse{Status: werr.Success()}, nil)
+
+	err := client.NotifySegmentCompacted(ctx, "bucket", "root", 1, 0)
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_NotifySegmentCompacted_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("NotifySegmentCompacted", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("notify error"))
+
+	err := client.NotifySegmentCompacted(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_NotifySegmentCompacted_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("NotifySegmentCompacted", ctx, mock.Anything).
+		Return(&proto.NotifySegmentCompactedResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	err := client.NotifySegmentCompacted(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_SegmentClean_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("CleanSegment", ctx, mock.AnythingOfType("*proto.CleanSegmentRequest")).
+		Return(&proto.CleanSegmentResponse{}, nil)
+
+	err := client.SegmentClean(ctx, "bucket", "root", 1, 0, 1)
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_SegmentClean_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("CleanSegment", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("clean error"))
+
+	err := client.SegmentClean(ctx, "bucket", "root", 1, 0, 1)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_SegmentClean_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("CleanSegment", ctx, mock.Anything).
+		Return(&proto.CleanSegmentResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	err := client.SegmentClean(ctx, "bucket", "root", 1, 0, 1)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_UpdateLastAddConfirmed_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("UpdateLastAddConfirmed", ctx, mock.AnythingOfType("*proto.UpdateLastAddConfirmedRequest")).
+		Return(&proto.UpdateLastAddConfirmedResponse{}, nil)
+
+	err := client.UpdateLastAddConfirmed(ctx, "bucket", "root", 1, 0, 42)
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_UpdateLastAddConfirmed_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("UpdateLastAddConfirmed", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("update lac error"))
+
+	err := client.UpdateLastAddConfirmed(ctx, "bucket", "root", 1, 0, 42)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_UpdateLastAddConfirmed_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("UpdateLastAddConfirmed", ctx, mock.Anything).
+		Return(&proto.UpdateLastAddConfirmedResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	err := client.UpdateLastAddConfirmed(ctx, "bucket", "root", 1, 0, 42)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_SelectNodes_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	expectedNodes := []*proto.NodeMeta{{NodeId: "node1"}, {NodeId: "node2"}}
+	mockClient.On("SelectNodes", mock.Anything, mock.AnythingOfType("*proto.SelectNodesRequest")).
+		Return(&proto.SelectNodesResponse{Nodes: expectedNodes}, nil)
+
+	nodes, err := client.SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	assert.NoError(t, err)
+	assert.Len(t, nodes, 2)
+}
+
+func TestRemoteClient_SelectNodes_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("SelectNodes", mock.Anything, mock.Anything).
+		Return(nil, fmt.Errorf("select error"))
+
+	nodes, err := client.SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	assert.Error(t, err)
+	assert.Nil(t, nodes)
+}
+
+func TestRemoteClient_SelectNodes_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("SelectNodes", mock.Anything, mock.Anything).
+		Return(&proto.SelectNodesResponse{
+			Status: werr.Status(werr.ErrUnknownError),
+		}, nil)
+
+	nodes, err := client.SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	assert.Error(t, err)
+	assert.Nil(t, nodes)
+}
+
+func TestRemoteClient_AppendEntry_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
+	resultCh := channel.NewLocalResultChannel("ch")
+
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(nil, fmt.Errorf("stream error"))
+
+	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "stream error")
+}
+
+func TestRemoteClient_AppendEntry_RecvError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
+	resultCh := channel.NewLocalResultChannel("ch")
+
+	// Stream returns error on Recv
+	stream := &mockAddEntryStream{responses: nil}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(stream, nil)
+
+	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.Error(t, err) // io.EOF from empty stream
+}
+
+func TestRemoteClient_AppendEntry_Synced(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
+	resultCh := channel.NewLocalResultChannel("ch")
+
+	stream := &mockAddEntryStream{
+		responses: []*proto.AddEntryResponse{
+			{State: proto.AddEntryState_Synced, EntryId: 10},
+		},
+	}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(stream, nil)
+
+	entryId, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(10), entryId)
+}
+
+func TestRemoteClient_AppendEntry_Buffered_WrongChannelType(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
+	// Use a local result channel which is NOT a RemoteResultChannel
+	resultCh := channel.NewLocalResultChannel("ch")
+
+	stream := &mockAddEntryStream{
+		responses: []*proto.AddEntryResponse{
+			{State: proto.AddEntryState_Buffered, EntryId: 5},
+		},
+	}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(stream, nil)
+
+	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrInternalError.Is(err))
+}
+
+func TestRemoteClient_AppendEntry_Failed_WithStatus(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
+	resultCh := channel.NewLocalResultChannel("ch")
+
+	stream := &mockAddEntryStream{
+		responses: []*proto.AddEntryResponse{
+			{State: proto.AddEntryState_Failed, EntryId: 0, Status: werr.Status(werr.ErrSegmentFenced)},
+		},
+	}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(stream, nil)
+
+	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_AppendEntry_Failed_NilStatus(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
+	resultCh := channel.NewLocalResultChannel("ch")
+
+	stream := &mockAddEntryStream{
+		responses: []*proto.AddEntryResponse{
+			{State: proto.AddEntryState_Failed, EntryId: 0, Status: nil},
+		},
+	}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(stream, nil)
+
+	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrUnknownError.Is(err))
+}
+
+func TestRemoteClient_AppendEntry_AfterClose(t *testing.T) {
+	client, _ := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	_ = client.Close(ctx)
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
+	resultCh := channel.NewLocalResultChannel("ch")
+
+	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "client is closed")
+}
+
+func TestRemoteClient_AppendEntry_Buffered_WithRemoteChannel(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
+	resultCh := channel.NewRemoteResultChannel("remote-ch")
+
+	stream := &mockAddEntryStream{
+		responses: []*proto.AddEntryResponse{
+			{State: proto.AddEntryState_Buffered, EntryId: 5},
+		},
+	}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(stream, nil)
+
+	entryId, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(5), entryId)
+}
+
+// =====================================================================
+// Tests for self-eviction on transport failure (maybeDropCachedConn).
+// =====================================================================
+//
+// logStoreClientRemote takes responsibility for clearing its own entry
+// from the connection pool on transport errors. Callers (fence / append /
+// discovery / ...) must NOT have to know about pool management. These
+// tests guard that contract: any RPC method that returns a transport-level
+// error must drop the client's cached entry; any RPC method that returns
+// an app-level error must NOT.
+
+// fakeSelfEvictingPool records Clear calls so tests can assert whether a
+// particular RPC method triggered self-eviction.
+type fakeSelfEvictingPool struct {
+	cleared []string
+}
+
+func (p *fakeSelfEvictingPool) GetLogStoreClient(ctx context.Context, target string) (LogStoreClient, error) {
+	panic("not used in these tests")
+}
+
+func (p *fakeSelfEvictingPool) Clear(ctx context.Context, target string) {
+	p.cleared = append(p.cleared, target)
+}
+
+func (p *fakeSelfEvictingPool) Close(ctx context.Context) error { return nil }
+
+// unavailableErr returns a gRPC Unavailable status mimicking what grpc-go
+// produces when the peer is unreachable (connection refused, etc.). This is
+// the exact error shape every transport failure converges to via toRPCErr
+// at rpc_util.go:1008 — see IsTransportError for the full trail.
+func unavailableErr() error {
+	return status.Error(codes.Unavailable,
+		`connection error: desc = "transport: Error while dialing: dial tcp 10.0.0.1:18080: connect: connection refused"`)
+}
+
+func TestRemoteClient_SelfEvictsOnTransportError_FenceSegment(t *testing.T) {
+	mockClient := &mockProtoLogStoreClient{}
+	pool := &fakeSelfEvictingPool{}
+	client := &logStoreClientRemote{innerClient: mockClient, pool: pool, target: "pod-0.headless:18080"}
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", mock.Anything, mock.Anything).
+		Return(nil, unavailableErr())
+
+	_, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+	assert.Equal(t, []string{"pod-0.headless:18080"}, pool.cleared,
+		"FenceSegment must self-evict from the pool on a transport-level gRPC error")
+}
+
+func TestRemoteClient_SelfEvictsOnTransportError_AppendEntry(t *testing.T) {
+	mockClient := &mockProtoLogStoreClient{}
+	pool := &fakeSelfEvictingPool{}
+	client := &logStoreClientRemote{innerClient: mockClient, pool: pool, target: "pod-1.headless:18080"}
+	ctx := context.Background()
+
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(nil, unavailableErr())
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("x")}
+	resultCh := channel.NewLocalResultChannel("op-1")
+	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.Error(t, err)
+	assert.Equal(t, []string{"pod-1.headless:18080"}, pool.cleared,
+		"AppendEntry must self-evict on a transport-level gRPC error from the initial AddEntry call")
+}
+
+func TestRemoteClient_DoesNotEvictOnApplicationError(t *testing.T) {
+	// Application-level status errors (e.g. werr.ErrSegmentFenced, permission
+	// denied, not found) are NOT transport failures — the peer is healthy,
+	// it just rejected the request. Dropping the connection here would cause
+	// needless churn under legitimate high error rates.
+	mockClient := &mockProtoLogStoreClient{}
+	pool := &fakeSelfEvictingPool{}
+	client := &logStoreClientRemote{innerClient: mockClient, pool: pool, target: "pod-2.headless:18080"}
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", mock.Anything, mock.Anything).
+		Return(&proto.FenceSegmentResponse{Status: werr.Status(werr.ErrSegmentFenced)}, nil)
+
+	_, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+	assert.Empty(t, pool.cleared,
+		"application-level errors must not trigger self-eviction (would cause thrash under normal load)")
+}
+
+func TestRemoteClient_DoesNotEvictOnSuccess(t *testing.T) {
+	mockClient := &mockProtoLogStoreClient{}
+	pool := &fakeSelfEvictingPool{}
+	client := &logStoreClientRemote{innerClient: mockClient, pool: pool, target: "pod-3.headless:18080"}
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", mock.Anything, mock.Anything).
+		Return(&proto.FenceSegmentResponse{Status: werr.Success(), LastEntryId: 42}, nil)
+
+	lastId, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(42), lastId)
+	assert.Empty(t, pool.cleared, "successful RPCs must never evict the cached connection")
+}
+
+func TestRemoteClient_NilPool_IsNoOp(t *testing.T) {
+	// Unit tests across the codebase construct logStoreClientRemote directly
+	// without a pool/target (pool == nil). maybeDropCachedConn must be a
+	// graceful no-op in that case — otherwise every existing test that
+	// injects a gRPC error would panic.
+	mockClient := &mockProtoLogStoreClient{}
+	client := &logStoreClientRemote{innerClient: mockClient}
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", mock.Anything, mock.Anything).
+		Return(nil, unavailableErr())
+
+	assert.NotPanics(t, func() {
+		_, _ = client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	})
+}
+
+func TestRemoteClient_MarkLogDeleted_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkLogDeleted", ctx, mock.AnythingOfType("*proto.MarkLogDeletedRequest")).
+		Return(&proto.MarkLogDeletedResponse{}, nil)
+
+	_, err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_MarkLogDeleted_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkLogDeleted", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("mark log deleted error"))
+
+	_, err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_MarkLogDeleted_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkLogDeleted", ctx, mock.Anything).
+		Return(&proto.MarkLogDeletedResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	_, err := client.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_MarkInstanceDeleted_Success(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkInstanceDeleted", ctx, mock.AnythingOfType("*proto.MarkInstanceDeletedRequest")).
+		Return(&proto.MarkInstanceDeletedResponse{}, nil)
+
+	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
+	assert.NoError(t, err)
+}
+
+func TestRemoteClient_MarkInstanceDeleted_GrpcError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkInstanceDeleted", ctx, mock.Anything).
+		Return(nil, fmt.Errorf("mark instance deleted error"))
+
+	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
+	assert.Error(t, err)
+}
+
+func TestRemoteClient_MarkInstanceDeleted_StatusError(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	ctx := context.Background()
+
+	mockClient.On("MarkInstanceDeleted", ctx, mock.Anything).
+		Return(&proto.MarkInstanceDeletedResponse{
+			Status: werr.Status(werr.ErrSegmentNotFound),
+		}, nil)
+
+	err := client.MarkInstanceDeleted(ctx, "bucket", "root")
+	assert.Error(t, err)
+}
+
+// TestMarkLogDeletedSyncFailsClosedOnOldNode pins the mixed-version behaviour. proto3 drops
+// the unknown sync field, so an old node runs its ordinary asynchronous delete and still
+// answers Success with sync_applied unset. Reporting that as a completed synchronous delete
+// is precisely how an operator switches backends on a WAL that still has data on disk.
+func TestMarkLogDeletedSyncFailsClosedOnOldNode(t *testing.T) {
+	ctx := context.Background()
+
+	// An old node: Success, but nothing echoed back.
+	oldClient, oldMock := newRemoteClientWithMock(t)
+	oldMock.On("MarkLogDeleted", ctx, mock.AnythingOfType("*proto.MarkLogDeletedRequest")).
+		Return(&proto.MarkLogDeletedResponse{}, nil)
+
+	_, err := oldClient.MarkLogDeleted(ctx, "bucket", "root", 1, true)
+	require.Error(t, err, "a sync delete must not be reported as done by a node that ignored the flag")
+	assert.Contains(t, err.Error(), "synchronous delete")
+
+	// The same reply is fine for an async delete, which promises nothing about local data.
+	_, err = oldClient.MarkLogDeleted(ctx, "bucket", "root", 1, false)
+	assert.NoError(t, err)
+
+	// A new node echoes the flag and reports what it found.
+	newClient, newMock := newRemoteClientWithMock(t)
+	newMock.On("MarkLogDeleted", ctx, mock.AnythingOfType("*proto.MarkLogDeletedRequest")).
+		Return(&proto.MarkLogDeletedResponse{SyncApplied: true, LocalDataFound: true}, nil)
+
+	found, err := newClient.MarkLogDeleted(ctx, "bucket", "root", 1, true)
+	require.NoError(t, err)
+	assert.True(t, found)
+}
+
+// blockUntilCancelled makes a mocked call behave like gRPC opening a stream or
+// issuing a call on a connection that is still CONNECTING: it returns only when
+// the call's context ends.
+func blockUntilCancelled(args mock.Arguments) {
+	<-args.Get(0).(context.Context).Done()
+}
+
+// TestRemoteClient_AppendEntry_StreamOpenTimeout: opening the stream waits for
+// the connection to be READY, which an address that never answers never
+// becomes. The bound must cover that wait, not only the first Recv, and the
+// failure must read as an unreachable replica.
+func TestRemoteClient_AppendEntry_StreamOpenTimeout(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	client.timeouts.AppendSend = 200 * time.Millisecond
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Run(blockUntilCancelled).
+		Return(nil, status.Error(codes.Canceled, "context canceled"))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.AppendEntry(context.Background(), "bucket", "root", 1,
+			&proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("v")},
+			channel.NewRemoteResultChannel("ch"))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Equal(t, codes.Unavailable, status.Code(err), "a timed-out open must read as an unreachable replica: %v", err)
+		assert.True(t, werr.IsTransportError(err), "a timed-out open must evict the pinned connection")
+	case <-time.After(2 * time.Second):
+		t.Fatal("AppendEntry is not bounded while opening the stream")
+	}
+}
+
+// TestRemoteClient_AppendEntries_StreamOpenTimeout is the batched counterpart.
+func TestRemoteClient_AppendEntries_StreamOpenTimeout(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	client.timeouts.AppendSend = 200 * time.Millisecond
+	mockClient.On("AddEntries", mock.Anything, mock.Anything).
+		Run(blockUntilCancelled).
+		Return(nil, status.Error(codes.Canceled, "context canceled"))
+
+	entries := []*proto.LogEntry{{SegId: 1, EntryId: 0, Values: []byte("v0")}}
+	resultChs := []channel.ResultChannel{channel.NewLocalResultChannel("e0")}
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.AppendEntries(context.Background(), "bucket", "root", 1, entries, resultChs)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Equal(t, codes.Unavailable, status.Code(err), "%v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("AppendEntries is not bounded while opening the stream")
+	}
+}
+
+// TestRemoteClient_SelectNodes_Timeout: segment creation sits on the append
+// path, so a seed that never answers must fail the call within the bound.
+func TestRemoteClient_SelectNodes_Timeout(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	client.timeouts.SelectNodes = 200 * time.Millisecond
+	mockClient.On("SelectNodes", mock.Anything, mock.Anything).
+		Run(blockUntilCancelled).
+		Return(nil, status.Error(codes.DeadlineExceeded, "context deadline exceeded"))
+
+	start := time.Now()
+	_, err := client.SelectNodes(context.Background(), proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.Equal(t, codes.Unavailable, status.Code(err), "%v", err)
+
+	// The caller's own cancellation is not our timeout and keeps its error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mockClient.ExpectedCalls = nil
+	mockClient.On("SelectNodes", mock.Anything, mock.Anything).
+		Return(nil, status.Error(codes.Canceled, "context canceled"))
+	_, err = client.SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	assert.Equal(t, codes.Canceled, status.Code(err))
+}
+
+// TestLogStoreClientPool_ConnectTimeout drives a real gRPC connection at an
+// address that accepts TCP and then never answers, the way a reclaimed pod IP
+// behaves. Without a connect bound the call waits for gRPC's default 20s; it
+// must give up after the dial timeout even though the call itself has a longer
+// budget.
+func TestLogStoreClientPool_ConnectTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	var heldMu sync.Mutex
+	var held []net.Conn
+	defer func() {
+		heldMu.Lock()
+		defer heldMu.Unlock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+	}()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			heldMu.Lock()
+			held = append(held, c) // never read, never written: no server preface
+			heldMu.Unlock()
+		}
+	}()
+
+	dial := config.DefaultGRPCClientConfig()
+	dial.DialTimeout = config.NewDurationMillisecondsFromInt(300)
+	pool := NewLogStoreClientPool(1<<20, 1<<20,
+		WithGRPCClientConfig(dial),
+		WithCallTimeouts(CallTimeouts{SelectNodes: 10 * time.Second}))
+	defer pool.Close(context.Background())
+	cli, err := pool.GetLogStoreClient(context.Background(), ln.Addr().String())
+	require.NoError(t, err)
+
+	start := time.Now()
+	_, err = cli.SelectNodes(context.Background(), proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, nil)
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	assert.Equal(t, codes.Unavailable, status.Code(err), "%v", err)
+	assert.Less(t, elapsed, 3*time.Second, "the connect attempt was not bounded by the dial timeout")
+	t.Logf("call against a silent address failed after %v: %v", elapsed, err)
+}
+
+// The pool hands its call bounds to every client it creates, and a zero bound
+// falls back to its default.
+func TestLogStoreClientPool_CallTimeoutsReachClients(t *testing.T) {
+	pool := NewLogStoreClientPool(1<<20, 1<<20,
+		WithCallTimeouts(CallTimeouts{AppendSend: 700 * time.Millisecond}))
+	defer pool.Close(context.Background())
+	cli, err := pool.GetLogStoreClient(context.Background(), "127.0.0.1:1")
+	require.NoError(t, err)
+	remote := cli.(*logStoreClientRemote)
+	assert.Equal(t, 700*time.Millisecond, remote.timeouts.appendSend())
+	assert.Equal(t, defaultSelectNodesTimeout, remote.timeouts.selectNodes())
+}
+
+// A zero dial configuration, as a caller that never set it has, dials with the
+// defaults rather than with no bound or a zero backoff.
+func TestConnectParams_ZeroConfigUsesDefaults(t *testing.T) {
+	p := connectParams(config.GRPCClientConfig{})
+	assert.Equal(t, time.Second, p.MinConnectTimeout)
+	assert.Equal(t, 100*time.Millisecond, p.Backoff.BaseDelay)
+	assert.Equal(t, 1.6, p.Backoff.Multiplier)
+	assert.Equal(t, 0.2, p.Backoff.Jitter)
+	assert.Equal(t, 3*time.Second, p.Backoff.MaxDelay)
+
+	custom := config.DefaultGRPCClientConfig()
+	custom.DialTimeout = config.NewDurationMillisecondsFromInt(200)
+	custom.ConnectBackoff.MaxDelay = config.NewDurationMillisecondsFromInt(500)
+	p = connectParams(custom)
+	assert.Equal(t, 200*time.Millisecond, p.MinConnectTimeout)
+	assert.Equal(t, 500*time.Millisecond, p.Backoff.MaxDelay)
+}

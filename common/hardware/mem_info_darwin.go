@@ -19,7 +19,7 @@ package hardware
 
 import (
 	"github.com/labstack/gommon/log"
-	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/shirou/gopsutil/v4/mem"
 	"go.uber.org/zap"
 )
 

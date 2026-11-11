@@ -36,6 +36,20 @@ const (
 	FencedObjectMetaKey    = "Fenced"
 )
 
+//go:generate mockery --dir=./common/minio --name=MinioClientAPI --structname=MinioClientAPI --output=mocks/mocks_minio_client --filename=mock_minio_client_api.go --with-expecter=true --outpkg=mocks_minio_client
+
+// MinioClientAPI abstracts the minio.Client methods used by minioHandlerImpl,
+// enabling unit testing with mock implementations.
+// *minio.Client satisfies this interface implicitly via duck typing.
+type MinioClientAPI interface {
+	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
+	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
+	StatObject(ctx context.Context, bucketName, objectName string, opts minio.StatObjectOptions) (minio.ObjectInfo, error)
+	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
+	CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error)
+	ListObjects(ctx context.Context, bucketName string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
+}
+
 //go:generate mockery --dir=./common/minio --name=MinioHandler --structname=MinioHandler --output=mocks/mocks_minio --filename=mock_minio_handler.go --with-expecter=true  --outpkg=mocks_minio
 type MinioHandler interface {
 	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (*minio.Object, error)
@@ -52,7 +66,7 @@ type MinioHandler interface {
 var _ MinioHandler = (*minioHandlerImpl)(nil)
 
 type minioHandlerImpl struct {
-	client *minio.Client
+	client MinioClientAPI
 	cfg    *config.Configuration
 }
 
@@ -67,7 +81,7 @@ func NewMinioHandler(ctx context.Context, cfg *config.Configuration) (MinioHandl
 	}, nil
 }
 
-func NewMinioHandlerWithClient(ctx context.Context, cfg *config.Configuration, minioCli *minio.Client) (MinioHandler, error) {
+func NewMinioHandlerWithClient(ctx context.Context, cfg *config.Configuration, minioCli MinioClientAPI) (MinioHandler, error) {
 	return &minioHandlerImpl{
 		client: minioCli,
 		cfg:    cfg,
@@ -80,6 +94,9 @@ func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
+		// Lazy reader: minio-go's GetObject only validates the names before returning
+		// (api-get-object.go:32-39), so this error is a name-validation failure, never a
+		// missing object. A GET miss surfaces on the first Read, under read_object_full.
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Inc()
 		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
@@ -95,6 +112,9 @@ func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName,
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
+		// Lazy reader: minio-go's GetObject only validates the names before returning
+		// (api-get-object.go:32-39), so this error is a name-validation failure, never a
+		// missing object. A GET miss surfaces on the first Read, under read_object_full.
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error").Inc()
 		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
@@ -175,6 +195,7 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 func (m *minioHandlerImpl) putObjectIfNoneMatchWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	info, err := m.PutObject(ctx, bucketName, objectName, reader, objectSize, minio.PutObjectOptions{}, operatingNamespace, operatingLogId)
 	if err != nil {
+		logger.Ctx(ctx).Info("failed to put object", zap.String("objectName", objectName), zap.Error(err))
 		// check if object exists, some backend not support overwrite originally
 		// if exists, but object is fence object, return ErrSegmentFenced
 		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
@@ -246,6 +267,7 @@ func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, obje
 func (m *minioHandlerImpl) putFencedObjectWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, size int64, fencedObjectReader io.Reader, opts minio.PutObjectOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	info, err := m.client.PutObject(ctx, bucketName, objectName, fencedObjectReader, size, opts)
 	if err != nil {
+		logger.Ctx(ctx).Info("failed to put fenced object", zap.String("objectName", objectName), zap.Error(err))
 		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
 		if stateErr != nil {
 			// return normal err
@@ -283,8 +305,9 @@ func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectNam
 	start := time.Now()
 	info, err := m.client.StatObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		status := readStatus(err)
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", status).Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", status).Observe(float64(time.Since(start).Milliseconds()))
 	} else {
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Inc()
 		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))

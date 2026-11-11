@@ -9,11 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/tests/docker/framework"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
@@ -151,12 +153,6 @@ func TestMonitor_BasicMetricsVerification(t *testing.T) {
 		assertMetricRegistered(t, cluster, "woodpecker_server_system_memory_used_bytes")
 	})
 
-	t.Run("GrpcServerMetrics", func(t *testing.T) {
-		assertMetricExists(t, cluster, "grpc_server_started_total")
-		assertMetricExists(t, cluster, "grpc_server_handled_total")
-		assertMetricExists(t, cluster, "grpc_server_handling_seconds_count")
-	})
-
 	// Client metrics live in the test process. Prometheus scrapes them via
 	// host.docker.internal:29099, so they are queryable through the Prometheus API.
 	t.Run("ClientMetrics", func(t *testing.T) {
@@ -286,6 +282,7 @@ func TestMonitor_ComprehensiveMetricsVerification(t *testing.T) {
 	// Start a lightweight Prometheus endpoint in the test process so that
 	// client-side metrics can be scraped, just like a real application would.
 	startTestMetricsEndpoint(t)
+	metrics.RegisterClientMetricsWithRegisterer(prometheus.DefaultRegisterer)
 
 	// Wait for Prometheus to be ready
 	cluster.WaitForPrometheusReady(t, 60*time.Second)
@@ -396,12 +393,6 @@ func TestMonitor_ComprehensiveMetricsVerification(t *testing.T) {
 		assertMetricRegistered(t, cluster, "woodpecker_server_system_io_wait")
 	})
 
-	t.Run("GrpcServerMetrics", func(t *testing.T) {
-		assertMetricExists(t, cluster, "grpc_server_started_total")
-		assertMetricExists(t, cluster, "grpc_server_handled_total")
-		assertMetricExists(t, cluster, "grpc_server_handling_seconds_count")
-	})
-
 	// Client metrics live in the test process. Prometheus scrapes them via
 	// host.docker.internal:29099, so they are queryable through the Prometheus API.
 	t.Run("ClientMetrics", func(t *testing.T) {
@@ -419,6 +410,9 @@ func TestMonitor_ComprehensiveMetricsVerification(t *testing.T) {
 		assertMetricExists(t, cluster, "woodpecker_client_append_latency_count")
 		// Read path
 		assertMetricExists(t, cluster, "woodpecker_client_read_requests_total")
+		// Segment state tracking (populated by Store/Update/DeleteSegmentMetadata;
+		// truncation above ensures at least the Truncated state is represented)
+		assertMetricExists(t, cluster, "woodpecker_client_segment_state")
 	})
 
 	t.Log("ComprehensiveMetricsVerification passed: all metrics verified")

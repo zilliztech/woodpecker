@@ -1,0 +1,14 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata: { name: server-minio-loss, namespace: default }
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces: [default]
+    labelSelectors: { app.kubernetes.io/instance: my-woodpecker, app.kubernetes.io/component: server }
+  direction: to
+  target:
+    mode: all
+    selector: { namespaces: [default], labelSelectors: { app: minio } }
+  loss: { loss: "10", correlation: "25" }

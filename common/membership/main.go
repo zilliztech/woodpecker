@@ -9,6 +9,9 @@
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License.
 
+//go:build manualtest
+// +build manualtest
+
 package membership
 
 import (
@@ -20,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/zilliztech/woodpecker/common/topology"
 )
 
 // Test only
@@ -40,8 +45,10 @@ func main() {
 		bindPort = flag.Int("port", 7946, "Bind port")
 		joinAddr = flag.String("join", "", "Join addresses (comma separated)")
 
+		clusterName   = flag.String("cluster", topology.GetCurrentClusterName(), "Cluster name (server only)")
+		region        = flag.String("region", topology.GetCurrentRegion(), "Region (server only)")
 		resourceGroup = flag.String("rg", "rg-001", "Resource group (server only)")
-		az            = flag.String("az", "us-west-2a", "Availability zone (server only)")
+		az            = flag.String("az", topology.GetCurrentAvailabilityZone(), "Availability zone (server only)")
 		servicePort   = flag.Int("service-port", 8080, "Service port (server only)")
 	)
 	flag.Parse()
@@ -54,6 +61,8 @@ func main() {
 	if *role == "server" {
 		config := &ServerConfig{
 			NodeID:        *nodeID,
+			ClusterName:   *clusterName,
+			Region:        *region,
 			ResourceGroup: *resourceGroup,
 			AZ:            *az,
 			BindPort:      *bindPort,
@@ -72,6 +81,8 @@ func main() {
 			}
 		}
 		log.Printf("   Server %s started", *nodeID)
+		log.Printf("   Cluster: %s", *clusterName)
+		log.Printf("   Region: %s", *region)
 		log.Printf("   Resource Group: %s", *resourceGroup)
 		log.Printf("   AZ: %s", *az)
 		log.Printf("   Service Endpoint: %s:%d", *bindAddr, *servicePort)

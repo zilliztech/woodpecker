@@ -1,0 +1,724 @@
+# Woodpecker Admin HTTP API
+
+Woodpecker exposes an HTTP admin server on each node (default port `9091`, configurable via `METRICS_PORT` env). This server provides health checks, metrics, profiling, and node lifecycle management endpoints.
+
+## Endpoints Overview
+
+| Method | Path | Category | Description |
+|--------|------|----------|-------------|
+| GET | `/healthz` | Health | Health check (readiness probe) |
+| GET | `/metrics` | Monitoring | Prometheus metrics |
+| GET | `/log/level` | Ops | Query/update log level at runtime |
+| GET | `/admin/memberlist` | Cluster | Gossip memberlist status |
+| GET | `/admin/node/status` | Lifecycle | Node status and membership info |
+| GET | `/admin/log-health` | Health | Node-wide per-log read/write health (optionally filtered by bucket/rootPath) |
+| GET | `/admin/instance/data` | Data | Instances holding node-local data (optionally filtered by bucket/rootPath) |
+| GET | `/admin/logstore/segment/probe` | Data | Bounded read attempt on one segment: how far this node can read it |
+| GET | `/admin/logstore/segment/inspect` | Data | Block-by-block survey of one segment on this node, continuing past a bad block |
+| POST | `/admin/node/decommission` | Lifecycle | Start graceful node decommission |
+| GET | `/admin/node/decommission/progress` | Lifecycle | Decommission progress and safe-to-terminate check |
+| GET | `/debug/pprof/` | Debug | Pprof index page (enabled by default, disable via `PPROF_ENABLE=false`) |
+| GET | `/debug/pprof/profile` | Debug | CPU profile (`?seconds=N`) |
+| GET | `/debug/pprof/heap` | Debug | Heap memory profile |
+| GET | `/debug/pprof/goroutine` | Debug | Goroutine stack dump (`?debug=1` or `?debug=2`) |
+| GET | `/debug/pprof/allocs` | Debug | Memory allocation profile |
+| GET | `/debug/pprof/block` | Debug | Blocking profile |
+| GET | `/debug/pprof/mutex` | Debug | Mutex contention profile |
+| GET | `/debug/pprof/threadcreate` | Debug | Thread creation profile |
+| GET | `/debug/pprof/trace` | Debug | Execution trace (`?seconds=N`) |
+| GET | `/debug/pprof/cmdline` | Debug | Process command line |
+| GET | `/debug/pprof/symbol` | Debug | Symbol lookup |
+
+---
+
+## Every endpoint answers for one node
+
+**No admin endpoint fans out to peers.** Each one reports the state of the node that
+received the request, and nothing else.
+
+This is an invariant, not an accident. The server process makes no outbound HTTP calls,
+holds no LogStore client, and does not connect to etcd; its only outbound connections are
+gossip (membership only) and object storage (data). Cluster-wide views are assembled by
+the caller:
+
+- `wp` fans out through a single translation point, `Client.PeerAdminURL(member)` — every
+  admin request, `/metrics` scrape and pprof download takes its base URL from there.
+- A control plane does the same from its own pod inventory, or from `GET /admin/memberlist`.
+
+### Why this is worth keeping
+
+A `?scope=cluster` parameter was proposed for `/admin/instance/data` and rejected
+([#349](https://github.com/zilliztech/woodpecker/issues/349)). The reasoning generalizes
+to any endpoint added later:
+
+- It would be the first node-to-node admin call in the tree, giving every storage node a
+  standing reason to reach its peers over the admin port.
+- It invites an N² fan-out the moment a caller queries every pod for a cluster-wide view.
+- It buys the caller nothing it does not already need. There is no cluster-scoped delete,
+  so a caller must already enumerate nodes and handle an unreachable one in order to act
+  at all; a cluster-scoped read paired with a node-scoped write is asymmetric in exactly
+  the place where care is required.
+- **It keeps addressing honest.** A node advertises the address its own cluster knows it
+  by — under Kubernetes, the headless-service FQDN, which is stable across pod restarts
+  but resolves only inside the cluster. A caller outside that network has to translate
+  that identity into something it can dial, and today that translation lives entirely on
+  the caller's side, in one place. A node fanning out on a caller's behalf would have to
+  know how *the caller* reaches its peers, which it cannot.
+
+When adding an endpoint, answer for the local node. If a caller needs a cluster-wide
+view, let it ask every node.
+
+---
+
+## Health Check
+
+```bash
+# Plain text response
+curl http://localhost:9091/healthz
+```
+
+**Response (plain text, healthy):**
+```
+OK
+```
+
+**Response (plain text, unhealthy):**
+```
+Not all components are healthy, 1/2
+```
+
+```bash
+# JSON response with component details
+curl -H "Content-Type: application/json" http://localhost:9091/healthz
+```
+
+**Response (JSON, healthy):**
+```json
+{
+  "state": "OK",
+  "detail": [
+    {"name": "LogStore", "code": "Healthy"}
+  ]
+}
+```
+
+**Response (JSON, unhealthy):**
+```json
+{
+  "state": "Not all components are healthy, 1/2",
+  "detail": [
+    {"name": "LogStore", "code": "Healthy"},
+    {"name": "Membership", "code": "Abnormal"}
+  ]
+}
+```
+
+**HTTP Status:** `200` if all healthy, `500` if any component is unhealthy.
+
+**Component health codes:** `Initializing` | `Healthy` | `Abnormal` | `StandBy` | `Stopping`
+
+---
+
+## Log Health
+
+`/admin/log-health` reports the local node's observed per-log read/write health, derived
+from real operation results (no synthetic heartbeat logs are created).
+
+```bash
+# All logs observed on this node
+curl "http://localhost:9091/admin/log-health"
+
+# Filter to a single Woodpecker instance (both params required, otherwise ignored)
+curl "http://localhost:9091/admin/log-health?bucket_name=a-bucket&root_path=files"
+```
+
+- Both `bucket_name` and `root_path` must be supplied to filter; a partial filter is ignored
+  and all tenants are returned.
+- Write health is the logstore "accept" outcome (`logstore.add_entry`); read health is
+  `logstore.get_batch_entries`. Each log is classified Healthy / Stalled / Failed / Idle.
+  Reaching the end of a log (EOF / entry-not-found) is a healthy read, not a failure.
+- Independent of `/healthz`: `/healthz` is process liveness, while `/admin/log-health` is
+  data-path health — a stalled or failed log never affects the `/healthz` result.
+- Cold start, idle, or no observed log activity returns `Healthy` (a quiet node is not
+  pulled out of rotation).
+- **HTTP Status:** `503` only when every tracked log is Stalled or Failed; `200` otherwise.
+- From the CLI: `wp node log-health <node>`, with `--bucket` / `--root` for the same filter.
+
+---
+
+## Instance Local Data
+
+`/admin/instance/data` reports which Woodpecker instances still hold data on **this
+node's** local disk. It is the read half of the `/admin/instance` family whose write half
+is `POST /admin/instance/delete`: deletion alone is write-only, so a control plane could
+act but never verify. With both, it can run a query -> decide -> reclaim loop.
+
+```bash
+# Every instance holding local data on this node
+curl "http://localhost:9091/admin/instance/data"
+
+# Is one specific instance still here? (both params required, otherwise ignored)
+curl "http://localhost:9091/admin/instance/data?bucket_name=a-bucket&root_path=in01-abc"
+```
+
+**Response:**
+```json
+{
+  "node_id": "woodpecker-0",
+  "storage_mode": "service",
+  "storage_root": "/var/lib/woodpecker",
+  "timestamp_ms": 1758300000123,
+  "instance_count": 1,
+  "total_size_bytes": 1234567,
+  "scan_errors": 0,
+  "instances": [
+    {
+      "bucket_name": "a-bucket",
+      "root_path": "in01-abc",
+      "log_count": 12,
+      "segment_count": 37,
+      "live_segment_count": 30,
+      "size_bytes": 1234567,
+      "last_modified_ms": 1758299000456,
+      "active_processors": 0,
+      "delete_state": "",
+      "marked_deleted_at_ms": 0
+    }
+  ]
+}
+```
+
+**Fields:**
+- `scan_errors` — paths that could not be read. **While this is non-zero, an instance
+  missing from `instances` does not prove it has no data here.**
+- `active_processors`, `last_modified_ms` — a freshly created instance and a genuine
+  orphan look identical on disk; only live processors and data age separate them.
+  Require `active_processors == 0` plus an age threshold before deleting.
+- `delete_state` (`""` | `"log"` | `"instance"`), `marked_deleted_at_ms` — already marked
+  and inside the grace window. Do not re-send the delete; do not read it as a failure.
+- `segment_count` vs `live_segment_count` — the latter is the predicate
+  `/admin/node/decommission/progress` uses for `has_local_data`, which ignores segments
+  already durably compacted into object storage. That is why the two can disagree.
+- `storage_mode` — in `minio` mode there is no node-local data at all, so an empty list
+  means "not applicable", not "clean".
+- `filter_bucket_name` / `filter_root_path` — present only when a filter took effect.
+  Supplying just one of the two params is ignored (same rule as `/admin/log-health`), and
+  the echo is how a caller notices it got an unfiltered answer.
+
+**HTTP Status:** always `200`; `405` for any method other than GET.
+
+### Reconciling orphaned instance data
+
+This endpoint answers only for the node that serves it, like every other one here (see
+[Every endpoint answers for one node](#every-endpoint-answers-for-one-node)). The
+cluster-wide view is assembled by the caller:
+
+1. Enumerate nodes (your own pod inventory, or `GET /admin/memberlist`) and query each.
+   **If any node fails to answer, or any answer has `scan_errors > 0`, stop** — an
+   unreachable node holds intact data, and deleting on a partial view is exactly the
+   accident this endpoint exists to prevent.
+2. Diff against your live-instance registry, then filter candidates by
+   `active_processors == 0` and a `last_modified_ms` age threshold.
+3. `POST /admin/instance/delete` to exactly the nodes that reported the instance.
+4. Re-query with the filter until the instance is absent everywhere. Instance reclamation
+   is asynchronous (there is no `sync` option on the instance delete), so poll rather than
+   expect immediate absence.
+
+```bash
+# From a machine with wp: step 1 across every node, with the completeness check applied
+wp instance data --all --strict
+```
+
+---
+
+## Segment Read Probe
+
+```
+GET /admin/logstore/segment/probe?log_id=7&segment_id=3
+GET /admin/logstore/segment/probe?log_id=7&segment_id=3&from_entry=4000&max_entries=100
+GET /admin/logstore/segment/probe?log_id=7&segment_id=3&bucket_name=<bucket>&root_path=<root>
+```
+
+The only endpoint that reads segment data. It reports what this node holds for the segment and how
+far it could read it:
+
+```json
+{
+  "node_id": "10.0.1.7:18080",
+  "bucket_name": "milvus", "root_path": "inst-a",
+  "log_id": 7, "segment_id": 3,
+  "local": { "data_log": true, "data_log_bytes": 4194304,
+             "compacted_mark": false, "delete_marked": false },
+  "source": "local_staged",
+  "from_entry": 0, "first_entry": 0, "last_entry": 1200,
+  "entries_read": 1201,
+  "outcome": "entry_not_found",
+  "error": "entry not found: no record extract",
+  "elapsed_ms": 34
+}
+```
+
+**`outcome` is the read path's own word, not a verdict.** A node cannot tell "nothing has been
+written yet" from "this copy is damaged": both arrive as `ErrEntryNotFound`, from a missing
+`data.log` (`stagedstorage/reader_impl.go:120`), from a block whose data or checksum could not be
+read (`:1199`, `disk/reader_impl.go:783`), and from a caught-up tail. So the node reports what it
+saw — `entry_not_found`, `end_of_file`, `cap_reached`, `error`, or `no_local_data` — together with
+the local facts, and the caller decides what it means. `wp segment probe` does that with the
+segment's metadata: a replica that stops short of a sealed segment's `LastEntryId` cannot serve data
+that provably exists, whatever the read called it.
+
+**The local facts are gathered with stat calls before anything is opened**, and a node holding
+neither a `data.log` nor a compacted mark answers `no_local_data` without opening a reader. That is
+not an optimisation: opening a reader creates the segment directory (`reader_impl.go:101`,
+`disk:80`) before it discovers there is nothing to read, and the instance a probe resolves to is
+decided by which directories exist — so probing a segment the node does not hold would leave behind
+the evidence the next probe reads.
+
+**`source` says what agreement between replicas is worth.** While the local staged copy exists each
+replica answers about its own; once compaction has reclaimed it (`compacted_mark`), the node serves
+the object-storage copy that *every* replica shares, and three agreeing answers are one copy
+answering three times.
+
+`max_entries` is bounded by the node whatever the caller asks, so a diagnostic cannot become a full
+scan of a segment holding millions of entries, and the read carries the request's context: a caller
+that gives up stops the scan.
+
+`bucket_name` and `root_path` name an instance together; one without the other is a 400 rather than
+a silent fallback to "whichever instance this node finds", which could be another tenant's. With
+neither, the node resolves the instance from a live processor or from local data, and reports
+ambiguity instead of picking — a 404 whose message says what it could not resolve.
+
+This endpoint answers only for the node that serves it, like every other one here. `wp segment
+probe` assembles the quorum's view.
+
+---
+
+## Segment Block Survey
+
+```
+GET /admin/logstore/segment/inspect?log_id=7&segment_id=3
+GET /admin/logstore/segment/inspect?log_id=7&segment_id=3&from_block=10&max_blocks=8
+GET /admin/logstore/segment/inspect?log_id=7&segment_id=3&verify=false
+```
+
+Walks this node's copy of a segment block by block and reports what it found at each one — block
+number, offset, size, the entries it holds, and whether it verified:
+
+```json
+{
+  "node_id": "10.0.1.7:18080",
+  "local": { "data_log": true, "data_log_bytes": 4194304, "compacted_mark": false, "delete_marked": false },
+  "source": "local_staged",
+  "survey": {
+    "blocks": [
+      {"block": 0, "offset": 25, "bytes": 2048, "first_entry_id": 0, "last_entry_id": 9, "status": "ok"},
+      {"block": 1, "offset": 2110, "bytes": 2048, "first_entry_id": 10, "last_entry_id": 19,
+       "records_ok": 6, "last_good_entry_id": 15,
+       "status": "checksum_failed",
+       "detail": "block CRC mismatch: expected 1a2b3c4d, got 5e6f7a8b; record_checksum_failed at record offset 384 (record checksum mismatch)"},
+      {"block": 2, "offset": 4195, "bytes": 2048, "first_entry_id": 20, "last_entry_id": 29, "status": "ok"}
+    ],
+    "sealed": true, "total_blocks_known": 3, "lac": 29,
+    "stopped_early": false, "stop_reason": "end_of_segment"
+  }
+}
+```
+
+**It does not stop at the first failure**, which is what separates it from every read path: a reader
+stops there and returns what it already had (`stagedstorage/reader_impl.go:1081-1096`), so nothing
+else can say whether one block is damaged or everything after it is — the difference between
+skipping a few entries and skipping the rest of the segment.
+
+**How far it can continue depends on what locates the next block.** A sealed segment carries index
+records giving every block's offset independently, so no single damaged block hides the rest. An
+active segment has only the chain: block N+1 begins where block N's header says it ends. A damaged
+body is stepped over there too, but a header that cannot be read ends the walk, reported as
+`stop_reason: chain_broken` — the blocks beyond it have not been looked at, which is not the same as
+their being damaged.
+
+**A damaged block is still walked record by record.** A block's checksum covers all of it, so one
+flipped byte condemns the whole block — but every record inside carries its own checksum, so the
+damage can be placed at a record. `records_ok` and `last_good_entry_id` say how far into the block
+the records still verify.
+
+That is a statement about what could be **recovered**, not about what can be **read**. Every backend
+drops a block whose integrity check fails without returning the records that passed
+(`stagedstorage/reader_impl.go:1090`, `disk:705`, `objectstorage:763`), so a skip range still has to
+cover the whole block's entries. What the record walk adds is that a repair could salvage the
+prefix, which `wp segment inspect` reports on its own line rather than folding into what a reader
+can serve.
+
+There is no "undecodable" status: `DecodeRecordList` answers corruption by stopping and returning
+the records it already has, never by erroring, so a damaged block header presents as no block header
+record being found at that offset.
+
+A segment finalized with no entries is complete, not broken: `Finalize` writes the header and the
+footer with nothing between, and it is reported as sealed with no blocks. On a segment nobody has
+finalized, a block whose header is written and whose data is not — the writer puts them out in two
+separate writes — is reported as `data_incomplete` rather than as damage: those entries have not been
+written yet.
+
+`verify=false` asks what the segment claims to hold instead of reading it. A sealed segment's index
+already carries every block's offset, size and entry range, so the answer comes from one trailer read
+— a few kilobytes whatever the segment's size — and each block is reported `not_verified` with no
+byte of its body read. An active segment has no index, so the walk still follows the chain and reads
+each block's header, but not its body. This is what makes a whole-log sweep affordable: `wp log scan
+--mode quick` reads structure across every segment at trailer cost, and `--mode raw` leaves it
+default so codec and CRC decide. The default is `verify=true`; any other value than a boolean is a
+400, so a typo reads as a request error rather than silently skipping verification.
+
+`max_blocks` is bounded by the node whatever the caller asks — a full survey reads every byte of the
+segment — and the read carries the request's context. Its default is 64 blocks when verifying and
+4096 when not, since a pass that reads no block body no longer costs what the segment weighs; the
+ceiling a caller can ask for is 4096 either way. A node with no local `data.log` answers
+`no_local_blocks` without opening anything: a compacted segment's blocks are objects every replica
+shares, so surveying that per replica would be one copy answered repeatedly.
+
+This endpoint answers only for the node that serves it. `wp segment inspect` assembles the quorum's
+view and states the readings no single replica can: entries damaged here but readable there, entries
+no replica can read, and where readable data resumes.
+
+`lac` is the entry the quorum confirmed, from the replica's own footer, and a finalized replica may
+intentionally hold less than that (`stagedstorage/writer_impl.go:1173`). So a sealed replica that
+walked to the end and stops short of its own `lac` is missing entries that are known to exist, which
+is a different answer from not having looked.
+
+It compares replicas **by entry, never by block number**. Each node flushes on its own timer and
+size (`writer_impl.go:475`, `:509`), so the same entries land in different blocks on different
+nodes and a block number means nothing across them. It also distinguishes what a replica could not
+read from what it never looked at: a replica that stopped early has said nothing about the entries
+beyond its horizon, and its silence is not evidence that they are lost.
+
+---
+
+## Prometheus Metrics
+
+```bash
+curl http://localhost:9091/metrics
+```
+
+**Response (Prometheus text format, excerpt):**
+```
+# HELP woodpecker_server_logstore_active_logs Number of active logs in the log store
+# TYPE woodpecker_server_logstore_active_logs gauge
+woodpecker_server_logstore_active_logs{namespace="mybucket/myroot",node_id="woodpecker-0"} 3
+
+# HELP woodpecker_server_logstore_active_segments Number of active segments in the log store
+# TYPE woodpecker_server_logstore_active_segments gauge
+woodpecker_server_logstore_active_segments{log_id="1",namespace="mybucket/myroot",node_id="woodpecker-0"} 2
+
+# HELP woodpecker_server_logstore_operations_total Total number of log store operations
+# TYPE woodpecker_server_logstore_operations_total counter
+woodpecker_server_logstore_operations_total{log_id="1",namespace="mybucket/myroot",node_id="woodpecker-0",operation="add_entry",status="success"} 1024
+
+# HELP woodpecker_server_logstore_operation_latency Latency of log store operations
+# TYPE woodpecker_server_logstore_operation_latency histogram
+woodpecker_server_logstore_operation_latency_bucket{log_id="1",namespace="mybucket/myroot",node_id="woodpecker-0",operation="add_entry",status="success",le="1"} 500
+...
+```
+
+**Key metric families:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `woodpecker_server_logstore_active_logs` | Gauge | Number of active logs |
+| `woodpecker_server_logstore_active_segments` | Gauge | Number of active segments |
+| `woodpecker_server_logstore_active_segment_processors` | Gauge | Number of active segment processors |
+| `woodpecker_server_logstore_instances_total` | Gauge | Total LogStore instances |
+| `woodpecker_server_logstore_operations_total` | Counter | Total operations (by operation, status) |
+| `woodpecker_server_logstore_operation_latency` | Histogram | Operation latency in ms |
+| `woodpecker_server_buffer_wait_latency` | Histogram | Time entries wait in buffer (ms) |
+| `woodpecker_server_file_operations_total` | Counter | File I/O operations |
+| `woodpecker_server_file_operation_latency` | Histogram | File I/O latency in ms |
+| `woodpecker_server_file_flush_latency` | Histogram | Flush latency in ms |
+| `woodpecker_server_file_compaction_latency` | Histogram | Compaction latency in ms |
+| `woodpecker_server_object_storage_operations_total` | Counter | Object storage operations |
+| `woodpecker_server_object_storage_operation_latency` | Histogram | Object storage latency in ms |
+| `woodpecker_server_object_storage_bytes_transferred` | Counter | Bytes transferred to/from object storage |
+| `woodpecker_server_object_storage_stored_bytes` | Gauge | Current bytes stored in object storage |
+| `woodpecker_server_system_cpu_usage` | Gauge | System CPU usage ratio |
+| `woodpecker_server_system_memory_used_bytes` | Gauge | System memory used |
+| `woodpecker_server_system_disk_used_bytes` | Gauge | Disk usage on data directory |
+| `woodpecker_server_system_io_wait` | Gauge | I/O wait ratio |
+
+**Prometheus scrape config example:**
+```yaml
+scrape_configs:
+  - job_name: 'woodpecker'
+    static_configs:
+      - targets: ['woodpecker-0:9091', 'woodpecker-1:9091', 'woodpecker-2:9091']
+```
+
+---
+
+## Log Level
+
+Query or update the runtime log level (TODO: runtime change not yet implemented).
+
+```bash
+curl http://localhost:9091/log/level
+```
+
+**Response:**
+```
+Log level change endpoint - TODO
+```
+
+**HTTP Status:** `200`
+
+> **Note:** This endpoint is a placeholder. Runtime log level adjustment is planned for a future release.
+
+---
+
+## Cluster Memberlist
+
+```bash
+curl http://localhost:9091/admin/memberlist
+```
+
+**Response (plain text):**
+```
+Total Members: 4
+
+[1] Name: woodpecker-0
+    Addr: 172.18.0.2:17946
+    State: 0
+
+[2] Name: woodpecker-1
+    Addr: 172.18.0.3:17946
+    State: 0
+```
+
+---
+
+## Node Lifecycle APIs
+
+These endpoints enable external orchestration systems (e.g., K8s operators, cluster autoscalers) to manage node lifecycle events such as rolling upgrades, scale-down, and graceful decommissioning.
+
+Each endpoint targets the **local node** receiving the request. The external orchestrator should call each pod's admin port directly.
+
+### GET /admin/node/status
+
+Query the current node's status, membership info, and metadata.
+
+```bash
+curl http://localhost:9091/admin/node/status
+```
+
+**Response:**
+```json
+{
+  "node_id": "woodpecker-0",
+  "state": "active",
+  "is_decommissioning": false,
+  "member_count": 4,
+  "address": "172.18.0.2:18080",
+  "resource_group": "default",
+  "az": "az-1",
+  "tags": {
+    "role": "logstore"
+  }
+}
+```
+
+**Fields:**
+- `state`: `"active"` | `"decommissioning"` | `"decommissioned"`
+- `is_decommissioning`: convenience boolean for quick checks
+- `member_count`: number of nodes visible in the gossip cluster
+- `address`: gRPC service address for client connections
+
+**Use case:** Post-upgrade verification, scale-up confirmation, monitoring dashboards.
+
+### POST /admin/node/decommission
+
+Mark the node for retirement. The node will stop accepting new write operations while allowing existing tasks (segment processors) to drain.
+
+```bash
+curl -X POST http://localhost:9091/admin/node/decommission
+```
+
+**Response (success):**
+```json
+{"status": "decommission started"}
+```
+
+**Response (conflict — already decommissioned):**
+```json
+{"error": "node already decommissioned"}
+```
+
+**HTTP Status:** `200` on success, `409` on conflict.
+
+**Behavior:**
+- Idempotent: calling multiple times while decommissioning is safe (returns `200`)
+- Immediately rejects new `AddEntry` (write) gRPC requests with `ErrLogStoreShutdown`
+- Existing reads, segment completions, compactions, and other operations continue normally
+
+### GET /admin/node/decommission/progress
+
+Track remaining tasks on a decommissioning node. Poll this endpoint to determine when it is safe to terminate the pod.
+
+```bash
+curl http://localhost:9091/admin/node/decommission/progress
+```
+
+**Response (processors active):**
+```json
+{
+  "state": "decommissioning",
+  "remaining_processors": 5,
+  "has_local_data": true,
+  "safe_to_terminate": false
+}
+```
+
+**Response (processors drained, waiting for data cleanup):**
+```json
+{
+  "state": "decommissioning",
+  "remaining_processors": 0,
+  "has_local_data": true,
+  "safe_to_terminate": false
+}
+```
+
+**Response (ready to terminate):**
+```json
+{
+  "state": "decommissioned",
+  "remaining_processors": 0,
+  "has_local_data": false,
+  "safe_to_terminate": true
+}
+```
+
+**Fields:**
+- `remaining_processors`: number of active segment processors still running (informational, does not affect `safe_to_terminate`)
+- `has_local_data`: whether there are segment data files (`data.log`) remaining on local disk
+- `safe_to_terminate`: `true` when `has_local_data == false` — the pod can be killed safely. This is the sole criterion; processor count is not a factor because processors are in-memory objects that disappear on shutdown
+
+---
+
+## K8s Integration Examples
+
+### PreStop Hook (Graceful Drain)
+
+```yaml
+lifecycle:
+  preStop:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - |
+          # Signal the node to stop accepting new writes
+          curl -X POST http://localhost:9091/admin/node/decommission
+          # Wait until all tasks have drained
+          while true; do
+            SAFE=$(curl -s http://localhost:9091/admin/node/decommission/progress | jq .safe_to_terminate)
+            if [ "$SAFE" = "true" ]; then break; fi
+            sleep 2
+          done
+```
+
+### Readiness Probe
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: 9091
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+### Liveness Probe
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 9091
+  initialDelaySeconds: 15
+  periodSeconds: 20
+```
+
+### Rolling Upgrade Verification Script
+
+```bash
+#!/bin/bash
+# Wait for a node to join the cluster after upgrade
+NODE_ADDR="woodpecker-0.woodpecker:9091"
+for i in $(seq 1 30); do
+  STATE=$(curl -s http://$NODE_ADDR/admin/node/status | jq -r .state)
+  MEMBERS=$(curl -s http://$NODE_ADDR/admin/node/status | jq .member_count)
+  if [ "$STATE" = "active" ] && [ "$MEMBERS" -ge 3 ]; then
+    echo "Node is active with $MEMBERS members"
+    exit 0
+  fi
+  echo "Waiting... state=$STATE members=$MEMBERS (attempt $i/30)"
+  sleep 2
+done
+echo "Node failed to become ready"
+exit 1
+```
+
+---
+
+## Debug / Profiling (pprof)
+
+Enabled by default. Disable via `PPROF_ENABLE=false` environment variable.
+
+**Available pprof endpoints:**
+
+| Path | Description |
+|------|-------------|
+| `/debug/pprof/` | Index page listing all profiles |
+| `/debug/pprof/profile` | CPU profile (default 30s, configurable via `?seconds=N`) |
+| `/debug/pprof/heap` | Heap memory profile |
+| `/debug/pprof/goroutine` | Goroutine stack dump |
+| `/debug/pprof/allocs` | Memory allocation profile |
+| `/debug/pprof/block` | Blocking profile |
+| `/debug/pprof/mutex` | Mutex contention profile |
+| `/debug/pprof/threadcreate` | Thread creation profile |
+| `/debug/pprof/cmdline` | Process command line |
+| `/debug/pprof/symbol` | Symbol lookup |
+| `/debug/pprof/trace` | Execution trace (configurable via `?seconds=N`) |
+
+**Usage examples:**
+
+```bash
+# Browse pprof index page
+curl http://localhost:9091/debug/pprof/
+
+# CPU profile — collect 30 seconds (binary protobuf output, save to file)
+curl -o cpu.prof http://localhost:9091/debug/pprof/profile?seconds=30
+
+# Heap profile — current heap snapshot
+curl -o heap.prof http://localhost:9091/debug/pprof/heap
+
+# Goroutine dump — human-readable stack traces
+curl http://localhost:9091/debug/pprof/goroutine?debug=2
+
+# Goroutine dump — compact summary (one line per goroutine)
+curl http://localhost:9091/debug/pprof/goroutine?debug=1
+
+# Memory allocation profile — all allocations since process start
+curl -o allocs.prof http://localhost:9091/debug/pprof/allocs
+
+# Block profile — goroutine blocking events
+curl -o block.prof http://localhost:9091/debug/pprof/block
+
+# Mutex contention profile
+curl -o mutex.prof http://localhost:9091/debug/pprof/mutex
+
+# Execution trace — collect 5 seconds
+curl -o trace.out http://localhost:9091/debug/pprof/trace?seconds=5
+
+# Interactive analysis with go tool pprof
+go tool pprof http://localhost:9091/debug/pprof/heap
+go tool pprof http://localhost:9091/debug/pprof/profile?seconds=30
+
+# Analyze execution trace
+go tool trace trace.out
+```

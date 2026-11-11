@@ -1,0 +1,49 @@
+milvusRelease: milvus
+clusterLabel: local
+components:
+  grafana: false
+  prometheus: false
+  alertmanager: false
+  jaeger: false
+  loki: false
+jaeger:
+  enabled: false
+  image: jaegertracing/all-in-one:1.53.0
+  # Bounded, ephemeral trace history for local diagnosis.
+  maxTraces: 10000
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+mailpit:
+  enabled: false
+  image: axllent/mailpit:v1.31.6
+alerts:
+  enabled: true
+  limits:
+    # Reference AWS medium-region profile from the supplied document; calibrate
+    # these on the actual platform. Alerts never perform scaling automatically.
+    volumeIOPS: 3000
+    volumeBytesPerSecond: 81000000
+    nodeNetworkBytesPerSecond: 98000000
+    replicaFactor: 3
+loki:
+  enabled: false
+  image: grafana/loki:3.5.7
+  storage: 4Gi
+  retention: 24h
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+alloy:
+  image: grafana/alloy:v1.10.2
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {cpu: "1", memory: 256Mi}
+etcd:
+  image: quay.io/coreos/etcd:v3.5.25
+  storage: 1Gi
+minio:
+  image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
+  storage: 8Gi
+  accessKey: minioadmin
+  secretKey: minioadmin

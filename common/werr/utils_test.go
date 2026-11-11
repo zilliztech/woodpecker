@@ -21,6 +21,9 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/errors"
+	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestUtils_Code(t *testing.T) {
@@ -101,6 +104,69 @@ func TestUtils_StatusAndError(t *testing.T) {
 	}
 }
 
+func TestIsSegmentNotWritableErr(t *testing.T) {
+	// nil error
+	assert.False(t, IsSegmentNotWritableErr(nil))
+
+	// segment closed error
+	assert.True(t, IsSegmentNotWritableErr(ErrSegmentHandleSegmentClosed))
+	assert.True(t, IsSegmentNotWritableErr(ErrSegmentHandleSegmentClosed.WithCauseErrMsg("wrapped")))
+
+	// segment fenced error
+	assert.True(t, IsSegmentNotWritableErr(ErrSegmentFenced))
+	assert.True(t, IsSegmentNotWritableErr(ErrSegmentFenced.WithCauseErr(errors.New("cause"))))
+
+	// storage not writable error
+	assert.True(t, IsSegmentNotWritableErr(ErrStorageNotWritable))
+
+	// file writer finalized error
+	assert.True(t, IsSegmentNotWritableErr(ErrFileWriterFinalized))
+
+	// file writer finalizing error
+	assert.True(t, IsSegmentNotWritableErr(ErrFileWriterFinalizing))
+
+	// client closed error
+	assert.True(t, IsSegmentNotWritableErr(ErrWoodpeckerClientClosed))
+
+	// unrelated errors
+	assert.False(t, IsSegmentNotWritableErr(ErrInternalError))
+	assert.False(t, IsSegmentNotWritableErr(errors.New("random error")))
+	assert.False(t, IsSegmentNotWritableErr(ErrTimeoutError))
+}
+
+func TestIsTimeoutError(t *testing.T) {
+	// nil error
+	assert.False(t, IsTimeoutError(nil))
+
+	// context.Canceled
+	assert.True(t, IsTimeoutError(context.Canceled))
+
+	// context.DeadlineExceeded
+	assert.True(t, IsTimeoutError(context.DeadlineExceeded))
+
+	// gRPC DeadlineExceeded
+	grpcDeadlineErr := status.Error(codes.DeadlineExceeded, "deadline exceeded")
+	assert.True(t, IsTimeoutError(grpcDeadlineErr))
+
+	// gRPC Canceled
+	grpcCanceledErr := status.Error(codes.Canceled, "canceled")
+	assert.True(t, IsTimeoutError(grpcCanceledErr))
+
+	// string matching: "context deadline exceeded"
+	assert.True(t, IsTimeoutError(errors.New("wrapped: context deadline exceeded")))
+
+	// string matching: "DeadlineExceeded"
+	assert.True(t, IsTimeoutError(errors.New("some DeadlineExceeded error")))
+
+	// string matching: "context canceled"
+	assert.True(t, IsTimeoutError(errors.New("request failed: context canceled")))
+
+	// non-timeout errors
+	assert.False(t, IsTimeoutError(errors.New("random error")))
+	assert.False(t, IsTimeoutError(ErrInternalError))
+	assert.False(t, IsTimeoutError(status.Error(codes.Internal, "internal error")))
+}
+
 func TestUtils_Success(t *testing.T) {
 	// Test Success with no reason
 	status := Success()
@@ -120,4 +186,46 @@ func TestUtils_Success(t *testing.T) {
 	if status.Reason != expected {
 		t.Errorf("Expected reason '%s', got '%s'", expected, status.Reason)
 	}
+}
+
+func TestUtils_IsTransportError(t *testing.T) {
+	assert.False(t, IsTransportError(nil), "nil is not a transport error")
+
+	// gRPC Unavailable is the canonical transport error: the server was not
+	// reachable. It's what we observe when a pod has been killed.
+	unavailable := status.Error(codes.Unavailable,
+		`connection error: desc = "transport: Error while dialing: dial tcp 10.0.0.1:18080: connect: connection refused"`)
+	assert.True(t, IsTransportError(unavailable))
+
+	// Wrapped gRPC Unavailable must still be recognized.
+	wrapped := errors.Wrap(unavailable, "failed to fence segment 3")
+	assert.True(t, IsTransportError(wrapped))
+
+	// DeadlineExceeded is a timeout, not a transport error: the caller's
+	// own deadline elapsed and the connection may still be healthy. Do NOT
+	// drop it, or we'd cause thrash under slow-peer load.
+	deadline := status.Error(codes.DeadlineExceeded, "deadline exceeded")
+	assert.False(t, IsTransportError(deadline))
+
+	// Canceled is caller-initiated, not a transport failure.
+	canceled := status.Error(codes.Canceled, "canceled")
+	assert.False(t, IsTransportError(canceled))
+
+	// Application-level errors must not trigger connection teardown.
+	notFound := status.Error(codes.NotFound, "missing")
+	assert.False(t, IsTransportError(notFound))
+	invalid := status.Error(codes.InvalidArgument, "bad request")
+	assert.False(t, IsTransportError(invalid))
+
+	// Non-status errors with known transport markers fall back to string
+	// matching. This catches errors that reach us after losing their
+	// gRPC status through wrapping layers.
+	assert.True(t, IsTransportError(errors.New("dial tcp 10.0.0.1:18080: connect: connection refused")))
+	assert.True(t, IsTransportError(errors.New("lookup foo.bar: no such host")))
+	assert.True(t, IsTransportError(errors.New("read tcp 10.0.0.1->10.0.0.2: connection reset by peer")))
+	assert.True(t, IsTransportError(errors.New("rpc error: transport is closing")))
+
+	// Regular application errors remain non-transport.
+	assert.False(t, IsTransportError(errors.New("invalid argument")))
+	assert.False(t, IsTransportError(ErrSegmentFenced))
 }

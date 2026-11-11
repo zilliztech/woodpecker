@@ -1,0 +1,141 @@
+name: Component Integration Test
+
+on:
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "tests/integration/tracing/**"
+      - "Makefile"
+      - ".github/scripts/ci_packages.py"
+      - ".github/workflows/integration-test-components.yaml"
+      - ".github/docker-compose-ci.yaml"
+  workflow_call:
+
+concurrency:
+  group: integration-test-components-${{ github.event_name == 'workflow_call' && 'nightly-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  Component-Test:
+    name: Component Integration Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Start dependencies (etcd + MinIO)
+        run: |
+          # Pull before `up` so a registry hiccup can be retried on its own: a Docker Hub
+          # timeout used to fail the job before a single test ran (#256). Bounded — three
+          # attempts with backoff, then give up. Never retry indefinitely.
+          for attempt in 1 2 3; do
+            if docker compose -f .github/docker-compose-ci.yaml pull; then break; fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::docker compose pull failed after 3 attempts"
+              exit 1
+            fi
+            echo "pull attempt $attempt failed; retrying in $((attempt * 10))s"
+            sleep $((attempt * 10))
+          done
+          docker compose -f .github/docker-compose-ci.yaml up -d
+          # Bounded health waits too. An unbounded `until` loop here would burn the whole
+          # job timeout and surface as a cancelled job rather than a clear error.
+          for svc in ci-etcd ci-minio; do
+            echo "Waiting for $svc..."
+            for i in $(seq 60); do
+              if [ "$(docker inspect --format='{{.State.Health.Status}}' "$svc" 2>/dev/null)" = healthy ]; then break; fi
+              if [ "$i" = 60 ]; then
+                echo "::error::$svc did not become healthy within 120s"
+                docker logs "$svc" 2>&1 | tail -50
+                exit 1
+              fi
+              sleep 2
+            done
+            echo "$svc is ready"
+          done
+
+      - name: Create MinIO bucket
+        run: |
+          # mc comes from the MinIO image the stack already pulls, which ships it at
+          # /usr/bin/mc. Neither of the two sources this step used before survived: the binary
+          # download answers 410 (issue #330) and the standalone mc image is no longer public
+          # (issue #376). Reusing the server image leaves one image to keep working instead of
+          # two, and it is one we mirror ourselves.
+          docker run --rm --network woodpecker-ci \
+            -e MC_HOST_local=http://minioadmin:minioadmin@ci-minio:9000 \
+            --entrypoint mc \
+            milvusdb/minio:RELEASE.2024-12-18T13-15-44Z \
+            mb local/a-bucket --ignore-existing
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Run component integration tests
+        run: |
+          # Rollover latency is owned by the dedicated embedded-MinIO fallback workflow.
+          packages="$(python3 .github/scripts/ci_packages.py sdk-integration)"
+          mapfile -t test_packages <<< "$packages"
+          set +e
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output.json \
+            -- -race -cover -failfast -timeout=20m \
+            -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestDataCorruptionService|TestServiceStability|TestServiceUpgrade|TestClientLogWriter|TestEmbedMinioRolloverConditionWrite)" \
+            "${test_packages[@]}"
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output.json
+          exit $exit_code
+
+      - name: Upload test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs-components
+          path: test-output.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Stop dependencies
+        if: always()
+        run: |
+          docker compose -f .github/docker-compose-ci.yaml down -v
+
+  tracing:
+    name: Trace Export Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Trace request and lifecycle contracts
+        run: |
+          go test -race ./tests/integration/tracing/cmd/requests
+          python3 -m unittest discover -s tests/integration/tracing -p 'test_*.py' -v
+      - run: docker pull jaegertracing/all-in-one:1.53.0
+      - name: Verify actual emitted append spans
+        run: python3 tests/integration/tracing/append_propagation.py --output /tmp/wp-append-trace-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: append-trace-propagation
+          path: /tmp/wp-append-trace-evidence
+          if-no-files-found: ignore
+          retention-days: 7

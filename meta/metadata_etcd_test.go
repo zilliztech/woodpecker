@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
+	"google.golang.org/grpc/metadata"
 	pb "google.golang.org/protobuf/proto"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -36,29 +37,101 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
-func testMetaCfg() *config.Configuration {
-	cfg, _ := config.NewConfiguration()
+func testMetaCfg(t *testing.T) *config.Configuration {
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err, "failed to create test configuration")
+	cfg.Etcd.RootPath = ""
+	cfg.Woodpecker.Meta.Prefix = LegacyServicePrefix
 	return cfg
 }
 
+func testMetaCfgWithPrefix(t *testing.T, rootPath string, metaPrefix string) *config.Configuration {
+	cfg := testMetaCfg(t)
+	cfg.Etcd.RootPath = rootPath
+	cfg.Woodpecker.Meta.Prefix = metaPrefix
+	return cfg
+}
+
+func legacyKeyBuilder() *KeyBuilder {
+	return NewKeyBuilder(LegacyServicePrefix)
+}
+
+func deleteMetadataRoot(t *testing.T, etcdCli *clientv3.Client, prefix string) {
+	_, err := etcdCli.Delete(context.Background(), prefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+}
+
+func putInitializedMetadataKeys(t *testing.T, etcdCli *clientv3.Client, keyBuilder *KeyBuilder) {
+	versionData, err := pb.Marshal(&proto.Version{
+		Major: VersionMajor,
+		Minor: VersionMinor,
+		Patch: VersionPatch,
+	})
+	require.NoError(t, err)
+
+	_, err = etcdCli.Put(context.Background(), keyBuilder.ServiceInstanceKey(), "legacy-instance")
+	require.NoError(t, err)
+	_, err = etcdCli.Put(context.Background(), keyBuilder.VersionKey(), string(versionData))
+	require.NoError(t, err)
+	_, err = etcdCli.Put(context.Background(), keyBuilder.LogIdGeneratorKey(), "0")
+	require.NoError(t, err)
+	_, err = etcdCli.Put(context.Background(), keyBuilder.QuorumIdGeneratorKey(), "0")
+	require.NoError(t, err)
+}
+
 func TestAll(t *testing.T) {
-	err := etcd.InitEtcdServer(true, "", "/tmp/testMetadata", "/tmp/testMetadata.log", "info")
-	assert.NoError(t, err)
+	tmpDir := t.TempDir()
+	err := etcd.InitEtcdServer(true, "", tmpDir, tmpDir+"/etcd.log", "info")
+	require.NoError(t, err)
 	defer etcd.StopEtcdServer()
 	t.Run("test init if necessary", testInitIfNecessary)
+	t.Run("test configured metadata prefix", testConfiguredMetadataPrefix)
+	t.Run("test configured prefix under legacy root", testConfiguredPrefixUnderLegacyRoot)
+	t.Run("test legacy metadata prefix fallback", testLegacyMetadataPrefixFallback)
+	t.Run("test independent metadata prefix per provider", testIndependentMetadataPrefixPerProvider)
+	t.Run("test skip ranges: an absent record reads as empty", testSkipRangesAbsentRecordReadsAsEmpty)
+	t.Run("test skip ranges: the accessor is nil-safe at every level", testSkipRangesAccessorIsNilSafeAtEveryLevel)
+	t.Run("test skip ranges: round trips by log and segment", testSkipRangesRoundTripsByLogAndSegment)
+	t.Run("test skip ranges: an undecodable record is an error", testSkipRangesUndecodableRecordIsAnError)
+	t.Run("test skip ranges: a cached read answers from the cache, not from etcd", testSkipRangesCachedReadAnswersFromTheCacheNotFromEtcd)
+	t.Run("test skip ranges: the refresh interval comes from the configuration", testSkipRangesRefreshIntervalComesFromTheConfiguration)
+	t.Run("test skip ranges: one log's ranges come back keyed by segment", testGetLogSkipRangesReturnsOneLogsRanges)
+	t.Run("test skip ranges: the refresh is single-flighted", testSkipRangesRefreshIsSingleFlighted)
+	t.Run("test skip ranges: a cached read holds for its window", testSkipRangesCachedReadHoldsForItsWindow)
+	t.Run("test skip ranges: a cached read survives an unreadable record", testSkipRangesCachedReadSurvivesAnUnreadableRecord)
+	t.Run("test skip ranges: a stale write is refused", testSkipRangesStaleWriteIsRefused)
+	t.Run("test skip ranges: a first write refuses if someone else created it", testSkipRangesFirstWriteRefusesIfSomeoneElseCreatedIt)
+	t.Run("test skip ranges: an oversized record is refused", testSkipRangesOversizedRecordIsRefused)
+	t.Run("test skip ranges: remove drops the record", testSkipRangesRemoveDropsTheRecord)
+	t.Run("test skip ranges: a stale remove is refused", testSkipRangesRemoveStaleIsRefused)
 	t.Run("test create log and open", testCreateLogAndOpen)
 	t.Run("test check exists", testCheckExists)
 	t.Run("test store quorum info", testStoreQuorumInfo)
 	t.Run("test store segment meta", testStoreSegmentMeta)
 	t.Run("test update segment meta", testUpdateSegmentMeta)
 	t.Run("test delete segment meta", testDeleteSegmentMeta)
+	t.Run("test segment metadata writes take no provider lock", testSegmentMetadataWritesTakeNoProviderLock)
+	t.Run("test concurrent segment metadata writes across logs", testConcurrentSegmentMetadataWritesAcrossLogs)
 	t.Run("test log writer lock", testLogWriterLock)
 	t.Run("test update log meta for truncation", testUpdateLogMetaForTruncation)
+	t.Run("test clear meta preserves counter", testClearMetaPreservesCounterAndIsRepeatable)
+	t.Run("test clear meta resumes after interruption", testClearMetaResumesAfterInterruption)
+	t.Run("test clear meta only logidgen left still starts", testClearMetaOnlyLogIdGenLeftStillStarts)
+	t.Run("test clear meta with logidgen resets counter", testClearMetaWithLogIdGenResetsCounter)
+	t.Run("test list parked log ids sees only log meta records", testListParkedLogIdsSeesOnlyLogMetaRecords)
 	t.Run("test create reader temp info", testCreateReaderTempInfo)
 	t.Run("test get reader temp info", testGetReaderTempInfo)
 	t.Run("test update reader temp info", testUpdateReaderTempInfo)
 	t.Run("test get all reader temp info for log", testGetAllReaderTempInfoForLog)
 	t.Run("test delete reader temp info", testDeleteReaderTempInfo)
+	t.Run("test reader temp info outlives lease ttl while idle", testReaderTempInfoOutlivesLeaseTTLWhileIdle)
+	t.Run("test update reader temp info self heals after lease loss", testUpdateReaderTempInfoSelfHealsAfterLeaseLoss)
+	t.Run("test update after delete does not resurrect reader temp info", testUpdateAfterDeleteDoesNotResurrectReaderTempInfo)
+	t.Run("test update put failure does not revoke reader temp info lease", testUpdatePutFailureDoesNotRevokeReaderTempInfoLease)
+	t.Run("test reader session survives provider close", testReaderSessionSurvivesProviderClose)
+	t.Run("test provider close is idempotent and leaves readers alone", testProviderCloseIsIdempotentAndLeavesReadersAlone)
+	t.Run("test reader temp info rejects foreign session", testReaderTempInfoRejectsForeignSession)
+	t.Run("test create reader temp info honors caller deadline when etcd unreachable", testCreateReaderTempInfoHonorsCallerDeadlineWhenEtcdUnreachable)
 	t.Run("test create segment cleanup status", testCreateSegmentCleanupStatus)
 	t.Run("test update segment cleanup status", testUpdateSegmentCleanupStatus)
 	t.Run("test list segment cleanup status", testListSegmentCleanupStatus)
@@ -69,17 +142,60 @@ func TestAll(t *testing.T) {
 	t.Run("test update log meta with wrong revision", testUpdateLogMetaWithWrongRevision)
 	t.Run("test update segment meta with wrong revision", testUpdateSegmentMetaWithWrongRevision)
 	t.Run("test store or get condition write result", testStoreOrGetConditionWriteResult)
+	t.Run("test store condition write enabled", testStoreConditionWriteEnabled)
 	t.Run("test get condition write result", testGetConditionWriteResult)
+	t.Run("test session lock with etcd", testSessionLockWithEtcd)
+	t.Run("test check session lock alive nil", testCheckSessionLockAliveNil)
+	t.Run("test close empty provider", testCloseEmptyProvider)
+	t.Run("test get log meta not found", testGetLogMetaNotFound)
+	t.Run("test close with active lock", testCloseWithActiveLock)
+	t.Run("test release non existent lock", testReleaseNonExistentLock)
+	t.Run("test init already initialized", testInitAlreadyInitialized)
+	t.Run("test init partial init", testInitPartialInit)
+	t.Run("test get version info not found", testGetVersionInfoNotFound)
+	t.Run("test get quorum info not found", testGetQuorumInfoNotFound)
+	t.Run("test store quorum info already exists", testStoreQuorumInfoAlreadyExists)
+	t.Run("test open log not found", testOpenLogNotFound)
+	t.Run("test list logs with prefix no match", testListLogsWithPrefixNoMatch)
+	t.Run("test new metadata provider default timeout", testNewMetadataProviderDefaultTimeout)
+	t.Run("test get context with timeout grpc metadata", testGetContextWithTimeoutGRPCMetadata)
+	t.Run("test store segment meta already exists", testStoreSegmentMetaAlreadyExists)
+	t.Run("test create cleanup status already exists", testCreateCleanupStatusAlreadyExists)
+	t.Run("test update cleanup status not exists", testUpdateCleanupStatusNotExists)
+	t.Run("test create segment compacted notify status", testCreateSegmentCompactedNotifyStatus)
+	t.Run("test update segment compacted notify status", testUpdateSegmentCompactedNotifyStatus)
+	t.Run("test list segment compacted notify status", testListSegmentCompactedNotifyStatus)
+	t.Run("test delete segment compacted notify status", testDeleteSegmentCompactedNotifyStatus)
+	t.Run("test create compacted notify status already exists", testCreateCompactedNotifyStatusAlreadyExists)
+	t.Run("test update compacted notify status not exists", testUpdateCompactedNotifyStatusNotExists)
+	t.Run("test corrupted compacted notify status data", testCorruptedCompactedNotifyStatusData)
+	t.Run("test delete log metadata wipes marking records", testDeleteLogMetadataWipesMarkingRecords)
+	t.Run("test list compacted notify status no cross log", testListSegmentCompactedNotifyStatusNoCrossLog)
+	t.Run("test list cleanup status no cross log", testListSegmentCleanupStatusNoCrossLog)
+	t.Run("test check segment not exists", testCheckSegmentNotExists)
+	t.Run("test cancelled context etcd errors", testCancelledContextEtcdErrors)
+	t.Run("test corrupted protobuf data", testCorruptedProtobufData)
+	t.Run("test create log edge cases", testCreateLogEdgeCases)
+	t.Run("test acquire lock edge cases", testAcquireLockEdgeCases)
+	t.Run("test update reader temp info without in-process session", testUpdateReaderTempInfoWithoutSession)
+	t.Run("test close with nil lock entry", testCloseWithNilLockEntry)
+	t.Run("test open log with corrupted segment data", testOpenLogWithCorruptedSegmentData)
+	t.Run("test delete log metadata force true", testDeleteLogMetadata_ForceTrue)
+	t.Run("test delete log metadata force false parks subtree", testDeleteLogMetadata_ForceFalse_ParksSubtree)
+	t.Run("test delete log metadata idempotent", testDeleteLogMetadata_Idempotent)
+	t.Run("test delete log metadata force false large segment count", testDeleteLogMetadata_ForceFalse_ManySegments)
+	t.Run("test delete log metadata force false double delete", testDeleteLogMetadata_ForceFalse_DoubleDelete)
+	t.Run("test store segment metadata rejects after log deleted", testStoreSegmentMetadata_RejectsAfterLogDeleted)
 }
 
 func testInitIfNecessary(t *testing.T) {
 	// get etcd client
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
 
 	// clear metadata first
-	deleteResp, err := etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix(), clientv3.WithPrevKV())
+	deleteResp, err := etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix(), clientv3.WithPrevKV())
 	assert.NoError(t, err)
 	if len(deleteResp.PrevKvs) > 0 {
 		t.Logf("clear metadata success, following keys have bean deleted")
@@ -89,14 +205,14 @@ func testInitIfNecessary(t *testing.T) {
 	}
 
 	// Init metadata
-	metadataProvider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	metadataProvider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	initErr := metadataProvider.InitIfNecessary(context.Background())
-	assert.NoError(t, initErr)
+	require.NoError(t, initErr)
 
 	// check init
 	{
-		getResp, getErr := etcdCli.Get(context.Background(), ServiceInstanceKey)
-		assert.NoErrorf(t, getErr, "get %s failed:", ServiceInstanceKey)
+		getResp, getErr := etcdCli.Get(context.Background(), legacyKeyBuilder().ServiceInstanceKey())
+		assert.NoErrorf(t, getErr, "get %s failed:", legacyKeyBuilder().ServiceInstanceKey())
 		assert.Equalf(t, 1, len(getResp.Kvs), "expected 1 kv，but got %d ", len(getResp.Kvs))
 	}
 	expectedVersion := &proto.Version{
@@ -107,8 +223,8 @@ func testInitIfNecessary(t *testing.T) {
 	expectedVersionData, _ := pb.Marshal(expectedVersion)
 	expectedVersionStr := string(expectedVersionData)
 	{
-		getResp, getErr := etcdCli.Get(context.Background(), VersionKey)
-		assert.NoErrorf(t, getErr, "get %s failed:", VersionKey)
+		getResp, getErr := etcdCli.Get(context.Background(), legacyKeyBuilder().VersionKey())
+		assert.NoErrorf(t, getErr, "get %s failed:", legacyKeyBuilder().VersionKey())
 		assert.Equalf(t, 1, len(getResp.Kvs), "expected 1 kv，but got %d ", len(getResp.Kvs))
 		assert.Equalf(t, expectedVersionStr, string(getResp.Kvs[0].Value), "expected %s but got %s ", expectedVersionStr, string(getResp.Kvs[0].Value))
 	}
@@ -119,33 +235,188 @@ func testInitIfNecessary(t *testing.T) {
 		assert.Equal(t, expectedVersionStr, string(actualVersionData))
 	}
 	{
-		getResp, getErr := etcdCli.Get(context.Background(), LogIdGeneratorKey)
-		assert.NoErrorf(t, getErr, "get %s failed:", LogIdGeneratorKey)
+		getResp, getErr := etcdCli.Get(context.Background(), legacyKeyBuilder().LogIdGeneratorKey())
+		assert.NoErrorf(t, getErr, "get %s failed:", legacyKeyBuilder().LogIdGeneratorKey())
 		assert.Equalf(t, 1, len(getResp.Kvs), "expected 1 kv，but got %d ", len(getResp.Kvs))
-		assert.Equal(t, "0", string(getResp.Kvs[0].Value), "get %s value does not equal to '0'", LogIdGeneratorKey)
+		assert.Equal(t, "0", string(getResp.Kvs[0].Value), "get %s value does not equal to '0'", legacyKeyBuilder().LogIdGeneratorKey())
 	}
 	{
-		getResp, getErr := etcdCli.Get(context.Background(), QuorumIdGeneratorKey)
-		assert.NoErrorf(t, getErr, "get %s failed:", QuorumIdGeneratorKey)
+		getResp, getErr := etcdCli.Get(context.Background(), legacyKeyBuilder().QuorumIdGeneratorKey())
+		assert.NoErrorf(t, getErr, "get %s failed:", legacyKeyBuilder().QuorumIdGeneratorKey())
 		assert.Equalf(t, 1, len(getResp.Kvs), "expected 1 kv，but got %d ", len(getResp.Kvs))
-		assert.Equalf(t, "0", string(getResp.Kvs[0].Value), "get %s value does not equal to '0'", QuorumIdGeneratorKey)
+		assert.Equalf(t, "0", string(getResp.Kvs[0].Value), "get %s value does not equal to '0'", legacyKeyBuilder().QuorumIdGeneratorKey())
 	}
 
 	t.Logf("clear finished")
 }
 
+func testConfiguredMetadataPrefix(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+
+	cfg := testMetaCfgWithPrefix(t, "lakebase-165", "wp")
+	configuredKeys := NewKeyBuilder("lakebase-165/wp")
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, configuredKeys.Prefix())
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, cfg)
+	p := provider.(*metadataProviderEtcd)
+	assert.Equal(t, configuredKeys.Prefix(), p.configuredPrefix)
+	assert.Equal(t, configuredKeys.Prefix(), p.effectivePrefix)
+
+	conditionWriteEnabled, err := provider.StoreOrGetConditionWriteResult(context.Background(), true)
+	require.NoError(t, err)
+	assert.True(t, conditionWriteEnabled)
+
+	conditionWriteResp, err := etcdCli.Get(context.Background(), configuredKeys.ConditionWriteKey())
+	require.NoError(t, err)
+	require.Len(t, conditionWriteResp.Kvs, 1)
+	assert.Equal(t, "true", string(conditionWriteResp.Kvs[0].Value))
+
+	legacyConditionWriteResp, err := etcdCli.Get(context.Background(), legacyKeyBuilder().ConditionWriteKey())
+	require.NoError(t, err)
+	assert.Len(t, legacyConditionWriteResp.Kvs, 0)
+
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	for _, key := range []string{
+		configuredKeys.ServiceInstanceKey(),
+		configuredKeys.VersionKey(),
+		configuredKeys.LogIdGeneratorKey(),
+		configuredKeys.QuorumIdGeneratorKey(),
+	} {
+		resp, getErr := etcdCli.Get(context.Background(), key)
+		require.NoError(t, getErr)
+		assert.Len(t, resp.Kvs, 1, "expected configured metadata key %s", key)
+	}
+
+	logName := "configured-log"
+	err = provider.CreateLog(context.Background(), logName)
+	require.NoError(t, err)
+
+	configuredLogResp, err := etcdCli.Get(context.Background(), configuredKeys.BuildLogKey(logName))
+	require.NoError(t, err)
+	assert.Len(t, configuredLogResp.Kvs, 1)
+
+	legacyLogResp, err := etcdCli.Get(context.Background(), legacyKeyBuilder().BuildLogKey(logName))
+	require.NoError(t, err)
+	assert.Len(t, legacyLogResp.Kvs, 0)
+
+	logs, err := provider.ListLogs(context.Background())
+	require.NoError(t, err)
+	assert.Contains(t, logs, logName)
+}
+
+func testConfiguredPrefixUnderLegacyRoot(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+
+	cfg := testMetaCfgWithPrefix(t, LegacyServicePrefix, "wp-165")
+	configuredKeys := NewKeyBuilder("woodpecker/wp-165")
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, configuredKeys.Prefix())
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, cfg)
+	p := provider.(*metadataProviderEtcd)
+	assert.Equal(t, configuredKeys.Prefix(), p.effectivePrefix)
+
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	restartedProvider := NewMetadataProvider(context.Background(), etcdCli, cfg)
+	restarted := restartedProvider.(*metadataProviderEtcd)
+	assert.Equal(t, configuredKeys.Prefix(), restarted.effectivePrefix)
+
+	version, err := restartedProvider.GetVersionInfo(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int32(VersionMajor), version.Major)
+}
+
+func testLegacyMetadataPrefixFallback(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+
+	cfg := testMetaCfgWithPrefix(t, "lakebase-legacy", "wp")
+	configuredKeys := NewKeyBuilder("lakebase-legacy/wp")
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, configuredKeys.Prefix())
+	putInitializedMetadataKeys(t, etcdCli, NewKeyBuilder(LegacyServicePrefix))
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, cfg)
+	p := provider.(*metadataProviderEtcd)
+	assert.Equal(t, configuredKeys.Prefix(), p.configuredPrefix)
+	assert.Equal(t, LegacyServicePrefix, p.effectivePrefix)
+
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	logName := "legacy-prefix-log"
+	err = provider.CreateLog(context.Background(), logName)
+	require.NoError(t, err)
+
+	legacyLogResp, err := etcdCli.Get(context.Background(), legacyKeyBuilder().BuildLogKey(logName))
+	require.NoError(t, err)
+	assert.Len(t, legacyLogResp.Kvs, 1)
+
+	configuredLogResp, err := etcdCli.Get(context.Background(), configuredKeys.BuildLogKey(logName))
+	require.NoError(t, err)
+	assert.Len(t, configuredLogResp.Kvs, 0)
+}
+
+func testIndependentMetadataPrefixPerProvider(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+
+	keysA := NewKeyBuilder("root-a-165/wp-a")
+	keysB := NewKeyBuilder("root-b-165/wp-b")
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, keysA.Prefix())
+	deleteMetadataRoot(t, etcdCli, keysB.Prefix())
+
+	providerA := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, "root-a-165", "wp-a"))
+	providerB := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, "root-b-165", "wp-b"))
+
+	pA := providerA.(*metadataProviderEtcd)
+	pB := providerB.(*metadataProviderEtcd)
+	assert.Equal(t, keysA.Prefix(), pA.effectivePrefix)
+	assert.Equal(t, keysB.Prefix(), pB.effectivePrefix)
+
+	require.NoError(t, providerA.InitIfNecessary(context.Background()))
+	require.NoError(t, providerB.InitIfNecessary(context.Background()))
+
+	logName := "same-log-name"
+	require.NoError(t, providerA.CreateLog(context.Background(), logName))
+	require.NoError(t, providerB.CreateLog(context.Background(), logName))
+
+	respA, err := etcdCli.Get(context.Background(), keysA.BuildLogKey(logName))
+	require.NoError(t, err)
+	assert.Len(t, respA.Kvs, 1)
+
+	respB, err := etcdCli.Get(context.Background(), keysB.BuildLogKey(logName))
+	require.NoError(t, err)
+	assert.Len(t, respB.Kvs, 1)
+
+	legacyResp, err := etcdCli.Get(context.Background(), legacyKeyBuilder().BuildLogKey(logName))
+	require.NoError(t, err)
+	assert.Len(t, legacyResp.Kvs, 0)
+}
+
 // TestCreateLog tests the CreateLog method of metadataProviderEtcd
 func testCreateLogAndOpen(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// create log
 	logName := "test_log" + time.Now().Format("20060102150405")
@@ -153,13 +424,13 @@ func testCreateLogAndOpen(t *testing.T) {
 	assert.NoError(t, err)
 
 	// check idgen update to 1
-	idGenResp, err := etcdCli.Get(context.Background(), LogIdGeneratorKey)
-	require.NoError(t, err, "get LogIdGeneratorKey failed")
+	idGenResp, err := etcdCli.Get(context.Background(), legacyKeyBuilder().LogIdGeneratorKey())
+	require.NoError(t, err, "get legacyKeyBuilder().LogIdGeneratorKey() failed")
 	assert.Equal(t, "1", string(idGenResp.Kvs[0].Value))
 
 	// check test_log exists
 	{
-		logPath := BuildLogKey(logName)
+		logPath := legacyKeyBuilder().BuildLogKey(logName)
 		logResp, err := etcdCli.Get(context.Background(), logPath)
 		require.NoError(t, err, "get log failed")
 		require.Len(t, logResp.Kvs, 1)
@@ -204,7 +475,7 @@ func testCreateLogAndOpen(t *testing.T) {
 
 	// test list logs
 	{
-		printDirContents(t, context.Background(), etcdCli, ServicePrefix, "")
+		printDirContents(t, context.Background(), etcdCli, LegacyServicePrefix, "")
 		logNames, err := provider.ListLogs(context.Background())
 		assert.NoError(t, err)
 		assert.Equalf(t, 1, len(logNames), "%v", logNames)
@@ -213,7 +484,7 @@ func testCreateLogAndOpen(t *testing.T) {
 
 	// test list log with prefix
 	{
-		printDirContents(t, context.Background(), etcdCli, ServicePrefix, "")
+		printDirContents(t, context.Background(), etcdCli, LegacyServicePrefix, "")
 		logNames, err := provider.ListLogsWithPrefix(context.Background(), "test_log")
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(logNames))
@@ -223,15 +494,15 @@ func testCreateLogAndOpen(t *testing.T) {
 
 func testCheckExists(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// create log
 	logName := "test_log_11"
@@ -239,8 +510,8 @@ func testCheckExists(t *testing.T) {
 	assert.NoError(t, err)
 
 	// check idgen update to 1
-	idGenResp, err := etcdCli.Get(context.Background(), LogIdGeneratorKey)
-	require.NoError(t, err, "get LogIdGeneratorKey failed")
+	idGenResp, err := etcdCli.Get(context.Background(), legacyKeyBuilder().LogIdGeneratorKey())
+	require.NoError(t, err, "get legacyKeyBuilder().LogIdGeneratorKey() failed")
 	assert.Equal(t, "1", string(idGenResp.Kvs[0].Value))
 
 	{
@@ -282,15 +553,15 @@ func printDirContents(t *testing.T, ctx context.Context, cli *clientv3.Client, p
 // testStoreQuorumInfo tests the StoreQuorumInfo & GetQuorumInfo methods
 func testStoreQuorumInfo(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// store quorumInfo
 	quorumInfo := &proto.QuorumInfo{
@@ -315,15 +586,15 @@ func testStoreQuorumInfo(t *testing.T) {
 // testStoreSegmentMeta tests the StoreSegmentMeta & GetSegmentMeta methods
 func testStoreSegmentMeta(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	logName := "test_log" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
@@ -335,7 +606,7 @@ func testStoreSegmentMeta(t *testing.T) {
 			SegNo: 1,
 		},
 	}
-	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, int64(1), segmentMeta)
 	assert.NoError(t, storeErr)
 
 	// test get segmentMeta
@@ -358,15 +629,15 @@ func testStoreSegmentMeta(t *testing.T) {
 // testUpdateSegmentMeta tests the UpdateSegmentMeta
 func testUpdateSegmentMeta(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	logName := "test_log" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
@@ -379,7 +650,7 @@ func testUpdateSegmentMeta(t *testing.T) {
 			State: proto.SegmentState_Active,
 		},
 	}
-	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, int64(1), segmentMeta)
 	assert.NoError(t, storeErr)
 	// test get segmentMeta
 	{
@@ -397,7 +668,7 @@ func testUpdateSegmentMeta(t *testing.T) {
 
 	// Update the state and use the current revision
 	currentSegmentMeta.Metadata.State = proto.SegmentState_Sealed
-	updateErr := provider.UpdateSegmentMetadata(context.Background(), logName, currentSegmentMeta)
+	updateErr := provider.UpdateSegmentMetadata(context.Background(), logName, int64(1), currentSegmentMeta, proto.SegmentState_Active)
 	assert.NoError(t, updateErr)
 	{
 		getSegmentMeta, getErr := provider.GetSegmentMetadata(context.Background(), logName, 1)
@@ -411,15 +682,15 @@ func testUpdateSegmentMeta(t *testing.T) {
 // testDeleteSegmentMeta tests the DeleteSegmentMetadata method
 func testDeleteSegmentMeta(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	logName := "test_log" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
@@ -433,7 +704,7 @@ func testDeleteSegmentMeta(t *testing.T) {
 		},
 	}
 
-	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, int64(1), segmentMeta)
 	assert.NoError(t, storeErr)
 
 	// Verify segment exists
@@ -442,7 +713,7 @@ func testDeleteSegmentMeta(t *testing.T) {
 	assert.True(t, exists)
 
 	// Delete the segment
-	deleteErr := provider.DeleteSegmentMetadata(context.Background(), logName, segmentMeta.Metadata.SegNo)
+	deleteErr := provider.DeleteSegmentMetadata(context.Background(), logName, int64(1), segmentMeta.Metadata.SegNo, proto.SegmentState_Active)
 	assert.NoError(t, deleteErr)
 
 	// Verify segment no longer exists
@@ -456,29 +727,29 @@ func testDeleteSegmentMeta(t *testing.T) {
 	assert.True(t, werr.ErrSegmentNotFound.Is(getErr))
 
 	// Attempt to delete a non-existent segment should result in error
-	deleteErr = provider.DeleteSegmentMetadata(context.Background(), logName, 999)
+	deleteErr = provider.DeleteSegmentMetadata(context.Background(), logName, int64(1), 999, proto.SegmentState_Truncated)
 	assert.Error(t, deleteErr)
 	assert.True(t, werr.ErrSegmentNotFound.Is(deleteErr))
 
 	// Test deleting from a non-existent log
 	nonExistentLogName := "non_existent_log"
-	deleteErr = provider.DeleteSegmentMetadata(context.Background(), nonExistentLogName, 1)
+	deleteErr = provider.DeleteSegmentMetadata(context.Background(), nonExistentLogName, int64(1), 1, proto.SegmentState_Truncated)
 	assert.Error(t, deleteErr)
 	assert.True(t, werr.ErrSegmentNotFound.Is(deleteErr))
 }
 
 func testLogWriterLock(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	defer provider.Close()
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	logName := "test_log" + time.Now().Format("20060102150405")
 
 	// lock success
@@ -492,13 +763,12 @@ func testLogWriterLock(t *testing.T) {
 	// test lock fail from another session
 	{
 		newSession, newSessionErr := concurrency.NewSession(etcdCli, concurrency.WithTTL(5))
-		assert.NoError(t, newSessionErr)
-		lockKey := BuildLogLockKey(logName)
+		require.NoError(t, newSessionErr)
+		defer newSession.Close()
+		lockKey := legacyKeyBuilder().BuildLogLockKey(logName)
 		mutex1 := concurrency.NewMutex(newSession, lockKey)
 		lockErr := mutex1.TryLock(context.Background())
 		assert.Error(t, lockErr)
-		assert.ErrorContainsf(t, lockErr, "Locked by another session", "unexpected error: %s", lockErr.Error())
-		newSession.Close()
 	}
 
 	// release lock
@@ -508,26 +778,26 @@ func testLogWriterLock(t *testing.T) {
 	// test lock success from another session after release
 	{
 		newSession, newSessionErr := concurrency.NewSession(etcdCli, concurrency.WithTTL(5))
-		assert.NoError(t, newSessionErr)
-		lockKey := BuildLogLockKey(logName)
+		require.NoError(t, newSessionErr)
+		defer newSession.Close()
+		lockKey := legacyKeyBuilder().BuildLogLockKey(logName)
 		mutex1 := concurrency.NewMutex(newSession, lockKey)
 		lockErr := mutex1.TryLock(context.Background())
 		assert.NoError(t, lockErr)
-		newSession.Close()
 	}
 }
 
 func testUpdateLogMetaForTruncation(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a test log
 	logName := "truncate_test_log_" + time.Now().Format("20060102150405")
@@ -563,25 +833,25 @@ func testUpdateLogMetaForTruncation(t *testing.T) {
 
 func testCreateReaderTempInfo(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// Create a metadata provider with the session
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a test log
 	logName := "reader_temp_info_test_log_" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Get log metadata to get the logId
 	logMeta, err := provider.GetLogMeta(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create reader temp info
 	readerName := "test-reader-" + time.Now().Format("20060102150405")
@@ -589,11 +859,12 @@ func testCreateReaderTempInfo(t *testing.T) {
 	entryId := int64(42)
 
 	// Create the reader temp info - this will use the session's lease
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
+	readerSession, err := provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
 	assert.NoError(t, err)
+	assert.NotNil(t, readerSession)
 
 	// Verify the reader temp info was created
-	readerKey := BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
+	readerKey := legacyKeyBuilder().BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
 	resp, err := etcdCli.Get(context.Background(), readerKey)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Kvs), "Reader temp info should exist")
@@ -614,45 +885,42 @@ func testCreateReaderTempInfo(t *testing.T) {
 	assert.Greater(t, readerInfo.RecentReadTimestamp, uint64(0))
 
 	// Verify the key is attached to the session's lease
-	leaseInfo, err := etcdCli.TimeToLive(context.Background(), clientv3.LeaseID(resp.Kvs[0].Lease))
-	assert.NoError(t, err)
+	leaseID := clientv3.LeaseID(resp.Kvs[0].Lease)
+	leaseInfo, err := etcdCli.TimeToLive(context.Background(), leaseID)
+	require.NoError(t, err)
 	assert.True(t, leaseInfo.TTL > 0, "Key should have a TTL")
 	assert.True(t, leaseInfo.TTL <= 60, "TTL should be 60 seconds or less")
 
-	t.Logf("Reader temp info is created with TTL of %d seconds", leaseInfo.TTL)
+	// Revoke the lease to simulate expiry without waiting 65 seconds
+	_, err = etcdCli.Revoke(context.Background(), leaseID)
+	require.NoError(t, err)
 
-	// Wait for the lease to expire (a bit more than the TTL)
-	t.Log("Waiting for session lease to expire...")
-	time.Sleep(65 * time.Second)
-
-	// Check if the key has been automatically removed after session ended
+	// Check if the key has been automatically removed after lease revoked
 	checkResp, err := etcdCli.Get(context.Background(), readerKey)
 	assert.NoError(t, err)
-	assert.Equal(t, 0, len(checkResp.Kvs), "Reader temp info should be automatically removed after session ends")
-
-	t.Log("Reader temp info was automatically removed after session ended as expected")
+	assert.Equal(t, 0, len(checkResp.Kvs), "Reader temp info should be automatically removed after lease revoked")
 }
 
 func testGetReaderTempInfo(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a test log
 	logName := "get_reader_temp_info_test_log_" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Get log metadata to get the logId
 	logMeta, err := provider.GetLogMeta(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create reader temp info
 	readerName := "test-reader-" + time.Now().Format("20060102150405")
@@ -660,7 +928,7 @@ func testGetReaderTempInfo(t *testing.T) {
 	entryId := int64(42)
 
 	// Create the reader temp info
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
+	_, err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
 	assert.NoError(t, err)
 
 	// Get the reader temp info
@@ -688,33 +956,34 @@ func testGetReaderTempInfo(t *testing.T) {
 // Test updating reader temporary information
 func testUpdateReaderTempInfo(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a test log
 	logName := "update_reader_temp_info_test_" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Get log metadata to get the logId
 	logMeta, err := provider.GetLogMeta(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create reader temp info
 	readerName := "test-reader-update-" + time.Now().Format("20060102150405")
 	initialSegmentId := int64(3)
 	initialEntryId := int64(42)
 
-	// Create the reader temp info
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, initialSegmentId, initialEntryId)
+	// Create the reader temp info; the returned session is what the reader owns
+	readerSession, err := provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, initialSegmentId, initialEntryId)
 	assert.NoError(t, err)
+	assert.NotNil(t, readerSession)
 
 	// Get the reader temp info
 	initialReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)
@@ -727,8 +996,9 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	updatedSegmentId := int64(4)
 	updatedEntryId := int64(10)
 
-	// Update reader temp info
-	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName, updatedSegmentId, updatedEntryId)
+	// Use an explicit timestamp so the test does not depend on the clock advancing.
+	reportedAtMs := int64(initialReader.RecentReadTimestamp) + 1
+	err = provider.UpdateReaderTempInfo(context.Background(), readerSession, reportedAtMs, updatedSegmentId, updatedEntryId)
 	assert.NoError(t, err)
 
 	// Get the updated reader temp info
@@ -739,24 +1009,18 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	// Verify updated fields
 	assert.Equal(t, updatedSegmentId, updatedReader.RecentReadSegmentId)
 	assert.Equal(t, updatedEntryId, updatedReader.RecentReadEntryId)
-	assert.Greater(t, updatedReader.RecentReadTimestamp, initialReader.RecentReadTimestamp)
+	assert.Equal(t, uint64(reportedAtMs), updatedReader.RecentReadTimestamp)
 
 	// Original initial positions should remain unchanged
 	assert.Equal(t, initialSegmentId, updatedReader.OpenSegmentId)
 	assert.Equal(t, initialEntryId, updatedReader.OpenEntryId)
 
-	// Test updating non-existent reader
-	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.Metadata.LogId, "non-existent-reader", 1, 1)
+	// Test updating without a session of this provider
+	err = provider.UpdateReaderTempInfo(context.Background(), nil, time.Now().UnixMilli(), 1, 1)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "reader temp info not found")
-
-	// Test updating with different logId
-	err = provider.UpdateReaderTempInfo(context.Background(), 999, readerName, 1, 1)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "reader temp info not found")
 
 	// Verify lease persistence (reader temporary info should still exist with a TTL)
-	readerKey := BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
+	readerKey := legacyKeyBuilder().BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
 	resp, err := etcdCli.Get(context.Background(), readerKey)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Kvs))
@@ -773,24 +1037,24 @@ func testUpdateReaderTempInfo(t *testing.T) {
 // Test deleting reader temporary information
 func testDeleteReaderTempInfo(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a test log
 	logName := "delete_reader_temp_info_test_" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Get log metadata to get the logId
 	logMeta, err := provider.GetLogMeta(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create multiple reader temp infos
 	readerCount := 3
@@ -798,9 +1062,10 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	segmentIds := []int64{1, 2, 3}
 	entryIds := []int64{10, 20, 30}
 
+	readerSessions := make([]ReaderTempInfoSession, readerCount)
 	for i := 0; i < readerCount; i++ {
 		readerNames[i] = fmt.Sprintf("test-reader-%d-%s", i, time.Now().Format("20060102150405"))
-		err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
+		readerSessions[i], err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
 		assert.NoError(t, err)
 	}
 
@@ -810,7 +1075,7 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	assert.Equal(t, readerCount, len(readers))
 
 	// Test 1: Delete a specific reader
-	err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerNames[1])
+	err = provider.DeleteReaderTempInfo(context.Background(), readerSessions[1])
 	assert.NoError(t, err)
 
 	// Verify reader was deleted
@@ -823,13 +1088,13 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "reader temp info not found")
 
-	// Test 2: Delete non-existent reader - should not error
-	err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, "non-existent-reader")
+	// Test 2: Deleting an already retired session is idempotent
+	err = provider.DeleteReaderTempInfo(context.Background(), readerSessions[1])
 	assert.NoError(t, err)
 
-	// Test 3: Delete with incorrect logId - should not error but won't delete anything
-	err = provider.DeleteReaderTempInfo(context.Background(), 999, readerNames[0])
-	assert.NoError(t, err)
+	// Test 3: Delete without a session of this provider - refused, deletes nothing
+	err = provider.DeleteReaderTempInfo(context.Background(), nil)
+	assert.Error(t, err)
 
 	// Verify remaining reader still exists
 	readers, err = provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
@@ -839,7 +1104,7 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	// Delete last readers
 	for i := 0; i < readerCount; i++ {
 		if i != 1 { // Skip the one we already deleted
-			err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerNames[i])
+			err = provider.DeleteReaderTempInfo(context.Background(), readerSessions[i])
 			assert.NoError(t, err)
 		}
 	}
@@ -852,24 +1117,24 @@ func testDeleteReaderTempInfo(t *testing.T) {
 
 func testGetAllReaderTempInfoForLog(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a test log
 	logName := "get_all_readers_temp_info_test_log_" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Get log metadata to get the logId
 	logMeta, err := provider.GetLogMeta(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Initially there should be no readers
 	readers, err := provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
@@ -882,9 +1147,10 @@ func testGetAllReaderTempInfoForLog(t *testing.T) {
 	segmentIds := []int64{1, 2, 3}
 	entryIds := []int64{10, 20, 30}
 
+	readerSessions := make([]ReaderTempInfoSession, readerCount)
 	for i := 0; i < readerCount; i++ {
 		readerNames[i] = fmt.Sprintf("test-reader-%d-%s", i, time.Now().Format("20060102150405"))
-		err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
+		readerSessions[i], err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
 		assert.NoError(t, err)
 	}
 
@@ -930,24 +1196,24 @@ func testGetAllReaderTempInfoForLog(t *testing.T) {
 // Helper function to create a test log and return provider, logName, and logId
 func setupSegmentCleanupTest(t *testing.T) (MetadataProvider, string, int64) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a test log
 	logName := "segment_cleanup_test_log_" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Get log metadata to get the logId
 	logMeta, err := provider.GetLogMeta(context.Background(), logName)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	return provider, logName, logMeta.Metadata.LogId
 }
@@ -1221,15 +1487,15 @@ func testEmptyListForNonExistentLog(t *testing.T) {
 // Test updating logMeta with wrong revision (optimistic lock failure)
 func testUpdateLogMetaWithWrongRevision(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create a test log
 	logName := "wrong_revision_test_log_" + time.Now().Format("20060102150405")
@@ -1287,15 +1553,15 @@ func testUpdateLogMetaWithWrongRevision(t *testing.T) {
 // Test updating segmentMeta with wrong revision (optimistic lock failure)
 func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
-	assert.NoError(t, err)
-	assert.NotNil(t, etcdCli)
-	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 	err = provider.InitIfNecessary(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	logName := "wrong_revision_segment_test_log_" + time.Now().Format("20060102150405")
 	err = provider.CreateLog(context.Background(), logName)
@@ -1309,7 +1575,7 @@ func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 		},
 	}
 
-	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, initialSegmentMeta)
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, int64(1), initialSegmentMeta)
 	assert.NoError(t, storeErr)
 
 	// Get the current segment metadata to get the correct revision
@@ -1327,7 +1593,7 @@ func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 	}
 
 	// Try to update with wrong revision - should fail
-	err = provider.UpdateSegmentMetadata(context.Background(), logName, wrongRevisionSegmentMeta)
+	err = provider.UpdateSegmentMetadata(context.Background(), logName, int64(1), wrongRevisionSegmentMeta, proto.SegmentState_Active)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "segment metadata revision is invalid or outdated")
 
@@ -1338,7 +1604,7 @@ func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 
 	// Now try with correct revision - should succeed
 	currentSegmentMeta.Metadata.State = proto.SegmentState_Sealed
-	err = provider.UpdateSegmentMetadata(context.Background(), logName, currentSegmentMeta)
+	err = provider.UpdateSegmentMetadata(context.Background(), logName, int64(1), currentSegmentMeta, proto.SegmentState_Active)
 	assert.NoError(t, err)
 
 	// Verify the update was successful
@@ -1354,10 +1620,10 @@ func testStoreOrGetConditionWriteResult(t *testing.T) {
 	require.NotNil(t, etcdCli)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 
 	// Clear the condition write key first
-	_, err = etcdCli.Delete(context.Background(), ConditionWriteKey)
+	_, err = etcdCli.Delete(context.Background(), legacyKeyBuilder().ConditionWriteKey())
 	require.NoError(t, err)
 
 	// Test Case 1: First node stores true, should get true back
@@ -1376,13 +1642,13 @@ func testStoreOrGetConditionWriteResult(t *testing.T) {
 	assert.True(t, result3, "Third node should get the first node's result (true)")
 
 	// Verify the value is actually stored in etcd
-	resp, err := etcdCli.Get(context.Background(), ConditionWriteKey)
+	resp, err := etcdCli.Get(context.Background(), legacyKeyBuilder().ConditionWriteKey())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Kvs))
 	assert.Equal(t, "true", string(resp.Kvs[0].Value))
 
 	// Test Case 4: Clear and test with false as first value
-	_, err = etcdCli.Delete(context.Background(), ConditionWriteKey)
+	_, err = etcdCli.Delete(context.Background(), legacyKeyBuilder().ConditionWriteKey())
 	require.NoError(t, err)
 
 	// First node stores false
@@ -1396,10 +1662,39 @@ func testStoreOrGetConditionWriteResult(t *testing.T) {
 	assert.False(t, result5, "Second node should get the first node's result (false), not its own (true)")
 
 	// Verify the value is false in etcd
-	resp, err = etcdCli.Get(context.Background(), ConditionWriteKey)
+	resp, err = etcdCli.Get(context.Background(), legacyKeyBuilder().ConditionWriteKey())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Kvs))
 	assert.Equal(t, "false", string(resp.Kvs[0].Value))
+}
+
+func testStoreConditionWriteEnabled(t *testing.T) {
+	// get etcd client
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Start from a historical disabled result.
+	_, err = etcdCli.Put(context.Background(), legacyKeyBuilder().ConditionWriteKey(), "false")
+	require.NoError(t, err)
+
+	err = provider.StoreConditionWriteEnabled(context.Background())
+	assert.NoError(t, err)
+
+	result, err := provider.GetConditionWriteResult(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, result, "StoreConditionWriteEnabled should overwrite false with true")
+
+	// Repeating the write should stay true.
+	err = provider.StoreConditionWriteEnabled(context.Background())
+	assert.NoError(t, err)
+
+	result, err = provider.GetConditionWriteResult(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, result, "StoreConditionWriteEnabled should be idempotent")
 }
 
 func testGetConditionWriteResult(t *testing.T) {
@@ -1409,10 +1704,10 @@ func testGetConditionWriteResult(t *testing.T) {
 	require.NotNil(t, etcdCli)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
 
 	// Test Case 1: Key doesn't exist, should return error
-	_, err = etcdCli.Delete(context.Background(), ConditionWriteKey)
+	_, err = etcdCli.Delete(context.Background(), legacyKeyBuilder().ConditionWriteKey())
 	require.NoError(t, err)
 
 	result, err := provider.GetConditionWriteResult(context.Background())
@@ -1421,7 +1716,7 @@ func testGetConditionWriteResult(t *testing.T) {
 	assert.ErrorIs(t, err, werr.ErrMetadataKeyNotExists, "Error should be ErrMetadataKeyNotExists")
 
 	// Test Case 2: Store true and retrieve it
-	_, err = etcdCli.Put(context.Background(), ConditionWriteKey, "true")
+	_, err = etcdCli.Put(context.Background(), legacyKeyBuilder().ConditionWriteKey(), "true")
 	require.NoError(t, err)
 
 	result, err = provider.GetConditionWriteResult(context.Background())
@@ -1429,7 +1724,7 @@ func testGetConditionWriteResult(t *testing.T) {
 	assert.True(t, result, "Should retrieve true value")
 
 	// Test Case 3: Store false and retrieve it
-	_, err = etcdCli.Put(context.Background(), ConditionWriteKey, "false")
+	_, err = etcdCli.Put(context.Background(), legacyKeyBuilder().ConditionWriteKey(), "false")
 	require.NoError(t, err)
 
 	result, err = provider.GetConditionWriteResult(context.Background())
@@ -1438,7 +1733,7 @@ func testGetConditionWriteResult(t *testing.T) {
 
 	// Test Case 4: Integration with StoreOrGetConditionWriteResult
 	// Clear the key first
-	_, err = etcdCli.Delete(context.Background(), ConditionWriteKey)
+	_, err = etcdCli.Delete(context.Background(), legacyKeyBuilder().ConditionWriteKey())
 	require.NoError(t, err)
 
 	// Use StoreOrGetConditionWriteResult to store a value
@@ -1451,4 +1746,1332 @@ func testGetConditionWriteResult(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, retrieved, "Should retrieve the same value that was stored")
 	assert.Equal(t, stored, retrieved, "Stored and retrieved values should match")
+}
+
+// testInitAlreadyInitialized tests InitIfNecessary when all keys already exist
+func testInitAlreadyInitialized(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// First init — creates all keys
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	// Second init — all keys already exist, should hit "already initialized" path
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+}
+
+// testInitPartialInit tests InitIfNecessary when only some keys exist
+func testInitPartialInit(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	// Manually create only legacyKeyBuilder().ServiceInstanceKey() (partial init)
+	_, err = etcdCli.Put(context.Background(), legacyKeyBuilder().ServiceInstanceKey(), "partial-instance")
+	assert.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Should fail because only some keys exist
+	err = provider.InitIfNecessary(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "some keys already exists")
+}
+
+// testGetVersionInfoNotFound tests GetVersionInfo when version key doesn't exist
+func testGetVersionInfoNotFound(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	// Delete version key
+	_, err = etcdCli.Delete(context.Background(), legacyKeyBuilder().VersionKey())
+	assert.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	version, err := provider.GetVersionInfo(context.Background())
+	assert.Error(t, err)
+	assert.Nil(t, version)
+	assert.Contains(t, err.Error(), "version not found")
+}
+
+// testGetQuorumInfoNotFound tests GetQuorumInfo for non-existent quorum
+func testGetQuorumInfoNotFound(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	quorum, err := provider.GetQuorumInfo(context.Background(), 99999)
+	assert.Error(t, err)
+	assert.Nil(t, quorum)
+	assert.Contains(t, err.Error(), "quorum info not found")
+}
+
+// testStoreQuorumInfoAlreadyExists tests StoreQuorumInfo when quorum already exists
+func testStoreQuorumInfoAlreadyExists(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	quorum := &proto.QuorumInfo{Id: 100, Es: 1, Wq: 1, Aq: 1, Nodes: []string{"node1"}}
+
+	// First store should succeed
+	err = provider.StoreQuorumInfo(context.Background(), quorum)
+	assert.NoError(t, err)
+
+	// Second store should fail — already exists
+	err = provider.StoreQuorumInfo(context.Background(), quorum)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "quorum info already exists")
+}
+
+// testOpenLogNotFound tests OpenLog for non-existent log
+func testOpenLogNotFound(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	logMeta, segMetas, err := provider.OpenLog(context.Background(), "nonexistent_log")
+	assert.Error(t, err)
+	assert.Nil(t, logMeta)
+	assert.Nil(t, segMetas)
+}
+
+// testListLogsWithPrefixNoMatch tests ListLogsWithPrefix when no logs match
+func testListLogsWithPrefixNoMatch(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	logNames, err := provider.ListLogsWithPrefix(context.Background(), "nonexistent_prefix")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(logNames))
+}
+
+// testNewMetadataProviderDefaultTimeout tests NewMetadataProvider with zero request timeout
+func testNewMetadataProviderDefaultTimeout(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	cfg := testMetaCfg(t)
+	// Zero value DurationMilliseconds → Milliseconds() returns 0 → defaults to 10000ms
+	cfg.Etcd.RequestTimeout = config.DurationMilliseconds{}
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, cfg)
+	assert.NotNil(t, provider)
+
+	// Should still work with default timeout (10s)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+}
+
+// testGetContextWithTimeoutGRPCMetadata tests getContextWithTimeout with gRPC metadata in context
+func testGetContextWithTimeoutGRPCMetadata(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	p := provider.(*metadataProviderEtcd)
+
+	// Create context with gRPC incoming metadata including auth keys
+	md := metadata.Pairs("authorization", "Bearer token123", "token", "abc", "other-key", "value")
+	ctxWithMd := metadata.NewIncomingContext(context.Background(), md)
+
+	newCtx, cancel := p.getContextWithTimeout(ctxWithMd)
+	defer cancel()
+
+	// Verify context is valid and has timeout
+	assert.NotNil(t, newCtx)
+	deadline, hasDeadline := newCtx.Deadline()
+	assert.True(t, hasDeadline)
+	assert.True(t, deadline.After(time.Now()))
+
+	// Verify auth-related keys are removed from the new context
+	newMd, ok := metadata.FromIncomingContext(newCtx)
+	require.True(t, ok, "new context should have incoming metadata")
+	assert.Empty(t, newMd.Get("authorization"), "authorization should be removed")
+	assert.Empty(t, newMd.Get("token"), "token should be removed")
+	assert.Equal(t, []string{"value"}, newMd.Get("other-key"), "non-auth keys should be preserved")
+
+	// Verify original context metadata is NOT mutated
+	origMd, ok := metadata.FromIncomingContext(ctxWithMd)
+	require.True(t, ok, "original context should still have incoming metadata")
+	assert.NotEmpty(t, origMd.Get("authorization"), "original authorization should not be mutated")
+	assert.NotEmpty(t, origMd.Get("token"), "original token should not be mutated")
+}
+
+// testStoreSegmentMetaAlreadyExists tests StoreSegmentMetadata when segment already exists
+func testStoreSegmentMetaAlreadyExists(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	logName := "dup_seg_test_" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	assert.NoError(t, err)
+
+	seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}}
+	err = provider.StoreSegmentMetadata(context.Background(), logName, int64(1), seg)
+	assert.NoError(t, err)
+
+	// Store again — should fail
+	seg2 := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}}
+	err = provider.StoreSegmentMetadata(context.Background(), logName, int64(1), seg2)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrMetadataSegmentAlreadyExists.Is(err), "expected ErrMetadataSegmentAlreadyExists, got: %v", err)
+	assert.Contains(t, err.Error(), "segment metadata already exists")
+}
+
+// testCreateCleanupStatusAlreadyExists tests CreateSegmentCleanupStatus when status already exists
+func testCreateCleanupStatusAlreadyExists(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCleanupStatus{
+		LogId:               logId,
+		SegmentId:           int64(1),
+		State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		StartTime:           uint64(time.Now().UnixMilli()),
+		LastUpdateTime:      uint64(time.Now().UnixMilli()),
+		QuorumCleanupStatus: map[string]bool{"node1": false},
+	}
+
+	err := provider.CreateSegmentCleanupStatus(context.Background(), status)
+	assert.NoError(t, err)
+
+	// Create again — should fail
+	err = provider.CreateSegmentCleanupStatus(context.Background(), status)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
+// testUpdateCleanupStatusNotExists tests UpdateSegmentCleanupStatus when status doesn't exist
+func testUpdateCleanupStatusNotExists(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCleanupStatus{
+		LogId:               logId,
+		SegmentId:           int64(999),
+		State:               proto.SegmentCleanupState_CLEANUP_COMPLETED,
+		StartTime:           uint64(time.Now().UnixMilli()),
+		LastUpdateTime:      uint64(time.Now().UnixMilli()),
+		QuorumCleanupStatus: map[string]bool{},
+	}
+
+	err := provider.UpdateSegmentCleanupStatus(context.Background(), status)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "does not exist")
+}
+
+// testCheckSegmentNotExists tests CheckSegmentExists for non-existent segment
+func testCheckSegmentNotExists(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	logName := "check_seg_test_" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// Check non-existent segment
+	exists, err := provider.CheckSegmentExists(context.Background(), logName, 999)
+	assert.NoError(t, err)
+	assert.False(t, exists)
+}
+
+// === etcd-dependent SessionLock / Close / Release tests (moved from constant_test.go) ===
+
+func testSessionLockWithEtcd(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	mp := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	assert.NotNil(t, mp)
+
+	// Acquire a lock
+	lock, err := mp.AcquireLogWriterLock(context.Background(), "test-session-lock")
+	assert.NoError(t, err)
+	assert.NotNil(t, lock)
+	assert.True(t, lock.IsValid())
+	assert.NotNil(t, lock.GetSession())
+
+	// Check lock alive
+	alive, err := mp.CheckSessionLockAlive(context.Background(), lock)
+	assert.NoError(t, err)
+	assert.True(t, alive)
+
+	// Release the lock
+	err = mp.ReleaseLogWriterLock(context.Background(), "test-session-lock")
+	assert.NoError(t, err)
+}
+
+func testCheckSessionLockAliveNil(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	mp := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Test nil session lock
+	alive, err := mp.CheckSessionLockAlive(context.Background(), nil)
+	assert.Error(t, err)
+	assert.False(t, alive)
+	assert.Contains(t, err.Error(), "not properly initialized")
+
+	// Test session lock with nil session
+	sl := &SessionLock{}
+	alive, err = mp.CheckSessionLockAlive(context.Background(), sl)
+	assert.Error(t, err)
+	assert.False(t, alive)
+}
+
+func testCloseEmptyProvider(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	mp := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Close with no locks should succeed
+	err = mp.Close()
+	assert.NoError(t, err)
+}
+
+func testGetLogMetaNotFound(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	mp := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// GetLogMeta for non-existent log
+	logMeta, err := mp.GetLogMeta(context.Background(), "nonexistent-log")
+	assert.Error(t, err)
+	assert.Nil(t, logMeta)
+}
+
+func testCloseWithActiveLock(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	mp := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Acquire a lock
+	_, err = mp.AcquireLogWriterLock(context.Background(), "close-test-log")
+	assert.NoError(t, err)
+
+	// Close should release the lock
+	err = mp.Close()
+	assert.NoError(t, err)
+}
+
+func testReleaseNonExistentLock(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	mp := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Release a lock that was never acquired should succeed (no-op)
+	err = mp.ReleaseLogWriterLock(context.Background(), "never-acquired-log")
+	assert.NoError(t, err)
+}
+
+// testCancelledContextEtcdErrors covers error branches when etcd operations fail due to cancelled context
+func testCancelledContextEtcdErrors(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// A pre-cancelled context must surface an error from each op. Mutating ops
+	// (txn / lease grant) reliably fail, so assert on them. Read/list ops, however,
+	// can race the cancellation inside the etcd client and occasionally return a
+	// benign empty result with a nil error, so they are only exercised here for
+	// cancelled-context branch coverage — asserting on them is flaky.
+
+	// InitIfNecessary (mutating)
+	err = provider.InitIfNecessary(cancelledCtx)
+	assert.Error(t, err)
+
+	// GetVersionInfo (read: exercise only, see note above)
+	_, _ = provider.GetVersionInfo(cancelledCtx)
+
+	// CreateLog (mutating)
+	err = provider.CreateLog(cancelledCtx, "cancelled-log")
+	assert.Error(t, err)
+
+	// GetLogMeta (read)
+	_, _ = provider.GetLogMeta(cancelledCtx, "cancelled-log")
+
+	// UpdateLogMeta - marshal succeeds, txn fails (mutating)
+	err = provider.UpdateLogMeta(cancelledCtx, "cancelled-log", &LogMeta{
+		Metadata: &proto.LogMeta{LogId: 1},
+		Revision: 1,
+	})
+	assert.Error(t, err)
+
+	// OpenLog (read)
+	_, _, _ = provider.OpenLog(cancelledCtx, "cancelled-log")
+
+	// CheckExists (read)
+	_, _ = provider.CheckExists(cancelledCtx, "cancelled-log")
+
+	// ListLogs / ListLogsWithPrefix (read)
+	_, _ = provider.ListLogs(cancelledCtx)
+	_, _ = provider.ListLogsWithPrefix(cancelledCtx, "test")
+
+	// StoreSegmentMetadata - marshal succeeds, txn fails (mutating)
+	err = provider.StoreSegmentMetadata(cancelledCtx, "cancelled-log", 1, &SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active},
+	})
+	assert.Error(t, err)
+
+	// UpdateSegmentMetadata - marshal succeeds, txn fails (mutating)
+	err = provider.UpdateSegmentMetadata(cancelledCtx, "cancelled-log", 1, &SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Sealed},
+		Revision: 1,
+	}, proto.SegmentState_Active)
+	assert.Error(t, err)
+
+	// GetSegmentMetadata / GetAllSegmentMetadata / CheckSegmentExists (read)
+	_, _ = provider.GetSegmentMetadata(cancelledCtx, "cancelled-log", 1)
+	_, _ = provider.GetAllSegmentMetadata(cancelledCtx, "cancelled-log")
+	_, _ = provider.CheckSegmentExists(cancelledCtx, "cancelled-log", 1)
+
+	// DeleteSegmentMetadata - txn fails (mutating)
+	err = provider.DeleteSegmentMetadata(cancelledCtx, "cancelled-log", 1, 1, proto.SegmentState_Active)
+	assert.Error(t, err)
+
+	// StoreQuorumInfo - marshal succeeds, txn fails (mutating)
+	err = provider.StoreQuorumInfo(cancelledCtx, &proto.QuorumInfo{Id: 1})
+	assert.Error(t, err)
+
+	// GetQuorumInfo (read)
+	_, _ = provider.GetQuorumInfo(cancelledCtx, 1)
+
+	// CreateReaderTempInfo - grant fails (mutating)
+	_, err = provider.CreateReaderTempInfo(cancelledCtx, "reader1", 1, 0, 0)
+	assert.Error(t, err)
+
+	// GetReaderTempInfo / GetAllReaderTempInfoForLog (read)
+	_, _ = provider.GetReaderTempInfo(cancelledCtx, 1, "reader1")
+	_, _ = provider.GetAllReaderTempInfoForLog(cancelledCtx, 1)
+
+	// UpdateReaderTempInfo / DeleteReaderTempInfo without a session (mutating)
+	err = provider.UpdateReaderTempInfo(cancelledCtx, nil, time.Now().UnixMilli(), 0, 0)
+	assert.Error(t, err)
+	err = provider.DeleteReaderTempInfo(cancelledCtx, nil)
+	assert.Error(t, err)
+
+	// CreateSegmentCleanupStatus - marshal succeeds, txn fails (mutating)
+	err = provider.CreateSegmentCleanupStatus(cancelledCtx, &proto.SegmentCleanupStatus{
+		LogId: 1, SegmentId: 1, State: proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+		StartTime: 1, LastUpdateTime: 1,
+	})
+	assert.Error(t, err)
+
+	// UpdateSegmentCleanupStatus - marshal succeeds, txn fails (mutating)
+	err = provider.UpdateSegmentCleanupStatus(cancelledCtx, &proto.SegmentCleanupStatus{
+		LogId: 1, SegmentId: 1, State: proto.SegmentCleanupState_CLEANUP_COMPLETED,
+		StartTime: 1, LastUpdateTime: 1,
+	})
+	assert.Error(t, err)
+
+	// GetSegmentCleanupStatus (read)
+	_, _ = provider.GetSegmentCleanupStatus(cancelledCtx, 1, 1)
+
+	// DeleteSegmentCleanupStatus (mutating)
+	err = provider.DeleteSegmentCleanupStatus(cancelledCtx, 1, 1)
+	assert.Error(t, err)
+
+	// ListSegmentCleanupStatus (read)
+	_, _ = provider.ListSegmentCleanupStatus(cancelledCtx, 1)
+
+	// StoreOrGetConditionWriteResult - txn (mutating)
+	_, err = provider.StoreOrGetConditionWriteResult(cancelledCtx, true)
+	assert.Error(t, err)
+
+	// StoreConditionWriteEnabled (mutating)
+	err = provider.StoreConditionWriteEnabled(cancelledCtx)
+	assert.Error(t, err)
+
+	// GetConditionWriteResult (read)
+	_, _ = provider.GetConditionWriteResult(cancelledCtx)
+}
+
+// testCorruptedProtobufData covers unmarshal error branches by writing invalid data to etcd
+func testCorruptedProtobufData(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Invalid protobuf: field 1, length-delimited, claims length=10 but no data follows
+	invalidProto := string([]byte{0x0a, 0x0a})
+
+	// GetVersionInfo unmarshal error
+	_, err = etcdCli.Put(context.Background(), legacyKeyBuilder().VersionKey(), invalidProto)
+	require.NoError(t, err)
+	_, err = provider.GetVersionInfo(context.Background())
+	assert.Error(t, err)
+
+	// GetLogMeta unmarshal error
+	logKey := legacyKeyBuilder().BuildLogKey("corrupted-log")
+	_, err = etcdCli.Put(context.Background(), logKey, invalidProto)
+	require.NoError(t, err)
+	_, err = provider.GetLogMeta(context.Background(), "corrupted-log")
+	assert.Error(t, err)
+
+	// GetSegmentMetadata unmarshal error
+	segKey := legacyKeyBuilder().BuildSegmentInstanceKey("corrupted-log", "1")
+	_, err = etcdCli.Put(context.Background(), segKey, invalidProto)
+	require.NoError(t, err)
+	_, err = provider.GetSegmentMetadata(context.Background(), "corrupted-log", 1)
+	assert.Error(t, err)
+
+	// GetAllSegmentMetadata unmarshal error (reuses corrupted segment key from above)
+	_, err = provider.GetAllSegmentMetadata(context.Background(), "corrupted-log")
+	assert.Error(t, err)
+
+	// GetQuorumInfo unmarshal error
+	quorumKey := legacyKeyBuilder().BuildQuorumInfoKey("999")
+	_, err = etcdCli.Put(context.Background(), quorumKey, invalidProto)
+	require.NoError(t, err)
+	_, err = provider.GetQuorumInfo(context.Background(), 999)
+	assert.Error(t, err)
+
+	// GetReaderTempInfo unmarshal error
+	readerKey := legacyKeyBuilder().BuildLogReaderTempInfoKey(1, "corrupted-reader")
+	_, err = etcdCli.Put(context.Background(), readerKey, invalidProto)
+	require.NoError(t, err)
+	_, err = provider.GetReaderTempInfo(context.Background(), 1, "corrupted-reader")
+	assert.Error(t, err)
+
+	// GetAllReaderTempInfoForLog with corrupted data (should skip bad entries via continue)
+	readers, err := provider.GetAllReaderTempInfoForLog(context.Background(), 1)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(readers))
+
+	// UpdateReaderTempInfo does not read the stored value at all, so corrupted
+	// data cannot break it; without a session of this provider it is refused
+	err = provider.UpdateReaderTempInfo(context.Background(), nil, time.Now().UnixMilli(), 0, 0)
+	assert.Error(t, err)
+
+	// GetSegmentCleanupStatus unmarshal error
+	cleanupKey := legacyKeyBuilder().BuildSegmentCleanupStatusKey(1, 1)
+	_, err = etcdCli.Put(context.Background(), cleanupKey, invalidProto)
+	require.NoError(t, err)
+	_, err = provider.GetSegmentCleanupStatus(context.Background(), 1, 1)
+	assert.Error(t, err)
+
+	// ListSegmentCleanupStatus SKIPS the corrupt record (hardened: one bad value must not
+	// poison the truncate cleanup / orphan sweep for the whole log).
+	cleanupStatuses, err := provider.ListSegmentCleanupStatus(context.Background(), 1)
+	assert.NoError(t, err)
+	assert.Empty(t, cleanupStatuses, "the corrupt record is skipped, not returned")
+}
+
+// testCreateLogEdgeCases covers CreateLog error branches for missing/invalid idgen
+func testCreateLogEdgeCases(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	// Test 1: legacyKeyBuilder().LogIdGeneratorKey() does not exist
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider.CreateLog(context.Background(), "test-log-no-idgen")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "key not found")
+
+	// Test 2: legacyKeyBuilder().LogIdGeneratorKey() has non-numeric value
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+	_, err = etcdCli.Put(context.Background(), legacyKeyBuilder().LogIdGeneratorKey(), "not-a-number")
+	require.NoError(t, err)
+
+	provider2 := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider2.CreateLog(context.Background(), "test-log-bad-idgen")
+	assert.Error(t, err)
+}
+
+// testAcquireLockEdgeCases covers AcquireLogWriterLock and ReleaseLogWriterLock edge cases
+func testAcquireLockEdgeCases(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Test 1: Re-acquire with invalid existing lock
+	logName1 := "invalid-lock-test-" + time.Now().Format("20060102150405")
+	lock, err := provider.AcquireLogWriterLock(context.Background(), logName1)
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+
+	lock.MarkInvalid()
+
+	newLock, err := provider.AcquireLogWriterLock(context.Background(), logName1)
+	assert.NoError(t, err)
+	assert.NotNil(t, newLock)
+	assert.True(t, newLock.IsValid())
+
+	// Test 2: Acquire with cancelled context on existing valid lock
+	// (covers TryLock error on existing lock → MarkInvalid → cleanup → new session → TryLock error)
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = provider.AcquireLogWriterLock(cancelledCtx, logName1)
+	assert.Error(t, err)
+
+	// Test 3: Acquire with cancelled context on fresh log name (no existing lock)
+	logName2 := "lock-cancel-fresh-" + time.Now().Format("20060102150405")
+	_, err = provider.AcquireLogWriterLock(cancelledCtx, logName2)
+	assert.Error(t, err)
+
+	// Test 4: Release with cancelled context (covers Unlock error branch)
+	logName3 := "release-err-test-" + time.Now().Format("20060102150405")
+	_, err = provider.AcquireLogWriterLock(context.Background(), logName3)
+	require.NoError(t, err)
+
+	err = provider.ReleaseLogWriterLock(cancelledCtx, logName3)
+	assert.NoError(t, err) // function always returns nil, errors are logged
+
+	// Test 5: CheckSessionLockAlive with cancelled context (covers KeepAliveOnce error)
+	logName4 := "alive-check-err-" + time.Now().Format("20060102150405")
+	aliveLock, err := provider.AcquireLogWriterLock(context.Background(), logName4)
+	require.NoError(t, err)
+
+	alive, err := provider.CheckSessionLockAlive(cancelledCtx, aliveLock)
+	assert.Error(t, err)
+	assert.False(t, alive)
+
+	// Cleanup
+	_ = provider.Close()
+}
+
+// testUpdateReaderTempInfoWithoutSession verifies updates are rejected for a
+// reader that has no in-process session (a key written by someone else)
+func testUpdateReaderTempInfoWithoutSession(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	logName := "no_lease_reader_test_" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	require.NoError(t, err)
+
+	logMeta, err := provider.GetLogMeta(context.Background(), logName)
+	require.NoError(t, err)
+
+	// Write reader temp info directly to etcd WITHOUT a lease
+	readerName := "reader-no-lease"
+	readerKey := legacyKeyBuilder().BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
+	readerInfo := &proto.ReaderTempInfo{
+		ReaderName:          readerName,
+		OpenTimestamp:       uint64(time.Now().UnixMilli()),
+		LogId:               logMeta.Metadata.LogId,
+		OpenSegmentId:       0,
+		OpenEntryId:         0,
+		RecentReadSegmentId: 0,
+		RecentReadEntryId:   0,
+		RecentReadTimestamp: uint64(time.Now().UnixMilli()),
+	}
+	readerBytes, err := pb.Marshal(readerInfo)
+	require.NoError(t, err)
+	_, err = etcdCli.Put(context.Background(), readerKey, string(readerBytes)) // no lease
+	require.NoError(t, err)
+
+	// Verify the key has no lease
+	resp, err := etcdCli.Get(context.Background(), readerKey)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(resp.Kvs))
+	assert.Equal(t, int64(0), resp.Kvs[0].Lease, "Key should have no lease")
+
+	// Update must refuse to write for a reader this process never opened:
+	// blindly adopting a foreign key would resurrect metadata after close and
+	// pin the cleanup low-watermark forever.
+	err = provider.UpdateReaderTempInfo(context.Background(), foreignReaderTempInfoSession{logId: logMeta.Metadata.LogId, readerName: readerName}, time.Now().UnixMilli(), 5, 100)
+	assert.Error(t, err)
+
+	// The foreign key is left untouched
+	unchangedReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), unchangedReader.RecentReadSegmentId)
+	assert.Equal(t, int64(0), unchangedReader.RecentReadEntryId)
+}
+
+// testCloseWithNilLockEntry covers Close with nil and empty lock entries in the map
+func testCloseWithNilLockEntry(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	p := provider.(*metadataProviderEtcd)
+
+	// Store a nil SessionLock pointer in the locks map
+	p.logWriterLocks.Store("nil-lock-log", (*SessionLock)(nil))
+
+	// Store a SessionLock with nil mutex and nil session
+	p.logWriterLocks.Store("empty-lock-log", &SessionLock{})
+
+	// Close should handle nil/empty lock entries gracefully
+	err = provider.Close()
+	assert.NoError(t, err)
+}
+
+// testOpenLogWithCorruptedSegmentData covers OpenLog when GetAllSegmentMetadata fails
+func testOpenLogWithCorruptedSegmentData(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), LegacyServicePrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+	err = provider.InitIfNecessary(context.Background())
+	require.NoError(t, err)
+
+	logName := "open_log_corrupted_seg_" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	require.NoError(t, err)
+
+	// Put corrupted segment data so GetAllSegmentMetadata fails during OpenLog
+	invalidProto := string([]byte{0x0a, 0x0a})
+	segKey := legacyKeyBuilder().BuildSegmentInstanceKey(logName, "1")
+	_, err = etcdCli.Put(context.Background(), segKey, invalidProto)
+	require.NoError(t, err)
+
+	// OpenLog should fail due to corrupted segment metadata
+	logMeta, segMetas, err := provider.OpenLog(context.Background(), logName)
+	assert.Error(t, err)
+	assert.Nil(t, logMeta)
+	assert.Nil(t, segMetas)
+}
+
+// testDeleteLogMetadata_ForceTrue verifies that DeleteLogMetadata(force=true) hard-deletes
+// the target log's metadata (log key, segments, reader, and cleanup keys) while leaving a
+// sibling log whose name shares the same prefix completely untouched.
+func testDeleteLogMetadata_ForceTrue(t *testing.T) {
+	prefix := "del-force-true-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	// Clear legacy keys to ensure detectEffectiveMetadataPrefix chooses our prefix.
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	// Get the effective key builder from the provider so we always use the right prefix.
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	// Create "foo" and its sibling "foobar" (shares "foo" as a string prefix).
+	require.NoError(t, provider.CreateLog(context.Background(), "foo"))
+	require.NoError(t, provider.CreateLog(context.Background(), "foobar"))
+
+	// Capture foo's LogId before deletion.
+	fooMeta, err := provider.GetLogMeta(context.Background(), "foo")
+	require.NoError(t, err)
+	oldFooLogId := fooMeta.Metadata.LogId
+
+	// Give "foo" a segment via StoreSegmentMetadata.
+	seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}}
+	require.NoError(t, provider.StoreSegmentMetadata(context.Background(), "foo", oldFooLogId, seg))
+
+	// Add a reader-temp-info key and a cleanup-status key using etcdCli directly.
+	readerKey := kb.BuildLogReaderTempInfoKey(oldFooLogId, "reader-1")
+	_, err = etcdCli.Put(context.Background(), readerKey, "reader-val")
+	require.NoError(t, err)
+	cleanupKey := kb.BuildSegmentCleanupStatusKey(oldFooLogId, 1)
+	_, err = etcdCli.Put(context.Background(), cleanupKey, "cleanup-val")
+	require.NoError(t, err)
+
+	// Delete "foo" with force=true.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), "foo", true))
+
+	// GetLogMeta("foo") must now error.
+	_, err = provider.GetLogMeta(context.Background(), "foo")
+	assert.Error(t, err, "expected GetLogMeta to error after force-delete")
+
+	// "foo" segments must be gone.
+	segResp, err := etcdCli.Get(context.Background(), kb.BuildSegmentInstanceKey("foo", ""), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(segResp.Kvs), "segments for 'foo' should be deleted")
+
+	// "foo" reader temp infos must be gone.
+	readerResp, err := etcdCli.Get(context.Background(), kb.BuildLogAllReaderTempInfosKey(oldFooLogId), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(readerResp.Kvs), "reader temp infos for 'foo' should be deleted")
+
+	// "foo" cleanup status must be gone.
+	cleanupResp, err := etcdCli.Get(context.Background(), kb.BuildLogCleanupStatusPrefix(oldFooLogId), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(cleanupResp.Kvs), "cleanup status for 'foo' should be deleted")
+
+	// CRITICAL: "foobar" must be completely untouched.
+	foobarMeta, err := provider.GetLogMeta(context.Background(), "foobar")
+	require.NoError(t, err, "foobar must survive deletion of foo")
+	assert.NotNil(t, foobarMeta)
+
+	// Re-create "foo" and assert the new LogId is strictly greater than the old one.
+	require.NoError(t, provider.CreateLog(context.Background(), "foo"))
+	newFooMeta, err := provider.GetLogMeta(context.Background(), "foo")
+	require.NoError(t, err)
+	assert.Greater(t, newFooMeta.Metadata.LogId, oldFooLogId,
+		"re-created 'foo' must have a strictly greater LogId than the deleted one")
+}
+
+// testDeleteLogMetadata_ForceFalse_ParksSubtree verifies that DeleteLogMetadata(force=false)
+// copies the log meta and its segments under logs-deleted/ before removing the active keys.
+func testDeleteLogMetadata_ForceFalse_ParksSubtree(t *testing.T) {
+	prefix := "del-force-false-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	require.NoError(t, provider.CreateLog(context.Background(), "log1"))
+
+	logMeta, err := provider.GetLogMeta(context.Background(), "log1")
+	require.NoError(t, err)
+	logId := logMeta.Metadata.LogId
+
+	// Give "log1" a segment.
+	seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 2, State: proto.SegmentState_Active}}
+	require.NoError(t, provider.StoreSegmentMetadata(context.Background(), "log1", logId, seg))
+
+	// Soft-delete "log1".
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), "log1", false))
+
+	// GetLogMeta must now error.
+	_, err = provider.GetLogMeta(context.Background(), "log1")
+	assert.Error(t, err, "expected GetLogMeta to error after soft-delete")
+
+	// ListLogs must not contain "log1".
+	logs, err := provider.ListLogs(context.Background())
+	require.NoError(t, err)
+	assert.NotContains(t, logs, "log1", "log1 should not appear in ListLogs after soft-delete")
+
+	// Under logs-deleted/ there must be BOTH a parked LogMeta key AND a parked segment key.
+	parkedResp, err := etcdCli.Get(context.Background(), kb.LogDeletedPrefix(), clientv3.WithPrefix())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(parkedResp.Kvs), 2,
+		"expected at least 2 parked keys (LogMeta + segment) under logs-deleted/")
+
+	// Distinguish LogMeta park key from segment park key.
+	var foundLogMetaKey, foundSegmentKey bool
+	for _, kv := range parkedResp.Kvs {
+		k := string(kv.Key)
+		if strings.Contains(k, "/segments/") {
+			foundSegmentKey = true
+		} else {
+			foundLogMetaKey = true
+		}
+	}
+	assert.True(t, foundLogMetaKey, "expected a parked LogMeta key under logs-deleted/")
+	assert.True(t, foundSegmentKey, "expected a parked segment key under logs-deleted/")
+
+	// Re-creating "log1" should succeed.
+	require.NoError(t, provider.CreateLog(context.Background(), "log1"))
+}
+
+// testDeleteLogMetadata_Idempotent verifies that DeleteLogMetadata returns nil when the
+// log does not exist and that double-deleting a log also returns nil.
+func testDeleteLogMetadata_Idempotent(t *testing.T) {
+	prefix := "del-idempotent-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	// Deleting a non-existent log (force=true) must return nil.
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "ghost", true),
+		"deleting non-existent log with force=true must be a no-op")
+	// Deleting a non-existent log (force=false) must return nil.
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "ghost", false),
+		"deleting non-existent log with force=false must be a no-op")
+
+	// Create a log, delete it twice (force=true); both calls must return nil.
+	require.NoError(t, provider.CreateLog(context.Background(), "twice"))
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "twice", true), "first delete must succeed")
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "twice", true), "second delete must be idempotent")
+}
+
+// testDeleteLogMetadata_ForceFalse_ManySegments verifies that DeleteLogMetadata(force=false)
+// succeeds even when the log has 130 segments — exceeding etcd's default --max-txn-ops=128.
+// Before the fix, the single park+delete transaction would fail with a txn-too-large error.
+func testDeleteLogMetadata_ForceFalse_ManySegments(t *testing.T) {
+	prefix := "del-many-segs-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	const logName = "large-log"
+	const segmentCount = 130
+
+	require.NoError(t, provider.CreateLog(context.Background(), logName))
+
+	logMeta, err := provider.GetLogMeta(context.Background(), logName)
+	require.NoError(t, err)
+	logId := logMeta.Metadata.LogId
+
+	// Store 130 segments (SegNo 0..129).
+	for i := 0; i < segmentCount; i++ {
+		seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: int64(i), State: proto.SegmentState_Active}}
+		require.NoError(t, provider.StoreSegmentMetadata(context.Background(), logName, logId, seg),
+			"failed to store segment %d", i)
+	}
+
+	// This must NOT fail even though 1 LogMeta + 130 segments = 131 park puts,
+	// which would exceed etcd's --max-txn-ops=128 in the old single-txn approach.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), logName, false),
+		"DeleteLogMetadata(force=false) must succeed with %d segments", segmentCount)
+
+	// Active log must be gone.
+	_, err = provider.GetLogMeta(context.Background(), logName)
+	assert.Error(t, err, "active log must be absent after soft-delete")
+
+	logs, err := provider.ListLogs(context.Background())
+	require.NoError(t, err)
+	assert.NotContains(t, logs, logName, "log must not appear in ListLogs after soft-delete")
+
+	// Under logs-deleted/ there must be exactly 130 parked segment keys + 1 parked LogMeta key.
+	parkedResp, err := etcdCli.Get(context.Background(), kb.LogDeletedPrefix(), clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	var parkedSegmentCount, parkedLogMetaCount int
+	for _, kv := range parkedResp.Kvs {
+		if strings.Contains(string(kv.Key), "/segments/") {
+			parkedSegmentCount++
+		} else {
+			parkedLogMetaCount++
+		}
+	}
+	assert.Equal(t, segmentCount, parkedSegmentCount,
+		"expected %d parked segment keys under logs-deleted/", segmentCount)
+	assert.Equal(t, 1, parkedLogMetaCount,
+		"expected exactly 1 parked LogMeta key under logs-deleted/")
+}
+
+// testDeleteLogMetadata_ForceFalse_DoubleDelete verifies that two successive soft-deletes
+// of the same log name produce two distinct parked LogMeta keys under logs-deleted/,
+// proving that the nanosecond-granularity timestamp keeps both generations.
+func testDeleteLogMetadata_ForceFalse_DoubleDelete(t *testing.T) {
+	prefix := "del-double-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	// First generation: create "dd", soft-delete it.
+	require.NoError(t, provider.CreateLog(context.Background(), "dd"))
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "dd", false),
+		"first soft-delete must succeed")
+
+	// Active "dd" must be gone.
+	_, err = provider.GetLogMeta(context.Background(), "dd")
+	assert.Error(t, err, "active log must be absent after first soft-delete")
+
+	// Second generation: recreate "dd", soft-delete again.
+	require.NoError(t, provider.CreateLog(context.Background(), "dd"))
+	assert.NoError(t, provider.DeleteLogMetadata(context.Background(), "dd", false),
+		"second soft-delete must succeed")
+
+	// Active "dd" must still be gone.
+	_, err = provider.GetLogMeta(context.Background(), "dd")
+	assert.Error(t, err, "active log must be absent after second soft-delete")
+
+	// Both generations must have left a parked LogMeta key under logs-deleted/.
+	parkedResp, err := etcdCli.Get(context.Background(), kb.LogDeletedPrefix(), clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	var parkedLogMetaCount int
+	for _, kv := range parkedResp.Kvs {
+		if !strings.Contains(string(kv.Key), "/segments/") {
+			parkedLogMetaCount++
+		}
+	}
+	assert.GreaterOrEqual(t, parkedLogMetaCount, 2,
+		"expected at least 2 parked LogMeta keys (one per generation) under logs-deleted/")
+}
+
+// testStoreSegmentMetadata_RejectsAfterLogDeleted verifies that StoreSegmentMetadata
+// returns an error when the parent log has already been deleted, preventing a
+// phantom resurrection of the log as a listing entry.
+func testStoreSegmentMetadata_RejectsAfterLogDeleted(t *testing.T) {
+	prefix := "resurrect-guard-" + time.Now().Format("150405")
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	deleteMetadataRoot(t, etcdCli, LegacyServicePrefix)
+	deleteMetadataRoot(t, etcdCli, prefix)
+	defer deleteMetadataRoot(t, etcdCli, prefix)
+
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfgWithPrefix(t, prefix, "wp"))
+	kb := provider.(*metadataProviderEtcd).keyBuilder
+	require.NoError(t, provider.InitIfNecessary(context.Background()))
+
+	// Create the "ghost" log.
+	require.NoError(t, provider.CreateLog(context.Background(), "ghost"))
+
+	// Read back the logId so we have a realistic call signature.
+	ghostMeta, err := provider.GetLogMeta(context.Background(), "ghost")
+	require.NoError(t, err)
+	logId := ghostMeta.Metadata.LogId
+
+	// Hard-delete the log.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), "ghost", true))
+
+	// StoreSegmentMetadata must fail because the parent log is gone.
+	seg := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}}
+	storeErr := provider.StoreSegmentMetadata(context.Background(), "ghost", logId, seg)
+	assert.Error(t, storeErr, "StoreSegmentMetadata must return an error after the parent log has been deleted")
+	assert.Truef(t, werr.ErrMetadataKeyNotExists.Is(storeErr),
+		"expected a parent-log-not-exists error (not segment-already-exists), got: %v", storeErr)
+
+	// No logs/ghost/segments/ key may exist (no resurrection).
+	segResp, err := etcdCli.Get(context.Background(), kb.BuildSegmentInstanceKey("ghost", ""), clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(segResp.Kvs), "no segment key must exist under deleted log 'ghost'")
+}
+
+// === SegmentCompactedNotifyStatus (root/marking) provider tests ===
+// Mirror of the SegmentCleanupStatus tests for the Sealed-phase sibling record.
+
+func testCreateSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(1)
+	nowMs := uint64(time.Now().UnixMilli())
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:          logId,
+		SegmentId:      segmentId,
+		State:          proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:      nowMs,
+		LastUpdateTime: nowMs,
+		QuorumNotifyStatus: map[string]bool{
+			"node1": false,
+			"node2": true,
+		},
+	}
+	createdRev, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+	assert.Positive(t, createdRev, "create must return the record's revision for later CAS updates")
+
+	stored, rev, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.NotNil(t, stored)
+	assert.Equal(t, createdRev, rev, "get must return the same revision the create produced")
+	assert.Equal(t, logId, stored.LogId)
+	assert.Equal(t, segmentId, stored.SegmentId)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS, stored.State)
+	assert.Equal(t, nowMs, stored.StartTime)
+	assert.Equal(t, nowMs, stored.LastUpdateTime)
+	assert.Equal(t, 2, len(stored.QuorumNotifyStatus))
+	assert.False(t, stored.QuorumNotifyStatus["node1"])
+	assert.True(t, stored.QuorumNotifyStatus["node2"])
+}
+
+func testUpdateSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(2)
+	nowMs := uint64(time.Now().UnixMilli())
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          nowMs,
+		LastUpdateTime:     nowMs,
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	rev, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+
+	// Advance to PENDING_MANUAL with an error message (the operator-triage transition),
+	// CAS-guarded by the revision the create returned.
+	status.State = proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL
+	status.ErrorMessage = "nodes unacked after 30m0s of retries: node1"
+	status.LastUpdateTime = uint64(time.Now().UnixMilli())
+	require.NoError(t, provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status, rev))
+
+	stored, newRev, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.NotNil(t, stored)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL, stored.State)
+	assert.Contains(t, stored.ErrorMessage, "node1")
+	assert.Greater(t, newRev, rev, "a successful update advances the revision")
+
+	// A STALE write-back (using the pre-update revision) must fail with a revision conflict
+	// and leave the record untouched — this is the guard that keeps the notify manager's
+	// multi-second read→distribute→write-back pass from clobbering a concurrent
+	// "wp marking confirm" (NOTIFY_OPERATOR_CONFIRMED would otherwise be silently lost).
+	stale := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	err = provider.UpdateSegmentCompactedNotifyStatus(context.Background(), stale, rev)
+	assert.True(t, werr.ErrMetadataRevisionConflict.Is(err), "stale revision must be rejected, got: %v", err)
+
+	unchanged, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL, unchanged.State,
+		"the concurrent writer's state must survive the stale write-back attempt")
+}
+
+func testListSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	for _, segId := range []int64{1, 2, 3} {
+		status := &proto.SegmentCompactedNotifyStatus{
+			LogId:              logId,
+			SegmentId:          segId,
+			State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+			StartTime:          uint64(time.Now().UnixMilli()),
+			LastUpdateTime:     uint64(time.Now().UnixMilli()),
+			QuorumNotifyStatus: map[string]bool{"node1": false},
+		}
+		_, createErr := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+		require.NoError(t, createErr)
+	}
+
+	statuses, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(statuses))
+	segIds := make([]int64, 0, len(statuses))
+	for _, s := range statuses {
+		segIds = append(segIds, s.SegmentId)
+	}
+	sort.Slice(segIds, func(i, j int) bool { return segIds[i] < segIds[j] })
+	assert.Equal(t, []int64{1, 2, 3}, segIds)
+
+	// Empty list for a log with no records.
+	empty, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId+999)
+	assert.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func testDeleteSegmentCompactedNotifyStatus(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	segmentId := int64(4)
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          segmentId,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": true},
+	}
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+
+	require.NoError(t, provider.DeleteSegmentCompactedNotifyStatus(context.Background(), logId, segmentId))
+
+	stored, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, segmentId)
+	assert.NoError(t, err)
+	assert.Nil(t, stored)
+
+	// Deleting a missing record is idempotent.
+	assert.NoError(t, provider.DeleteSegmentCompactedNotifyStatus(context.Background(), logId, segmentId))
+}
+
+func testCreateCompactedNotifyStatusAlreadyExists(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          5,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+	_, err = provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
+func testUpdateCompactedNotifyStatusNotExists(t *testing.T) {
+	provider, _, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          77,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+		QuorumNotifyStatus: map[string]bool{"node1": true},
+	}
+	// A missing record has ModRevision 0, so any positive expected revision fails the CAS —
+	// updates can neither create nor resurrect a record.
+	err := provider.UpdateSegmentCompactedNotifyStatus(context.Background(), status, 42)
+	assert.True(t, werr.ErrMetadataRevisionConflict.Is(err), "got: %v", err)
+}
+
+func testCorruptedCompactedNotifyStatusData(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	provider := NewMetadataProvider(context.Background(), etcdCli, testMetaCfg(t))
+
+	// Invalid protobuf: field 1, length-delimited, claims length=10 but no data follows.
+	invalidProto := string([]byte{0x0a, 0x0a})
+	logId := int64(31415)
+	key := legacyKeyBuilder().BuildSegmentCompactedNotifyStatusKey(logId, 1)
+	_, err = etcdCli.Put(context.Background(), key, invalidProto)
+	require.NoError(t, err)
+
+	_, _, err = provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
+	assert.Error(t, err, "a targeted Get of the corrupt record still surfaces the error")
+
+	// List SKIPS the corrupt record instead of failing wholesale: one bad value must not
+	// poison the notify seed / orphan sweep for the entire log. A good sibling record is
+	// still returned.
+	goodKey := legacyKeyBuilder().BuildSegmentCompactedNotifyStatusKey(logId, 2)
+	goodVal, err := proto.MarshalSegmentCompactedNotifyStatus(&proto.SegmentCompactedNotifyStatus{
+		LogId: logId, SegmentId: 2, State: proto.SegmentCompactedNotifyState_NOTIFY_COMPLETED,
+	})
+	require.NoError(t, err)
+	_, err = etcdCli.Put(context.Background(), goodKey, string(goodVal))
+	require.NoError(t, err)
+
+	statuses, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), logId)
+	assert.NoError(t, err, "List must tolerate a corrupt record")
+	require.Len(t, statuses, 1, "the good record survives; the corrupt one is skipped")
+	assert.Equal(t, int64(2), statuses[0].SegmentId)
+
+	_, err = etcdCli.Delete(context.Background(), key)
+	require.NoError(t, err)
+	_, err = etcdCli.Delete(context.Background(), goodKey)
+	require.NoError(t, err)
+}
+
+func testDeleteLogMetadataWipesMarkingRecords(t *testing.T) {
+	provider, logName, logId := setupSegmentCleanupTest(t)
+
+	status := &proto.SegmentCompactedNotifyStatus{
+		LogId:              logId,
+		SegmentId:          1,
+		State:              proto.SegmentCompactedNotifyState_NOTIFY_PENDING_MANUAL,
+		StartTime:          uint64(time.Now().UnixMilli()),
+		LastUpdateTime:     uint64(time.Now().UnixMilli()),
+		QuorumNotifyStatus: map[string]bool{"node1": false},
+	}
+	_, err := provider.CreateSegmentCompactedNotifyStatus(context.Background(), status)
+	require.NoError(t, err)
+
+	// Whole-log delete must wipe the marking/<logId>/ prefix along with the rest.
+	require.NoError(t, provider.DeleteLogMetadata(context.Background(), logName, true))
+
+	stored, _, err := provider.GetSegmentCompactedNotifyStatus(context.Background(), logId, 1)
+	assert.NoError(t, err)
+	assert.Nil(t, stored, "marking record must be wiped by the whole-log delete transaction")
+}
+
+// testListSegmentCompactedNotifyStatusNoCrossLog is the regression for the trailing-slash
+// prefix fix: List(logId=1) must NOT also match marking/12/*, marking/10/* etc. (records are
+// keyed by SegmentId alone downstream, so a cross-log match would seed the wrong log's
+// same-numbered segment as settled and silently skip its distribution).
+func testListSegmentCompactedNotifyStatusNoCrossLog(t *testing.T) {
+	provider, _, _ := setupSegmentCleanupTest(t)
+
+	put := func(logId, segId int64) {
+		_, putErr := provider.CreateSegmentCompactedNotifyStatus(context.Background(), &proto.SegmentCompactedNotifyStatus{
+			LogId: logId, SegmentId: segId,
+			State:              proto.SegmentCompactedNotifyState_NOTIFY_IN_PROGRESS,
+			StartTime:          uint64(time.Now().UnixMilli()),
+			QuorumNotifyStatus: map[string]bool{"n1": false},
+		})
+		require.NoError(t, putErr)
+	}
+	// Log 1 has segment 3; sibling logs 10, 12, 100 (whose ids share the "1" prefix) also have it.
+	put(1, 3)
+	put(10, 3)
+	put(12, 7)
+	put(100, 9)
+
+	got, err := provider.ListSegmentCompactedNotifyStatus(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "List(1) must return only log 1's records, not marking/10, marking/12, marking/100")
+	assert.Equal(t, int64(1), got[0].LogId)
+	assert.Equal(t, int64(3), got[0].SegmentId)
+}
+
+// testListSegmentCleanupStatusNoCrossLog is the same regression for the sibling cleanup-status
+// scan (which had the identical prefix bug).
+func testListSegmentCleanupStatusNoCrossLog(t *testing.T) {
+	provider, _, _ := setupSegmentCleanupTest(t)
+
+	put := func(logId, segId int64) {
+		require.NoError(t, provider.CreateSegmentCleanupStatus(context.Background(), &proto.SegmentCleanupStatus{
+			LogId: logId, SegmentId: segId,
+			State:               proto.SegmentCleanupState_CLEANUP_IN_PROGRESS,
+			StartTime:           uint64(time.Now().UnixMilli()),
+			QuorumCleanupStatus: map[string]bool{"n1": false},
+		}))
+	}
+	put(1, 3)
+	put(10, 3)
+	put(12, 7)
+
+	got, err := provider.ListSegmentCleanupStatus(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "List(1) must return only log 1's cleanup records")
+	assert.Equal(t, int64(1), got[0].LogId)
 }

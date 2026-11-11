@@ -27,6 +27,9 @@ func TestObjectStoragePutObject(t *testing.T) {
 	ctx := context.Background()
 	bucketName := cfg.Minio.BucketName
 	objectName := fmt.Sprintf("test-put-object-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
+	})
 
 	// Test data
 	testData := []byte("test content for put object")
@@ -51,10 +54,6 @@ func TestObjectStoragePutObject(t *testing.T) {
 	readData, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, testData, readData)
-
-	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
-	assert.NoError(t, err)
 }
 
 func TestObjectStoragePutObjectIfNoneMatch(t *testing.T) {
@@ -67,6 +66,9 @@ func TestObjectStoragePutObjectIfNoneMatch(t *testing.T) {
 	ctx := context.Background()
 	bucketName := cfg.Minio.BucketName
 	objectName := fmt.Sprintf("test-put-if-none-match-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
+	})
 
 	// Test data
 	testData := []byte("test content for if-none-match")
@@ -97,10 +99,6 @@ func TestObjectStoragePutObjectIfNoneMatch(t *testing.T) {
 	readData, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, testData, readData, "Original content should be unchanged")
-
-	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
-	assert.NoError(t, err)
 }
 
 func TestObjectStoragePutFencedObject(t *testing.T) {
@@ -113,6 +111,9 @@ func TestObjectStoragePutFencedObject(t *testing.T) {
 	ctx := context.Background()
 	bucketName := cfg.Minio.BucketName
 	objectName := fmt.Sprintf("test-put-fenced-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
+	})
 
 	// 1. Test successful fenced object creation
 	err = storageCli.PutFencedObject(ctx, bucketName, objectName, "test-ns", "0")
@@ -129,10 +130,6 @@ func TestObjectStoragePutFencedObject(t *testing.T) {
 	err = storageCli.PutFencedObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	t.Logf("Idempotent fenced object creation succeeded")
-
-	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
-	assert.NoError(t, err)
 }
 
 func TestObjectStoragePutIfNoneMatchWithFencedObject(t *testing.T) {
@@ -145,6 +142,9 @@ func TestObjectStoragePutIfNoneMatchWithFencedObject(t *testing.T) {
 	ctx := context.Background()
 	bucketName := cfg.Minio.BucketName
 	objectName := fmt.Sprintf("test-put-if-none-match-fenced-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
+	})
 
 	// 1. Create a fenced object
 	err = storageCli.PutFencedObject(ctx, bucketName, objectName, "test-ns", "0")
@@ -163,10 +163,6 @@ func TestObjectStoragePutIfNoneMatchWithFencedObject(t *testing.T) {
 	_, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	assert.True(t, isFenced, "Object should remain fenced")
-
-	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
-	assert.NoError(t, err)
 }
 
 func TestObjectStoragePutIfNoneMatchConcurrency(t *testing.T) {
@@ -179,18 +175,21 @@ func TestObjectStoragePutIfNoneMatchConcurrency(t *testing.T) {
 	ctx := context.Background()
 	bucketName := cfg.Minio.BucketName
 	objectName := fmt.Sprintf("test-put-if-none-match-concurrency-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
+	})
 
 	// Test concurrent uploads to the same object
 	const numGoroutines = 5
 	var wg sync.WaitGroup
 	results := make(chan error, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 
-			data := []byte(fmt.Sprintf("concurrent data from goroutine %d", id))
+			data := fmt.Appendf(nil, "concurrent data from goroutine %d", id)
 			err := storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 				bytes.NewReader(data), int64(len(data)), "test-ns", "0")
 			results <- err
@@ -220,10 +219,6 @@ func TestObjectStoragePutIfNoneMatchConcurrency(t *testing.T) {
 
 	t.Logf("Concurrency test results: %d success, %d object exists, %d other errors",
 		successCount, objectExistsCount, otherErrorCount)
-
-	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
-	assert.NoError(t, err)
 }
 
 func TestObjectStoragePutFencedObjectConcurrency(t *testing.T) {
@@ -236,13 +231,16 @@ func TestObjectStoragePutFencedObjectConcurrency(t *testing.T) {
 	ctx := context.Background()
 	bucketName := cfg.Minio.BucketName
 	objectName := fmt.Sprintf("test-put-fenced-concurrency-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
+	})
 
 	// Test concurrent fence operations on the same object
 	const numGoroutines = 5
 	var wg sync.WaitGroup
 	results := make(chan error, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -276,10 +274,6 @@ func TestObjectStoragePutFencedObjectConcurrency(t *testing.T) {
 	assert.True(t, isFenced, "Object should be fenced after concurrent operations")
 
 	t.Logf("Fenced concurrency test results: %d success, %d errors", successCount, errorCount)
-
-	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
-	assert.NoError(t, err)
 }
 
 func TestObjectStoragePutObjectIdempotency(t *testing.T) {
@@ -292,6 +286,9 @@ func TestObjectStoragePutObjectIdempotency(t *testing.T) {
 	ctx := context.Background()
 	bucketName := cfg.Minio.BucketName
 	objectName := fmt.Sprintf("test-put-object-idempotency-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
+	})
 
 	// Test data
 	testData := []byte("test content for idempotency")
@@ -326,10 +323,6 @@ func TestObjectStoragePutObjectIdempotency(t *testing.T) {
 	readData, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, testData, readData, "Original content should be preserved")
-
-	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
-	assert.NoError(t, err)
 }
 
 func TestObjectStorageCheckIfConditionWriteSupport(t *testing.T) {
@@ -343,10 +336,9 @@ func TestObjectStorageCheckIfConditionWriteSupport(t *testing.T) {
 	bucketName := cfg.Minio.BucketName
 	basePath := fmt.Sprintf("test-support-check-%d", time.Now().UnixNano())
 
-	// Test that the function runs successfully without panicking
-	assert.NotPanics(t, func() {
-		storageclient.CheckIfConditionWriteSupport(ctx, storageCli, bucketName, basePath)
-	}, "CheckIfConditionWriteSupport should not panic with valid ObjectStorage")
+	isSupport, checkErr := storageclient.CheckIfConditionWriteSupport(ctx, storageCli, bucketName, basePath)
+	require.NoError(t, checkErr)
+	assert.True(t, isSupport, "CheckIfConditionWriteSupport should report support")
 
 	t.Logf("CheckIfConditionWriteSupport passed successfully for bucket: %s", bucketName)
 }
@@ -362,11 +354,11 @@ func TestObjectStorageCheckIfConditionWriteSupportMultipleCalls(t *testing.T) {
 	bucketName := cfg.Minio.BucketName
 	basePath := fmt.Sprintf("test-support-check-multi-%d", time.Now().UnixNano())
 
-	// Call multiple times to test sync.Once behavior
-	for i := 0; i < 3; i++ {
-		assert.NotPanics(t, func() {
-			storageclient.CheckIfConditionWriteSupport(ctx, storageCli, bucketName, basePath)
-		}, "Multiple calls to CheckIfConditionWriteSupport should not panic")
+	// Call multiple times to verify repeated invocations are stable
+	for i := range 3 {
+		isSupport, checkErr := storageclient.CheckIfConditionWriteSupport(ctx, storageCli, bucketName, basePath)
+		require.NoError(t, checkErr, "call %d should not return error", i)
+		assert.True(t, isSupport, "call %d should report support", i)
 	}
 
 	t.Logf("Multiple calls to CheckIfConditionWriteSupport handled correctly")
@@ -383,36 +375,34 @@ func TestObjectStorageCheckIfConditionWriteSupportConcurrency(t *testing.T) {
 	bucketName := cfg.Minio.BucketName
 	basePath := fmt.Sprintf("test-support-check-concurrent-%d", time.Now().UnixNano())
 
-	// Test concurrent calls to ensure sync.Once works correctly
+	// Test concurrent calls to verify thread safety
 	const numGoroutines = 5
 	var wg sync.WaitGroup
-	panicChan := make(chan interface{}, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	type result struct {
+		supported bool
+		err       error
+	}
+	resultChan := make(chan result, numGoroutines)
+
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					panicChan <- r
-				}
-			}()
-
-			storageclient.CheckIfConditionWriteSupport(ctx, storageCli, bucketName, basePath)
+			supported, err := storageclient.CheckIfConditionWriteSupport(ctx, storageCli, bucketName, basePath)
+			resultChan <- result{supported: supported, err: err}
 		}(i)
 	}
 
 	wg.Wait()
-	close(panicChan)
+	close(resultChan)
 
-	// Check that no goroutines panicked
-	panicCount := 0
-	for panic := range panicChan {
-		panicCount++
-		t.Errorf("Goroutine panicked: %v", panic)
+	// Verify all goroutines succeeded
+	for res := range resultChan {
+		assert.NoError(t, res.err, "concurrent call should not return error")
+		assert.True(t, res.supported, "concurrent call should report support")
 	}
 
-	assert.Equal(t, 0, panicCount, "No goroutines should panic during concurrent calls")
 	t.Logf("Concurrent calls to CheckIfConditionWriteSupport handled correctly")
 }
 
@@ -433,6 +423,11 @@ func TestObjectStorageWalkWithObjects(t *testing.T) {
 		fmt.Sprintf("%s/obj2.txt", basePath),
 		fmt.Sprintf("%s/subdir/obj3.txt", basePath),
 	}
+	t.Cleanup(func() {
+		for _, objName := range testObjects {
+			storageCli.RemoveObject(ctx, bucketName, objName, "test-ns", "0")
+		}
+	})
 
 	testData := []byte("test data for walk")
 	for _, objName := range testObjects {
@@ -452,23 +447,10 @@ func TestObjectStorageWalkWithObjects(t *testing.T) {
 	// Verify all objects were found
 	assert.GreaterOrEqual(t, len(foundObjects), len(testObjects), "Should find at least the created objects")
 	for _, expectedObj := range testObjects {
-		found := false
-		for _, foundObj := range foundObjects {
-			if foundObj == expectedObj {
-				found = true
-				break
-			}
-		}
-		assert.True(t, found, "Should find object: %s", expectedObj)
+		assert.Contains(t, foundObjects, expectedObj, "Should find object: %s", expectedObj)
 	}
 
 	t.Logf("WalkWithObjects found %d objects with prefix %s", len(foundObjects), basePath)
-
-	// Cleanup
-	for _, objName := range testObjects {
-		err = storageCli.RemoveObject(ctx, bucketName, objName, "test-ns", "0")
-		assert.NoError(t, err)
-	}
 }
 
 func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
@@ -481,10 +463,13 @@ func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	ctx := context.Background()
 	bucketName := cfg.Minio.BucketName
 	objectName := fmt.Sprintf("test-get-object-offset-size-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
+	})
 
 	// Create 100 bytes of test data
 	testData := make([]byte, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		testData[i] = byte(i % 256) // Fill with pattern 0-99
 	}
 
@@ -556,8 +541,4 @@ func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	t.Logf("  - Middle 30 bytes (35-64): %d bytes", len(middleData))
 	t.Logf("  - Last 25 bytes (75-99): %d bytes", len(lastData))
 	t.Logf("  - Beyond object (90+20): %d bytes", len(beyondData))
-
-	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
-	assert.NoError(t, err)
 }

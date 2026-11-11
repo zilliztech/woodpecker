@@ -20,9 +20,9 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/errors/oserror"
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
 	"go.uber.org/automaxprocs/maxprocs"
 	"go.uber.org/zap"
 
@@ -56,14 +56,12 @@ func GetCPUNum() int {
 func GetCPUUsage() float64 {
 	percents, err := cpu.Percent(0, false)
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("failed to get cpu usage",
-			zap.Error(err))
+		logger.Ctx(context.TODO()).Warn("failed to get cpu usage", zap.Error(err))
 		return 0
 	}
 
 	if len(percents) != 1 {
-		logger.Ctx(context.TODO()).Warn("something wrong in cpu.Percent, len(percents) must be equal to 1",
-			zap.Int("len(percents)", len(percents)))
+		logger.Ctx(context.TODO()).Warn("something wrong in cpu.Percent, len(percents) must be equal to 1", zap.Int("len(percents)", len(percents)))
 		return 0
 	}
 
@@ -75,8 +73,7 @@ func GetMemoryCount() uint64 {
 	// get host memory by `gopsutil`
 	stats, err := mem.VirtualMemory()
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("failed to get memory count",
-			zap.Error(err))
+		logger.Ctx(context.TODO()).Warn("failed to get memory count", zap.Error(err))
 		return 0
 	}
 
@@ -88,9 +85,22 @@ func GetMemoryCount() uint64 {
 	}
 
 	if err != nil || limit > stats.Total {
-		logger.Ctx(context.TODO()).Warn("failed to get container memory limit",
-			zap.Uint64("containerLimit", limit),
-			zap.Error(err))
+		logger.Ctx(context.TODO()).Warn("failed to get container memory limit", zap.Uint64("containerLimit", limit), zap.Error(err))
+	}
+	return stats.Total
+}
+
+// GetHostMemoryCount returns the machine's total memory in bytes, ignoring any container limit.
+//
+// It exists so callers can tell a real container limit from the fallback: GetMemoryCount returns
+// the host total when the cgroup limit cannot be read, and returns it indistinguishably from a
+// limit that happens to equal it. Sizing anything as a fraction of memory needs to know the
+// difference -- on a small pod on a large machine the two are orders of magnitude apart.
+func GetHostMemoryCount() uint64 {
+	stats, err := mem.VirtualMemory()
+	if err != nil {
+		logger.Ctx(context.TODO()).Warn("failed to get host memory count", zap.Error(err))
+		return 0
 	}
 	return stats.Total
 }
@@ -113,6 +123,21 @@ func GetDiskUsage(path string) (float64, float64, error) {
 	usedGB := float64(diskStats.Used) / 1e9
 	totalGB := float64(diskStats.Total) / 1e9
 	return usedGB, totalGB, nil
+}
+
+// GetDiskStats returns used/total/free bytes for the filesystem containing path.
+// free is the space available to unprivileged processes (statfs Bavail): on ext4
+// this excludes root-reserved blocks, so compute a df-style usage ratio as
+// used/(used+free), NOT used/total. A non-existent path returns zeros, nil.
+func GetDiskStats(path string) (used, total, free uint64, err error) {
+	diskStats, err := disk.Usage(path)
+	if err != nil {
+		if errors.Is(err, oserror.ErrNotExist) {
+			return 0, 0, 0, nil
+		}
+		return 0, 0, 0, err
+	}
+	return diskStats.Used, diskStats.Total, diskStats.Free, nil
 }
 
 // GetIOWait Get IO Wait Percentage

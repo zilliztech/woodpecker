@@ -1,0 +1,59 @@
+# Posts the CI command list once, when a pull request is opened, so a failing
+# check does not have to explain how to rerun itself.
+#
+# `pull_request_target` is used because a `pull_request` workflow raised from a
+# fork gets a read-only token and cannot comment (see #308). Like the labeller,
+# this workflow is therefore privileged: it must never check out the PR head,
+# run anything the PR provides, or interpolate PR-controlled strings into
+# `run:`. It only posts a fixed message to a PR number.
+name: PR CI Guide
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  Guide:
+    name: PR CI Guide
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post CI command guide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR" --repo "$REPO" --body-file - <<'GUIDE'
+          ### CI commands
+
+          Comment any of these to rerun checks on this pull request:
+
+          | Command | Reruns |
+          | --- | --- |
+          | `/rerun` | every failed workflow on the latest commit |
+          | `/rerun-lint` | Code Checker: Lint and Go Mod Tidy Check |
+          | `/rerun-mod-tidy` | Code Checker: Lint and Go Mod Tidy Check |
+          | `/rerun-unit-test` | Core Unit Test and CI Contracts |
+          | `/rerun-wpcli` | WPCLI CI: native commands including `wp diagnose`, configuration and shell interaction |
+          | `/rerun-diagnostics` | Diagnostics CI: `wp diag`, reports, operations WebUI, Prometheus/Jaeger, fixtures and stack examples |
+          | `/rerun-e2e-local` | E2E Local |
+          | `/rerun-e2e-objectstorage` | E2E Object Storage |
+          | `/rerun-embed-minio-without-conditionwrite` | Embed MinIO Without ConditionWrite |
+          | `/rerun-e2e-service` | E2E Service |
+          | `/rerun-e2e-service-corruption` | E2E Service Data Corruption |
+          | `/rerun-issue-commands` | Issue Command Tests |
+          | `/rerun-component-test` | Component Integration Test and Trace Export Integration |
+          | `/rerun-chaos` | Chaos Test |
+          | `/rerun-service-stability-process` | Service Stability (Process) |
+          | `/rerun-service-stability-docker` | Service Stability (Docker) |
+          | `/rerun-operator` | Operator Test |
+          | `/rerun-upgrade-local` | Upgrade Compat Local |
+          | `/rerun-upgrade-objectstorage` | Upgrade Compat Object Storage |
+          | `/rerun-upgrade-service` | Upgrade Compat Service |
+
+          The `ci-passed` label is applied automatically once every required check passes.
+          GUIDE

@@ -1,0 +1,488 @@
+{
+  "shell": [
+    "wp shell --context milvus-prod\n# Inside the interactive session:\nstatus\nconnect tenant-a --etcd 127.0.0.1:32379 --meta-prefix tenant-a/woodpecker --bucket tenant-a-bucket --root-path milvus/wp\nmeta log list",
+    "wp[context=milvus-prod | meta=disconnected]>\n# After connect succeeds:\nwp[context=milvus-prod | meta=tenant-a]>",
+    "wp shell: Prerequisite: no tenant metadata connection configured. Connect with: connect <tenant> --etcd <host:port> --meta-prefix <prefix>. Run status to view the session",
+    "The service context is required; attaching a tenant is explicit and optional. Service commands work while disconnected. Metadata operations require connect, and interactive scan/inspect/probe also require bucket/root-path. status shows local selection; status --check checks reachability. Switching service contexts clears the tenant connection. This source-build feature is not included in v0.1.47."
+  ],
+  "cluster info": [
+    "wp cluster info",
+    "members: [node-0, node-1, node-2]",
+    "Network: seed unavailable",
+    "Membership is the seed’s current view, not proof of data availability. Compare peer views with gossip-diff."
+  ],
+  "cluster health": [
+    "wp cluster health --expected-replicas 3",
+    "Cluster Health: GREEN",
+    "Cluster Health: YELLOW\nactive: 3\nzero redundancy (active == N)",
+    "GREEN requires active > N, no unreachable/decommissioning nodes and no version skew. RED: active < N or any node unreachable. YELLOW: active == N, decommissioning or mixed versions. The default N=3 is a baseline, not inferred per-log quorum health."
+  ],
+  "cluster gossip-diff": [
+    "wp cluster gossip-diff",
+    "Peer membership views agree",
+    "Membership views differ / unreachable peer",
+    "Agreement is among responding peers. Use --strict for incomplete fan-out; inspect whether a new/removed node has converged."
+  ],
+  "config show": [
+    "wp config show node-0 -o json",
+    "{\"woodpecker\":{\"storage\":{\"type\":\"service\"}}}",
+    "Error: Network: /admin/config returned status 503",
+    "This is server configuration, not client SDK configuration. Compare actual values and failed respondents separately."
+  ],
+  "env show": [
+    "wp env show node-0 -o json",
+    "{\"env\":{...},\"runtime\":{...},\"host\":{...},\"build\":{...}}",
+    "Error: TargetNotFound: node-missing",
+    "Compare build, Go runtime and deployment environment. Differences are evidence to investigate, not automatic data corruption."
+  ],
+  "config diff": [
+    "wp config diff --all --strict",
+    "node-0: (reference)\nnode-1: identical\nnode-2: identical",
+    "node-1: DRIFT (1 fields differ)\nnode-2: UNREACHABLE (not compared)\nError: YellowFinding: config drift detected",
+    "This is server configuration, not client SDK configuration. Compare actual values and failed respondents separately."
+  ],
+  "env diff": [
+    "wp env diff --strict",
+    "node-0: (reference)\nnode-1: identical",
+    "node-1: DRIFT (...)\nnode-2: UNREACHABLE (not compared)",
+    "Compare build, Go runtime and deployment environment. Differences are evidence to investigate, not automatic data corruption."
+  ],
+  "ctx list": [
+    "wp ctx list",
+    "NAME         ENDPOINT                ACTIVE\nmilvus-prod  http://127.0.0.1:19091   *",
+    "Context does not exist / config parse or write error",
+    "list and view inspect local CLI configuration. use persists current-context; --context selects one invocation without changing it. No server configuration is changed."
+  ],
+  "ctx view": [
+    "wp --context milvus-prod ctx view",
+    "Active context:\n  endpoint:     http://127.0.0.1:19091\n  admin_port:   9091\n  timeout:      30s\n  concurrency:  8\n  strict:       false",
+    "Context does not exist / config parse or write error",
+    "list and view inspect local CLI configuration. use persists current-context; --context selects one invocation without changing it. No server configuration is changed."
+  ],
+  "ctx use": [
+    "wp ctx use milvus-prod",
+    "Switched to context \"milvus-prod\"",
+    "Context does not exist / config parse or write error",
+    "list and view inspect local CLI configuration. use persists current-context; --context selects one invocation without changing it. No server configuration is changed."
+  ],
+  "version": [
+    "wp version",
+    "wp version ...\n# Version, commit and build details reflect this CLI binary.",
+    "Unavailable build fields in an unversioned build",
+    "This reports the CLI build, not all node versions. Use env show or cluster info for remote builds."
+  ],
+  "completion bash": [
+    "wp completion bash > wp-completion.bash",
+    "Generated shell completion script",
+    "Shell setup does not load the script",
+    "Generation only writes stdout; it does not edit shell startup files. Load it using your shell’s completion mechanism. For zsh: initialize compinit, then source the generated file."
+  ],
+  "completion zsh": [
+    "wp completion zsh > wp-completion.zsh",
+    "Generated shell completion script",
+    "Shell setup does not load the script",
+    "Generation only writes stdout; it does not edit shell startup files. Load it using your shell’s completion mechanism. For zsh: initialize compinit, then source the generated file."
+  ],
+  "completion fish": [
+    "wp completion fish > wp-completion.fish",
+    "Generated shell completion script",
+    "Shell setup does not load the script",
+    "Generation only writes stdout; it does not edit shell startup files. Load it using your shell’s completion mechanism. For zsh: initialize compinit, then source the generated file."
+  ],
+  "completion powershell": [
+    "wp completion powershell > wp-completion.powershell",
+    "Generated shell completion script",
+    "Shell setup does not load the script",
+    "Generation only writes stdout; it does not edit shell startup files. Load it using your shell’s completion mechanism. For zsh: initialize compinit, then source the generated file."
+  ],
+  "node list": [
+    "wp node list --strict",
+    "NAME                  STATE   HEALTH\nmilvus-woodpecker-0    active  OK\nmilvus-woodpecker-1    active  OK",
+    "milvus-woodpecker-2    unreachable\n# With --strict, incomplete fan-out returns a nonzero exit code.",
+    "Use node IDs from this list in node-scoped commands; distinguish membership from HTTP reachability."
+  ],
+  "node show": [
+    "wp node show node-0 -o json",
+    "{\"node_id\":\"milvus-woodpecker-0\",\"state\":\"active\",\"is_decommissioning\":false,...}",
+    "Error: Network: /admin/node returned status 503",
+    "Inspect one discovered node. A missing target is different from an HTTP failure."
+  ],
+  "node healthz": [
+    "wp node healthz node-0",
+    "Health probe on node-0: ok",
+    "Health probe on node-0: failed\n# Read individual dependency/check codes in the report.",
+    "Process health/readiness does not establish log read/write progress or replica data integrity."
+  ],
+  "node log-health": [
+    "wp node log-health node-0",
+    "tracked: 1  healthy: 1  stalled: 0  failed: 0  idle: 0",
+    "reason: idle_logs_present\ntracked: 1  healthy: 0  stalled: 0  failed: 0  idle: 1",
+    "Write/read health describe client/log activity tracked on this node. Idle is inactivity, not a checksum failure. Stalled and Failed require looking at operations and last failure; this registry is not a complete metadata inventory."
+  ],
+  "node drain-status": [
+    "wp node drain-status node-0",
+    "safe_to_terminate: true",
+    "state: active\nremaining_processors: 1\nhas_local_data: true\nsafe_to_terminate: false",
+    "Terminate only after safe_to_terminate=true. active means decommission has not completed; processors and local data independently prevent a safe drain. -w polls."
+  ],
+  "node decommission": [
+    "wp node decommission node-0 --async",
+    "decommission started on node-0\n# --async returns before drain completion; follow with drain-status.",
+    "state=decommissioning remaining_processors=1 has_local_data=true safe=false",
+    "Changes node lifecycle state. Check capacity first; --async returns after request rather than completion. Timeout does not authorize termination."
+  ],
+  "node cancel-decommission": [
+    "wp node cancel-decommission node-0",
+    "decommission cancelled on node-0; returning to active",
+    "Error: StateConflict: ...",
+    "Cancels the lifecycle operation; re-check node state and application progress."
+  ],
+  "node restart": [
+    "wp node restart node-0",
+    "No supported success path",
+    "NotImplemented",
+    "This command is currently a stub. Restart through the orchestrator; first verify drain safety when doing planned replacement."
+  ],
+  "logging get-level": [
+    "wp logging get-level node-0",
+    "NODE    LEVEL\nnode-0  info",
+    "node-0  (unreachable)\n# In an --all report, inspect each row.",
+    "Runtime logging changes affect this node. Record the old level and restore it after a short reproduction; this is separate from the log metadata command group."
+  ],
+  "logging set-level": [
+    "wp logging set-level node-0 --level debug",
+    "Log level set to \"debug\" on node-0",
+    "Error: Usage: invalid log level ...",
+    "Runtime logging changes affect this node. Record the old level and restore it after a short reproduction; this is separate from the log metadata command group."
+  ],
+  "profile": [
+    "wp profile node-0 --type cpu --seconds 10 --output-file node0-cpu.pb.gz",
+    "Saved: node0-cpu.pb.gz\nTo analyze: go tool pprof -http=127.0.0.1:8081 node0-cpu.pb.gz",
+    "pprof returned status 404 / timeout",
+    "CPU uses /debug/pprof/profile. Trace uses go tool trace, not pprof, and saves .trace. allocs is cumulative allocation, heap is live memory; a sparse mutex profile does not prove absence of deadlocks. Goroutine pprof aggregates stacks; it is not a raw stack dump."
+  ],
+  "instance data": [
+    "wp instance data --all --strict",
+    "NODE    BUCKET         ROOT_PATH  LOGS  SEGMENTS  LIVE  SIZE_BYTES  PROCS  DELETE_STATE\nnode-0  milvus-bucket  milvus/wp  1     2         1     1048576     1      active",
+    "A node has scan_errors or is unreachable. A partial inventory does not establish that no data remains.",
+    "Inventory local instances before deleting or draining. --bucket requires --root (this command uses --root, unlike segment --root-path). No CLI instance-delete command is currently registered; the scenario guide documents the admin API."
+  ],
+  "k8s doctor": [
+    "wp k8s doctor",
+    "No supported success path: this operation is not implemented.",
+    "Error: NotImplemented: k8s doctor\n# Exit code 10 is expected.",
+    "Use kubectl and the status/logs helpers for diagnosis; this placeholder does not check prerequisites or cluster health."
+  ],
+  "k8s status": [
+    "wp k8s status --namespace milvus --wp-cluster woodpecker-prod",
+    "kubectl ... get woodpeckercluster woodpecker-prod -o wide\nkubectl ... describe woodpeckercluster woodpecker-prod\n# Printed plan only; --execute runs it.",
+    "Missing kubectl, kubeconfig or resource / kubectl exit status",
+    "status, logs and scale print plans by default; -x executes. scale targets a WoodpeckerCluster CR, not an arbitrary StatefulSet. Set the correct kube context and namespace. doctor checks local prerequisites. status/scale require an operator-managed WoodpeckerCluster CR. For a Helm deployment without that CR, use kubectl get pods directly."
+  ],
+  "k8s logs": [
+    "wp k8s logs milvus-woodpecker-0 --namespace milvus",
+    "kubectl ... -n milvus logs milvus-woodpecker-0 --tail=100",
+    "Missing kubectl, kubeconfig or resource / kubectl exit status",
+    "status, logs and scale print plans by default; -x executes. scale targets a WoodpeckerCluster CR, not an arbitrary StatefulSet. Set the correct kube context and namespace. doctor checks local prerequisites."
+  ],
+  "k8s scale": [
+    "wp k8s scale --namespace milvus --wp-cluster wp --replicas 4",
+    "Scaling wp to 4 replicas...\nkubectl ... patch woodpeckercluster wp --type merge -p ...\n# Printed plan only; --execute runs it.",
+    "Missing kubectl, kubeconfig or resource / kubectl exit status",
+    "status, logs and scale print plans by default; -x executes. scale targets a WoodpeckerCluster CR, not an arbitrary StatefulSet. Set the correct kube context and namespace. doctor checks local prerequisites. This targets a WoodpeckerCluster CR, not a Helm release."
+  ],
+  "ops list": [
+    "wp ops list node-0 --longer-than 30000",
+    "OP_TYPE  OP_ID  TRACE_ID  LOG:SEG\n# No rows means no matching tracked operation at this instant.",
+    "logstore.add_entry  append-op-123  ...  42:7\n# The same old operation across samples needs investigation.",
+    "An empty table means no tracked in-flight operations at this instant, not no historical workload. Compare age and operation IDs over time."
+  ],
+  "ops show": [
+    "wp ops show node-0 --op-id append-op-123",
+    "Identity\n  op_id: append-op-123\n  op_type: logstore.add_entry\nContext\n  log_id: 42\n  segment_id: 7",
+    "Error: ResourceNotFound: ...\n# It may have completed or been evicted since listing.",
+    "Copy a real OP_ID from ops list. A completed operation disappearing is expected; registry capacity is bounded. Replace append-op-123 with an ID returned by ops list."
+  ],
+  "ops stats": [
+    "wp ops stats node-0",
+    "Capacity\n  capacity: 1024\n  in_use: 0 (0.0%)\nEviction Totals\n  old: 0",
+    "old: 12 (STALL SIGNAL)\n# This counter is cumulative; sample again to see whether it is growing.",
+    "Counters can be cumulative. Compare snapshots and queue state; eviction can hide old operations, so no listed op is not always conclusive."
+  ],
+  "logstore segments": [
+    "wp logstore segments node-0",
+    "LOG_ID SEG_ID BACKEND WRITABLE FENCED FINALIZED ENTRIES BLOCKS",
+    "Header only / node unavailable",
+    "Lists loaded writer objects, not every segment on disk or in etcd. An empty table does not establish no stored data; use log scan and instance data."
+  ],
+  "logstore segment-show": [
+    "wp logstore segment-show node-0 --log 2 --seg 0",
+    "writer: ...\nbuffer: ...\nflush_state: ...\n# Illustrative excerpt; fields depend on the storage backend.",
+    "Error: TargetNotFound: ...\n# No loaded writer; historical data may still exist.",
+    "--log and --seg are numeric IDs. Historical/unloaded segments need segment inspect and log scan, not this active-writer endpoint."
+  ],
+  "logstore buffer": [
+    "wp logstore buffer node-0",
+    "LOG:SEG  BUFFER_BYTES  BUFFER_ENTRIES\n42:7     4096          4",
+    "# A sustained/growing value with outstanding appends requires flush-path investigation.",
+    "This inspects node-local runtime state. Take repeated samples and correlate long-running operations; one nonzero queue is not automatically a stall."
+  ],
+  "logstore flush-queue": [
+    "wp logstore flush-queue node-0",
+    "LOG:SEG  QUEUE_DEPTH  QUEUE_CAP\n42:7     0            16",
+    "42:7     16           16\n# Correlate a persistently full queue with file.flush operations and backend latency.",
+    "This inspects node-local runtime state. Take repeated samples and correlate long-running operations; one nonzero queue is not automatically a stall."
+  ],
+  "logstore lac": [
+    "wp logstore lac my-channel 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "quorum LAC: 99 (aq=2 of 3 nodes at or past it)",
+    "quorum LAC: unknown — 1 of 3 nodes answered, fewer than aq=2",
+    "LAC is confirmed progress reported per replica, not a full checksum verification. Active metadata is not a final boundary. Map every quorum member’s admin address."
+  ],
+  "logstore force-flush": [
+    "wp logstore force-flush node-0 --log 2 --seg 0",
+    "force-flush completed on node-0",
+    "Error: StateConflict: ...",
+    "Mutates a loaded writer. It cannot repair corrupted payloads; inspect queues and backend errors first."
+  ],
+  "logstore compact": [
+    "wp logstore compact node-0 --log 2 --seg 0 --expected-last-entry-id 99",
+    "compact completed on node-0",
+    "Error: StateConflict: ...\n# Verify the exact coordinator last entry; inspect node logs for the rejected compaction.",
+    "Use the exact LastEntryId from verified Completed metadata, never guess from a replica’s longer tail. This acts on one replica; client auditor owns lifecycle advancement and mark distribution."
+  ],
+  "logstore fence": [
+    "wp logstore fence node-0 --log 2 --seg 0 --reason \"Reviewed recovery\"",
+    "About to fence log 2 segment 0 on node-0. Reason: Reviewed recovery\n# Preview only; no -y means no fencing and exit code 7.",
+    "Missing writer / fence failure",
+    "Changes write acceptance on one node. One-node fencing does not necessarily block an entire quorum; use fence-quorum for deliberate quorum intervention. Re-run with -y only after reviewing the node and quorum impact."
+  ],
+  "logstore fence-quorum": [
+    "wp logstore fence-quorum my-channel 0 --reason \"Verified writer recovery\" --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "Selected ...\n# Preview only; without -y no RPC fencing is committed (exit 7).",
+    "Acceptance not given / too few selected reachable members",
+    "The command previews quorum impact and requires acceptance (-y bypasses the prompt). Fencing can interrupt writes and trigger rolling/recovery; it does not repair data. Re-run the reviewed command with -y to commit."
+  ],
+  "log readers": [
+    "wp log readers my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "READER      OPEN_POS  CURRENT  LAST_REPORT  OPEN_FOR  STATE\nreader-123  7:0       7:50     3s           5m        live",
+    "Log my-channel (id 42) — no live readers\n# Or a stale report: check activity and namespace before declaring a stall.",
+    "Reads leased registration under readers/<logId>/. No live readers means no usable registration here, not no Milvus queries. Reports normally refresh every 30 seconds; compare two snapshots to establish progress. Lease expiry or wrong namespace can hide readers."
+  ],
+  "log scan": [
+    "wp log scan my-channel --mode raw --bucket milvus-bucket --root-path milvus/wp --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "SEGMENT STATE META LAST REACHES REPLICAS VERDICT\n1 Active -1 (open) - 3/3 open\nPer replica: local_empty / none / no_local_blocks",
+    "unknown: HTTP 404 ... / short: missing entries 50..99",
+    "REACHES is the union of observed local ranges; - means none observed. 3/3 counts usable inspection responses, not three healthy data copies. quick checks structure; raw verifies local blocks. Sealed/compacted data in object storage is not verified. Explicit bucket/root-path resolves empty or unloaded targets; pending writes are not inspected."
+  ],
+  "segment inspect": [
+    "wp segment inspect my-channel 1 --bucket milvus-bucket --root-path milvus/wp --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "BLOCK ENTRIES READABLE RECOVERABLE STATUS\n- - - - no_local_blocks",
+    "Block 0: checksum mismatch; entry 50 corrupt; later good entries",
+    "Walks local blocks and records to locate damage boundaries; it can report later recoverable entries despite a bad block. no_local_blocks says nothing about shared object integrity. Use actual timestamps/metadata separately; --max-blocks bounds the survey."
+  ],
+  "segment probe": [
+    "wp segment probe my-channel 1 --bucket milvus-bucket --root-path milvus/wp --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "SOURCE object_storage  SERVED 0-0 (1)  OUTCOME end_of_file  VERDICT served",
+    "Completed expected 99, replica stops at 49 → short / RedFinding if all fail",
+    "Actually probes sequential entry reads and stops at a failure or bound. 0-0 (1) means one entry, ID 0. Object storage responses share one copy. Active tail/no local data has unknown final boundary and must not be called a permanent stall; Completed shortfall is compared to metadata. cap_reached is a bound, not EOF."
+  ],
+  "log skip-range list": [
+    "wp log skip-range list my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "log 42 segment 7: 50-50\n# Illustrative excerpt; inspect the recorded reason and age.",
+    "# No declarations is normal when no loss has been accepted.",
+    "A declaration makes readers skip accepted data loss; it does not fix replicas or advance compaction. Entry bounds are inclusive. add previews before confirmation (-y accepts); remove does not restore skipped/reclaimed data. Inspect all replicas and the healthy tail first."
+  ],
+  "log skip-range add": [
+    "wp log skip-range add my-channel 0 --from-entry 50 --to-entry 50 --reason \"Confirmed unrecoverable entry\" --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "Ranges and reasons / preview or committed declaration",
+    "Gate refuses because a replica can serve / acceptance not given",
+    "A declaration makes readers skip accepted data loss; it does not fix replicas or advance compaction. Entry bounds are inclusive. add previews before confirmation (-y accepts); remove does not restore skipped/reclaimed data. Inspect all replicas and the healthy tail first."
+  ],
+  "log skip-range remove": [
+    "wp log skip-range remove my-channel 0 --from-entry 50 --to-entry 50 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "Removed: ...\n# Inspect list afterward to verify the remaining intervals.",
+    "Error: StateConflict: ...\n# Refresh and retry after reviewing concurrent changes.",
+    "A declaration makes readers skip accepted data loss; it does not fix replicas or advance compaction. Entry bounds are inclusive. add previews before confirmation (-y accepts); remove does not restore skipped/reclaimed data. Inspect all replicas and the healthy tail first."
+  ],
+  "marking list": [
+    "wp marking list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "COMPLETED / operator-confirmed records",
+    "NOTIFY_PENDING_MANUAL with unacked nodes",
+    "Records describe compacted-mark distribution, not the data payload. Investigate unacked nodes and physical cleanup before manual settlement."
+  ],
+  "marking confirm": [
+    "wp marking confirm 2 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "Record set to OPERATOR_CONFIRMED",
+    "StateConflict for IN_PROGRESS / COMPLETED without --force",
+    "After verifying the permanently unavailable/unacked replica, settle notification retries. This preserves the record until truncation reaps it; it does not repair a segment or delete data immediately."
+  ],
+  "metrics list": [
+    "wp metrics list node-0",
+    "NAME                                          TYPE     SERIES  HELP\nwoodpecker_server_logstore_operations_total    COUNTER  6       ...",
+    "# No matching metric: check --filter, node build and whether the series has been created.",
+    "Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below."
+  ],
+  "metrics snapshot": [
+    "wp metrics snapshot node-0",
+    "NODE    METRIC                                      LABELS  VALUE\nnode-0  woodpecker_server_logstore_operations_total  ...     5",
+    "# Missing rows can mean absent series or a failed scrape. Check peer reachability.",
+    "Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below."
+  ],
+  "metrics top": [
+    "wp metrics top --by woodpecker_server_logstore_operations_total",
+    "RANK  NODE    VALUE\n1     node-0  120\n2     node-1  100",
+    "# Ranking is by the requested metric value. A cumulative counter is not an interval rate.",
+    "Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below."
+  ],
+  "metrics watch": [
+    "wp metrics watch woodpecker_server_logstore_operations_total node-0 --interval 1s",
+    "TIMESTAMP     VALUE  DELTA  TREND\n12:00:01.000  5      -      ...\n12:00:02.000  6      +1     ...",
+    "12:00:02.000  (error)\n# Or (not found): inspect the scrape/metric selection.",
+    "Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below."
+  ],
+  "metrics report": [
+    "wp metrics report node-0 --scenario stuck-read --window 30s --interval 1s",
+    "Result: OK — no findings for scenario \"stuck-read\"",
+    "Findings (1):\n  [RED] read_stall: ...\n    -> wp ops list ...\nError: RedFinding: ...",
+    "Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below."
+  ],
+  "etcd list": [
+    "wp etcd list milvus-prod/ --etcd 127.0.0.1:32379 --limit 20 -o json",
+    "{\"prefix\":\"milvus-prod/\",\"snapshot_revision\":105,\"count\":1,\"more\":false,\"keys\":[{\"key\":\"milvus-prod/woodpecker/version\",\"mod_revision\":90,...}]}",
+    "Error: Usage: --after-key and --after-key-base64 are mutually exclusive\n# A compacted --revision instead produces a Network error.",
+    "Omit the prefix to explore all keys; list / searches only keys beginning with /. The limit controls page size, not the total count. When more=true, use the returned next_key_base64 and the same snapshot_revision for the next page. The context meta_prefix is never prepended."
+  ],
+  "etcd get": [
+    "wp etcd get milvus-prod/woodpecker/version --etcd 127.0.0.1:32379",
+    "{\"key\":{\"key\":\"milvus-prod/woodpecker/version\",\"mod_revision\":90,\"lease\":0,...},\"snapshot_revision\":105,\"value_encoding\":\"base64\",\"value\":\"CAEQACAu\"}",
+    "Error: TargetNotFound: milvus-prod/woodpecker/missing-key",
+    "get reads one exact key and returns key metadata plus an encoded value. auto keeps readable UTF-8 text and base64-encodes binary protobuf data; this command does not decode Woodpecker protobuf fields. Use --revision to read a retained historical snapshot and -o yaml for YAML."
+  ],
+  "etcd cat": [
+    "wp etcd cat milvus-prod/woodpecker/version --etcd 127.0.0.1:32379 --encoding base64",
+    "CAEQACAu\n# Encoded value only; binary auto output also explains its encoding on stderr.",
+    "Error: Usage: value is not UTF-8; use --encoding base64, hex or raw\n# Only cat supports --encoding raw.",
+    "cat writes the value without an envelope. auto/text/base64/hex output ends with a newline; --encoding raw preserves exact bytes and adds none. Redirect raw output to a file for byte-exact inspection. Neither cat nor get changes the key."
+  ],
+  "meta log list": [
+    "wp meta log list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"prefix\": \"milvus-prod/woodpecker\",\n  \"snapshot_revision\": 18000,\n  \"records\": [\n    {\n      \"kind\": \"log\",\n      \"key\": \"milvus-prod/woodpecker/logs/my-channel\",\n      \"revision\": 17099,\n      \"lease\": 0,\n      \"metadata\": {\n        \"logId\": \"42\",\n        \"truncated_segment_id\": \"6\",\n        \"truncated_entry_id\": \"99\"\n      }\n    }\n  ]\n}",
+    "# records: [] means this listing has no matching records.\n# An undecodable record instead returns a configuration error.",
+    "Lists top-level log records, including unloaded history. records is a snapshot, not a list of live node writers. Narrow with meta log show; use the record revision for a patch."
+  ],
+  "meta log show": [
+    "wp meta log show my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"kind\": \"log\",\n  \"key\": \"milvus-prod/woodpecker/logs/my-channel\",\n  \"revision\": 17099,\n  \"lease\": 0,\n  \"metadata\": {\n    \"logId\": \"42\",\n    \"truncated_segment_id\": \"6\",\n    \"truncated_entry_id\": \"99\"\n  }\n}",
+    "Error: TargetNotFound: target not found: milvus-prod/woodpecker/logs/my-channel",
+    "Shows the exact log key, ModRevision, lease and decoded fields. int64 values are decimal strings. A missing target means the key is absent in this namespace, not a damaged replica. Log truncation fields are changed with log truncate, not generic patch."
+  ],
+  "meta segment list": [
+    "wp meta segment list my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"prefix\": \"milvus-prod/woodpecker\",\n  \"snapshot_revision\": 18000,\n  \"records\": [\n    {\n      \"kind\": \"segment\",\n      \"key\": \"milvus-prod/woodpecker/logs/my-channel/segments/7\",\n      \"revision\": 174,\n      \"lease\": 0,\n      \"metadata\": {\n        \"segNo\": \"7\",\n        \"lastEntryId\": \"99\",\n        \"state\": \"Completed\"\n      }\n    }\n  ]\n}",
+    "# records: [] means this listing has no matching records.\n# An undecodable record instead returns a configuration error.",
+    "Lists persisted segments under this exact log, including unloaded history. The parent log must exist. State and lastEntryId are metadata claims; probe/inspect physical data separately."
+  ],
+  "meta segment show": [
+    "wp meta segment show my-channel 7 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"kind\": \"segment\",\n  \"key\": \"milvus-prod/woodpecker/logs/my-channel/segments/7\",\n  \"revision\": 174,\n  \"lease\": 0,\n  \"metadata\": {\n    \"segNo\": \"7\",\n    \"lastEntryId\": \"99\",\n    \"state\": \"Completed\"\n  }\n}",
+    "Error: TargetNotFound: target not found: milvus-prod/woodpecker/logs/my-channel/segments/7",
+    "Shows authoritative persisted metadata and its embedded quorum when present. Active lastEntryId=-1 is an unknown final boundary; Completed/Sealed lastEntryId=-1 means finalized empty. A key/segNo mismatch blocks patching. This read does not verify local or object-storage payloads."
+  ],
+  "meta quorum list": [
+    "wp meta quorum list --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"prefix\": \"milvus-prod/woodpecker\",\n  \"snapshot_revision\": 18000,\n  \"records\": [\n    {\n      \"kind\": \"quorum\",\n      \"key\": \"milvus-prod/woodpecker/quorums/1\",\n      \"revision\": 100,\n      \"lease\": 0,\n      \"metadata\": {\n        \"id\": \"1\",\n        \"es\": 3,\n        \"wq\": 3,\n        \"aq\": 2,\n        \"nodes\": [\n          \"node0:18080\",\n          \"node1:18080\",\n          \"node2:18080\"\n        ]\n      }\n    }\n  ]\n}",
+    "# records: [] means this listing has no matching records.\n# An undecodable record instead returns a configuration error.",
+    "Lists separately stored quorum records. Modern segments embed their quorum, so an empty list can be normal; inspect meta segment show to see that topology. This group cannot patch quorum records."
+  ],
+  "meta quorum show": [
+    "wp meta quorum show 1 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"kind\": \"quorum\",\n  \"key\": \"milvus-prod/woodpecker/quorums/1\",\n  \"revision\": 100,\n  \"lease\": 0,\n  \"metadata\": {\n    \"id\": \"1\",\n    \"es\": 3,\n    \"wq\": 3,\n    \"aq\": 2,\n    \"nodes\": [\n      \"node0:18080\",\n      \"node1:18080\",\n      \"node2:18080\"\n    ]\n  }\n}",
+    "Error: TargetNotFound: target not found: milvus-prod/woodpecker/quorums/1",
+    "Shows one separately stored quorum by numeric ID; it does not fan out or test node health. es is ensemble size, wq write quorum, aq acknowledgement quorum. Modern embedded quorum is read through meta segment show."
+  ],
+  "meta check": [
+    "wp meta check my-channel --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"issues\": [],\n  \"log_name\": \"my-channel\",\n  \"scope\": \"metadata only; use segment inspect/log scan for physical data\",\n  \"segments_checked\": 2,\n  \"snapshot_revision\": 18000,\n  \"state\": \"ok\"\n}",
+    "{\n  \"state\": \"invalid\",\n  \"issues\": [\n    \"milvus-prod/woodpecker/logs/my-channel/segments/7: key must use canonical segment ID 8 matching segNo\"\n  ]\n}\nError: RedFinding: 1 metadata constraint violations",
+    "Checks log policy/frontier fields, segment identity/state/timestamps, embedded quorum structure and frontier bounds at one snapshot. Exit 9 plus issues means inconsistent metadata. state=ok establishes metadata consistency only; it does not prove payload readability or application progress."
+  ],
+  "meta export": [
+    "wp meta export --output-file ./metadata-snapshot.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"file\": \"./metadata-snapshot.json\",\n  \"keys\": 5,\n  \"snapshot_revision\": 18000\n}",
+    "Error: Config: create new backup file: open ./metadata-snapshot.json: file exists",
+    "Creates a new mode-0600 namespace snapshot. The file contains readable metadata for known protobuf records plus byte-exact value_base64, revisions and leases. Unknown/corrupt values retain bytes and encoding/decode errors. It is a metadata backup, not a payload backup or automatic restore command; an existing file is never overwritten."
+  ],
+  "meta log patch": [
+    "wp meta log patch my-channel --patch-file ./log-policy.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"applied\": false,\n  \"before\": {\n    \"revision\": 17099\n  },\n  \"changes\": {\n    \"max_segment_roll_time_seconds\": {\n      \"before\": \"60\",\n      \"after\": \"120\"\n    }\n  }\n}",
+    "Error: Usage: --apply requires --offline, --expected-revision, --reason, and --backup\n# A stale revision or live writer lock returns StateConflict; no correction is applied.",
+    "Create log-policy.json using the walkthrough above. Only max_segment_roll_time_seconds, max_segment_roll_size_bytes, compaction_buffer_size_bytes and max_compaction_file_count are patchable (nonnegative; zero allowed). They are reserved metadata fields, not live runtime configuration. Preview writes nothing. Apply uses the target before.revision plus offline acknowledgement, reason and a new durable backup; unknown fields and leases are preserved."
+  ],
+  "meta segment patch": [
+    "wp meta segment patch my-channel 7 --patch-file ./segment-repair.json --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"applied\": false,\n  \"before\": {\n    \"revision\": 174\n  },\n  \"changes\": {\n    \"lastEntryId\": {\n      \"before\": \"999\",\n      \"after\": \"99\"\n    }\n  }\n}",
+    "Error: StateConflict: lastEntryId is below the log truncation frontier\n# Other examples: key/segNo mismatch; Active segment requires lastEntryId -1; Sealed segment requires sealedTime.",
+    "Create segment-repair.json using the walkthrough above and independent data evidence. Writable fields are size, createTime, completionTime, sealedTime, lastEntryId and state. Lifecycle constraints remain strict; key identity, quorum and log truncation fields are protected. An existing invalid embedded quorum is preserved and reported in warnings rather than blocking a scalar repair. meta check will still report that unresolved quorum. A state edit does not create compacted files or repair replica contents."
+  ],
+  "log truncate": [
+    "wp log truncate my-channel --segment 8 --entry 0 --etcd 127.0.0.1:32379 --meta-prefix milvus-prod/woodpecker",
+    "{\n  \"applied\": false,\n  \"unchanged\": false,\n  \"before\": {\n    \"revision\": 17099,\n    \"metadata\": {\n      \"truncated_segment_id\": \"6\",\n      \"truncated_entry_id\": \"99\"\n    }\n  },\n  \"after\": {\n    \"revision\": 17099,\n    \"metadata\": {\n      \"truncated_segment_id\": \"8\",\n      \"truncated_entry_id\": \"0\"\n    }\n  },\n  \"target_segment_revision\": 175,\n  \"snapshot_revision\": 18000\n}",
+    "Error: StateConflict: truncation cannot move backward or restore deleted data\n# Active/empty targets, identity mismatches, stale revisions and concurrent updates are also rejected.",
+    "Preview requires a non-empty Completed/Sealed target and entry within 0..lastEntryId. Apply requires --apply --expected-revision (the log before.revision), --reason and a new --backup; no offline flag is required. The log and target revisions are compared and an audit record is written atomically. The frontier segment stays retained; earlier finalized segments become eligible for auditor/retention/reader-protected cleanup. Unchanged frontier means applied=false, unchanged=true with no artifacts. Verify application checkpoints first: metadata backup cannot restore reclaimed data."
+  ],
+  "diagnose": [
+    "wp --context milvus-prod diagnose --scenario write --window 30s --max-writers 16 -o json > write-report.json\n# Current disk admission; progress rules remain inconclusive:\nwp --context milvus-prod diagnose node-0 --scenario write --mode snapshot -o json\n# Optional replica check: select the Milvus WP-client metadata namespace explicitly.\nwp --context milvus-prod diagnose --scenario write --log-name YOUR_LOG --segment 0 --etcd http://127.0.0.1:2379 --meta-prefix YOUR_WP_CLIENT_PREFIX -o json\n# Native read scenario:\nwp --context milvus-prod diagnose --scenario read --window 30s -o json > read-report.json\n# Optional reader check with a suitable reporting window and explicit WP-client namespace:\nwp --context milvus-prod diagnose --scenario read --read-mode catch-up --log-name YOUR_LOG --segment 0 --etcd http://127.0.0.1:2379 --meta-prefix YOUR_WP_CLIENT_PREFIX --window 65s --interval 5s --max-samples 14 --budget 90s -o json\n# Existing focused append check:\nwp --context milvus-prod diagnose node-0 --scenario stuck-write --window 30s -o json",
+    "{\"schema_version\":\"wp.diagnosis/v1\",\"collection_status\":\"completed\",\"observation_mode\":\"live_window\",\"findings\":[{\"rule_id\":\"write_stall\",\"outcome\":\"suspected_stall\",\"evidence_strength\":\"suspected\",\"unknown\":[\"tenant_association_unknown\"]}]}\n# Abbreviated illustrative output; inspect actual observations and coverage_gaps.",
+    "PartialCollection (exit 6): required metrics/ops/writers were unavailable or writer details exceeded the bound; report retained.\nBudget exhausted (exit 5) / cancellation (exit 7): partial evidence retained.",
+    "Source-build capability. Reuses the WP service context and node Admin mappings. The write scenario checks append, writer-local buffer/flush trends, actual disk watermarks and optional explicitly selected log/segment quorum. Missing metadata does not fall back to another namespace. All includes these checks; focused stuck-write/read contracts remain compatible. --window samples from now; snapshot cannot prove a sustained stall. Queue pressure does not prove a disk/fsync cause, and missing replica observations do not prove quorum loss. Maintenance/object-store attribution remains an explicit evidence gap. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for warning/critical findings. Same-log completions cannot prove an individual op finished; resets, registry limits and missing evidence remain explicit. No external Prometheus, trace or Loki client is included.\n\nSource-build capability. Reuses the WP service context and node Admin mappings. The read scenario separates success/EOF and pending server activity from leased reader progress and configured quorum evidence. Reader checks require explicit log/segment and WP-client etcd/prefix; there is no fallback namespace. The source client profile reports about every 30 seconds, so short unchanged-position windows are inconclusive. Fresh renewed attempts plus available data and catch-up expectation are needed for a no-progress suspicion. A missing replica is not quorum loss or corruption; a metadata end is not payload verification. Server ops lack reader identity, and duplicate numeric log IDs do not establish a tenant join. Existing focused stuck-write/read contracts remain compatible. --window samples now, not history. Exit 0 means completed evaluation, not healthy; --fail-on-findings opts into exit 8 for warning/critical findings. No external Prometheus, trace or Loki client is included."
+  ],
+  "webui": [
+    "wp webui --config /path/to/cli.yaml --listen 127.0.0.1:8795",
+    "Open the printed local URL.",
+    "A missing or invalid cli.yaml prevents startup.",
+    "Diagnostics finds issues; Operations confirms and handles them; Command Explorer exposes native commands. No diagnostic action automatically repairs the cluster."
+  ],
+  "diag catalog": [
+    "wp diag catalog --source metrics --check writer-latency",
+    "Lists the metric, formula, rule and required inputs without querying a source.",
+    "An unknown key is rejected.",
+    "The CLI, rules and WebUI share the same canonical check keys."
+  ],
+  "diag metrics check": [
+    "wp --context local diag metrics check writer-latency --window 15m --details all -o json > writes.json",
+    "A wp.diag/v1 report for the selected Writer timer.",
+    "Missing source configuration, failed queries and insufficient coverage remain explicit.",
+    "This checks recorded WP client Writer operations. It does not infer application end-to-end latency."
+  ],
+  "diag trace check": [
+    "wp --context local diag trace check server-append-duration --window 15m --details all -o json > spans.json",
+    "A source-local report for selected retained append spans.",
+    "Missing spans or a query budget prevent a full assessment.",
+    "Sampling, retention and emitted tags bound the evidence. No spans does not imply zero operation latency."
+  ],
+  "diag scenario": [
+    "wp --context local diag scenario slow-writes --window 15m --node-id woodpecker-0 --details all -o json > diagnosis.json",
+    "Independent Metrics/Trace findings summarized by WAL step.",
+    "Configure at least one required source; checks without a source are skipped.",
+    "A scenario aggregates check results without a second root-cause engine or automatic cross-source association."
+  ],
+  "report inspect": [
+    "wp report inspect diagnosis.json server-disk-watermark",
+    "Shows the recorded calculation, measurements and available curves.",
+    "Detail omitted during collection cannot be reconstructed without another check.",
+    "Consumes saved JSON without a source query or model call."
+  ],
+  "report export": [
+    "wp report export diagnosis.json --packet > findings.json",
+    "Exports a bounded findings packet with original report provenance.",
+    "Malformed or oversized reports are rejected.",
+    "Without --packet, copies the original report. It does not rerun checks."
+  ],
+  "report analyze": [
+    "wp --context local report analyze diagnosis.json --config /path/to/cli.yaml",
+    "The explicitly configured backend-local Agent explains abnormal findings.",
+    "No Agent configuration, no findings or a model failure leaves the original report unchanged.",
+    "This explicitly invokes a model with supplied evidence. It cannot automatically query sources, run commands or repair the cluster."
+  ]
+}

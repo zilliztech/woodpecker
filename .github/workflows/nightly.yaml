@@ -1,0 +1,85 @@
+name: Nightly Integration Tests
+
+on:
+  schedule:
+    # 16:15 UTC = 00:15 Beijing Time (UTC+8)
+    - cron: "15 16 * * *"
+    # 18:15 UTC = 02:15 Beijing Time (UTC+8)
+    - cron: "15 18 * * *"
+    # 20:15 UTC = 04:15 Beijing Time (UTC+8)
+    - cron: "15 20 * * *"
+  workflow_dispatch:
+
+jobs:
+  prime:
+    name: Prime Upgrade Baselines
+    uses: ./.github/workflows/prime-upgrade-baselines.yaml
+    secrets: inherit
+
+  e2e-local:
+    name: E2E Local
+    uses: ./.github/workflows/integration-test-e2e-local.yaml
+    secrets: inherit
+
+  e2e-objectstorage:
+    name: E2E Object Storage
+    uses: ./.github/workflows/integration-test-e2e-objectstorage.yaml
+    secrets: inherit
+
+  embed-minio-without-conditionwrite:
+    name: Embed MinIO Without ConditionWrite
+    uses: ./.github/workflows/integration-test-embed-minio-without-conditionwrite.yaml
+    secrets: inherit
+
+  e2e-service:
+    name: E2E Service
+    uses: ./.github/workflows/integration-test-e2e-service.yaml
+    secrets: inherit
+
+  upgrade-local:
+    name: Upgrade Compat Local
+    needs: [prime]
+    uses: ./.github/workflows/integration-test-upgrade-local.yaml
+    secrets: inherit
+
+  upgrade-objectstorage:
+    name: Upgrade Compat Object Storage
+    needs: [prime]
+    uses: ./.github/workflows/integration-test-upgrade-objectstorage.yaml
+    secrets: inherit
+
+  upgrade-service:
+    name: Upgrade Compat Service
+    needs: [prime]
+    uses: ./.github/workflows/integration-test-upgrade-service.yaml
+    secrets: inherit
+
+  component-test:
+    name: Component Integration Test
+    uses: ./.github/workflows/integration-test-components.yaml
+    secrets: inherit
+
+  chaos-test:
+    name: Chaos Test
+    uses: ./.github/workflows/integration-test-chaos.yaml
+    secrets: inherit
+
+  chaos-mesh-test:
+    name: Chaos Mesh Test
+    uses: ./.github/workflows/nightly-chaos-mesh.yaml
+    secrets: inherit
+
+  service-stability-process:
+    name: Service Stability (Process)
+    uses: ./.github/workflows/integration-test-service-stability-process.yaml
+    secrets: inherit
+
+  service-stability-docker:
+    name: Service Stability (Docker)
+    uses: ./.github/workflows/integration-test-service-stability-docker.yaml
+    secrets: inherit
+
+  service-stability-k8s:
+    name: Service Stability (K8s)
+    uses: ./.github/workflows/nightly-service-stability-k8s.yaml
+    secrets: inherit

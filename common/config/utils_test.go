@@ -156,6 +156,113 @@ func TestDurationSecondsUnmarshal(t *testing.T) {
 	}
 }
 
+func TestNewDuration(t *testing.T) {
+	d := NewDuration(5*time.Second, time.Second)
+	assert.Equal(t, 5, d.Seconds())
+	assert.Equal(t, 5000, d.Milliseconds())
+	assert.Equal(t, 5*time.Second, d.Duration())
+}
+
+func TestNewDurationWithDefault(t *testing.T) {
+	d := NewDurationWithDefault(time.Second)
+	assert.Equal(t, 0, d.Seconds())
+	assert.Equal(t, 0, d.Milliseconds())
+}
+
+func TestByteSizeUnmarshal_InvalidType(t *testing.T) {
+	var config struct {
+		Size ByteSize `yaml:"size"`
+	}
+	err := yaml.Unmarshal([]byte("size: true"), &config)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid type for ByteSize")
+}
+
+func TestByteSizeUnmarshal_InvalidString(t *testing.T) {
+	var config struct {
+		Size ByteSize `yaml:"size"`
+	}
+	err := yaml.Unmarshal([]byte("size: invalidXYZ"), &config)
+	assert.Error(t, err)
+}
+
+func TestDurationUnmarshal_InvalidType(t *testing.T) {
+	var config struct {
+		Duration DurationSeconds `yaml:"duration"`
+	}
+	err := yaml.Unmarshal([]byte("duration: true"), &config)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid type for Duration")
+}
+
+func TestDurationUnmarshal_InvalidString(t *testing.T) {
+	var config struct {
+		Duration DurationSeconds `yaml:"duration"`
+	}
+	err := yaml.Unmarshal([]byte("duration: invalidXYZ"), &config)
+	assert.Error(t, err)
+}
+
+func TestDurationMillisecondsUnmarshal_InvalidType(t *testing.T) {
+	var config struct {
+		Duration DurationMilliseconds `yaml:"duration"`
+	}
+	err := yaml.Unmarshal([]byte("duration: [1,2,3]"), &config)
+	assert.Error(t, err)
+}
+
+func TestParseSize_InvalidSuffixValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"invalid GB value", "abcg"},
+		{"invalid MB value", "xyzm"},
+		{"invalid KB value", "abck"},
+		{"invalid TB value", "xyzt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseSize(tt.input)
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestParseSize_WhitespaceOnly(t *testing.T) {
+	result, err := parseSize("   ")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), result)
+}
+
+func TestParseDuration_WhitespaceOnly(t *testing.T) {
+	result, err := parseDuration("   ", time.Second)
+	assert.NoError(t, err)
+	assert.Equal(t, time.Duration(0), result)
+}
+
+func TestByteSizeUnmarshal_LargeInt(t *testing.T) {
+	// YAML parses large integers as int, not int64, but let's ensure both paths work
+	var config struct {
+		Size ByteSize `yaml:"size"`
+	}
+	// YAML int maps to Go int which is int64 on 64-bit platforms
+	err := yaml.Unmarshal([]byte("size: 9999999999"), &config)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(9999999999), config.Size.Int64())
+}
+
+func TestDurationUnmarshal_DefaultUnitZero(t *testing.T) {
+	// Duration with defaultUnit=0 should default to milliseconds
+	var d Duration
+	// defaultUnit is 0 (zero value)
+	node := yaml.Node{}
+	_ = yaml.Unmarshal([]byte("100"), &node)
+	err := d.UnmarshalYAML(&node)
+	assert.NoError(t, err)
+	assert.Equal(t, 100*time.Millisecond, d.Duration())
+}
+
 func TestDurationMillisecondsUnmarshal(t *testing.T) {
 	tests := []struct {
 		name       string

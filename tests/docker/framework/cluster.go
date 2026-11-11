@@ -334,7 +334,7 @@ func (dc *DockerCluster) NewConfig(t *testing.T) *config.Configuration {
 	for _, n := range dc.Nodes[:3] { // Use first 3 nodes as seeds
 		seeds = append(seeds, fmt.Sprintf("localhost:%d", n.ServicePort))
 	}
-	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 
 	return cfg
 }
@@ -386,6 +386,27 @@ func (dc *DockerCluster) NewClientManual(t *testing.T, ctx context.Context) (woo
 	}
 
 	return client, etcdCli, cfg
+}
+
+// RecreateAllNodes stops all Woodpecker nodes and brings them back up on the
+// image currently configured via the WOODPECKER_IMAGE environment variable, using
+// `docker compose up -d --wait <nodes>`. This differs from StartNode, which uses
+// `docker start` and therefore keeps the container's original image — unsuitable for
+// an upgrade image swap. etcd, minio, and node data volumes are preserved.
+//
+// The caller MUST set WOODPECKER_IMAGE (e.g. via t.Setenv) to the target image
+// before calling.
+func (dc *DockerCluster) RecreateAllNodes(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	dc.StopAllWoodpeckerNodes(t)
+
+	args := append(dc.composeArgs(), "up", "-d", "--wait")
+	for _, n := range dc.Nodes {
+		args = append(args, n.ContainerName)
+	}
+	RunCommandNoFail(t, "docker", args...)
+
+	dc.WaitForClusterReady(t, timeout)
 }
 
 // StopAllWoodpeckerNodes stops all Woodpecker nodes (not etcd/minio/extras).

@@ -1,0 +1,151 @@
+# Based on tests/k8s/monitor/manifests/kube-prometheus-values.yaml.
+# kube-prometheus-stack 67.4.0: Grafana 11.4.0, Prometheus 3.0.1, operator 0.79.2.
+alertmanager:
+  enabled: true
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: local-only
+      group_by: [cluster, namespace, woodpecker_id, alertname]
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 4h
+      routes: []
+    # Deliberately no email/webhook/chat integrations: alerts remain visible in AM.
+    receivers:
+      - name: local-only
+    inhibit_rules:
+      - source_matchers: ['rule_id="F1"', 'node_id=~".+"']
+        target_matchers: ['alert_scope="server"', 'rule_id!="F1"', 'node_id=~".+"']
+        equal: [cluster, namespace, woodpecker_id, node_id]
+      - source_matchers: ['rule_id="F8"', 'node_id=~".+"']
+        target_matchers: ['rule_id="S6"', 'node_id=~".+"']
+        equal: [cluster, namespace, woodpecker_id, node_id]
+      - source_matchers: ['rule_id="F8"']
+        target_matchers: ['rule_id="C8"']
+        equal: [cluster, namespace, woodpecker_id]
+      - source_matchers: ['rule_id="R5"', 'node_id=~".+"']
+        target_matchers: ['rule_id="S3"', 'node_id=~".+"']
+        equal: [cluster, namespace, woodpecker_id, node_id]
+      - source_matchers: ['rule_id="C6"', 'log_ns=~".+"', 'log_id=~".+"']
+        target_matchers: ['rule_id="C5"', 'log_ns=~".+"', 'log_id=~".+"']
+        equal: [cluster, namespace, woodpecker_id, log_ns, log_id]
+      - source_matchers: ['rule_id="F5"']
+        target_matchers: ['rule_id="F4"']
+        equal: [cluster, namespace, woodpecker_id, node_id]
+  alertmanagerSpec:
+    retention: 120h
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {memory: 256Mi}
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests: {storage: 1Gi}
+defaultRules:
+  create: false
+grafana:
+  defaultDashboardsEnabled: false
+  # Local-only access via port-forward. No anonymous administrator access.
+  adminUser: admin
+  adminPassword: admin
+  image:
+    tag: 11.4.0
+  testFramework:
+    enabled: false
+  # Populated from the selected components; no datasource points to an absent addon.
+  additionalDataSources: []
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  grafana.ini:
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+    users:
+      default_theme: dark
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      # Same namespace as the chart; avoid importing other deployments' dashboards.
+      searchNamespace: null
+      provider:
+        folder: Milvus full stack
+    datasources:
+      defaultDatasourceEnabled: true
+      uid: prometheus
+      alertmanager:
+        enabled: true
+prometheus:
+  prometheusSpec:
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelector:
+      matchLabels: {full-stack: milvus}
+    podMonitorNamespaceSelector:
+      matchLabels: {full-stack: milvus}
+    # Infrastructure monitors remain scoped to this monitoring Helm release.
+    serviceMonitorSelectorNilUsesHelmValues: true
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector:
+      matchLabels: {full-stack: milvus}
+    ruleNamespaceSelector:
+      matchLabels: {full-stack: milvus}
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    # C2 compares with offset 7d. The size cap can still shorten this under load.
+    retention: 8d
+    retentionSize: 3GB
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests: {storage: 4Gi}
+    resources:
+      requests: {cpu: 200m, memory: 256Mi}
+      limits: {memory: 1Gi}
+prometheusOperator:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+# The production Milvus dashboard needs pod identity and cAdvisor metrics.
+kubeStateMetrics:
+  enabled: true
+kube-state-metrics:
+  resources:
+    requests: {cpu: 30m, memory: 32Mi}
+    limits: {memory: 128Mi}
+  prometheus:
+    monitor:
+      jobLabel: app.kubernetes.io/name
+      relabelings:
+        - {targetLabel: cluster, replacement: local}
+kubelet:
+  enabled: true
+  serviceMonitor:
+    cAdvisor: true
+    # Preserve container_spec_* and mapped_file used in the imported dashboard.
+    cAdvisorMetricRelabelings: []
+    cAdvisorRelabelings:
+      - {targetLabel: cluster, replacement: local}
+    relabelings:
+      - {targetLabel: cluster, replacement: local}
+nodeExporter:
+  enabled: false
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+coreDns:
+  enabled: false

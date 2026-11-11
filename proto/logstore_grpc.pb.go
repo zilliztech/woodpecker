@@ -23,14 +23,19 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	LogStore_AddEntry_FullMethodName                   = "/woodpecker.proto.logstore.LogStore/AddEntry"
+	LogStore_AddEntries_FullMethodName                 = "/woodpecker.proto.logstore.LogStore/AddEntries"
 	LogStore_GetBatchEntriesAdv_FullMethodName         = "/woodpecker.proto.logstore.LogStore/GetBatchEntriesAdv"
 	LogStore_FenceSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/FenceSegment"
 	LogStore_CompleteSegment_FullMethodName            = "/woodpecker.proto.logstore.LogStore/CompleteSegment"
 	LogStore_CompactSegment_FullMethodName             = "/woodpecker.proto.logstore.LogStore/CompactSegment"
+	LogStore_CompactSegmentWithExpected_FullMethodName = "/woodpecker.proto.logstore.LogStore/CompactSegmentWithExpected"
+	LogStore_NotifySegmentCompacted_FullMethodName     = "/woodpecker.proto.logstore.LogStore/NotifySegmentCompacted"
 	LogStore_GetSegmentLastAddConfirmed_FullMethodName = "/woodpecker.proto.logstore.LogStore/GetSegmentLastAddConfirmed"
 	LogStore_GetSegmentBlockCount_FullMethodName       = "/woodpecker.proto.logstore.LogStore/GetSegmentBlockCount"
 	LogStore_UpdateLastAddConfirmed_FullMethodName     = "/woodpecker.proto.logstore.LogStore/UpdateLastAddConfirmed"
 	LogStore_CleanSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/CleanSegment"
+	LogStore_MarkLogDeleted_FullMethodName             = "/woodpecker.proto.logstore.LogStore/MarkLogDeleted"
+	LogStore_MarkInstanceDeleted_FullMethodName        = "/woodpecker.proto.logstore.LogStore/MarkInstanceDeleted"
 	LogStore_SelectNodes_FullMethodName                = "/woodpecker.proto.logstore.LogStore/SelectNodes"
 )
 
@@ -45,18 +50,39 @@ const (
 type LogStoreClient interface {
 	// Write APIs
 	AddEntry(ctx context.Context, in *AddEntryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AddEntryResponse], error)
+	// AddEntries appends a batch of consecutive entries in a single request
+	// (client-side group commit). The server streams back one Buffered response
+	// per entry, then one Synced/Failed response per entry as durability
+	// completes; every response is keyed by entry_id.
+	AddEntries(ctx context.Context, in *AddEntriesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AddEntriesResponse], error)
 	// Read APIs
 	GetBatchEntriesAdv(ctx context.Context, in *GetBatchEntriesAdvRequest, opts ...grpc.CallOption) (*GetBatchEntriesAdvResponse, error)
 	// Segment state transitions
 	FenceSegment(ctx context.Context, in *FenceSegmentRequest, opts ...grpc.CallOption) (*FenceSegmentResponse, error)
 	CompleteSegment(ctx context.Context, in *CompleteSegmentRequest, opts ...grpc.CallOption) (*CompleteSegmentResponse, error)
+	// Deprecated: Do not use.
+	// CompactSegment is the legacy compaction RPC. Upgraded servers keep it only
+	// to fail old clients explicitly, because its request does not carry the
+	// quorum-confirmed compaction boundary. Clients must use
+	// CompactSegmentWithExpected instead.
 	CompactSegment(ctx context.Context, in *CompactSegmentRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error)
+	// CompactSegmentWithExpected compacts exactly through expected_last_entry_id.
+	// New clients must not fall back to CompactSegment when this RPC is unavailable.
+	CompactSegmentWithExpected(ctx context.Context, in *CompactSegmentWithExpectedRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error)
+	// NotifySegmentCompacted informs a node that a segment's data is durably compacted in
+	// object storage, authorizing it to mark (and later reclaim) its local copy.
+	NotifySegmentCompacted(ctx context.Context, in *NotifySegmentCompactedRequest, opts ...grpc.CallOption) (*NotifySegmentCompactedResponse, error)
 	// Segment introspection
 	GetSegmentLastAddConfirmed(ctx context.Context, in *GetSegmentLastAddConfirmedRequest, opts ...grpc.CallOption) (*GetSegmentLastAddConfirmedResponse, error)
 	GetSegmentBlockCount(ctx context.Context, in *GetSegmentBlockCountRequest, opts ...grpc.CallOption) (*GetSegmentBlockCountResponse, error)
 	UpdateLastAddConfirmed(ctx context.Context, in *UpdateLastAddConfirmedRequest, opts ...grpc.CallOption) (*UpdateLastAddConfirmedResponse, error)
 	// Maintenance
 	CleanSegment(ctx context.Context, in *CleanSegmentRequest, opts ...grpc.CallOption) (*CleanSegmentResponse, error)
+	// Mark deleted
+	// MarkLogDeleted marks a single log deleted on this node (stop serving + persist marker).
+	MarkLogDeleted(ctx context.Context, in *MarkLogDeletedRequest, opts ...grpc.CallOption) (*MarkLogDeletedResponse, error)
+	// MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on this node.
+	MarkInstanceDeleted(ctx context.Context, in *MarkInstanceDeletedRequest, opts ...grpc.CallOption) (*MarkInstanceDeletedResponse, error)
 	// Node management
 	SelectNodes(ctx context.Context, in *SelectNodesRequest, opts ...grpc.CallOption) (*SelectNodesResponse, error)
 }
@@ -88,6 +114,25 @@ func (c *logStoreClient) AddEntry(ctx context.Context, in *AddEntryRequest, opts
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type LogStore_AddEntryClient = grpc.ServerStreamingClient[AddEntryResponse]
 
+func (c *logStoreClient) AddEntries(ctx context.Context, in *AddEntriesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AddEntriesResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &LogStore_ServiceDesc.Streams[1], LogStore_AddEntries_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[AddEntriesRequest, AddEntriesResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LogStore_AddEntriesClient = grpc.ServerStreamingClient[AddEntriesResponse]
+
 func (c *logStoreClient) GetBatchEntriesAdv(ctx context.Context, in *GetBatchEntriesAdvRequest, opts ...grpc.CallOption) (*GetBatchEntriesAdvResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBatchEntriesAdvResponse)
@@ -118,10 +163,31 @@ func (c *logStoreClient) CompleteSegment(ctx context.Context, in *CompleteSegmen
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *logStoreClient) CompactSegment(ctx context.Context, in *CompactSegmentRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CompactSegmentResponse)
 	err := c.cc.Invoke(ctx, LogStore_CompactSegment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) CompactSegmentWithExpected(ctx context.Context, in *CompactSegmentWithExpectedRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompactSegmentResponse)
+	err := c.cc.Invoke(ctx, LogStore_CompactSegmentWithExpected_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) NotifySegmentCompacted(ctx context.Context, in *NotifySegmentCompactedRequest, opts ...grpc.CallOption) (*NotifySegmentCompactedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotifySegmentCompactedResponse)
+	err := c.cc.Invoke(ctx, LogStore_NotifySegmentCompacted_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +234,26 @@ func (c *logStoreClient) CleanSegment(ctx context.Context, in *CleanSegmentReque
 	return out, nil
 }
 
+func (c *logStoreClient) MarkLogDeleted(ctx context.Context, in *MarkLogDeletedRequest, opts ...grpc.CallOption) (*MarkLogDeletedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkLogDeletedResponse)
+	err := c.cc.Invoke(ctx, LogStore_MarkLogDeleted_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) MarkInstanceDeleted(ctx context.Context, in *MarkInstanceDeletedRequest, opts ...grpc.CallOption) (*MarkInstanceDeletedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkInstanceDeletedResponse)
+	err := c.cc.Invoke(ctx, LogStore_MarkInstanceDeleted_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *logStoreClient) SelectNodes(ctx context.Context, in *SelectNodesRequest, opts ...grpc.CallOption) (*SelectNodesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SelectNodesResponse)
@@ -189,18 +275,39 @@ func (c *logStoreClient) SelectNodes(ctx context.Context, in *SelectNodesRequest
 type LogStoreServer interface {
 	// Write APIs
 	AddEntry(*AddEntryRequest, grpc.ServerStreamingServer[AddEntryResponse]) error
+	// AddEntries appends a batch of consecutive entries in a single request
+	// (client-side group commit). The server streams back one Buffered response
+	// per entry, then one Synced/Failed response per entry as durability
+	// completes; every response is keyed by entry_id.
+	AddEntries(*AddEntriesRequest, grpc.ServerStreamingServer[AddEntriesResponse]) error
 	// Read APIs
 	GetBatchEntriesAdv(context.Context, *GetBatchEntriesAdvRequest) (*GetBatchEntriesAdvResponse, error)
 	// Segment state transitions
 	FenceSegment(context.Context, *FenceSegmentRequest) (*FenceSegmentResponse, error)
 	CompleteSegment(context.Context, *CompleteSegmentRequest) (*CompleteSegmentResponse, error)
+	// Deprecated: Do not use.
+	// CompactSegment is the legacy compaction RPC. Upgraded servers keep it only
+	// to fail old clients explicitly, because its request does not carry the
+	// quorum-confirmed compaction boundary. Clients must use
+	// CompactSegmentWithExpected instead.
 	CompactSegment(context.Context, *CompactSegmentRequest) (*CompactSegmentResponse, error)
+	// CompactSegmentWithExpected compacts exactly through expected_last_entry_id.
+	// New clients must not fall back to CompactSegment when this RPC is unavailable.
+	CompactSegmentWithExpected(context.Context, *CompactSegmentWithExpectedRequest) (*CompactSegmentResponse, error)
+	// NotifySegmentCompacted informs a node that a segment's data is durably compacted in
+	// object storage, authorizing it to mark (and later reclaim) its local copy.
+	NotifySegmentCompacted(context.Context, *NotifySegmentCompactedRequest) (*NotifySegmentCompactedResponse, error)
 	// Segment introspection
 	GetSegmentLastAddConfirmed(context.Context, *GetSegmentLastAddConfirmedRequest) (*GetSegmentLastAddConfirmedResponse, error)
 	GetSegmentBlockCount(context.Context, *GetSegmentBlockCountRequest) (*GetSegmentBlockCountResponse, error)
 	UpdateLastAddConfirmed(context.Context, *UpdateLastAddConfirmedRequest) (*UpdateLastAddConfirmedResponse, error)
 	// Maintenance
 	CleanSegment(context.Context, *CleanSegmentRequest) (*CleanSegmentResponse, error)
+	// Mark deleted
+	// MarkLogDeleted marks a single log deleted on this node (stop serving + persist marker).
+	MarkLogDeleted(context.Context, *MarkLogDeletedRequest) (*MarkLogDeletedResponse, error)
+	// MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on this node.
+	MarkInstanceDeleted(context.Context, *MarkInstanceDeletedRequest) (*MarkInstanceDeletedResponse, error)
 	// Node management
 	SelectNodes(context.Context, *SelectNodesRequest) (*SelectNodesResponse, error)
 }
@@ -215,6 +322,9 @@ type UnimplementedLogStoreServer struct{}
 func (UnimplementedLogStoreServer) AddEntry(*AddEntryRequest, grpc.ServerStreamingServer[AddEntryResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method AddEntry not implemented")
 }
+func (UnimplementedLogStoreServer) AddEntries(*AddEntriesRequest, grpc.ServerStreamingServer[AddEntriesResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method AddEntries not implemented")
+}
 func (UnimplementedLogStoreServer) GetBatchEntriesAdv(context.Context, *GetBatchEntriesAdvRequest) (*GetBatchEntriesAdvResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBatchEntriesAdv not implemented")
 }
@@ -227,6 +337,12 @@ func (UnimplementedLogStoreServer) CompleteSegment(context.Context, *CompleteSeg
 func (UnimplementedLogStoreServer) CompactSegment(context.Context, *CompactSegmentRequest) (*CompactSegmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CompactSegment not implemented")
 }
+func (UnimplementedLogStoreServer) CompactSegmentWithExpected(context.Context, *CompactSegmentWithExpectedRequest) (*CompactSegmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompactSegmentWithExpected not implemented")
+}
+func (UnimplementedLogStoreServer) NotifySegmentCompacted(context.Context, *NotifySegmentCompactedRequest) (*NotifySegmentCompactedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NotifySegmentCompacted not implemented")
+}
 func (UnimplementedLogStoreServer) GetSegmentLastAddConfirmed(context.Context, *GetSegmentLastAddConfirmedRequest) (*GetSegmentLastAddConfirmedResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSegmentLastAddConfirmed not implemented")
 }
@@ -238,6 +354,12 @@ func (UnimplementedLogStoreServer) UpdateLastAddConfirmed(context.Context, *Upda
 }
 func (UnimplementedLogStoreServer) CleanSegment(context.Context, *CleanSegmentRequest) (*CleanSegmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CleanSegment not implemented")
+}
+func (UnimplementedLogStoreServer) MarkLogDeleted(context.Context, *MarkLogDeletedRequest) (*MarkLogDeletedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarkLogDeleted not implemented")
+}
+func (UnimplementedLogStoreServer) MarkInstanceDeleted(context.Context, *MarkInstanceDeletedRequest) (*MarkInstanceDeletedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarkInstanceDeleted not implemented")
 }
 func (UnimplementedLogStoreServer) SelectNodes(context.Context, *SelectNodesRequest) (*SelectNodesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SelectNodes not implemented")
@@ -272,6 +394,17 @@ func _LogStore_AddEntry_Handler(srv interface{}, stream grpc.ServerStream) error
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type LogStore_AddEntryServer = grpc.ServerStreamingServer[AddEntryResponse]
+
+func _LogStore_AddEntries_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(AddEntriesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(LogStoreServer).AddEntries(m, &grpc.GenericServerStream[AddEntriesRequest, AddEntriesResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LogStore_AddEntriesServer = grpc.ServerStreamingServer[AddEntriesResponse]
 
 func _LogStore_GetBatchEntriesAdv_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetBatchEntriesAdvRequest)
@@ -341,6 +474,42 @@ func _LogStore_CompactSegment_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(LogStoreServer).CompactSegment(ctx, req.(*CompactSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_CompactSegmentWithExpected_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompactSegmentWithExpectedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).CompactSegmentWithExpected(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_CompactSegmentWithExpected_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).CompactSegmentWithExpected(ctx, req.(*CompactSegmentWithExpectedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_NotifySegmentCompacted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NotifySegmentCompactedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).NotifySegmentCompacted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_NotifySegmentCompacted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).NotifySegmentCompacted(ctx, req.(*NotifySegmentCompactedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -417,6 +586,42 @@ func _LogStore_CleanSegment_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LogStore_MarkLogDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkLogDeletedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).MarkLogDeleted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_MarkLogDeleted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).MarkLogDeleted(ctx, req.(*MarkLogDeletedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_MarkInstanceDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkInstanceDeletedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).MarkInstanceDeleted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_MarkInstanceDeleted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).MarkInstanceDeleted(ctx, req.(*MarkInstanceDeletedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _LogStore_SelectNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SelectNodesRequest)
 	if err := dec(in); err != nil {
@@ -459,6 +664,14 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _LogStore_CompactSegment_Handler,
 		},
 		{
+			MethodName: "CompactSegmentWithExpected",
+			Handler:    _LogStore_CompactSegmentWithExpected_Handler,
+		},
+		{
+			MethodName: "NotifySegmentCompacted",
+			Handler:    _LogStore_NotifySegmentCompacted_Handler,
+		},
+		{
 			MethodName: "GetSegmentLastAddConfirmed",
 			Handler:    _LogStore_GetSegmentLastAddConfirmed_Handler,
 		},
@@ -475,6 +688,14 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _LogStore_CleanSegment_Handler,
 		},
 		{
+			MethodName: "MarkLogDeleted",
+			Handler:    _LogStore_MarkLogDeleted_Handler,
+		},
+		{
+			MethodName: "MarkInstanceDeleted",
+			Handler:    _LogStore_MarkInstanceDeleted_Handler,
+		},
+		{
 			MethodName: "SelectNodes",
 			Handler:    _LogStore_SelectNodes_Handler,
 		},
@@ -483,6 +704,11 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "AddEntry",
 			Handler:       _LogStore_AddEntry_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "AddEntries",
+			Handler:       _LogStore_AddEntries_Handler,
 			ServerStreams: true,
 		},
 	},

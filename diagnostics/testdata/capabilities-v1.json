@@ -1,0 +1,64 @@
+{
+  "schema_version": "wpdiag.capabilities/v1",
+  "sources": [
+    {
+      "source": "wpcli",
+      "status": "available",
+      "issue": 454,
+      "profiles": [
+        {
+          "id": "wp.write_stall",
+          "version": 1,
+          "scope": "wp",
+          "flow": "write",
+          "stage": "append",
+          "modes": [
+            "snapshot",
+            "live"
+          ],
+          "target_fields": [
+            "node_id"
+          ],
+          "description": "Import native write-stall evidence; snapshot is inconclusive for progress"
+        },
+        {
+          "id": "wp.read_stall",
+          "version": 1,
+          "scope": "wp",
+          "flow": "read",
+          "stage": "wal_read",
+          "modes": [
+            "snapshot",
+            "live"
+          ],
+          "target_fields": [
+            "node_id"
+          ],
+          "description": "Import native WAL-read stall evidence; not Milvus visibility or search diagnosis"
+        }
+      ],
+      "required_connection_settings": [
+        "executable",
+        "context"
+      ]
+    },
+    {
+      "source": "prometheus",
+      "status": "not_implemented",
+      "issue": 460,
+      "profiles": []
+    },
+    {
+      "source": "trace",
+      "status": "not_implemented",
+      "issue": 461,
+      "profiles": []
+    },
+    {
+      "source": "loki",
+      "status": "not_implemented",
+      "issue": 462,
+      "profiles": []
+    }
+  ]
+}

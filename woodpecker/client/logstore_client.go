@@ -27,6 +27,11 @@ import (
 type LogStoreClient interface {
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
 	AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	// AppendEntries appends a batch of consecutive entries in a single request (client-side group commit).
+	// resultChs[i] receives the durability result for entries[i]. It returns the buffered entry IDs once the
+	// whole batch is buffered (a single send round-trip), and an error if the buffer phase fails. The per-entry
+	// Synced/Failed results are delivered asynchronously into resultChs as durability completes.
+	AppendEntries(ctx context.Context, bucketName string, rootPath string, logId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) ([]int64, error)
 	// ReadEntriesBatchAdv reads a batch of entries from the specified log segment and returns the entries and an error if any.
 	ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	// CompleteSegment finalize the specified log segment and returns an error if any.
@@ -34,9 +39,21 @@ type LogStoreClient interface {
 	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
 	FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// SegmentCompact compacts the specified log segment and returns the updated metadata and an error if any.
-	SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, expectedLastEntryId int64) (*proto.SegmentMetadata, error)
+	// NotifySegmentCompacted informs the target node that the specified log segment has been
+	// durably compacted, authorizing it to drop its local pre-compaction data. Best-effort from
+	// the caller's perspective: see segment.Compact fanout.
+	NotifySegmentCompacted(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) error
 	// SegmentClean cleans up the specified log segment and returns an error if any.
 	SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error
+	// MarkLogDeleted marks a single log deleted on the target node. With sync=true the node
+	// reclaims the log's local data before replying, so the caller can rely on the reply
+	// meaning "this node holds nothing for that log any more".
+	// Returns whether the node actually had local data for the log. Only meaningful with
+	// sync=true; see MarkLogDeletedResponse.local_data_found for why it is reported.
+	MarkLogDeleted(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error)
+	// MarkInstanceDeleted marks a whole bucket/rootPath instance deleted on the target node.
+	MarkInstanceDeleted(ctx context.Context, bucketName string, rootPath string) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.
 	GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// GetBlockCount gets the block count of the specified log segment and returns it and an error if any.

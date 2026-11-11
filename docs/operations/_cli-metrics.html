@@ -1,0 +1,308 @@
+<section id="topic-metrics">
+<h2>Metrics & scenarios</h2>
+<article class="command" id="metrics-list">
+<h2>wp metrics list</h2>
+<p>List all metric series exposed by a node</p>
+<pre>
+<code>wp metrics list &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--filter string</code>
+</td>
+<td>Substring filter on metric name</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp metrics list node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>NAME                                          TYPE     SERIES  HELP
+woodpecker_server_logstore_operations_total    COUNTER  6       ...</code>
+</pre>
+<p>Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code># No matching metric: check --filter, node build and whether the series has been created.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>List all metric series exposed by a node
+
+Usage:
+  wp metrics list &lt;node&gt; [flags]
+
+Flags:
+      --filter string   Substring filter on metric name
+  -h, --help            help for list</code>
+</pre>
+</details>
+</article>
+<article class="command" id="metrics-report">
+<h2>wp metrics report</h2>
+<p>Run scenario-based metrics analysis</p>
+<pre>
+<code>wp metrics report [node] [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--interval duration</code>
+</td>
+<td>Scrape interval within window (default 1s)</td>
+</tr>
+<tr>
+<td>
+<code>--list</code>
+</td>
+<td>List available scenarios</td>
+</tr>
+<tr>
+<td>
+<code>--scenario string</code>
+</td>
+<td>Scenario name to run</td>
+</tr>
+<tr>
+<td>
+<code>--window duration</code>
+</td>
+<td>Collection window duration (default 30s)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp metrics report node-0 --scenario stuck-read --window 30s --interval 1s</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>Result: OK — no findings for scenario &quot;stuck-read&quot;</code>
+</pre>
+<p>Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>Findings (1):
+  [RED] read_stall: ...
+    -&gt; wp ops list ...
+Error: RedFinding: ...</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Run scenario-based metrics analysis
+
+Usage:
+  wp metrics report [node] [flags]
+
+Flags:
+  -h, --help                help for report
+      --interval duration   Scrape interval within window (default 1s)
+      --list                List available scenarios
+      --scenario string     Scenario name to run
+      --window duration     Collection window duration (default 30s)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="metrics-snapshot">
+<h2>wp metrics snapshot</h2>
+<p>Point-in-time metric snapshot from one or all nodes</p>
+<pre>
+<code>wp metrics snapshot [node] [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--all</code>
+</td>
+<td>Snapshot from all nodes</td>
+</tr>
+<tr>
+<td>
+<code>--metric string</code>
+</td>
+<td>Filter to specific metric name</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp metrics snapshot node-0</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>NODE    METRIC                                      LABELS  VALUE
+node-0  woodpecker_server_logstore_operations_total  ...     5</code>
+</pre>
+<p>Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code># Missing rows can mean absent series or a failed scrape. Check peer reachability.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Point-in-time metric snapshot from one or all nodes
+
+Usage:
+  wp metrics snapshot [node] [flags]
+
+Flags:
+      --all             Snapshot from all nodes
+  -h, --help            help for snapshot
+      --metric string   Filter to specific metric name</code>
+</pre>
+</details>
+</article>
+<article class="command" id="metrics-top">
+<h2>wp metrics top</h2>
+<p>Cross-node top-N comparison of a specific metric</p>
+<pre>
+<code>wp metrics top [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--by string</code>
+</td>
+<td>Metric name to rank by (required)</td>
+</tr>
+<tr>
+<td>
+<code>--top int</code>
+</td>
+<td>Show top N nodes (default 10)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp metrics top --by woodpecker_server_logstore_operations_total</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>RANK  NODE    VALUE
+1     node-0  120
+2     node-1  100</code>
+</pre>
+<p>Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code># Ranking is by the requested metric value. A cumulative counter is not an interval rate.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Cross-node top-N comparison of a specific metric
+
+Usage:
+  wp metrics top [flags]
+
+Flags:
+      --by string   Metric name to rank by (required)
+  -h, --help        help for top
+      --top int     Show top N nodes (default 10)</code>
+</pre>
+</details>
+</article>
+<article class="command" id="metrics-watch">
+<h2>wp metrics watch</h2>
+<p>Real-time stream of a metric with trend arrows</p>
+<pre>
+<code>wp metrics watch &lt;metric-name&gt; &lt;node&gt; [flags]</code>
+</pre>
+<h3>Parameters to know</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter / type</th>
+<th>Use and default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>--interval duration</code>
+</td>
+<td>Scrape interval (default 1s)</td>
+</tr>
+</tbody>
+</table>
+<h3>Demo</h3>
+<pre>
+<code>wp metrics watch woodpecker_server_logstore_operations_total node-0 --interval 1s</code>
+</pre>
+<h3>Output and interpretation</h3>
+<pre>
+<code>TIMESTAMP     VALUE  DELTA  TREND
+12:00:01.000  5      -      ...
+12:00:02.000  6      +1     ...</code>
+</pre>
+<p>Prometheus counters are cumulative; compare deltas, labels and time windows. An idle counter alone is not a stall. stuck-read/write require a persistent relevant in-flight operation and no successful/EOF progress for the same log. Some named scenarios remain heuristic or placeholders; absence of findings does not establish a healthy application. See scenario implementation limits below.</p>
+<details class="ops-help">
+<summary>Finding or error example</summary>
+<pre>
+<code>12:00:02.000  (error)
+# Or (not found): inspect the scrape/metric selection.</code>
+</pre>
+</details>
+<details class="ops-help">
+<summary>Complete command help</summary>
+<pre>
+<code>Real-time stream of a metric with trend arrows
+
+Usage:
+  wp metrics watch &lt;metric-name&gt; &lt;node&gt; [flags]
+
+Flags:
+  -h, --help                help for watch
+      --interval duration   Scrape interval (default 1s)</code>
+</pre>
+</details>
+</article>
+</section>

@@ -1,0 +1,22 @@
+{{- if .Values.components.prometheus }}
+{{- range $name, $settings := dict "jaeger" (dict "enabled" .Values.jaeger.enabled "port" "admin") "loki" (dict "enabled" .Values.loki.enabled "port" "http") "alloy" (dict "enabled" .Values.loki.enabled "port" "http") }}
+{{- if $settings.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}
+  labels: {full-stack: milvus}
+spec:
+  selector:
+    matchLabels: {app: {{ $.Release.Name }}-{{ $name }}}
+  podMetricsEndpoints:
+    - port: {{ $settings.port }}
+      path: /metrics
+      interval: 15s
+      relabelings:
+        - {targetLabel: cluster, replacement: {{ $.Values.clusterLabel | quote }}}
+        - {targetLabel: component, replacement: {{ $name | quote }}}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -25,9 +25,33 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 )
 
+// Reasons a segment rolls. Exported so callers can label the roll counter without
+// restating the policy's conditions and drifting from them.
+const (
+	RollReasonSize     = "size"
+	RollReasonBlocks   = "blocks"
+	RollReasonInterval = "interval"
+	RollReasonForce    = "force"
+)
+
 type RollingPolicy interface {
-	// ShouldRollover returns true if the current segment should be rolled over.
-	ShouldRollover(ctx context.Context, currentSegmentSize int64, currentBlocksCount int64, lastRolloverTimeMs int64) bool
+	// ShouldRollover reports whether the current segment should be rolled over, and which
+	// limit decided it. The reason is empty when it should not roll.
+	ShouldRollover(ctx context.Context, currentSegmentSize int64, currentBlocksCount int64, lastRolloverTimeMs int64) (bool, string)
+}
+
+// IntervalElapsed reports whether a segment opened at lastRolloverTimeMs has been open for at
+// least intervalMs. A non-positive timestamp means no segment has been rolled yet, and a negative
+// elapsed time means the clock moved backwards; neither is a reason to roll.
+func IntervalElapsed(lastRolloverTimeMs, intervalMs int64) bool {
+	if lastRolloverTimeMs <= 0 {
+		return false
+	}
+	elapsed := time.Now().UnixMilli() - lastRolloverTimeMs
+	if elapsed < 0 {
+		return false
+	}
+	return elapsed >= intervalMs
 }
 
 func NewDefaultRollingPolicy(rolloverIntervalMs int64, rolloverSizeBytes int64, rolloverBlocksCount int64) RollingPolicy {
@@ -63,15 +87,15 @@ type DefaultRollingPolicy struct {
 	rolloverBlocksCount int64
 }
 
-func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmentSize int64, currentBlocksCount int64, lastRolloverTimeMs int64) bool {
+func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmentSize int64, currentBlocksCount int64, lastRolloverTimeMs int64) (bool, string) {
 	// Validate input parameters
 	if currentSegmentSize < 0 {
-		logger.Ctx(ctx).Info("Invalid currentSegmentSize", zap.Int64("currentSegmentSize", currentSegmentSize))
-		return false
+		logger.Ctx(ctx).Warn("Invalid currentSegmentSize", zap.Int64("currentSegmentSize", currentSegmentSize))
+		return false, ""
 	}
 	if currentBlocksCount < 0 {
-		logger.Ctx(ctx).Debug("Invalid currentBlocksCount", zap.Int64("currentBlocksCount", currentBlocksCount))
-		return false
+		logger.Ctx(ctx).Warn("Invalid currentBlocksCount", zap.Int64("currentBlocksCount", currentBlocksCount))
+		return false, ""
 	}
 
 	// Get current time once for consistency
@@ -82,7 +106,7 @@ func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmen
 		logger.Ctx(ctx).Debug("Rolling by size",
 			zap.Int64("rolloverSizeBytes", p.rolloverSizeBytes),
 			zap.Int64("actualSize", currentSegmentSize))
-		return true
+		return true, RollReasonSize
 	}
 
 	// Check blocks-based rollover
@@ -90,7 +114,7 @@ func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmen
 		logger.Ctx(ctx).Debug("Rolling by blocks count",
 			zap.Int64("rolloverBlocksCount", p.rolloverBlocksCount),
 			zap.Int64("actualBlocksCount", currentBlocksCount))
-		return true
+		return true, RollReasonBlocks
 	}
 
 	// Check time-based rollover
@@ -105,19 +129,19 @@ func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmen
 				zap.Int64("lastRolloverTimeMs", lastRolloverTimeMs),
 				zap.Int64("timeDiff", timeSinceLastRollover))
 			// Don't rollover on clock skew, wait for time to stabilize
-			return false
+			return false, ""
 		}
 
-		if timeSinceLastRollover >= p.rolloverIntervalMs {
+		if IntervalElapsed(lastRolloverTimeMs, p.rolloverIntervalMs) {
 			logger.Ctx(ctx).Debug("Rolling by time interval",
 				zap.Int64("rolloverIntervalMs", p.rolloverIntervalMs),
 				zap.Int64("actualIntervalMs", timeSinceLastRollover),
 				zap.Int64("actualSize", currentSegmentSize),
 				zap.Int64("actualBlocksCount", currentBlocksCount))
-			return true
+			return true, RollReasonInterval
 		}
 	}
 
 	// Otherwise, do not roll over
-	return false
+	return false, ""
 }

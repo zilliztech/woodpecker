@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func setupStagedAdvTest(t *testing.T, rootDir string) (storageclient.ObjectStora
 
 	// Set log level to debug for detailed logging
 	cfg.Log.Level = "debug"
-	cfg.Minio.RootPath = rootDir
+	cfg.Minio.RootPath = strings.TrimPrefix(rootDir, "/") // relative, as config.Validate requires
 
 	// Initialize logger with debug level
 	logger.InitLogger(cfg)
@@ -54,7 +55,7 @@ func setupStagedAdvTest(t *testing.T, rootDir string) (storageclient.ObjectStora
 
 	// Create a temporary directory for local files
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", rootDir, time.Now().Unix()))
-	err = os.MkdirAll(tempDir, 0755)
+	err = os.MkdirAll(tempDir, 0o755)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -219,7 +220,7 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 	defer readerBeforeCompact.Close(ctx)
 
 	// Step 2: Compact the data
-	compactedSize, err := writer.Compact(ctx)
+	compactedSize, err := writer.Compact(ctx, int64(len(testData))-1)
 	require.NoError(t, err)
 	assert.Greater(t, compactedSize, int64(0))
 
@@ -413,7 +414,7 @@ func TestAdvStagedFileReader_MixedLocalAndCompactedAccess(t *testing.T) {
 		assert.Equal(t, len(testData), len(result1.Entries))
 
 		// Compact the data
-		_, err = writer.Compact(ctx)
+		_, err = writer.Compact(ctx, int64(len(testData))-1)
 		require.NoError(t, err)
 
 		// Reader 2: Read from compacted (after compaction)
@@ -475,7 +476,7 @@ func TestAdvStagedFileReader_SequentialReading(t *testing.T) {
 	_, err = writer.Finalize(ctx, int64(len(testData))-1)
 	require.NoError(t, err)
 
-	_, err = writer.Compact(ctx)
+	_, err = writer.Compact(ctx, int64(len(testData))-1)
 	require.NoError(t, err)
 
 	err = writer.Close(ctx)
@@ -554,7 +555,7 @@ func TestAdvStagedFileReader_ErrorHandling(t *testing.T) {
 		_, err = writer.Finalize(ctx, int64(len(testData))-1)
 		require.NoError(t, err)
 
-		_, err = writer.Compact(ctx)
+		_, err = writer.Compact(ctx, int64(len(testData))-1)
 		require.NoError(t, err)
 
 		err = writer.Close(ctx)
@@ -640,7 +641,7 @@ func TestAdvStagedFileReader_LargeDataHandling(t *testing.T) {
 	_, err = writer.Finalize(ctx, int64(len(testData))-1)
 	require.NoError(t, err)
 
-	_, err = writer.Compact(ctx)
+	_, err = writer.Compact(ctx, int64(len(testData))-1)
 	require.NoError(t, err)
 
 	err = writer.Close(ctx)
@@ -726,7 +727,7 @@ func TestAdvStagedFileReader_ConcurrentReads(t *testing.T) {
 	_, err = writer.Finalize(ctx, int64(len(testData))-1)
 	require.NoError(t, err)
 
-	_, err = writer.Compact(ctx)
+	_, err = writer.Compact(ctx, int64(len(testData))-1)
 	require.NoError(t, err)
 
 	err = writer.Close(ctx)

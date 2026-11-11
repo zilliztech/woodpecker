@@ -30,6 +30,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
@@ -48,14 +49,21 @@ type internalLogWriterImpl struct {
 	logIdStr           string // for metrics label only
 	logHandle          LogHandle
 	auditorMaxInterval int
-	cfg                *config.Configuration
-	metricsNamespace   string
-	writerClose        chan struct{}
-	cleanupManager     segment.SegmentCleanupManager
+	// compactionPassBudget bounds how long one cycle spends starting compactions.
+	compactionPassBudget time.Duration
+	cfg                  *config.Configuration
+	logNs                string
+	writerClose          chan struct{}
+	cleanupManager       segment.SegmentCleanupManager
+	notifyManager        segment.SegmentCompactedNotifyManager
+	notifySegsCh         chan map[int64]*meta.SegmentMeta // auditor -> notify distributor snapshot handoff
 
 	// validation related fields
 	isWriterValid       atomic.Bool
 	onWriterInvalidated func(ctx context.Context, reason string)
+	maintenanceCtx      context.Context
+	maintenanceCancel   context.CancelFunc
+	maintenanceWG       sync.WaitGroup
 
 	// Mutex to ensure only one truncation cleanup task is running at a time
 	cleanupMutex      sync.Mutex
@@ -66,14 +74,20 @@ type internalLogWriterImpl struct {
 func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration) LogWriter {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "NewInternalLogWriter")
 	defer sp.End()
+	maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
 	w := &internalLogWriterImpl{
-		logIdStr:           fmt.Sprintf("%d", logHandle.GetId()),
-		logHandle:          logHandle,
-		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
-		cfg:                cfg,
-		metricsNamespace:   metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
-		writerClose:        make(chan struct{}, 1),
-		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		logIdStr:             fmt.Sprintf("%d", logHandle.GetId()),
+		logHandle:            logHandle,
+		auditorMaxInterval:   cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
+		compactionPassBudget: cfg.Woodpecker.Client.Auditor.CompactionPassBudget.Duration.Duration(),
+		cfg:                  cfg,
+		logNs:                metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		writerClose:          make(chan struct{}, 1),
+		cleanupManager:       segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		notifyManager:        segment.NewSegmentCompactedNotifyManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		notifySegsCh:         make(chan map[int64]*meta.SegmentMeta, 1),
+		maintenanceCtx:       maintenanceCtx,
+		maintenanceCancel:    maintenanceCancel,
 	}
 	// Set sessionValid to true
 	w.isWriterValid.Store(true)
@@ -81,14 +95,39 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 	// Set trigger expired
 	onWriterInvalidated := func(ctx context.Context, reason string) {
 		w.isWriterValid.Store(false)
+		w.stopMaintenance()
 		logger.Ctx(ctx).Warn("trigger writer lock session expired", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.String("reason", reason))
 	}
 	w.onWriterInvalidated = onWriterInvalidated
 
 	// Monitor keepAlive channel
-	go w.runAuditor()
+	w.startAuditor()
+	// Compacted-mark distribution runs on its own goroutine so a slow node can't stall the auditor.
+	w.startNotifyDistributor(cfg.Woodpecker.Storage.IsStorageService())
 	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
 	return w
+}
+
+func (l *internalLogWriterImpl) startAuditor() {
+	l.maintenanceWG.Add(1)
+	go func() {
+		defer l.maintenanceWG.Done()
+		l.runAuditor()
+	}()
+}
+
+func (l *internalLogWriterImpl) startNotifyDistributor(serviceMode bool) {
+	l.maintenanceWG.Add(1)
+	go func() {
+		defer l.maintenanceWG.Done()
+		runNotifyDistributor(l.maintenanceCtx, l.logHandle, l.notifyManager, serviceMode, l.notifySegsCh)
+	}()
+}
+
+func (l *internalLogWriterImpl) stopMaintenance() {
+	if l.maintenanceCancel != nil {
+		l.maintenanceCancel()
+	}
 }
 
 func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResult {
@@ -100,7 +139,7 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 	if !l.isWriterValid.Load() {
 		logger.Ctx(ctx).Warn("Writer lock session has expired",
 			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
 			Err:          werr.ErrLogWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
@@ -110,7 +149,13 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
 		logger.Ctx(ctx).Debug("write log entry callback",
-			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err), zap.Duration("duration", time.Since(start)))
+		// Invalidate the writer BEFORE delivering the result so that the next synchronous
+		// Write observes isWriterValid=false and fails fast. Channel send happens-after
+		// onWriterInvalidated, so the receiver is guaranteed to see the invalidation.
+		if err != nil && werr.IsSegmentNotWritableErr(err) {
+			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
+		}
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,
@@ -119,25 +164,22 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 			Err: err,
 		}
 		close(ch)
-		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && werr.IsSegmentNotWritableErr(err) {
-			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
-		}
-	}
-	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
-	if err != nil {
-		callback(-1, -1, err)
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return <-ch
 	}
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
 		logger.Ctx(ctx).Warn("serialize message failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
 			Err:          err,
 		}
+	}
+
+	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
+	if err != nil {
+		callback(-1, -1, err)
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
+		return <-ch
 	}
 
 	writableSegmentHandle.AppendAsync(ctx, bytes, callback)
@@ -145,15 +187,15 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 
 	// Update metrics based on result
 	if result.Err != nil {
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		if werr.ErrSegmentHandleSegmentRolling.Is(result.Err) {
 			logger.Ctx(ctx).Info("write to rolling segment rejected, retry later", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.String("detail", result.Err.Error()))
 		} else {
 			logger.Ctx(ctx).Warn("write log entry failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(result.Err))
 		}
 	} else {
-		metrics.WpLogWriterBytesWritten.WithLabelValues(l.metricsNamespace, l.logIdStr).Add(float64(len(bytes)))
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterBytesWritten.WithLabelValues(l.logNs, l.logIdStr).Add(float64(len(bytes)))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 
 	return result
@@ -167,7 +209,7 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 
 	// Check if session is valid
 	if !l.isWriterValid.Load() {
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
 		ch <- &WriteResult{
 			LogMessageId: nil,
 			Err:          werr.ErrLogWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
@@ -180,7 +222,7 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
 		logger.Ctx(ctx).Warn("serialize message failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
 		ch <- &WriteResult{
 			LogMessageId: nil,
 			Err:          err,
@@ -190,12 +232,17 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 	}
 
 	callback := func(segmentId int64, entryId int64, err error) {
-		logger.Ctx(ctx).Debug("write log entry callback exec", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Debug("write log entry callback exec", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err), zap.Duration("duration", time.Since(start)))
 		if err == nil {
-			metrics.WpLogWriterBytesWritten.WithLabelValues(l.metricsNamespace, l.logIdStr).Add(float64(len(bytes)))
-			metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write_async", "success").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogWriterBytesWritten.WithLabelValues(l.logNs, l.logIdStr).Add(float64(len(bytes)))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write_async", "success").Observe(float64(time.Since(start).Milliseconds()))
 		} else {
-			metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
+		}
+		// Invalidate the writer BEFORE delivering the result so that subsequent Writes
+		// observe isWriterValid=false and fail fast.
+		if err != nil && werr.IsSegmentNotWritableErr(err) {
+			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
@@ -205,10 +252,6 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 			Err: err,
 		}
 		close(ch)
-		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && werr.IsSegmentNotWritableErr(err) {
-			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
-		}
 	}
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
 	if err != nil {
@@ -222,23 +265,50 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 }
 
 func (l *internalLogWriterImpl) runAuditor() {
-	ticker := time.NewTicker(time.Duration(l.auditorMaxInterval * int(time.Second)))
-	defer ticker.Stop()
+	interval := time.Duration(l.auditorMaxInterval) * time.Second
+
+	// Storage mode is fixed for the writer's lifetime; read it once here rather than per
+	// segment. localMode disables the compaction pass (see compactCompletedSegments), so
+	// report it here instead of logging the skip for every segment on every cycle.
+	localMode := l.cfg.Woodpecker.Storage.IsStorageLocal()
 
 	logger.Ctx(context.Background()).Info("Log auditor started",
 		zap.String("logName", l.logHandle.GetName()),
 		zap.Int64("logId", l.logHandle.GetId()),
-		zap.Int("intervalSeconds", l.auditorMaxInterval))
+		zap.Int("intervalSeconds", l.auditorMaxInterval),
+		zap.Bool("localStorageCompactionDisabled", localMode))
 
+	// Spread the start so writers created together do not tick in lockstep.
+	if !waitAuditorStartJitter(l.maintenanceCtx, l.writerClose, interval) {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	auditCycle := uint64(0)
 	for {
 		select {
 		case <-ticker.C:
-			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
+			if l.maintenanceCtx.Err() != nil || !l.isWriterValid.Load() {
+				l.stopMaintenance()
+				return
+			}
+			auditCycle++
+			ctx, sp := logger.NewIntentCtxWithParent(l.maintenanceCtx, WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 
 			logger.Ctx(ctx).Debug("Starting auditor cycle",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()))
+
+			// Roll the open segment when the policy is due. The append path is the only
+			// other place this is evaluated, so without this a log that stops being
+			// written keeps its Active segment open and pins the data to its nodes.
+			// A failure here is not fatal to the cycle: the next pass retries.
+			if err := l.logHandle.RollWritableSegmentIfDue(ctx, l.onWriterInvalidated); err != nil {
+				logger.Ctx(ctx).Warn("roll writable segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+			}
 
 			// check and set segment truncate state if necessary
 			if err := l.logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx); err != nil {
@@ -260,61 +330,55 @@ func (l *internalLogWriterImpl) runAuditor() {
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Int("totalSegments", len(segmentMetaList)))
 
-			// compact/recover if necessary
-			// NOTE: Segments are compacted sequentially by design to minimize per-log resource usage.
-			// The cluster may host many logs, so keeping each log's background work lightweight is preferred.
-			truncatedSegmentExists := make([]int64, 0)
-			segmentsProcessed := 0
-			segmentsCompacted := 0
-			segmentsFailed := 0
+			// Per-segment maintenance, split by work type (a segment is in exactly one state
+			// per snapshot, so these are independent): compact the Completed segments and
+			// collect the Truncated ones to clean up. Compacted-mark distribution for Sealed
+			// segments runs on its own goroutine (runNotifyDistributor) so a slow/black-holed
+			// quorum node can never block compaction or truncate cleanup on this critical path.
+			// Share the freshly loaded snapshot with the notify distributor so it does not
+			// issue a second identical etcd range scan per cycle.
+			truncatedSegmentExists := collectTruncatedSegments(segmentMetaList)
+			// In-process reap sync: a Truncated segment must never be notified again, even if the
+			// distributor is mid-round on a stale snapshot that still shows it Sealed.
+			markTruncatedSegmentsReaped(l.notifyManager, truncatedSegmentExists)
+			publishSegmentsSnapshot(l.notifySegsCh, segmentMetaList)
 
-			for _, seg := range segmentMetaList {
-				stateBefore := seg.Metadata.State
-				if stateBefore == proto.SegmentState_Completed {
-					segmentsProcessed++
-					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.Metadata.SegNo)
-					if getRecoverySegmentHandleErr != nil {
-						logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(getRecoverySegmentHandleErr))
-						segmentsFailed++
-						continue
-					}
-					maintainErr := recoverySegmentHandle.Compact(context.TODO())
-					if maintainErr != nil {
-						logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(maintainErr))
-						segmentsFailed++
-						continue
-					}
-
-					// Check if segment was recovered or compacted by checking its new state
-					// This is a best-effort attempt to track the operation type
-					if stateBefore == proto.SegmentState_Completed {
-						segmentsCompacted++
-						logger.Ctx(ctx).Info("Successfully compacted segment",
-							zap.String("logName", l.logHandle.GetName()),
-							zap.Int64("logId", l.logHandle.GetId()),
-							zap.Int64("segmentId", seg.Metadata.SegNo))
-					}
-				} else if stateBefore == proto.SegmentState_Truncated {
-					truncatedSegmentExists = append(truncatedSegmentExists, seg.Metadata.SegNo)
-				}
+			// Bound the pass: the auditor runs its passes in sequence, so a compaction that
+			// hangs -- an object store that stops responding rather than failing -- would hold
+			// up truncate state, snapshot publication and the orphan sweep for as long as it
+			// lasts. Segments the budget does not reach are left for a later cycle.
+			cs := compactCompletedSegments(ctx, l.logHandle, segmentMetaList, localMode, l.compactionPassBudget)
+			if ctx.Err() != nil {
+				sp.End()
+				return
 			}
 
-			logger.Ctx(ctx).Info("Auditor segment processing completed",
+			// Periodic orphan sweep (pass 1 = startup recovery, then every Nth cycle): reclaims
+			// cleanup-domain records whose segment metadata is already gone, covering the
+			// idle-log case the batch-time sweeps (gated on a pending truncate batch) never
+			// reach — e.g. a transiently failed best-effort record delete on the log's last
+			// truncated segment.
+			if auditCycle%orphanSweepEveryNAuditCycles == 1 {
+				sweepOrphanedCleanupRecords(ctx, l.logHandle, l.cleanupManager, l.notifyManager, segmentMetaList)
+			}
+
+			logger.Ctx(ctx).Debug("Auditor segment processing completed",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
-				zap.Int("segmentsProcessed", segmentsProcessed),
-				zap.Int("segmentsCompacted", segmentsCompacted),
-				zap.Int("segmentsFailed", segmentsFailed),
+				zap.Int("segmentsProcessed", cs.processed),
+				zap.Int("segmentsCompacted", cs.compacted),
+				zap.Int("segmentsFailed", cs.failed),
+				zap.Int("segmentsDeferred", cs.deferred),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))
 
-			// Check for truncated segments to clean up
+			// Clean up truncated segments (object-storage data + local files + tombstones).
 			if len(truncatedSegmentExists) > 0 {
 				logger.Ctx(ctx).Info("auditor try to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64s("truncatedSegmentExists", truncatedSegmentExists))
 				l.cleanupTruncatedSegmentsIfNecessary(ctx)
 			}
 
 			auditDuration := time.Since(startAudit)
-			logger.Ctx(ctx).Info("Auditor cycle completed",
+			logger.Ctx(ctx).Debug("Auditor cycle completed",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Duration("duration", auditDuration),
@@ -324,9 +388,14 @@ func (l *internalLogWriterImpl) runAuditor() {
 			sp.End()
 
 			// Track auditor latency
-			metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "auditor_run", "success").Observe(float64(auditDuration.Milliseconds()))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "auditor_run", "success").Observe(float64(auditDuration.Milliseconds()))
 		case <-l.writerClose:
 			logger.Ctx(context.TODO()).Info("Log auditor stopped",
+				zap.String("logName", l.logHandle.GetName()),
+				zap.Int64("logId", l.logHandle.GetId()))
+			return
+		case <-l.maintenanceCtx.Done():
+			logger.Ctx(context.TODO()).Info("Log auditor stopped after writer invalidation",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()))
 			return
@@ -423,7 +492,9 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 	// Process segments in ascending order by segment ID
 	var segmentIdsToClean []int64
 	truncatedSegmentCount := 0
-	protectedSegmentCount := 0
+	readerProtectedCount := 0
+	ttlProtectedCount := 0
+	ttlCutoffMs := time.Now().UnixMilli() - int64(l.cfg.Woodpecker.Logstore.RetentionPolicy.TTL*1000)
 
 	for segId, segMeta := range segments {
 		// Only consider segments that are truncated
@@ -433,13 +504,12 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 
 		truncatedSegmentCount++
 
-		// Skip segments that are at or after the minTruncatedSegmentId point
+		// Skip segments that are at or after the minTruncatedSegmentId point.
+		// Counted, not logged: a protected segment stays protected across cycles, so a per-segment
+		// line re-reports the same segments every cycle at O(segments) volume. The eligibility
+		// summary below carries the counts and the cutoffs needed to explain any single decision.
 		if segId >= minTruncatedSegmentId {
-			logger.Ctx(ctx).Debug("Skipping truncated segment still in use by readers",
-				zap.String("logName", logName),
-				zap.Int64("logId", logId),
-				zap.Int64("segmentId", segId))
-			protectedSegmentCount++
+			readerProtectedCount++
 			continue
 		}
 
@@ -451,12 +521,8 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 		if segMeta.Metadata.SealedTime > lastActiveTime {
 			lastActiveTime = segMeta.Metadata.SealedTime
 		}
-		if lastActiveTime+int64(l.cfg.Woodpecker.Logstore.RetentionPolicy.TTL*1000) > time.Now().UnixMilli() {
-			logger.Ctx(ctx).Debug("Skipping truncated segment still within ttl protection",
-				zap.String("logName", logName),
-				zap.Int64("logId", logId),
-				zap.Int64("segmentId", segId))
-			protectedSegmentCount++
+		if lastActiveTime > ttlCutoffMs {
+			ttlProtectedCount++
 			continue
 		}
 
@@ -473,7 +539,10 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 		zap.Int64("logId", logId),
 		zap.Int("totalTruncatedSegments", truncatedSegmentCount),
 		zap.Int("segmentsEligibleForCleanup", len(segmentIdsToClean)),
-		zap.Int("segmentsProtectedByReaders", protectedSegmentCount))
+		zap.Int("segmentsProtectedByReaders", readerProtectedCount),
+		zap.Int("segmentsProtectedByTTL", ttlProtectedCount),
+		zap.Int64("minSegmentIdInUse", minTruncatedSegmentId),
+		zap.Int64("ttlCutoffMs", ttlCutoffMs))
 
 	if len(segmentIdsToClean) == 0 {
 		logger.Ctx(ctx).Info("No truncated segments eligible for cleanup",
@@ -486,6 +555,29 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 	sort.Slice(segmentIdsToClean, func(i, j int) bool {
 		return segmentIdsToClean[i] < segmentIdsToClean[j]
 	})
+
+	// Before starting cleanup, check for orphaned cleanup status records
+	// from segments older than the oldest pending segment. These are leftover
+	// records whose segment metadata was already deleted but cleanup status
+	// deletion was interrupted by a crash.
+	minSegId := segmentIdsToClean[0]
+	if err := l.cleanupManager.CleanupOrphanedStatuses(ctx, logId, minSegId); err != nil {
+		logger.Ctx(ctx).Warn("Failed to clean orphaned cleanup statuses",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("minSegmentId", minSegId),
+			zap.Error(err))
+	}
+	// Same sweep for the sibling marking records (compacted-mark distribution): their
+	// segment metadata is gone, so the records — including PENDING_MANUAL ones — are
+	// orphans; the need for a mark dies with the segment.
+	if err := l.notifyManager.CleanupOrphanedStatuses(ctx, logId, minSegId); err != nil {
+		logger.Ctx(ctx).Warn("Failed to clean orphaned compacted notify statuses",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("minSegmentId", minSegId),
+			zap.Error(err))
+	}
 
 	logger.Ctx(ctx).Info("Identified truncated segments eligible for cleanup",
 		zap.String("logName", logName),
@@ -513,14 +605,14 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 				zap.Int64("logId", logId),
 				zap.Int64("segmentId", segmentId),
 				zap.Error(err))
-			metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "cleanup_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "cleanup_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 			failureCount++
 		} else {
 			logger.Ctx(ctx).Info("Finish segment cleanup",
 				zap.String("logName", logName),
 				zap.Int64("logId", logId),
 				zap.Int64("segmentId", segmentId))
-			metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "cleanup_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "cleanup_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 			successCount++
 		}
 	}
@@ -545,14 +637,16 @@ func (l *internalLogWriterImpl) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("closing log writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 
 		l.isWriterValid.Store(false)
+		l.stopMaintenance()
 		l.writerClose <- struct{}{}
 		close(l.writerClose)
+		l.maintenanceWG.Wait()
 		status := "success"
 		closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
 		if closeErr != nil {
 			logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
 			status = "error"
-			if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) {
+			if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) || werr.ErrMetadataRevisionInvalid.Is(closeErr) {
 				closeErr = nil
 				status = "success"
 			}
@@ -564,7 +658,7 @@ func (l *internalLogWriterImpl) Close(ctx context.Context) error {
 		}
 
 		logger.Ctx(ctx).Info("log writer closed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
 		result = werr.Combine(closeErr, closeLogHandleErr)
 	})
 	return result

@@ -17,29 +17,31 @@ Most mainstream cloud storage backends natively support condition write (fence) 
 
 These backends allow Woodpecker to use optimistic concurrency control without requiring distributed locks.
 
-## Fallback to Distributed Locks
+## Condition Write Modes
 
-For object storage backends that don't support condition write (typically some open-source or self-hosted solutions), Woodpecker automatically falls back to a **distributed lock** mechanism using etcd.
+For object storage backends that don't support condition write (typically some open-source or self-hosted solutions), Woodpecker can use a **distributed lock** mechanism via explicit configuration.
 
-### Fallback Logic
+### Mode Logic
 
 The fallback behavior depends on the `fencePolicy.conditionWrite` configuration:
 
 #### Auto Mode (Default)
-- **Detection Phase**: Attempts to detect condition write support up to 30 times with exponential backoff
-- **Optimistic Enable**: If any detection succeeds, condition write is enabled for the entire cluster
-- **Pessimistic Fallback**: If all 30 attempts fail, automatically falls back to distributed lock mode
-- **Cluster Consensus**: All nodes share a single global result stored in etcd via CAS operation
-- **First Detection Wins**: The first successful detection determines the cluster-wide setting
+- **Legacy Metadata First**: If etcd already stores true or false, Woodpecker follows that cluster decision
+- **Strict New Cluster Behavior**: If no metadata exists, Woodpecker verifies condition write support using enable-mode semantics
+- **Success Behavior**: Successful verification stores true for the cluster
+- **Failure Behavior**: Verification failure fails startup; it does not fall back and does not persist false
 
 #### Enable Mode
-- **Strict Requirement**: Condition write detection must succeed within 10 retries
-- **Failure Behavior**: Panics if detection fails after all retries
+- **Fast Path**: Stored true metadata is trusted
+- **Ignore Stored False**: Stored false metadata is ignored because the operator explicitly required condition write
+- **Strict Requirement**: Condition write verification must succeed within 10 retries
+- **Success Behavior**: Successful verification overwrites cluster metadata to true
+- **Failure Behavior**: Verification failure fails startup
 - **Use Case**: When you're certain your storage backend supports condition write
 
 #### Disable Mode
 - **Skip Detection**: Completely skips condition write detection
-- **Direct Fallback**: Immediately uses distributed lock mode
+- **Distributed Lock Mode**: Immediately uses distributed lock mode
 - **Use Case**: When you know your storage backend doesn't support condition write
 
 ### Detection and Storage Separation
@@ -47,14 +49,14 @@ The fallback behavior depends on the `fencePolicy.conditionWrite` configuration:
 The detection retry logic is separated from etcd storage operations:
 
 1. **Phase 1 - Detection**: Retries storage capability detection up to the configured limit
-2. **Phase 2 - Storage**: Independently retries storing the result to etcd (up to 10 times)
+2. **Phase 2 - Storage**: Independently retries storing the enabled result to etcd (up to 10 times)
 3. **Error Handling**: If etcd storage fails after all retries, returns an error rather than silently using local detection result
 
-This separation ensures that etcd failures don't consume detection retry quota, preventing scenarios where storage supports condition write but etcd failures cause incorrect fallback.
+This separation ensures that etcd failures don't consume detection retry quota, and verification failures are surfaced instead of being persisted as unsupported capability.
 
 ## Distributed Lock Implementation
 
-When condition write is not available, Woodpecker uses distributed locks via etcd to coordinate concurrent writes.
+When condition write is explicitly disabled, or when legacy auto metadata stores false, Woodpecker uses distributed locks via etcd to coordinate concurrent writes.
 
 ### Lock Mechanism
 
@@ -104,8 +106,8 @@ woodpecker:
       conditionWrite: "auto"  # Options: "auto", "enable", "disable"
 ```
 
-- **`auto`**: Automatically detect and use condition write if available, fallback to distributed locks otherwise (recommended)
-- **`enable`**: Require condition write support, panic if not available
+- **`auto`**: Follow existing cluster metadata if present; otherwise verify condition write support and fail startup if verification fails
+- **`enable`**: Require condition write support; ignore stored false metadata, verify support, and fail startup if verification fails
 - **`disable`**: Force use of distributed locks, skip detection entirely
 
 ## Custom Object Storage Integration

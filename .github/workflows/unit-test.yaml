@@ -1,0 +1,102 @@
+name: Core Unit Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, dev]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - ".agents/skills/**"
+      - "cmd/wpcli/**"
+      - "cmd/wpdiag/**"
+      - "diagnostics/**"
+      - "tests/integration/diagnostics/**"
+      - "tests/integration/tracing/**"
+      - "deployments/milvus-full-stack-helm/**"
+      - "docs/stack-examples/**"
+      - "Makefile"
+      - "codecov.yml"
+      - ".github/scripts/ci_*"
+      - ".github/scripts/test_ci_*"
+      - ".github/scripts/stack_tests.py"
+      - ".github/scripts/requirements-ci.txt"
+      - ".github/workflows/**"
+  pull_request:
+    branches: [master, dev]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - ".agents/skills/**"
+      - "cmd/wpcli/**"
+      - "cmd/wpdiag/**"
+      - "diagnostics/**"
+      - "tests/integration/diagnostics/**"
+      - "tests/integration/tracing/**"
+      - "deployments/milvus-full-stack-helm/**"
+      - "docs/stack-examples/**"
+      - "Makefile"
+      - "codecov.yml"
+      - ".github/scripts/ci_*"
+      - ".github/scripts/test_ci_*"
+      - ".github/scripts/stack_tests.py"
+      - ".github/scripts/requirements-ci.txt"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-test:
+    name: Core Unit Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Verify package ownership
+        run: python3 .github/scripts/ci_packages.py verify
+      - name: Run core unit tests
+        run: make unit-test-core
+      - name: Upload core coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage-core.out
+          flags: core
+          name: core-unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  contracts:
+    name: CI Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Validate all workflow syntax and shell commands
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yaml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install -r .github/scripts/requirements-ci.txt
+      - run: python3 -m unittest discover -s .github/scripts -p "test_ci_*.py" -v

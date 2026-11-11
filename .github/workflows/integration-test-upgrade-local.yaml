@@ -1,0 +1,104 @@
+name: Upgrade Compat Local
+
+on:
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "server/storage/codec/**"
+      - "meta/**"
+      - "proto/**"
+      - "tests/upgrade/**"
+      - ".github/workflows/integration-test-upgrade-local.yaml"
+      - ".github/docker-compose-ci.yaml"
+  workflow_call:
+
+concurrency:
+  group: integration-test-upgrade-local-${{ github.event_name == 'workflow_call' && 'nightly-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  Upgrade-Compat-Local:
+    name: Upgrade Compat Local
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Start dependencies (etcd + MinIO)
+        run: |
+          # Pull before `up` so a registry hiccup can be retried on its own: a Docker Hub
+          # timeout used to fail the job before a single test ran (#256). Bounded — three
+          # attempts with backoff, then give up. Never retry indefinitely.
+          for attempt in 1 2 3; do
+            if docker compose -f .github/docker-compose-ci.yaml pull; then break; fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::docker compose pull failed after 3 attempts"
+              exit 1
+            fi
+            echo "pull attempt $attempt failed; retrying in $((attempt * 10))s"
+            sleep $((attempt * 10))
+          done
+          docker compose -f .github/docker-compose-ci.yaml up -d
+          # Bounded health waits too. An unbounded `until` loop here would burn the whole
+          # job timeout and surface as a cancelled job rather than a clear error.
+          for svc in ci-etcd ci-minio; do
+            echo "Waiting for $svc..."
+            for i in $(seq 60); do
+              if [ "$(docker inspect --format='{{.State.Health.Status}}' "$svc" 2>/dev/null)" = healthy ]; then break; fi
+              if [ "$i" = 60 ]; then
+                echo "::error::$svc did not become healthy within 120s"
+                docker logs "$svc" 2>&1 | tail -50
+                exit 1
+              fi
+              sleep 2
+            done
+            echo "$svc is ready"
+          done
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run upgrade compatibility test (local storage)
+        env:
+          GHCR_REPO: ghcr.io/${{ github.repository }}
+        run: |
+          # run_upgrade_compat.sh resolves the v0.1.13 writer image from
+          # $GHCR_REPO with a pull-fast-path / build-fallback, runs the writer
+          # container, builds the HEAD verifier, and runs the verifier.
+          bash tests/upgrade/run_upgrade_compat.sh --storage local
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-compat-local-artifacts
+          path: |
+            /tmp/woodpecker_upgrade_data/
+            /tmp/upgrade-test-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Stop dependencies
+        if: always()
+        run: |
+          docker compose -f .github/docker-compose-ci.yaml down -v

@@ -26,8 +26,8 @@ import (
 
 func TestEmbedEtcdServer(t *testing.T) {
 	configPath := ""
-	dataDir := "/tmp/test_etcd_data"
-	logPath := "/tmp/test_etcd.log"
+	dataDir := t.TempDir()
+	logPath := t.TempDir() + "/test_etcd.log"
 	logLevel := "info"
 	// init etcd embed server
 	if err := InitEtcdServer(true, configPath, dataDir, logPath, logLevel); err != nil {
@@ -67,6 +67,48 @@ func TestEmbedEtcdServer(t *testing.T) {
 	assert.Equalf(t, value, string(getResponse.Kvs[0].Value),
 		"get data failed, expect value=%s, but got %s", value, string(getResponse.Kvs[0].Value))
 
+	// test GetEtcdClient with useEmbedEtcd=true (uses the global etcdServer)
+	etcdCli, err := GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	if err == nil {
+		defer etcdCli.Close()
+		putKey := "test_get_etcd_client"
+		_, err = etcdCli.Put(ctx, putKey, "val")
+		assert.NoError(t, err)
+	}
+
+	// test HasServer
+	assert.True(t, HasServer())
+
 	// test summary
 	t.Logf("test embed etcd server success")
+}
+
+func TestInitEtcdServer_NotUseEmbed(t *testing.T) {
+	err := InitEtcdServer(false, "", "", "", "")
+	assert.NoError(t, err)
+}
+
+func TestStartEtcdServerUnsafe_InvalidConfigPath(t *testing.T) {
+	err := StartEtcdServerUnsafe(true, "/nonexistent/path/etcd.conf", t.TempDir(), t.TempDir()+"/etcd.log", "info")
+	assert.Error(t, err)
+}
+
+func TestStartEtcdServerUnsafe_StartFails(t *testing.T) {
+	// Use an invalid data dir (empty string causes embed.StartEtcd to fail)
+	err := StartEtcdServerUnsafe(true, "", "", t.TempDir()+"/etcd.log", "info")
+	assert.Error(t, err)
+}
+
+func TestShutdownEtcdServerUnsafe(t *testing.T) {
+	// Start a fresh server to test ShutdownEtcdServerUnsafe
+	dataDir := t.TempDir()
+	logPath := t.TempDir() + "/test_shutdown.log"
+	err := StartEtcdServerUnsafe(true, "", dataDir, logPath, "info")
+	if err != nil {
+		t.Skip("cannot start etcd for shutdown test")
+	}
+	assert.NotPanics(t, func() {
+		ShutdownEtcdServerUnsafe()
+	})
 }

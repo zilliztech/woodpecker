@@ -1,0 +1,29 @@
+# Environment connections only. Client metadata and check scope are run inputs.
+current-context: local
+contexts:
+  local:
+    endpoint: http://127.0.0.1:19091
+    node_admin_urls:
+      woodpecker-0: http://127.0.0.1:19091
+    k8s:
+      kube_context: minikube
+      namespace: woodpecker
+    observability:
+      prometheus:
+        endpoint: http://127.0.0.1:9090
+        deployment: local
+        match_labels: {namespace: woodpecker}
+      trace:
+        endpoint: http://127.0.0.1:16686
+        deployment: local
+        services: {wp-client: wp_client, woodpecker: wp_server}
+        search: {service: woodpecker}
+        # Only define these mappings if the instrumentation emits these tags.
+        # identity_tags: {log_ns: wp.log_ns, log_id: wp.log_id, node_id: wp.node_id}
+        # request_id_tag: request.id
+      grafana: http://127.0.0.1:3000
+    agent:
+      enabled: false
+      provider: codex
+      auth: cli
+      executable: codex
