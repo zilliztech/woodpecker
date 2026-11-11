@@ -20,7 +20,7 @@ func ProbeConnections(ctx context.Context, c d.Config, source string, b *Binding
 			continue
 		}
 		v := b.scope(role)
-		s := Scope{Deployment: v.Deployment}
+		s := Scope{Context: v.Context, Deployment: v.Deployment}
 		key := "prometheus"
 		if source == "metrics" {
 			s.Metrics = v.Metrics

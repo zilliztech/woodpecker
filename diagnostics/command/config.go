@@ -105,6 +105,17 @@ func EnvironmentConfig(f *config.File, abs string) (d.Config, error) {
 			if envelope.Settings.Kind == 0 {
 				envelope.Settings = node
 			}
+			// Context is the environment identity. Keep the internal report field
+			// compatible without requiring a second user-configured name. Decode
+			// and re-encode so runtime defaults never mutate the source document.
+			var settings map[string]any
+			if err := envelope.Settings.Decode(&settings); err != nil || settings == nil {
+				return c, fmt.Errorf("invalid context source settings")
+			}
+			settings["deployment"] = name
+			if err := envelope.Settings.Encode(settings); err != nil {
+				return c, fmt.Errorf("cannot prepare context source settings")
+			}
 			group := c.Sources[source]
 			if group.Connections == nil {
 				group.Connections = map[string]d.Connection{}

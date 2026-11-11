@@ -5,7 +5,7 @@ import d "github.com/zilliztech/woodpecker/diagnostics"
 type Module struct{}
 
 func (Module) Descriptor() d.Descriptor {
-	result := d.Descriptor{Source: "prometheus", Issue: 460, RequiredSettings: []string{"endpoint", "deployment", "match_labels"}, Profiles: []d.Profile{}}
+	result := d.Descriptor{Source: "prometheus", Issue: 460, RequiredSettings: []string{"endpoint", "match_labels"}, Profiles: []d.Profile{}}
 	for _, scope := range []string{"wp", "milvus", "e2e"} {
 		for _, flow := range []string{"write", "read"} {
 			stage := "append"

@@ -447,10 +447,14 @@ func TestExplicitComponentSelectionManualSourcesAndValidation(t *testing.T) {
 	cfg := configuration(t, srv.URL, false, false)
 	q := request()
 	q.Target = ""
-	q.Bindings = &Bindings{Server: &Scope{Name: "standalone server", MetricsEndpoint: srv.URL, Deployment: "fixture", MetricLabels: map[string]string{"cluster": "fixture"}, NodeID: "n"}}
+	q.Bindings = &Bindings{Server: &Scope{Name: "standalone server", Context: "my-context", MetricsEndpoint: srv.URL, MetricLabels: map[string]string{"cluster": "fixture"}, NodeID: "n"}}
 	report := Run(context.Background(), cfg, q, nil)
 	require.Equal(t, "completed", report.Status)
 	require.NotEmpty(t, report.Checks)
+	for _, observation := range report.Observations {
+		require.Equal(t, "my-context", observation.Target.Deployment)
+		require.NotContains(t, observation.Query.Expression, "my-context", "context names are not metric selectors")
+	}
 	for _, item := range report.Checks {
 		for _, def := range Definitions(report.Policy) {
 			if def.ID == item.ID {

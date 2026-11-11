@@ -11,7 +11,7 @@ import (
 func CheckConnection(ctx context.Context, conn d.Connection) d.ConnectionCheck {
 	s, err := settingsFor(conn, atomicPlan)
 	if err != nil {
-		return d.FailedConnection("invalid_connection_settings", err.Error(), "Review the Prometheus address, deployment and deployment labels in this form or server context.")
+		return d.FailedConnection("invalid_connection_settings", err.Error(), "Review the Prometheus address and population labels in this form or server context.")
 	}
 	token, user, password, err := auth(s)
 	if err != nil {

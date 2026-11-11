@@ -19,7 +19,7 @@ func TestSettingsAndCapabilityBoundaries(t *testing.T) {
 	for _, modify := range []func(*Settings){
 		func(s *Settings) { s.Endpoint = "http://user:sentinel-secret@host" },
 		func(s *Settings) { s.Endpoint = "http://host?password=sentinel-secret" },
-		func(s *Settings) { s.Deployment = "" }, func(s *Settings) { s.MatchLabels = nil },
+		func(s *Settings) { s.Deployment = strings.Repeat("x", 257) }, func(s *Settings) { s.MatchLabels = nil },
 		func(s *Settings) { s.MatchLabels["instance"] = "reserved" },
 		func(s *Settings) { s.Limits.MaxSamples = 1 }, func(s *Settings) { s.Limits.TimeoutMS = 0 },
 		func(s *Settings) { s.Policy.LatencyMS["unknown"] = 1 }, func(s *Settings) { s.Policy.LatencyMS["wp.append"] = 0 },

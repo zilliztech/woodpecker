@@ -12,7 +12,7 @@ import (
 type PersistenceModule struct{}
 
 func (PersistenceModule) Descriptor() d.Descriptor {
-	desc := d.Descriptor{Source: "prometheus", Issue: 465, RequiredSettings: []string{"endpoint", "deployment", "match_labels"}}
+	desc := d.Descriptor{Source: "prometheus", Issue: 465, RequiredSettings: []string{"endpoint", "match_labels"}}
 	for _, scope := range []string{"milvus", "e2e"} {
 		desc.Profiles = append(desc.Profiles, d.Profile{ID: scope + ".persistence.steps.metrics", Version: 1, Scope: scope, Flow: "write", Stage: "persistence", Modes: []string{"live", "historical"}, TargetFields: []string{"deployment", "instance"}, Description: "Persistence/flush/checkpoint source facts; WP maintenance remains parallel unassociated context"})
 	}

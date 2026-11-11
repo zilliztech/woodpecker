@@ -9,7 +9,6 @@ contexts:
         # Use the selected data source UID, not the dashboard UID or Explore URL.
         # The same proxy path works with a Prometheus-compatible VictoriaMetrics source.
         endpoint: https://grafana.example/api/datasources/proxy/uid/YOUR_DATASOURCE_UID
-        deployment: remote-wp
         # The variable must be available to the process starting wp webui/diag.
         # The token itself is never a YAML value or URL query parameter.
         bearer_token_env: WP_GRAFANA_TOKEN

@@ -47,11 +47,9 @@ contexts:
     observability:
       prometheus:
         endpoint: http://127.0.0.1:9090
-        deployment: local
         match_labels: {namespace: woodpecker}
       trace:
         endpoint: http://127.0.0.1:16686
-        deployment: local
         services: {woodpecker: wp_server}
         search: {service: woodpecker}
       grafana: http://127.0.0.1:3000
@@ -63,8 +61,9 @@ Use `WOODPECKER_CLI_CONFIG=/path/to/cli.yaml`, or pass `--config` to `diag`,
 `report` and `webui`. The normal CLI context selection still applies. Restart `wp webui` after editing
 `cli.yaml`; assessment files are loaded for each diagnostic run.
 Context configuration contains server addresses, host maps, Kubernetes settings
-and evidence connections. It does not contain tenant metadata prefixes, bucket,
-root path or log namespace. Those are explicit inputs to applicable commands.
+and evidence connections. The context name identifies the environment; a separate
+`deployment` setting is not required for Metrics or Trace. It does not contain
+tenant metadata prefixes, bucket, root path or log namespace. Those are explicit inputs to applicable commands.
 
 ### Direct Prometheus connection
 
@@ -79,7 +78,6 @@ contexts:
     observability:
       prometheus:
         endpoint: http://127.0.0.1:9099
-        deployment: local
         match_labels: {namespace: milvus-stack}
       grafana: http://127.0.0.1:3000
     agent:
@@ -102,7 +100,6 @@ observability:
   prometheus:
     endpoint: https://grafana.example/api/datasources/proxy/uid/YOUR_DATASOURCE_UID
     bearer_token_env: WP_GRAFANA_TOKEN
-    deployment: remote-wp
     match_labels:
       cluster: YOUR_CLUSTER
       namespace: YOUR_NAMESPACE
@@ -139,10 +136,13 @@ not a copy of Grafana's expanded All/regex selectors. A shared namespace may
 contain multiple clusters or WP service instances: use the actual `cluster` and
 `woodpecker_id` labels when present. WP client metrics may live in a different
 tenant namespace from the service pool; that association remains explicit.
-`deployment` is a local connection/population name, not an automatic PromQL
-label selector. Node ID and log filters are per-run parameters, not context
-defaults. A successful connection check confirms query access; a diagnosis
-still needs matching series for the chosen labels, filters and incident window.
+The context name identifies the environment in reports; no separate
+`deployment` setting is needed. Older files containing that field remain
+readable, but the context name takes precedence. This name is not a PromQL
+selector: actual population isolation comes from `match_labels`. Node ID and log
+filters are per-run parameters, not context defaults. A successful connection
+check confirms query access; a diagnosis still needs matching series for the
+chosen labels, filters and incident window.
 VictoriaMetrics responses declaring `isPartial: true` are rejected as incomplete
 evidence rather than assessed as a complete population. Missing instrumentation
 and zero completed operations remain distinct from connection failures.

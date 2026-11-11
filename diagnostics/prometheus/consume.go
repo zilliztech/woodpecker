@@ -12,7 +12,7 @@ import (
 type ConsumeModule struct{}
 
 func (ConsumeModule) Descriptor() d.Descriptor {
-	desc := d.Descriptor{Source: "prometheus", Issue: 464, RequiredSettings: []string{"endpoint", "deployment", "match_labels"}}
+	desc := d.Descriptor{Source: "prometheus", Issue: 464, RequiredSettings: []string{"endpoint", "match_labels"}}
 	for _, scope := range []string{"milvus", "e2e"} {
 		desc.Profiles = append(desc.Profiles, d.Profile{ID: scope + ".consume.steps.metrics", Version: 1, Scope: scope, Flow: "read", Stage: "consume", Modes: []string{"live", "historical"}, TargetFields: []string{"deployment", "instance"}, Description: "Scanner, subscription and visibility source facts; WP retrieval stays unassociated context, not per-reader progress"})
 	}

@@ -16,8 +16,8 @@ import (
 
 type Settings struct {
 	Endpoint             string            `yaml:"endpoint"`
-	Deployment           string            `yaml:"deployment"`
-	Services             map[string]string `yaml:"services"` // Exact service name -> component role.
+	Deployment           string            `yaml:"deployment,omitempty"` // Runtime context label; accepts legacy source settings.
+	Services             map[string]string `yaml:"services"`             // Exact service name -> component role.
 	MatchTags            map[string]string `yaml:"match_tags,omitempty"`
 	Search               Search            `yaml:"search,omitempty"`
 	RequestIDTag         string            `yaml:"request_id_tag,omitempty"`
@@ -67,8 +67,8 @@ func settings(c d.Connection) (Settings, error) {
 		return s, fmt.Errorf("invalid Jaeger settings (values withheld)")
 	}
 	u, err := url.Parse(s.Endpoint)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || s.Deployment == "" || !bounded(s.Deployment) || len(s.Services) == 0 || len(s.Services) > 32 || len(s.MatchTags) > 16 {
-		return s, fmt.Errorf("Jaeger requires an HTTP(S) query base without credentials/query/fragment, a deployment and exact service bindings")
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !bounded(s.Deployment) || len(s.Services) == 0 || len(s.Services) > 32 || len(s.MatchTags) > 16 {
+		return s, fmt.Errorf("Jaeger requires an HTTP(S) query base without credentials/query/fragment and exact service bindings")
 	}
 	for name, role := range s.Services {
 		if name == "" || !bounded(name) || !d.Has([]string{"proxy", "streamingnode", "querynode", "segcore", "wp_client", "wp_server", "other"}, role) {

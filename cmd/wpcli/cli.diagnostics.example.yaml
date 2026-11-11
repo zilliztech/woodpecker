@@ -12,13 +12,11 @@ contexts:
     observability:
       prometheus:
         endpoint: http://127.0.0.1:9090
-        deployment: local
         match_labels: {namespace: woodpecker}
         # Optional when the direct Prometheus API requires a Bearer token:
         # bearer_token_env: WP_PROMETHEUS_TOKEN
       trace:
         endpoint: http://127.0.0.1:16686
-        deployment: local
         services: {wp-client: wp_client, woodpecker: wp_server}
         search: {service: woodpecker}
         # Only define these mappings if the instrumentation emits these tags.

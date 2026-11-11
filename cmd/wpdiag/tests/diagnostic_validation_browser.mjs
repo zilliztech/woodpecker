@@ -99,11 +99,14 @@ try{
  assert(await evaluate('validateDiagnosticInputs()'),'valid fixed incident window');
  // Manual source population fields and invalid JSON are validated next to their inputs.
  await set(prom,'http://127.0.0.1:18090');
- await evaluate(`(()=>{initialBindings().client.deployment='';initialBindings().client.metric_labels={};renderDiagnosticBindings(true);render();})()`);
+ await evaluate(`(()=>{initialBindings().client.metric_labels={};renderDiagnosticBindings(true);render();})()`);
  await click('#run');
- assert.equal(await evaluate('document.querySelector("#diagnostic-observability [data-binding-key=deployment]").getAttribute("aria-invalid")'),'true');
+ assert.equal(await evaluate('document.querySelectorAll("#diagnostic-observability [data-binding-key=deployment]").length'),0,'manual sources need no duplicate environment name');
  assert.equal(await evaluate('document.querySelector("#diagnostic-observability [data-binding-labels]").getAttribute("aria-invalid")'),'true');
  await shot('diagnostics-manual-source-validation');
+ assert(await evaluate(`(()=>{initialBindings().client.metric_labels={cluster:'fixture'};renderDiagnosticBindings(true);render();return validateDiagnosticInputs();})()`),'manual endpoint with population labels is valid without deployment');
+ assert.equal(await evaluate('diagnosticRequestBindings().client.context'),'fixture-a');
+ assert.equal(await evaluate('Object.hasOwn(diagnosticRequestBindings().client,"deployment")'),false);
  assert.equal(await evaluate('document.querySelector("#milvus")'),null);
  assert(await evaluate('state.catalog.checks.every(c=>!c.name.includes("milvus"))'));
  await set(prom,addresses.metrics);await set('#mode','scenario');await set('#scenario','slow-writes');

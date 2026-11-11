@@ -58,7 +58,7 @@ def verify_explorer_rules(binary, path, root, endpoint):
         paths[source] = root / ('custom ' + source + '.yaml')
         paths[source].write_text(json.dumps({'schema_version': 'wp.diag.rules/v1', 'source': source,
                                             'evidence': {key: {'threshold': threshold}}}))
-    scope = {'metrics_endpoint': endpoint, 'trace_endpoint': endpoint, 'deployment': 'fixture',
+    scope = {'metrics_endpoint': endpoint, 'trace_endpoint': endpoint, 'context': 'fixture-a',
              'metric_labels': {'cluster': 'fixture'}, 'trace_service': 'wp', 'node_id': 'node-1'}
     receipts = []
     for enabled in [('metrics',), ('trace',), ('metrics', 'trace')]:
@@ -256,8 +256,8 @@ def main():
             root = Path(folder)
             endpoint = f'http://127.0.0.1:{backend.server_port}'
             config = {'current-context': 'fixture-a', 'contexts': {}, 'diagnostics': {
-                'sources': {'metrics': {'connections': {'local': {'settings': {'endpoint': endpoint, 'deployment': 'fixture', 'match_labels': {'cluster': 'fixture'}}}}},
-                            'trace': {'connections': {'local': {'settings': {'endpoint': endpoint, 'deployment': 'fixture', 'services': {'wp': 'wp_server'}, 'search': {'service': 'wp'}}}}}},
+                'sources': {'metrics': {'connections': {'local': {'settings': {'endpoint': endpoint, 'match_labels': {'cluster': 'fixture'}}}}},
+                            'trace': {'connections': {'local': {'settings': {'endpoint': endpoint, 'services': {'wp': 'wp_server'}, 'search': {'service': 'wp'}}}}}},
                 'targets': {}}, 'agent': {'enabled': False}}
             config['diagnostics']['sources']['trace']['connections']['tagged'] = copy.deepcopy(config['diagnostics']['sources']['trace']['connections']['local'])
             config['diagnostics']['sources']['trace']['connections']['tagged']['settings'].update({'identity_tags': {'log_ns':'wp.log_ns','log_id':'wp.log_id','node_id':'wp.node_id','reader_name':'wp.reader_name'}, 'request_id_tag':'request.id'})
