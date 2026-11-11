@@ -120,7 +120,7 @@ Object N: [IndexRecord...] [FooterRecord]
 
 Recovery only needs to read the tail of each object to get BlockLastRecord.
 
-## Intermediate writer checkpoints
+## Intermediate segment checkpoints
 
 The object-storage writer periodically persists `checkpoint.blk`, containing
 indexes for the contiguous prefix of successfully acknowledged blocks. The

@@ -37,8 +37,8 @@ const (
 )
 
 // New snapshots the committed prefix into the protobuf checkpoint schema.
-func New(blocks []*codec.IndexRecord) *pb.WriterCheckpoint {
-	cp := &pb.WriterCheckpoint{
+func New(blocks []*codec.IndexRecord) *pb.SegmentCheckpoint {
+	cp := &pb.SegmentCheckpoint{
 		FormatVersion: formatVersion,
 		BlockIndexes:  make([]*pb.CheckpointBlockIndex, len(blocks)),
 		LastEntryId:   -1,
@@ -62,7 +62,7 @@ func New(blocks []*codec.IndexRecord) *pb.WriterCheckpoint {
 
 // Serialize encodes [WPCP magic][protobuf payload][CRC32 IEEE, little endian].
 // Only the thin framing is custom; all snapshot fields use protobuf encoding.
-func Serialize(cp *pb.WriterCheckpoint) ([]byte, error) {
+func Serialize(cp *pb.SegmentCheckpoint) ([]byte, error) {
 	if err := validate(cp); err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func Serialize(cp *pb.WriterCheckpoint) ([]byte, error) {
 // Parse verifies framing, integrity and recovery invariants before exposing a
 // snapshot. Unsupported or invalid hints are safe to discard and scan in full.
 // Unknown protobuf fields are retained, including when Serialize is called again.
-func Parse(raw []byte) (*pb.WriterCheckpoint, error) {
+func Parse(raw []byte) (*pb.SegmentCheckpoint, error) {
 	if len(raw) < len(magic)+checksumSize || !bytes.Equal(raw[:len(magic)], magic[:]) {
 		return nil, fmt.Errorf("invalid checkpoint framing")
 	}
@@ -89,7 +89,7 @@ func Parse(raw []byte) (*pb.WriterCheckpoint, error) {
 	if crc32.ChecksumIEEE(payload) != checksum {
 		return nil, fmt.Errorf("checkpoint checksum mismatch")
 	}
-	cp := &pb.WriterCheckpoint{}
+	cp := &pb.SegmentCheckpoint{}
 	if err := proto.Unmarshal(payload, cp); err != nil {
 		return nil, fmt.Errorf("unmarshal checkpoint: %w", err)
 	}
@@ -100,7 +100,7 @@ func Parse(raw []byte) (*pb.WriterCheckpoint, error) {
 }
 
 // Indexes converts a validated checkpoint to the existing in-memory WAL index.
-func Indexes(cp *pb.WriterCheckpoint) []*codec.IndexRecord {
+func Indexes(cp *pb.SegmentCheckpoint) []*codec.IndexRecord {
 	blocks := make([]*codec.IndexRecord, len(cp.BlockIndexes))
 	for i, block := range cp.BlockIndexes {
 		blocks[i] = &codec.IndexRecord{
@@ -114,7 +114,7 @@ func Indexes(cp *pb.WriterCheckpoint) []*codec.IndexRecord {
 	return blocks
 }
 
-func validate(cp *pb.WriterCheckpoint) error {
+func validate(cp *pb.SegmentCheckpoint) error {
 	if cp == nil {
 		return fmt.Errorf("nil checkpoint")
 	}

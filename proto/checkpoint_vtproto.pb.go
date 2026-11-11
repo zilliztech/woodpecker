@@ -19,11 +19,11 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-func (m *WriterCheckpoint) CloneVT() *WriterCheckpoint {
+func (m *SegmentCheckpoint) CloneVT() *SegmentCheckpoint {
 	if m == nil {
-		return (*WriterCheckpoint)(nil)
+		return (*SegmentCheckpoint)(nil)
 	}
-	r := new(WriterCheckpoint)
+	r := new(SegmentCheckpoint)
 	r.FormatVersion = m.FormatVersion
 	r.LastEntryId = m.LastEntryId
 	r.TotalSize = m.TotalSize
@@ -41,7 +41,7 @@ func (m *WriterCheckpoint) CloneVT() *WriterCheckpoint {
 	return r
 }
 
-func (m *WriterCheckpoint) CloneMessageVT() proto.Message {
+func (m *SegmentCheckpoint) CloneMessageVT() proto.Message {
 	return m.CloneVT()
 }
 
@@ -66,7 +66,7 @@ func (m *CheckpointBlockIndex) CloneMessageVT() proto.Message {
 	return m.CloneVT()
 }
 
-func (this *WriterCheckpoint) EqualVT(that *WriterCheckpoint) bool {
+func (this *SegmentCheckpoint) EqualVT(that *SegmentCheckpoint) bool {
 	if this == that {
 		return true
 	} else if this == nil || that == nil {
@@ -101,8 +101,8 @@ func (this *WriterCheckpoint) EqualVT(that *WriterCheckpoint) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *WriterCheckpoint) EqualMessageVT(thatMsg proto.Message) bool {
-	that, ok := thatMsg.(*WriterCheckpoint)
+func (this *SegmentCheckpoint) EqualMessageVT(thatMsg proto.Message) bool {
+	that, ok := thatMsg.(*SegmentCheckpoint)
 	if !ok {
 		return false
 	}
@@ -139,7 +139,7 @@ func (this *CheckpointBlockIndex) EqualMessageVT(thatMsg proto.Message) bool {
 	}
 	return this.EqualVT(that)
 }
-func (m *WriterCheckpoint) MarshalVT() (dAtA []byte, err error) {
+func (m *SegmentCheckpoint) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -152,12 +152,12 @@ func (m *WriterCheckpoint) MarshalVT() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *WriterCheckpoint) MarshalToVT(dAtA []byte) (int, error) {
+func (m *SegmentCheckpoint) MarshalToVT(dAtA []byte) (int, error) {
 	size := m.SizeVT()
 	return m.MarshalToSizedBufferVT(dAtA[:size])
 }
 
-func (m *WriterCheckpoint) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+func (m *SegmentCheckpoint) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m == nil {
 		return 0, nil
 	}
@@ -257,7 +257,7 @@ func (m *CheckpointBlockIndex) MarshalToSizedBufferVT(dAtA []byte) (int, error) 
 	return len(dAtA) - i, nil
 }
 
-func (m *WriterCheckpoint) SizeVT() (n int) {
+func (m *SegmentCheckpoint) SizeVT() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -307,7 +307,7 @@ func (m *CheckpointBlockIndex) SizeVT() (n int) {
 	return n
 }
 
-func (m *WriterCheckpoint) UnmarshalVT(dAtA []byte) error {
+func (m *SegmentCheckpoint) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -330,10 +330,10 @@ func (m *WriterCheckpoint) UnmarshalVT(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: WriterCheckpoint: wiretype end group for non-group")
+			return fmt.Errorf("proto: SegmentCheckpoint: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: WriterCheckpoint: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: SegmentCheckpoint: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -597,7 +597,7 @@ func (m *CheckpointBlockIndex) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *WriterCheckpoint) UnmarshalVTUnsafe(dAtA []byte) error {
+func (m *SegmentCheckpoint) UnmarshalVTUnsafe(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -620,10 +620,10 @@ func (m *WriterCheckpoint) UnmarshalVTUnsafe(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: WriterCheckpoint: wiretype end group for non-group")
+			return fmt.Errorf("proto: SegmentCheckpoint: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: WriterCheckpoint: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: SegmentCheckpoint: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:

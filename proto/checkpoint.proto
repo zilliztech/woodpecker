@@ -20,11 +20,12 @@ package woodpecker.proto.checkpoint;
 
 option go_package = "github.com/zilliztech/woodpecker/proto";
 
-// WriterCheckpoint is a best-effort recovery hint for an unfinished segment.
+// SegmentCheckpoint is an intermediate recovery checkpoint of the durable,
+// contiguous block prefix of a segment. It is a best-effort recovery hint.
 // Add compatible fields without changing format_version. Reserve removed field
 // numbers and names; never reuse them. A change to recovery semantics that old
 // readers cannot safely ignore requires a new format_version and full-scan fallback.
-message WriterCheckpoint {
+message SegmentCheckpoint {
   uint32 format_version = 1;
   repeated CheckpointBlockIndex block_indexes = 2;
   // -1 for an empty checkpoint; otherwise the last indexed entry ID.

@@ -1,8 +1,9 @@
-# Protobuf writer checkpoints
+# Intermediate segment checkpoints
 
-`checkpoint.blk` is a best-effort recovery hint for an unfinished object-storage
-segment. Its typed schema is defined in [`proto/checkpoint.proto`](../../../../proto/checkpoint.proto).
-`WriterCheckpoint` stores the format version, the contiguous block indexes,
+An intermediate segment checkpoint (`checkpoint.blk`) is a best-effort recovery
+hint for an unfinished object-storage segment. Its typed schema is defined in
+[`proto/checkpoint.proto`](../../../../proto/checkpoint.proto).
+`SegmentCheckpoint` stores the format version, the contiguous block indexes,
 last entry ID and total indexed object size. `CheckpointBlockIndex` describes
 block number, offset, size and entry range directly; no JSON section table or
 embedded WAL index/footer records are used.

@@ -56,7 +56,7 @@ func checkpointTestData(t *testing.T, blocks []*codec.IndexRecord) []byte {
 	return data
 }
 
-func uncheckedCheckpointTestData(t *testing.T, cp *pb.WriterCheckpoint) []byte {
+func uncheckedCheckpointTestData(t *testing.T, cp *pb.SegmentCheckpoint) []byte {
 	t.Helper()
 	payload, err := gproto.Marshal(cp)
 	require.NoError(t, err)

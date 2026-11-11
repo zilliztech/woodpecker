@@ -59,7 +59,7 @@ func TestProtobufCheckpointRoundTrip(t *testing.T) {
 		require.Equal(t, uint64(count*1024), cp.TotalSize)
 		require.Equal(t, int64(count*100-1), cp.LastEntryId)
 		// The payload is an ordinary typed protobuf message, not encoded WAL records.
-		decoded := &pb.WriterCheckpoint{}
+		decoded := &pb.SegmentCheckpoint{}
 		require.NoError(t, proto.Unmarshal(raw[4:len(raw)-4], decoded))
 		require.True(t, proto.Equal(cp, decoded))
 	}
@@ -112,21 +112,21 @@ func TestProtobufCheckpointRejectsCorruption(t *testing.T) {
 }
 
 func TestProtobufCheckpointRejectsInvalidSnapshots(t *testing.T) {
-	cases := map[string]func(*pb.WriterCheckpoint){
-		"unsupported version": func(cp *pb.WriterCheckpoint) { cp.FormatVersion++ },
-		"missing version":     func(cp *pb.WriterCheckpoint) { cp.FormatVersion = 0 },
-		"nil block":           func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[0] = nil },
-		"block gap":           func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].BlockNumber++ },
-		"duplicate block":     func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].BlockNumber = 0 },
-		"negative block":      func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[0].BlockNumber = -1 },
-		"wrong offset":        func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].StartOffset++ },
-		"zero size":           func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[0].BlockSize = 0 },
-		"entry gap":           func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].FirstEntryId++ },
-		"entry overlap":       func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].FirstEntryId-- },
-		"negative entry":      func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[0].FirstEntryId = -1 },
-		"invalid entry range": func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].LastEntryId = 0 },
-		"wrong size":          func(cp *pb.WriterCheckpoint) { cp.TotalSize++ },
-		"wrong LAC":           func(cp *pb.WriterCheckpoint) { cp.LastEntryId++ },
+	cases := map[string]func(*pb.SegmentCheckpoint){
+		"unsupported version": func(cp *pb.SegmentCheckpoint) { cp.FormatVersion++ },
+		"missing version":     func(cp *pb.SegmentCheckpoint) { cp.FormatVersion = 0 },
+		"nil block":           func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[0] = nil },
+		"block gap":           func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[1].BlockNumber++ },
+		"duplicate block":     func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[1].BlockNumber = 0 },
+		"negative block":      func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[0].BlockNumber = -1 },
+		"wrong offset":        func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[1].StartOffset++ },
+		"zero size":           func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[0].BlockSize = 0 },
+		"entry gap":           func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[1].FirstEntryId++ },
+		"entry overlap":       func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[1].FirstEntryId-- },
+		"negative entry":      func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[0].FirstEntryId = -1 },
+		"invalid entry range": func(cp *pb.SegmentCheckpoint) { cp.BlockIndexes[1].LastEntryId = 0 },
+		"wrong size":          func(cp *pb.SegmentCheckpoint) { cp.TotalSize++ },
+		"wrong LAC":           func(cp *pb.SegmentCheckpoint) { cp.LastEntryId++ },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -149,7 +149,7 @@ func TestProtobufCheckpointRejectsInvalidSnapshots(t *testing.T) {
 func TestProtobufCheckpointRequiresExplicitEmptyLAC(t *testing.T) {
 	// An omitted scalar defaults to zero in proto3, which must not fabricate an
 	// entry in an empty segment. Our writer persists -1 explicitly.
-	payload, err := proto.Marshal(&pb.WriterCheckpoint{FormatVersion: 1})
+	payload, err := proto.Marshal(&pb.SegmentCheckpoint{FormatVersion: 1})
 	require.NoError(t, err)
 	_, err = Parse(frameTestPayload(payload))
 	require.Error(t, err)
