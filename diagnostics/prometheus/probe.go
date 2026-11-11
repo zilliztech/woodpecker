@@ -19,14 +19,18 @@ func CheckConnection(ctx context.Context, conn d.Connection) d.ConnectionCheck {
 	}
 	return d.CheckQueryAPI(ctx, conn, s.Endpoint, "/api/v1/query", url.Values{"query": {"vector(1)"}, "timeout": {"3s"}}, s.TLS, token, user, password, func(body []byte) d.ConnectionCheck {
 		var v struct {
-			Status string `json:"status"`
-			Data   struct {
+			Status    string `json:"status"`
+			IsPartial bool   `json:"isPartial"`
+			Data      struct {
 				Type   string            `json:"resultType"`
 				Result []json.RawMessage `json:"result"`
 			} `json:"data"`
 		}
 		if json.Unmarshal(body, &v) != nil || v.Status != "success" || v.Data.Type != "vector" || len(v.Data.Result) != 1 {
 			return d.FailedConnection("invalid_prometheus_response", "The endpoint did not return a successful Prometheus test query.", "Verify its query API and query permissions.")
+		}
+		if v.IsPartial {
+			return d.FailedConnection("partial_response", "The query API returned an explicitly partial result.", "Check backend storage availability; partial results cannot establish complete evidence.")
 		}
 		return d.ConnectionCheck{Status: "ready", Code: "query_api_ready", Message: "Prometheus query API is accessible.", Next: "Metric availability for the selected filters and time range is checked when you run a diagnosis."}
 	})

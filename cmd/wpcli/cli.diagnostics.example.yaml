@@ -1,4 +1,5 @@
 # Environment connections only. Client metadata and check scope are run inputs.
+# For a Grafana-proxied Metrics-only context, see cli.grafana.example.yaml.
 current-context: local
 contexts:
   local:
@@ -13,6 +14,8 @@ contexts:
         endpoint: http://127.0.0.1:9090
         deployment: local
         match_labels: {namespace: woodpecker}
+        # Optional when the direct Prometheus API requires a Bearer token:
+        # bearer_token_env: WP_PROMETHEUS_TOKEN
       trace:
         endpoint: http://127.0.0.1:16686
         deployment: local

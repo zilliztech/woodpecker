@@ -66,6 +66,87 @@ Context configuration contains server addresses, host maps, Kubernetes settings
 and evidence connections. It does not contain tenant metadata prefixes, bucket,
 root path or log namespace. Those are explicit inputs to applicable commands.
 
+### Direct Prometheus connection
+
+For the Helm example, use the actual local address reported by
+`stack.sh connections`. Its default is port 9099; other installations may use
+9090 or a reverse-proxy prefix. Configure the query API, not a `/metrics` exporter:
+
+```yaml
+current-context: local
+contexts:
+  local:
+    observability:
+      prometheus:
+        endpoint: http://127.0.0.1:9099
+        deployment: local
+        match_labels: {namespace: milvus-stack}
+      grafana: http://127.0.0.1:3000
+    agent:
+      enabled: false
+```
+
+Replace `milvus-stack` with the actual exported namespace label. This context can
+run historical Metrics checks without WP Admin or Trace. Add their connections
+only when using the corresponding capabilities. If the query API needs a Bearer
+token, add `bearer_token_env: WP_PROMETHEUS_TOKEN` to its Prometheus connection
+and set that environment variable before starting `wp`.
+
+### Prometheus or VictoriaMetrics through Grafana
+
+Copy [cli.grafana.example.yaml](../../../cmd/wpcli/cli.grafana.example.yaml)
+to a private file. Its essential connection settings are:
+
+```yaml
+observability:
+  prometheus:
+    endpoint: https://grafana.example/api/datasources/proxy/uid/YOUR_DATASOURCE_UID
+    bearer_token_env: WP_GRAFANA_TOKEN
+    deployment: remote-wp
+    match_labels:
+      cluster: YOUR_CLUSTER
+      namespace: YOUR_NAMESPACE
+      woodpecker_id: YOUR_WP_SERVICE_ID
+  grafana: https://grafana.example
+```
+
+Use the UID of the Prometheus-compatible data source actually selected in the
+dashboard or Explore view. A dashboard UID, a different data source UID, or the
+dashboard URL with `orgId`/variable query parameters does not select that API.
+`observability.grafana` is a navigation link; the tool queries
+`observability.prometheus.endpoint`. Do not append `/api/v1/query` to the base
+URL: the collector adds the query path. Grafana proxies it to the selected source.
+
+Supply a service-account token with access to query that data source. Set it in
+the same environment that launches the CLI or WebUI, for example by using an
+interactive hidden prompt rather than recording the token in a shell command:
+
+```bash
+export WP_GRAFANA_TOKEN="$(python3 -c 'import getpass; print(getpass.getpass("Grafana token: "))')"
+bin/wp webui --config /path/to/cli.yaml --listen 127.0.0.1:8795
+```
+
+The YAML contains only the environment variable's name. The server reads the
+value and sends `Authorization: Bearer ...` to Grafana. The token is not part of
+the URL, metric labels or diagnostic reports. The WebUI address field has no
+token editor: select the configured context to use its saved authentication,
+then click **Check connections**. **View cli.yaml** shows the environment
+reference, not the token. Restart the process after changing its environment
+or context configuration. Trace is optional and can remain unconfigured.
+
+`match_labels` are exact equality selectors for the intended metric population,
+not a copy of Grafana's expanded All/regex selectors. A shared namespace may
+contain multiple clusters or WP service instances: use the actual `cluster` and
+`woodpecker_id` labels when present. WP client metrics may live in a different
+tenant namespace from the service pool; that association remains explicit.
+`deployment` is a local connection/population name, not an automatic PromQL
+label selector. Node ID and log filters are per-run parameters, not context
+defaults. A successful connection check confirms query access; a diagnosis
+still needs matching series for the chosen labels, filters and incident window.
+VictoriaMetrics responses declaring `isPartial: true` are rejected as incomplete
+evidence rather than assessed as a complete population. Missing instrumentation
+and zero completed operations remain distinct from connection failures.
+
 Client Metrics must also be scraped. A server's `/metrics` does not contain all
 client Metrics. Configure population labels that identify the intended exporters;
 sharing Kubernetes or Grafana does not prove a client/server or tenant association.
