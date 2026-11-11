@@ -359,7 +359,13 @@ type SegmentSyncPolicyConfig struct {
 	RetryInterval              DurationMilliseconds `yaml:"retryInterval"`
 	MaxFlushSize               ByteSize             `yaml:"maxFlushSize"`
 	MaxFlushThreads            int                  `yaml:"maxFlushThreads"`
-	CheckpointThreshold        int                  `yaml:"checkpointThreshold"`
+	// CheckpointThreshold controls optional recovery acceleration for the direct
+	// object-storage backend (minio/default) used by embedded MinIO-compatible mode.
+	// It counts newly committed blocks per asynchronous checkpoint; <= 0 disables
+	// writes, while existing valid checkpoints may still accelerate recovery.
+	// Missing or unusable hints fall back to the normal full block scan.
+	// Local and service/staged writers do not use this setting.
+	CheckpointThreshold int `yaml:"checkpointThreshold"`
 }
 
 type SegmentCompactionPolicy struct {

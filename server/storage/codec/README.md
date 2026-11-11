@@ -122,10 +122,17 @@ Recovery only needs to read the tail of each object to get BlockLastRecord.
 
 ## Intermediate segment checkpoints
 
-The object-storage writer periodically persists `checkpoint.blk`, containing
-indexes for the contiguous prefix of successfully acknowledged blocks. The
-`segmentSyncPolicy.checkpointThreshold` setting controls the number of new
-blocks that triggers a snapshot (default: 10; zero disables writes).
+The direct object-storage writer used by embedded MinIO-compatible mode
+(`storage.type: minio/default`) can persist `checkpoint.blk` as an optional
+recovery accelerator. It contains indexes for the contiguous prefix of
+successfully acknowledged blocks. Local and service/staged writers do not
+use this checkpoint setting.
+
+`segmentSyncPolicy.checkpointThreshold` controls the number of newly committed
+blocks that triggers an asynchronous snapshot (default: 10). Smaller thresholds
+write more often and normally shorten the recovery tail; larger values reduce
+checkpoint writes. Zero or negative disables new checkpoint writes, while
+recovery may still use an existing valid checkpoint.
 
 Recovery prefers `footer.blk`. If the segment is unfinished, it tries the
 checkpoint and scans only the subsequent contiguous block sequence, stopping

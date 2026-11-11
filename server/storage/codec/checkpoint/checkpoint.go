@@ -15,6 +15,10 @@
 // See the license texts for specific language governing permissions and
 // limitations under the licenses.
 
+// Package checkpoint encodes optional intermediate segment recovery hints for
+// the direct object-storage backend used by embedded MinIO-compatible mode.
+// An unavailable or invalid hint can be discarded in favor of full block-scan
+// recovery; checkpoint persistence is not part of data acknowledgment.
 package checkpoint
 
 import (

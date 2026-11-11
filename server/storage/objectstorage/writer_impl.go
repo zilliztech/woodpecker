@@ -89,7 +89,9 @@ type MinioFileWriter struct {
 	headerWritten    atomic.Bool         // Ensure a header record is written before writing data
 	lastModifiedTime atomic.Int64        // lastModifiedTime
 
-	// checkpoint – coalescing async writer
+	// Optional recovery hints for the direct object-storage writer used by
+	// embedded MinIO-compatible mode. Checkpoint writes do not gate data acks;
+	// missing or unusable hints fall back to normal full block-scan recovery.
 	checkpointThreshold       int
 	lastCheckpointBlockCount  atomic.Int32
 	checkpointMu              sync.Mutex           // guards checkpointRunning and checkpointPendingSnapshot
@@ -211,7 +213,11 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 	return segmentFileWriter, nil
 }
 
-// recoverFromStorage attempts to recover the writer state from existing objects in MinIO
+// recoverFromStorageUnsafe restores state from the finalized footer when present.
+// For embedded MinIO-compatible object storage, a checkpoint is an optional fast
+// path: missing or unusable hints fall back to the normal contiguous block scan.
+// The hint is not required for recovery; errors in the authoritative storage
+// path are still returned, and a canceled context stops recovery.
 func (f *MinioFileWriter) recoverFromStorageUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromStorage")
 	defer sp.End()
@@ -1300,6 +1306,8 @@ func (f *MinioFileWriter) fastFlushSuccessUnsafe(ctx context.Context, blockInfo 
 // in-flight, the new snapshot simply replaces the pending one so that multiple
 // triggers coalesce into a single follow-up PutObject call. This keeps the
 // mechanism lightweight even under very high write throughput.
+// The threshold controls hint generation, not durability or recovery correctness;
+// <= 0 disables new writes without preventing recovery from an existing hint.
 func (f *MinioFileWriter) maybeWriteCheckpointAsync(ctx context.Context) {
 	if f.checkpointThreshold <= 0 || f.closed.Load() || f.finalized.Load() || f.inRecoveryMode.Load() {
 		return

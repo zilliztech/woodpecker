@@ -130,7 +130,13 @@ woodpecker:
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
       maxFlushSize: 2000000 # Maximum size of a block in bytes to flush, default is 2MB, which is the best practice for cloud storage
       maxFlushThreads: 32 # Maximum number of threads to flush data
-      checkpointThreshold: 10 # Number of new blocks that triggers a checkpoint write, used for fast recovery
+      # Optional recovery acceleration for embedded MinIO-compatible object storage
+      # (storage.type: minio/default); local and service/staged writers ignore this.
+      # Newly committed blocks per async checkpoint; <= 0 disables checkpoint writes.
+      # Smaller values write more often and normally shorten the recovery tail.
+      # Existing valid checkpoints can still be read when writes are disabled.
+      # Missing or unusable checkpoints fall back to normal full block-scan recovery.
+      checkpointThreshold: 10
     syncScheduler:
       # Workers in the node's shared flush pool, as a plain count. Each one blocks in fdatasync
       # while a flush is in flight, so this bounds concurrent syncs, not CPU usage -- a worker
