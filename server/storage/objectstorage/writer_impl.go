@@ -702,8 +702,6 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 		return id, err
 	}
 
-	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-
 	// trigger sync by max buffer entries num
 	currentBuffer := f.buffer.Load()
 	pendingAppendId := currentBuffer.ExpectedNextEntryId.Load() + 1
@@ -1217,7 +1215,6 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 			blockKey := getBlockKey(f.segmentFileKey, blockId)
 			blockRawData := f.serialize(blockId, blockDataBuff)
 			actualDataSize = int64(len(blockRawData))
-			logger.Ctx(ctx).Debug("serialized block data", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int64("originalBlockSize", blockSize), zap.Int64("actualDataSize", actualDataSize))
 			flushErr := retry.Do(ctx,
 				func() error {
 					putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, blockKey, bytes.NewReader(blockRawData), actualDataSize, f.logNs, f.logIdStr)
@@ -1251,7 +1248,7 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 				},
 				err: flushErr,
 			}
-			logger.Ctx(ctx).Debug("complete flush one block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockDataBuff)), zap.Int64("blockSize", blockSize))
+			logger.Ctx(ctx).Debug("complete flush one block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockDataBuff)), zap.Int64("blockSize", blockSize), zap.Int64("actualDataSize", actualDataSize))
 			if flushErr == nil {
 				status = "success"
 			}

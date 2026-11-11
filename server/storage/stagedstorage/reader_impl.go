@@ -604,6 +604,9 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatchAdv")
 	defer sp.End()
 	logger.Ctx(ctx).Debug("ReadNextBatchAdv called",
+		zap.Int64("logId", r.logId),
+		zap.Int64("segId", r.segId),
+		zap.String("filePath", r.filePath),
 		zap.Int64("startEntryID", opt.StartEntryID),
 		zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 		zap.Bool("isIncompleteFile", r.isIncompleteFile.Load()),
@@ -726,12 +729,6 @@ func (r *StagedFileReaderAdv) readAtUnsafe(ctx context.Context, offset int64, le
 		}
 		return nil, err
 	}
-
-	logger.Ctx(ctx).Debug("data read successfully",
-		zap.String("filePath", r.filePath),
-		zap.Int64("offset", offset),
-		zap.Int("requestedLength", length),
-		zap.Int("actualRead", n))
 
 	return data[:n], nil
 }
@@ -1064,7 +1061,7 @@ func (r *StagedFileReaderAdv) readDataBlocksWithFinalizedFooterLACUnsafe(ctx con
 		if readErr != nil {
 			// if EOF, maybe the file is at the beginning or EOF, otherwise it maybe in error state
 			if io.EOF == readErr {
-				logger.Ctx(ctx).Info("no block header to read currently, retry later", zap.String("filePath", r.filePath), zap.Int64("blockNumber", currentBlockID))
+				logger.Ctx(ctx).Debug("no block header to read currently, retry later", zap.String("filePath", r.filePath), zap.Int64("blockNumber", currentBlockID))
 			} else {
 				logger.Ctx(ctx).Warn("Failed to read block header", zap.String("filePath", r.filePath), zap.Int64("blockNumber", currentBlockID), zap.Error(readErr))
 			}
@@ -1196,12 +1193,21 @@ func (r *StagedFileReaderAdv) readDataBlocksWithFinalizedFooterLACUnsafe(ctx con
 	if len(entries) == 0 {
 		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.logNs, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Debug("no entry extracted",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
 			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int64("lac", currentLAC),
 			zap.Int64("lastReadEntryID", lastReadEntryID),
-			zap.Int("entriesReturned", len(entries)))
+			zap.Int("entriesReturned", len(entries)),
+			zap.Int64("startBlockID", startBlockID),
+			zap.Int64("startBlockOffset", startBlockOffset),
+			zap.Int64("endOffset", startOffset),
+			zap.Int64("finalizedFooterLAC", finalizedFooterLAC),
+			zap.Any("lastBlockInfo", lastBlockInfo),
+			zap.Bool("hasDataReadError", hasDataReadError),
+			zap.Duration("duration", time.Since(startTime)))
 		if !hasDataReadError {
 			if r.isIncompleteFile.Load() && r.footer == nil && (opt.StartEntryID <= currentLAC || currentLAC == -1) {
 				// when node restart or no lac received ever, currentLAC == -1, means can't read here, should retry to read other nodes
@@ -1244,10 +1250,21 @@ func (r *StagedFileReaderAdv) readDataBlocksWithFinalizedFooterLACUnsafe(ctx con
 		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
 	} else {
 		logger.Ctx(ctx).Debug("read data blocks completed",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
 			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int("entriesReturned", len(entries)),
+			zap.Int64("readBytes", readBytes),
+			zap.Int64("startBlockID", startBlockID),
+			zap.Int64("startBlockOffset", startBlockOffset),
+			zap.Int64("endOffset", startOffset),
+			zap.Int64("lac", currentLAC),
+			zap.Int64("lastReadEntryID", lastReadEntryID),
+			zap.Int64("finalizedFooterLAC", finalizedFooterLAC),
+			zap.Bool("hasDataReadError", hasDataReadError),
+			zap.Duration("duration", time.Since(startTime)),
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
 
@@ -1353,12 +1370,6 @@ func (r *StagedFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, bloc
 		return err // Stop reading on error, return what we have so far
 	}
 
-	logger.Ctx(ctx).Debug("block data integrity verified successfully",
-		zap.String("filePath", r.filePath),
-		zap.Int64("blockNumber", currentBlockID),
-		zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
-		zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
-		zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 	return nil
 }
 

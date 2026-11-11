@@ -1055,10 +1055,6 @@ func (l *logStore) collectIdleSegmentProcessorsUnsafe(ctx context.Context, maxId
 		processor processor.SegmentProcessor
 	}
 
-	logger.Ctx(ctx).Info("Scanning for idle segment processors to cleanup",
-		zap.Duration("maxIdleTime", maxIdleTime),
-		zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
-
 	// The cleanup strategy: for each log, except for the segment with the highest segmentId,
 	// any processor with idle time exceeding the threshold can be cleaned up
 	for logKey, processors := range l.segmentProcessors {
@@ -1107,9 +1103,6 @@ func (l *logStore) collectIdleSegmentProcessorsUnsafe(ctx context.Context, maxId
 		logger.Ctx(ctx).Info("Idle segment processors collected for cleanup",
 			zap.Int("cleanedCount", len(toRemove)),
 			zap.Int("remainingProcessors", l.getTotalProcessorCountUnsafe()))
-	} else {
-		logger.Ctx(ctx).Info("Idle segment processor cleanup completed - no processors to clean",
-			zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
 	}
 
 	return toRemove
@@ -1171,10 +1164,8 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 	// Phase 1: Under lock, collect idle processors and remove from map
 	l.spMu.Lock()
 
-	totalProcessors := l.getTotalProcessorCountUnsafe()
-
-	logger.Ctx(l.ctx).Info("Starting background cleanup cycle",
-		zap.Int("totalProcessors", totalProcessors),
+	logger.Ctx(l.ctx).Debug("Starting background cleanup cycle",
+		zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()),
 		zap.Duration("maxIdleTime", maxIdleTime))
 
 	idleProcessors := l.collectIdleSegmentProcessorsUnsafe(l.ctx, maxIdleTime)

@@ -417,12 +417,7 @@ func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64
 		notifyValue = entryId
 	}
 	if result >= 0 {
-		logger.Ctx(ctx).Debug("Notified pending entry directly with success",
-			zap.Int64("logId", logId),
-			zap.Int64("segId", segId),
-			zap.Int64("entryId", entryId),
-			zap.Int64("notifyValue", notifyValue),
-			zap.String("ch", fmt.Sprintf("%p", notifyChan)))
+		// Successful notifications are covered by the flush and writer callbacks.
 	} else {
 		logger.Ctx(ctx).Debug("Notified pending entry directly with fail",
 			zap.Int64("logId", logId),
@@ -441,12 +436,5 @@ func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64
 			zap.Int64("notifyValue", notifyValue),
 			zap.String("ch", fmt.Sprintf("%p", notifyChan)),
 			zap.Error(sendErr))
-	} else {
-		logger.Ctx(ctx).Debug("Notified pending entry finish",
-			zap.Int64("logId", logId),
-			zap.Int64("segId", segId),
-			zap.Int64("entryId", entryId),
-			zap.Int64("notifyValue", notifyValue),
-			zap.String("ch", fmt.Sprintf("%p", notifyChan)))
 	}
 }

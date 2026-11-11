@@ -149,7 +149,7 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
 		logger.Ctx(ctx).Debug("write log entry callback",
-			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err), zap.Duration("duration", time.Since(start)))
 		// Invalidate the writer BEFORE delivering the result so that the next synchronous
 		// Write observes isWriterValid=false and fails fast. Channel send happens-after
 		// onWriterInvalidated, so the receiver is guaranteed to see the invalidation.
@@ -232,7 +232,7 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 	}
 
 	callback := func(segmentId int64, entryId int64, err error) {
-		logger.Ctx(ctx).Debug("write log entry callback exec", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Debug("write log entry callback exec", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err), zap.Duration("duration", time.Since(start)))
 		if err == nil {
 			metrics.WpLogWriterBytesWritten.WithLabelValues(l.logNs, l.logIdStr).Add(float64(len(bytes)))
 			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logNs, l.logIdStr, "write_async", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -362,7 +362,7 @@ func (l *internalLogWriterImpl) runAuditor() {
 				sweepOrphanedCleanupRecords(ctx, l.logHandle, l.cleanupManager, l.notifyManager, segmentMetaList)
 			}
 
-			logger.Ctx(ctx).Info("Auditor segment processing completed",
+			logger.Ctx(ctx).Debug("Auditor segment processing completed",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Int("segmentsProcessed", cs.processed),
@@ -378,7 +378,7 @@ func (l *internalLogWriterImpl) runAuditor() {
 			}
 
 			auditDuration := time.Since(startAudit)
-			logger.Ctx(ctx).Info("Auditor cycle completed",
+			logger.Ctx(ctx).Debug("Auditor cycle completed",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Duration("duration", auditDuration),

@@ -59,11 +59,6 @@ func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResul
 	defer l.mu.RUnlock()
 	select {
 	case l.ch <- result:
-		logger.Ctx(ctx).Debug("sent result to local channel",
-			zap.String("identifier", l.identifier),
-			zap.Int64("syncedId", result.SyncedId),
-			zap.String("ch", fmt.Sprintf("%p", l)),
-			zap.Error(result.Err))
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -84,12 +79,6 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 			// Channel was closed externally
 			return nil, werr.ErrAppendOpResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
 		}
-		logger.Ctx(ctx).Debug("read result from local channel",
-			zap.String("identifier", l.identifier),
-			zap.Int64("syncedId", r.SyncedId),
-			zap.String("ch", fmt.Sprintf("%p", l)),
-			zap.Error(r.Err),
-		)
 		return r, nil
 	case <-ctx.Done():
 		return nil, readBudgetExhausted(ctx.Err())
@@ -120,9 +109,6 @@ func (l *LocalResultChannel) Close(ctx context.Context) error {
 		l.closed = true
 		close(l.ch)
 	}
-	logger.Ctx(ctx).Debug("closed local result channel and underlying channel",
-		zap.String("identifier", l.identifier),
-		zap.String("ch", fmt.Sprintf("%p", l)))
 	return nil
 }
 

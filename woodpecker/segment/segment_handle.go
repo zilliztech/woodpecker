@@ -405,8 +405,6 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 	}
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
-		op := element.Value.(*AppendOp)
-		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 
