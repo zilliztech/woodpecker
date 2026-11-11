@@ -139,5 +139,6 @@ The threshold is therefore not a strict upper bound on recovery work. Checkpoint
 contents scale with the number of indexed blocks, while per-block reads normally
 scale with the uncheckpointed tail.
 
-See [checkpoint format](checkpoint/README.md) for the self-describing container
-and compatibility with legacy raw index-plus-footer snapshots.
+Checkpoints use typed protobuf messages with a fixed magic and payload CRC.
+See [checkpoint format](checkpoint/README.md) for the schema, evolution rules and
+full-scan fallback for earlier unpublished checkpoint formats.

@@ -18,277 +18,139 @@
 package checkpoint
 
 import (
+	"encoding/binary"
+	"hash/crc32"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
+	pb "github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-// buildBlockIndexesSection replicates the output of serializeFooterAndIndexes
-// using only the public codec API, so the checkpoint package tests have no
-// dependency on objectstorage.
-func buildBlockIndexesSection(records []*codec.IndexRecord) []byte {
-	var out []byte
-	var totalSize int64
-	lastEntryID := int64(-1)
-	for _, r := range records {
-		out = append(out, codec.EncodeRecord(r)...)
-		totalSize += int64(r.BlockSize)
-		lastEntryID = r.LastEntryID
-	}
-	footer := &codec.FooterRecord{
-		TotalBlocks:  int32(len(records)),
-		TotalRecords: uint32(len(records)),
-		TotalSize:    uint64(totalSize),
-		IndexOffset:  0,
-		IndexLength:  uint32(len(out)),
-		Version:      codec.FormatVersion,
-		Flags:        0,
-		LAC:          lastEntryID,
-	}
-	out = append(out, codec.EncodeRecord(footer)...)
-	return out
-}
-
-func makeTestIndexRecords(n int) []*codec.IndexRecord {
-	records := make([]*codec.IndexRecord, n)
-	for i := 0; i < n; i++ {
-		records[i] = &codec.IndexRecord{
-			BlockNumber:  int32(i),
-			StartOffset:  int64(i),
-			BlockSize:    1024,
-			FirstEntryID: int64(i * 100),
-			LastEntryID:  int64(i*100 + 99),
+func testIndexes(count int) []*codec.IndexRecord {
+	blocks := make([]*codec.IndexRecord, count)
+	for i := range blocks {
+		blocks[i] = &codec.IndexRecord{
+			BlockNumber: int32(i), StartOffset: int64(i), BlockSize: 1024,
+			FirstEntryID: int64(i * 100), LastEntryID: int64(i*100 + 99),
 		}
 	}
-	return records
+	return blocks
 }
 
-func TestSerializeAndParse(t *testing.T) {
-	cp := New()
-	cp.SetSection(SectionBlockIndexes, []byte{10, 20, 30, 40, 50})
-	raw := cp.Serialize()
-
-	require.True(t, IsFormat(raw))
-
-	cp2, err := Parse(raw)
-	require.NoError(t, err)
-	assert.Equal(t, 1, cp2.Meta.Version)
-	require.Len(t, cp2.Meta.Sections, 1)
-	assert.Equal(t, SectionBlockIndexes, cp2.Meta.Sections[0].Type)
-
-	got, err := cp2.GetSectionData(SectionBlockIndexes)
-	require.NoError(t, err)
-	assert.Equal(t, []byte{10, 20, 30, 40, 50}, got)
+// Make independently framed fixtures, including invalid protobuf snapshots
+// that Serialize intentionally refuses to write.
+func frameTestPayload(payload []byte) []byte {
+	raw := append([]byte("WPCP"), payload...)
+	return binary.LittleEndian.AppendUint32(raw, crc32.ChecksumIEEE(payload))
 }
 
-func TestIsFormat(t *testing.T) {
-	t.Run("new format", func(t *testing.T) {
-		cp := New()
-		cp.SetSection(SectionBlockIndexes, []byte{1})
-		assert.True(t, IsFormat(cp.Serialize()))
-	})
-
-	t.Run("random data", func(t *testing.T) {
-		assert.False(t, IsFormat([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
-	})
-
-	t.Run("too small", func(t *testing.T) {
-		assert.False(t, IsFormat([]byte{1, 2, 3}))
-	})
-
-	t.Run("empty", func(t *testing.T) {
-		assert.False(t, IsFormat(nil))
-	})
-}
-
-func TestParse_Errors(t *testing.T) {
-	t.Run("too small", func(t *testing.T) {
-		_, err := Parse([]byte{1, 2, 3})
-		assert.Error(t, err)
-	})
-
-	t.Run("bad magic", func(t *testing.T) {
-		data := make([]byte, 16)
-		copy(data[12:], []byte("NOPE"))
-		_, err := Parse(data)
-		assert.Error(t, err)
-	})
-
-	t.Run("metaLength exceeds data", func(t *testing.T) {
-		data := make([]byte, trailerSize)
-		data[0] = 0xE7
-		data[1] = 0x03
-		copy(data[4:], magic[:])
-		_, err := Parse(data)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "exceeds data size")
-	})
-}
-
-func TestGetSectionData_Errors(t *testing.T) {
-	cp := New()
-	cp.SetSection(SectionBlockIndexes, []byte{1, 2, 3})
-
-	t.Run("not found", func(t *testing.T) {
-		_, err := cp.GetSectionData(99)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
-	})
-
-	t.Run("found", func(t *testing.T) {
-		got, err := cp.GetSectionData(SectionBlockIndexes)
+func TestProtobufCheckpointRoundTrip(t *testing.T) {
+	for _, count := range []int{0, 1, 635} {
+		blocks := testIndexes(count)
+		raw, err := Serialize(New(blocks))
 		require.NoError(t, err)
-		assert.Equal(t, []byte{1, 2, 3}, got)
-	})
-}
-
-func TestSetSection_Replace(t *testing.T) {
-	const (
-		typeA SectionType = 10
-		typeB SectionType = 20
-	)
-
-	cp := New()
-	cp.SetSection(typeA, []byte{1, 2})
-	cp.SetSection(typeB, []byte{3, 4, 5})
-	cp.SetSection(typeA, []byte{6, 7, 8, 9}) // replace typeA
-
-	require.Len(t, cp.Meta.Sections, 2)
-
-	// typeB should come first (preserved order), then new typeA appended at end.
-	assert.Equal(t, typeB, cp.Meta.Sections[0].Type)
-	assert.Equal(t, typeA, cp.Meta.Sections[1].Type)
-
-	got, err := cp.GetSectionData(typeA)
-	require.NoError(t, err)
-	assert.Equal(t, []byte{6, 7, 8, 9}, got)
-
-	got, err = cp.GetSectionData(typeB)
-	require.NoError(t, err)
-	assert.Equal(t, []byte{3, 4, 5}, got)
-
-	// Round-trip through serialize/parse.
-	raw := cp.Serialize()
-	cp2, err := Parse(raw)
-	require.NoError(t, err)
-
-	got, err = cp2.GetSectionData(typeA)
-	require.NoError(t, err)
-	assert.Equal(t, []byte{6, 7, 8, 9}, got)
-
-	got, err = cp2.GetSectionData(typeB)
-	require.NoError(t, err)
-	assert.Equal(t, []byte{3, 4, 5}, got)
-}
-
-func TestFindSection(t *testing.T) {
-	meta := &Meta{
-		Version: 1,
-		Sections: []Section{
-			{Type: SectionBlockIndexes, Offset: 0, Length: 100},
-		},
-	}
-
-	assert.NotNil(t, meta.FindSection(SectionBlockIndexes))
-	assert.Nil(t, meta.FindSection(99))
-}
-
-func TestCheckpointWithBlockIndexes(t *testing.T) {
-	blocks := makeTestIndexRecords(5)
-	sectionBytes := buildBlockIndexesSection(blocks)
-
-	cp := New()
-	cp.SetSection(SectionBlockIndexes, sectionBytes)
-	raw := cp.Serialize()
-
-	require.True(t, IsFormat(raw))
-
-	// Parse back and extract section.
-	cp2, err := Parse(raw)
-	require.NoError(t, err)
-
-	got, err := cp2.GetSectionData(SectionBlockIndexes)
-	require.NoError(t, err)
-	assert.Equal(t, sectionBytes, got)
-
-	// Parse footer from section data.
-	maxFooterSize := codec.GetMaxFooterReadSize()
-	footerData := got[len(got)-maxFooterSize:]
-	footer, err := codec.ParseFooterFromBytes(footerData)
-	require.NoError(t, err)
-	assert.Equal(t, int32(5), footer.TotalBlocks)
-
-	// Parse index records.
-	actualFooterSize := codec.RecordHeaderSize + codec.GetFooterRecordSize(footer.Version)
-	idxData := got[:len(got)-actualFooterSize]
-	recordSize := codec.RecordHeaderSize + codec.IndexRecordSize
-	assert.Equal(t, 5*recordSize, len(idxData))
-
-	for i := 0; i < 5; i++ {
-		rec, decErr := codec.DecodeRecord(idxData[i*recordSize:])
-		require.NoError(t, decErr)
-		idx := rec.(*codec.IndexRecord)
-		assert.Equal(t, int32(i), idx.BlockNumber)
-		assert.Equal(t, int64(i*100), idx.FirstEntryID)
-		assert.Equal(t, int64(i*100+99), idx.LastEntryID)
+		cp, err := Parse(raw)
+		require.NoError(t, err)
+		require.Equal(t, blocks, Indexes(cp))
+		require.Equal(t, uint64(count*1024), cp.TotalSize)
+		require.Equal(t, int64(count*100-1), cp.LastEntryId)
+		// The payload is an ordinary typed protobuf message, not encoded WAL records.
+		decoded := &pb.WriterCheckpoint{}
+		require.NoError(t, proto.Unmarshal(raw[4:len(raw)-4], decoded))
+		require.True(t, proto.Equal(cp, decoded))
 	}
 }
 
-func TestBackwardCompatibility(t *testing.T) {
-	// Old-format data: raw footer+indexes with no CKPT trailer.
-	oldData := buildBlockIndexesSection(makeTestIndexRecords(3))
-	require.False(t, IsFormat(oldData))
-
-	// Verify old data can still be parsed by the same footer+index logic.
-	minFooterSize := codec.RecordHeaderSize + codec.FooterRecordSizeV5
-	require.Greater(t, len(oldData), minFooterSize)
-
-	maxFooterSize := codec.GetMaxFooterReadSize()
-	footerData := oldData[len(oldData)-maxFooterSize:]
-	footer, err := codec.ParseFooterFromBytes(footerData)
+func TestProtobufCheckpointPreservesUnknownFields(t *testing.T) {
+	cp := New(testIndexes(2))
+	extra := protowire.AppendTag(nil, 100, protowire.BytesType)
+	extra = protowire.AppendString(extra, "future checkpoint metadata")
+	cp.ProtoReflect().SetUnknown(extra)
+	blockExtra := protowire.AppendTag(nil, 101, protowire.VarintType)
+	blockExtra = protowire.AppendVarint(blockExtra, 42)
+	cp.BlockIndexes[0].ProtoReflect().SetUnknown(blockExtra)
+	raw, err := Serialize(cp)
 	require.NoError(t, err)
-	assert.Equal(t, int32(3), footer.TotalBlocks)
-
-	actualFooterSize := codec.RecordHeaderSize + codec.GetFooterRecordSize(footer.Version)
-	idxData := oldData[:len(oldData)-actualFooterSize]
-	recordSize := codec.RecordHeaderSize + codec.IndexRecordSize
-	assert.Equal(t, 3*recordSize, len(idxData))
-
-	for i := 0; i < 3; i++ {
-		rec, decErr := codec.DecodeRecord(idxData[i*recordSize:])
-		require.NoError(t, decErr)
-		idx := rec.(*codec.IndexRecord)
-		assert.Equal(t, int32(i), idx.BlockNumber)
-	}
+	parsed, err := Parse(raw)
+	require.NoError(t, err)
+	require.Equal(t, extra, []byte(parsed.ProtoReflect().GetUnknown()))
+	require.Equal(t, blockExtra, []byte(parsed.BlockIndexes[0].ProtoReflect().GetUnknown()))
+	rewritten, err := Serialize(parsed)
+	require.NoError(t, err)
+	parsedAgain, err := Parse(rewritten)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(cp, parsedAgain))
 }
 
-func TestParseRejectsInvalidSections(t *testing.T) {
-	for name, section := range map[string]Section{
-		"negative offset": {Type: SectionBlockIndexes, Offset: -1, Length: 1},
-		"negative length": {Type: SectionBlockIndexes, Offset: 0, Length: -1},
-		"past end":        {Type: SectionBlockIndexes, Offset: 2, Length: 2},
-		"overflow":        {Type: SectionBlockIndexes, Offset: int(^uint(0) >> 1), Length: 1},
-	} {
+func TestProtobufCheckpointRejectsCorruption(t *testing.T) {
+	valid, err := Serialize(New(testIndexes(2)))
+	require.NoError(t, err)
+	corrupted := append([]byte(nil), valid...)
+	corrupted[5] ^= 1
+	badChecksum := append([]byte(nil), valid...)
+	badChecksum[len(badChecksum)-1] ^= 1
+	cases := map[string][]byte{
+		"empty":              nil,
+		"short framing":      []byte("WPCP"),
+		"wrong magic":        append([]byte("NOPE"), valid[4:]...),
+		"truncated":          valid[:len(valid)-1],
+		"corrupted payload":  corrupted,
+		"corrupted checksum": badChecksum,
+		"invalid protobuf":   frameTestPayload([]byte{0xff}),
+		"empty protobuf":     frameTestPayload(nil),
+		"trailing bytes":     append(append([]byte(nil), valid...), 0),
+	}
+	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
-			cp := New()
-			cp.SetSection(SectionBlockIndexes, []byte{1, 2, 3})
-			cp.Meta.Sections[0] = section
-			require.NotPanics(t, func() {
-				_, err := cp.GetSectionData(SectionBlockIndexes)
-				require.Error(t, err)
-				_, err = Parse(cp.Serialize())
-				require.Error(t, err)
-			})
+			require.NotPanics(t, func() { _, err := Parse(data); require.Error(t, err) })
 		})
 	}
 }
 
-func TestParseRejectsUnsupportedVersion(t *testing.T) {
-	cp := New()
-	cp.Meta.Version = 2
-	_, err := Parse(cp.Serialize())
-	require.ErrorContains(t, err, "unsupported checkpoint version")
+func TestProtobufCheckpointRejectsInvalidSnapshots(t *testing.T) {
+	cases := map[string]func(*pb.WriterCheckpoint){
+		"unsupported version": func(cp *pb.WriterCheckpoint) { cp.FormatVersion++ },
+		"missing version":     func(cp *pb.WriterCheckpoint) { cp.FormatVersion = 0 },
+		"nil block":           func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[0] = nil },
+		"block gap":           func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].BlockNumber++ },
+		"duplicate block":     func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].BlockNumber = 0 },
+		"negative block":      func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[0].BlockNumber = -1 },
+		"wrong offset":        func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].StartOffset++ },
+		"zero size":           func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[0].BlockSize = 0 },
+		"entry gap":           func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].FirstEntryId++ },
+		"entry overlap":       func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].FirstEntryId-- },
+		"negative entry":      func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[0].FirstEntryId = -1 },
+		"invalid entry range": func(cp *pb.WriterCheckpoint) { cp.BlockIndexes[1].LastEntryId = 0 },
+		"wrong size":          func(cp *pb.WriterCheckpoint) { cp.TotalSize++ },
+		"wrong LAC":           func(cp *pb.WriterCheckpoint) { cp.LastEntryId++ },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			cp := New(testIndexes(2))
+			mutate(cp)
+			_, err := Serialize(cp)
+			require.Error(t, err)
+			payload, err := proto.Marshal(cp)
+			require.NoError(t, err)
+			_, err = Parse(frameTestPayload(payload))
+			require.Error(t, err)
+		})
+	}
+	_, err := Serialize(nil)
+	require.Error(t, err)
+	_, err = Serialize(New([]*codec.IndexRecord{nil}))
+	require.Error(t, err)
+}
+
+func TestProtobufCheckpointRequiresExplicitEmptyLAC(t *testing.T) {
+	// An omitted scalar defaults to zero in proto3, which must not fabricate an
+	// entry in an empty segment. Our writer persists -1 explicitly.
+	payload, err := proto.Marshal(&pb.WriterCheckpoint{FormatVersion: 1})
+	require.NoError(t, err)
+	_, err = Parse(frameTestPayload(payload))
+	require.Error(t, err)
 }

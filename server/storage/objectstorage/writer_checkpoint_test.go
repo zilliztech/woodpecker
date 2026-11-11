@@ -19,7 +19,9 @@ package objectstorage
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"sync/atomic"
 	"testing"
@@ -28,10 +30,12 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	gproto "google.golang.org/protobuf/proto"
 
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
+	pb "github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"github.com/zilliztech/woodpecker/server/storage/codec/checkpoint"
@@ -45,11 +49,19 @@ func checkpointTestIndexes(count int) []*codec.IndexRecord {
 	return blocks
 }
 
-func checkpointTestData(blocks []*codec.IndexRecord) []byte {
-	section, _ := serializeFooterAndIndexes(context.Background(), blocks)
-	cp := checkpoint.New()
-	cp.SetSection(checkpoint.SectionBlockIndexes, section)
-	return cp.Serialize()
+func checkpointTestData(t *testing.T, blocks []*codec.IndexRecord) []byte {
+	t.Helper()
+	data, err := checkpoint.Serialize(checkpoint.New(blocks))
+	require.NoError(t, err)
+	return data
+}
+
+func uncheckedCheckpointTestData(t *testing.T, cp *pb.WriterCheckpoint) []byte {
+	t.Helper()
+	payload, err := gproto.Marshal(cp)
+	require.NoError(t, err)
+	raw := append([]byte("WPCP"), payload...)
+	return binary.LittleEndian.AppendUint32(raw, crc32.ChecksumIEEE(payload))
 }
 
 func checkpointTestWriter(t *testing.T, raw []byte) (*MinioFileWriter, *mocks_objectstorage.ObjectStorage) {
@@ -99,7 +111,7 @@ func TestCheckpointRecoveryOnlyReadsTail(t *testing.T) {
 	// only the tail length, even when the checkpoint covers hundreds of blocks.
 	for _, prefix := range []int{0, 10, 635} {
 		t.Run(fmt.Sprint(prefix), func(t *testing.T) {
-			w, m := checkpointTestWriter(t, checkpointTestData(checkpointTestIndexes(prefix)))
+			w, m := checkpointTestWriter(t, checkpointTestData(t, checkpointTestIndexes(prefix)))
 			for i := int64(prefix); i < int64(prefix+5); i++ {
 				expectCheckpointTailBlock(t, w, m, i)
 			}
@@ -114,7 +126,7 @@ func TestCheckpointRecoveryOnlyReadsTail(t *testing.T) {
 }
 
 func TestCheckpointRecoveryFenceRetryReplacesIndexes(t *testing.T) {
-	w, m := checkpointTestWriter(t, checkpointTestData(checkpointTestIndexes(1)))
+	w, m := checkpointTestWriter(t, checkpointTestData(t, checkpointTestIndexes(1)))
 	// Before the fence, block 1 is absent. The old owner then wins its PUT;
 	// retry recovery sees that block and must replace, rather than append to,
 	// the previous recovered index snapshot.
@@ -138,7 +150,7 @@ func TestCheckpointRecoveryFenceRetryReplacesIndexes(t *testing.T) {
 func TestCheckpointRecoveryStopsAtGapOrFence(t *testing.T) {
 	for _, fenced := range []bool{false, true} {
 		t.Run(fmt.Sprint(fenced), func(t *testing.T) {
-			w, m := checkpointTestWriter(t, checkpointTestData(checkpointTestIndexes(2)))
+			w, m := checkpointTestWriter(t, checkpointTestData(t, checkpointTestIndexes(2)))
 			// A later object may exist due to concurrent uploads. It must never be
 			// read past the first missing block or fence (unexpected calls fail).
 			expectCheckpointEnd(w, m, 2, fenced)
@@ -151,7 +163,7 @@ func TestCheckpointRecoveryStopsAtGapOrFence(t *testing.T) {
 }
 
 func TestCheckpointRecoveryFailureLeavesStateUntouched(t *testing.T) {
-	w, m := checkpointTestWriter(t, checkpointTestData(checkpointTestIndexes(1)))
+	w, m := checkpointTestWriter(t, checkpointTestData(t, checkpointTestIndexes(1)))
 	before := checkpointTestIndexes(3)
 	w.blockIndexes = before
 	w.lastEntryID.Store(2)
@@ -165,21 +177,32 @@ func TestCheckpointRecoveryFailureLeavesStateUntouched(t *testing.T) {
 
 func TestCheckpointRecoveryInvalidHintFallsBack(t *testing.T) {
 	blocks := checkpointTestIndexes(2)
-	raw, footer := serializeFooterAndIndexes(context.Background(), blocks)
+	raw := checkpointTestData(t, blocks)
 	corruptCRC := append([]byte(nil), raw...)
-	corruptCRC[codec.RecordHeaderSize+codec.IndexRecordSize+codec.RecordHeaderSize] ^= 0xff
-	hole := checkpointTestIndexes(2)
-	hole[1].BlockNumber = 2
-	hole[1].StartOffset = 2
-	wrongLAC := *footer
-	wrongLAC.LAC++
-	wrongLACData := append(append([]byte(nil), raw[:len(raw)-codec.RecordHeaderSize-codec.FooterRecordSize]...), codec.EncodeRecord(&wrongLAC)...)
+	corruptCRC[5] ^= 0xff
+	hole := checkpoint.New(blocks)
+	hole.BlockIndexes[1].BlockNumber = 2
+	hole.BlockIndexes[1].StartOffset = 2
+	wrongLAC := checkpoint.New(blocks)
+	wrongLAC.LastEntryId++
+	unknownVersion := checkpoint.New(blocks)
+	unknownVersion.FormatVersion++
+	legacyRaw, _ := serializeFooterAndIndexes(context.Background(), blocks)
+	legacyJSON := append([]byte(nil), legacyRaw...)
+	meta := []byte(fmt.Sprintf(`{"version":1,"sections":[{"type":1,"offset":0,"length":%d}]}`, len(legacyRaw)))
+	legacyJSON = append(legacyJSON, meta...)
+	legacyJSON = binary.LittleEndian.AppendUint32(legacyJSON, uint32(len(meta)))
+	legacyJSON = append(legacyJSON, []byte("CKPT")...)
 	cases := map[string][]byte{
 		"truncated":              {1, 2, 3},
-		"invalid index CRC":      corruptCRC,
-		"non-contiguous indexes": checkpointTestData(hole),
-		"wrong LAC":              wrongLACData,
+		"invalid protobuf CRC":   corruptCRC,
+		"non-contiguous indexes": uncheckedCheckpointTestData(t, hole),
+		"wrong LAC":              uncheckedCheckpointTestData(t, wrongLAC),
+		"unsupported version":    uncheckedCheckpointTestData(t, unknownVersion),
+		"legacy raw snapshot":    legacyRaw,
+		"legacy JSON snapshot":   legacyJSON,
 	}
+
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
 			w, m := checkpointTestWriter(t, data)
@@ -192,11 +215,10 @@ func TestCheckpointRecoveryInvalidHintFallsBack(t *testing.T) {
 	}
 }
 
-func TestCheckpointRecoveryLegacyAndEmpty(t *testing.T) {
+func TestCheckpointRecoveryEmptyAndCompletePrefix(t *testing.T) {
 	for _, count := range []int{0, 2} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			section, _ := serializeFooterAndIndexes(context.Background(), checkpointTestIndexes(count))
-			w, m := checkpointTestWriter(t, section)
+			w, m := checkpointTestWriter(t, checkpointTestData(t, checkpointTestIndexes(count)))
 			expectCheckpointEnd(w, m, int64(count), true)
 			require.NoError(t, w.recoverFromStorageUnsafe(context.Background()))
 			require.Len(t, w.blockIndexes, count)
@@ -226,14 +248,7 @@ func TestCheckpointWritesCoalesce(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			section, err := cp.GetSectionData(checkpoint.SectionBlockIndexes)
-			if err != nil {
-				return err
-			}
-			footer, err := codec.ParseFooterFromBytes(section)
-			if err != nil {
-				return err
-			}
+
 			if calls.Add(1) == 1 {
 				close(started)
 				select {
@@ -242,7 +257,7 @@ func TestCheckpointWritesCoalesce(t *testing.T) {
 					return ctx.Err()
 				}
 			}
-			written <- footer.TotalBlocks
+			written <- int32(len(cp.BlockIndexes))
 			return nil
 		},
 	)

@@ -375,8 +375,8 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 
 // recoverFromCheckpoint reads checkpoint.blk, restores blockIndexes from it,
 // then scans only the blocks written after the checkpoint, avoiding a full
-// sequential scan. It supports both the new self-describing format (with JSON
-// metadata trailer and "CKPT" magic) and the legacy raw footer+indexes format.
+// sequential scan. Invalid or unsupported checkpoint formats fall back to the
+// authoritative block scan in recoverFromStorageUnsafe.
 func (f *MinioFileWriter) recoverFromCheckpoint(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromCheckpoint")
 	defer sp.End()
@@ -399,69 +399,18 @@ func (f *MinioFileWriter) recoverFromCheckpoint(ctx context.Context) error {
 		return err
 	}
 
-	// Determine checkpoint format and extract the block_indexes section data.
-	var indexData []byte
-	if checkpoint.IsFormat(cpData) {
-		// New self-describing format with JSON metadata trailer.
-		cp, cpErr := checkpoint.Parse(cpData)
-		if cpErr != nil {
-			return fmt.Errorf("failed to parse checkpoint: %w", cpErr)
-		}
-		secData, secErr := cp.GetSectionData(checkpoint.SectionBlockIndexes)
-		if secErr != nil {
-			return fmt.Errorf("failed to get block_indexes section: %w", secErr)
-		}
-		indexData = secData
-	} else {
-		// Old format: raw footer+indexes (backward compatibility).
-		indexData = cpData
-	}
-
-	// Validate the entire checkpoint before publishing any recovered state. A
-	// malformed hint must fall back to the authoritative block sequence.
-	cpFooter, err := codec.ParseFooterFromBytes(indexData)
+	cp, err := checkpoint.Parse(cpData)
 	if err != nil {
-		return fmt.Errorf("failed to parse checkpoint footer: %w", err)
+		return err
 	}
-	actualFooterSize := codec.RecordHeaderSize + codec.GetFooterRecordSize(cpFooter.Version)
-	idxRecords := indexData[:len(indexData)-actualFooterSize]
-	recordSize := codec.RecordHeaderSize + codec.IndexRecordSize
-	if len(idxRecords)%recordSize != 0 || cpFooter.IndexOffset != 0 ||
-		uint64(cpFooter.IndexLength) != uint64(len(idxRecords)) ||
-		int64(cpFooter.TotalBlocks) != int64(len(idxRecords)/recordSize) {
-		return fmt.Errorf("inconsistent checkpoint index length or block count")
-	}
-
-	var recoveredIndexes []*codec.IndexRecord
-	var firstEntryID, lastEntryID, maxBlockID int64 = -1, -1, -1
-	var totalSize uint64
-	for offset := 0; offset < len(idxRecords); offset += recordSize {
-		record, decodeErr := codec.DecodeRecord(idxRecords[offset : offset+recordSize])
-		if decodeErr != nil {
-			return fmt.Errorf("invalid checkpoint index at offset %d: %w", offset, decodeErr)
-		}
-		indexRecord, ok := record.(*codec.IndexRecord)
-		if !ok {
-			return fmt.Errorf("unexpected checkpoint record type %d", record.Type())
-		}
-		if int64(indexRecord.BlockNumber) != maxBlockID+1 ||
-			indexRecord.StartOffset != int64(indexRecord.BlockNumber) ||
-			indexRecord.FirstEntryID < 0 || indexRecord.LastEntryID < indexRecord.FirstEntryID ||
-			(lastEntryID >= 0 && indexRecord.FirstEntryID != lastEntryID+1) {
-			return fmt.Errorf("non-contiguous checkpoint index for block %d", indexRecord.BlockNumber)
-		}
-		recoveredIndexes = append(recoveredIndexes, indexRecord)
-		if firstEntryID == -1 {
-			firstEntryID = indexRecord.FirstEntryID
-		}
-		lastEntryID = indexRecord.LastEntryID
-		maxBlockID = int64(indexRecord.BlockNumber)
-		totalSize += uint64(indexRecord.BlockSize)
-	}
-	if cpFooter.TotalSize != totalSize || (cpFooter.Version >= 6 && cpFooter.LAC != lastEntryID) {
-		return fmt.Errorf("inconsistent checkpoint size or LAC")
-	}
+	recoveredIndexes := checkpoint.Indexes(cp)
 	checkpointBlockCount := len(recoveredIndexes)
+	maxBlockID := int64(checkpointBlockCount) - 1
+	firstEntryID := int64(-1)
+	if checkpointBlockCount > 0 {
+		firstEntryID = recoveredIndexes[0].FirstEntryID
+	}
+	lastEntryID := cp.LastEntryId
 
 	logger.Ctx(ctx).Info("recovered checkpoint, scanning incremental blocks",
 		zap.String("segmentFileKey", f.segmentFileKey),
@@ -1407,14 +1356,12 @@ func (f *MinioFileWriter) writeCheckpointLoop(ctx context.Context) {
 		snapshotCount := int32(len(snapshot))
 		cpKey := getCheckpointBlockKey(f.segmentFileKey)
 
-		cp := checkpoint.New()
-		sectionData, _ := serializeFooterAndIndexes(ctx, snapshot)
-		cp.SetSection(checkpoint.SectionBlockIndexes, sectionData)
-		data := cp.Serialize()
-
-		writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := f.client.PutObject(writeCtx, f.bucket, cpKey, bytes.NewReader(data), int64(len(data)), f.logNs, f.logIdStr)
-		cancel()
+		data, err := checkpoint.Serialize(checkpoint.New(snapshot))
+		if err == nil {
+			writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err = f.client.PutObject(writeCtx, f.bucket, cpKey, bytes.NewReader(data), int64(len(data)), f.logNs, f.logIdStr)
+			cancel()
+		}
 
 		if err != nil {
 			logger.Ctx(ctx).Warn("failed to write checkpoint.blk (best-effort)",

@@ -2127,12 +2127,7 @@ func TestMinioFileWriter_CheckpointRecovery(t *testing.T) {
 		if parseErr != nil {
 			return false
 		}
-		section, sectionErr := cp.GetSectionData(checkpoint.SectionBlockIndexes)
-		if sectionErr != nil {
-			return false
-		}
-		footer, footerErr := codec.ParseFooterFromBytes(section)
-		return footerErr == nil && footer.TotalBlocks >= 900
+		return len(cp.BlockIndexes) >= 900
 	}, 10*time.Second, 10*time.Millisecond)
 	require.NoError(t, writer.Close(ctx))
 	footerKey := fmt.Sprintf("%s/%d/%d/footer.blk", baseDir, logID, segmentID)

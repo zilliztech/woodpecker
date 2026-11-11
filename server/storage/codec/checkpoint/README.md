@@ -1,94 +1,61 @@
-# Checkpoint Format
+# Protobuf writer checkpoints
 
-The `checkpoint` package defines a self-describing, extensible binary container
-used to persist intermediate writer state (e.g. `checkpoint.blk`). It enables
-fast recovery by storing a snapshot of progress so that only the delta since the
-last checkpoint needs to be replayed.
+`checkpoint.blk` is a best-effort recovery hint for an unfinished object-storage
+segment. Its typed schema is defined in [`proto/checkpoint.proto`](../../../../proto/checkpoint.proto).
+`WriterCheckpoint` stores the format version, the contiguous block indexes,
+last entry ID and total indexed object size. `CheckpointBlockIndex` describes
+block number, offset, size and entry range directly; no JSON section table or
+embedded WAL index/footer records are used.
 
-## Binary Layout
-
-The format is **tail-anchored** — readers start from the last 8 bytes and work
-backwards, similar to many file/container formats:
+## Framing and integrity
 
 ```
-+---------------------------+
-| Section 1 data            |
-+---------------------------+
-| Section 2 data            |
-+---------------------------+
-| ...                       |
-+---------------------------+
-| JSON metadata  (UTF-8)    |
-+---------------------------+
-| meta length    (4B LE)    |
-+---------------------------+
-| magic "CKPT"   (4B)       |
-+---------------------------+
+["WPCP" (4 bytes)][protobuf payload][CRC32 IEEE of payload (4 bytes, little endian)]
 ```
 
-**Trailer** (last 8 bytes, fixed):
+The fixed magic identifies the format. The checksum detects payload corruption
+and truncation independently of protobuf decoding. The object itself supplies
+the length, so there is no offset table or custom metadata-length field.
 
-| Field       | Size    | Description                           |
-|-------------|---------|---------------------------------------|
-| meta length | 4 bytes | Little-endian uint32, JSON byte count |
-| magic       | 4 bytes | `0x43 0x4B 0x50 0x54` ("CKPT")       |
+`Parse` verifies the frame, checksum and protobuf encoding, then checks:
 
-## JSON Metadata
+- Supported `format_version` (currently 1).
+- Block numbers and offsets form a contiguous prefix starting at zero.
+- Nonzero block sizes and valid, contiguous entry ranges.
+- `total_size` and `last_entry_id` agree with the block indexes.
+- Empty checkpoints explicitly carry `last_entry_id = -1`.
 
-```json
-{
-  "version": 1,
-  "sections": [
-    { "type": 1, "offset": 0, "length": 2503 }
-  ]
-}
-```
+The validated protobuf indexes are converted to existing `codec.IndexRecord`
+values in memory. Finalization still writes the existing WAL footer format.
 
-| Field              | Type | Description                                        |
-|--------------------|------|----------------------------------------------------|
-| `version`          | int  | Metadata format version (currently `1`)            |
-| `sections[].type`  | byte | Section type identifier (see table below)          |
-| `sections[].offset`| int  | Byte offset from the start of the file             |
-| `sections[].length`| int  | Byte length of the section data                    |
+## Schema evolution
 
-## Section Types
+Add compatible protobuf fields with new field numbers, retaining the same
+format version. Removed field numbers and names must be reserved, never reused.
+Unknown protobuf fields are retained by `Parse` and `Serialize`, including
+unknown fields in individual block indexes. Converting to the in-memory WAL
+indexes keeps only the fields needed for recovery; that conversion is not a
+round-trip editor for future checkpoint metadata.
 
-| Value | Constant              | Description                                                        |
-|-------|-----------------------|--------------------------------------------------------------------|
-| 1     | `SectionBlockIndexes` | Block index records + footer record (`serializeFooterAndIndexes`)  |
-| 2+    | *(reserved)*          | Future: bloom filters, column stats, WAL position, etc.            |
+Bump `format_version` only for incompatible recovery semantics that older
+readers cannot safely ignore. Unsupported versions cause full-scan fallback.
+Generated Go and VT methods use the existing repository `make proto` pipeline.
 
-To add a new section type, define a new `SectionType` constant and use
-`SetSection` / `GetSectionData` — no format changes are needed.
+## Recovery and compatibility
 
-## Reading Process
+Recovery first tries the finalized `footer.blk`. For unfinished segments it
+reads and validates `checkpoint.blk`, scans only subsequent blocks, and stops
+at the first missing block or fence. It publishes the recovered indexes only
+after the complete scan succeeds, replacing previous state on fence retries.
+Fence, finalize and metadata update ordering are unchanged.
 
-1. Read the last 8 bytes; validate magic = `"CKPT"`, extract `metaLength`.
-2. Read `metaLength` bytes immediately before the trailer; parse as JSON.
-3. Look up the desired section by `type`; slice `data[offset : offset+length]`.
-4. Parse the section payload with its type-specific logic.
+Missing, unreadable, corrupt or unsupported checkpoints fall back to the
+authoritative full block scan. Earlier unpublished raw-index/footer and
+JSON-section checkpoint formats also take this fallback; no legacy decoder is
+retained. Existing WAL block/footer files remain compatible, and pre-checkpoint
+releases continue to recover from those files without using the hint.
 
-## Backward Compatibility
-
-Code that reads checkpoint files should check `IsFormat(data)` first:
-
-- **true** — new format, use `Parse()` then `GetSectionData()`.
-- **false** — legacy format (raw index records + footer, identical to
-  `footer.blk`); parse the entire blob directly.
-
-This ensures checkpoint files written before the format change remain readable.
-
-## Usage Example
-
-```go
-// Writing
-cp := checkpoint.New()
-cp.SetSection(checkpoint.SectionBlockIndexes, indexAndFooterBytes)
-raw := cp.Serialize()
-// ... upload raw as checkpoint.blk ...
-
-// Reading
-cp, err := checkpoint.Parse(raw)
-section, err := cp.GetSectionData(checkpoint.SectionBlockIndexes)
-// ... decode index records + footer from section ...
-```
+Writes are coalesced, asynchronous and best effort. `checkpointThreshold`
+(default 10; zero disables writes) triggers a snapshot after that many newly
+committed blocks. A lagging or failed write can leave a longer tail, so the
+threshold is not a strict bound on recovery work.

@@ -20,159 +20,120 @@ package checkpoint
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
+	"hash/crc32"
+
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var magic = [4]byte{'C', 'K', 'P', 'T'}
-
-const trailerSize = 8 // 4 bytes metaLength + 4 bytes magic
-
-// SectionType identifies a data section inside a Checkpoint.
-type SectionType byte
+var magic = [4]byte{'W', 'P', 'C', 'P'}
 
 const (
-	SectionBlockIndexes SectionType = 1
+	formatVersion = 1
+	checksumSize  = 4
 )
 
-// Meta describes the contents of a checkpoint file.
-type Meta struct {
-	Version  int       `json:"version"`
-	Sections []Section `json:"sections"`
-}
-
-// Section describes a single data section inside the checkpoint.
-type Section struct {
-	Type   SectionType `json:"type"`
-	Offset int         `json:"offset"`
-	Length int         `json:"length"`
-}
-
-// FindSection returns the first section with the given type, or nil.
-func (m *Meta) FindSection(sectionType SectionType) *Section {
-	for i := range m.Sections {
-		if m.Sections[i].Type == sectionType {
-			return &m.Sections[i]
+// New snapshots the committed prefix into the protobuf checkpoint schema.
+func New(blocks []*codec.IndexRecord) *pb.WriterCheckpoint {
+	cp := &pb.WriterCheckpoint{
+		FormatVersion: formatVersion,
+		BlockIndexes:  make([]*pb.CheckpointBlockIndex, len(blocks)),
+		LastEntryId:   -1,
+	}
+	for i, block := range blocks {
+		if block == nil {
+			continue
+		} // Serialize will reject an invalid snapshot.
+		cp.BlockIndexes[i] = &pb.CheckpointBlockIndex{
+			BlockNumber:  block.BlockNumber,
+			StartOffset:  block.StartOffset,
+			BlockSize:    block.BlockSize,
+			FirstEntryId: block.FirstEntryID,
+			LastEntryId:  block.LastEntryID,
 		}
+		cp.TotalSize += uint64(block.BlockSize)
+		cp.LastEntryId = block.LastEntryID
+	}
+	return cp
+}
+
+// Serialize encodes [WPCP magic][protobuf payload][CRC32 IEEE, little endian].
+// Only the thin framing is custom; all snapshot fields use protobuf encoding.
+func Serialize(cp *pb.WriterCheckpoint) ([]byte, error) {
+	if err := validate(cp); err != nil {
+		return nil, err
+	}
+	payload, err := proto.Marshal(cp)
+	if err != nil {
+		return nil, fmt.Errorf("marshal checkpoint: %w", err)
+	}
+	out := make([]byte, len(magic)+len(payload)+checksumSize)
+	copy(out, magic[:])
+	copy(out[len(magic):], payload)
+	binary.LittleEndian.PutUint32(out[len(out)-checksumSize:], crc32.ChecksumIEEE(payload))
+	return out, nil
+}
+
+// Parse verifies framing, integrity and recovery invariants before exposing a
+// snapshot. Unsupported or invalid hints are safe to discard and scan in full.
+// Unknown protobuf fields are retained, including when Serialize is called again.
+func Parse(raw []byte) (*pb.WriterCheckpoint, error) {
+	if len(raw) < len(magic)+checksumSize || !bytes.Equal(raw[:len(magic)], magic[:]) {
+		return nil, fmt.Errorf("invalid checkpoint framing")
+	}
+	payload := raw[len(magic) : len(raw)-checksumSize]
+	checksum := binary.LittleEndian.Uint32(raw[len(raw)-checksumSize:])
+	if crc32.ChecksumIEEE(payload) != checksum {
+		return nil, fmt.Errorf("checkpoint checksum mismatch")
+	}
+	cp := &pb.WriterCheckpoint{}
+	if err := proto.Unmarshal(payload, cp); err != nil {
+		return nil, fmt.Errorf("unmarshal checkpoint: %w", err)
+	}
+	if err := validate(cp); err != nil {
+		return nil, err
+	}
+	return cp, nil
+}
+
+// Indexes converts a validated checkpoint to the existing in-memory WAL index.
+func Indexes(cp *pb.WriterCheckpoint) []*codec.IndexRecord {
+	blocks := make([]*codec.IndexRecord, len(cp.BlockIndexes))
+	for i, block := range cp.BlockIndexes {
+		blocks[i] = &codec.IndexRecord{
+			BlockNumber:  block.BlockNumber,
+			StartOffset:  block.StartOffset,
+			BlockSize:    block.BlockSize,
+			FirstEntryID: block.FirstEntryId,
+			LastEntryID:  block.LastEntryId,
+		}
+	}
+	return blocks
+}
+
+func validate(cp *pb.WriterCheckpoint) error {
+	if cp == nil {
+		return fmt.Errorf("nil checkpoint")
+	}
+	if cp.FormatVersion != formatVersion {
+		return fmt.Errorf("unsupported checkpoint version %d", cp.FormatVersion)
+	}
+	var totalSize uint64
+	var lastEntryID int64 = -1
+	for i, block := range cp.BlockIndexes {
+		if block == nil || int64(block.BlockNumber) != int64(i) || block.StartOffset != int64(i) ||
+			block.BlockSize == 0 || block.FirstEntryId < 0 || block.LastEntryId < block.FirstEntryId ||
+			(i > 0 && block.FirstEntryId != lastEntryID+1) {
+			return fmt.Errorf("invalid or non-contiguous checkpoint index at block %d", i)
+		}
+		totalSize += uint64(block.BlockSize)
+		lastEntryID = block.LastEntryId
+	}
+	if cp.TotalSize != totalSize || cp.LastEntryId != lastEntryID {
+		return fmt.Errorf("inconsistent checkpoint size or last entry ID")
 	}
 	return nil
-}
-
-// Checkpoint is a self-describing container that pairs metadata with
-// concatenated section data. The binary on-disk format is tail-anchored:
-//
-//	[section data...][JSON metadata][metaLength (4B LE)][magic "CKPT" (4B)]
-type Checkpoint struct {
-	Meta Meta
-	data []byte // concatenated section data; offsets in Meta.Sections index into this
-}
-
-// New creates an empty Checkpoint ready for sections to be added.
-func New() *Checkpoint {
-	return &Checkpoint{Meta: Meta{Version: 1}}
-}
-
-// SetSection adds or replaces a section's data. When replacing an existing
-// section the internal data buffer is rebuilt so that all offsets remain
-// consistent.
-func (c *Checkpoint) SetSection(sectionType SectionType, sectionData []byte) {
-	// Collect existing section payloads, skipping the one being replaced.
-	type entry struct {
-		typ  SectionType
-		data []byte
-	}
-	var entries []entry
-	for _, s := range c.Meta.Sections {
-		if s.Type != sectionType {
-			entries = append(entries, entry{s.Type, c.data[s.Offset : s.Offset+s.Length]})
-		}
-	}
-	entries = append(entries, entry{sectionType, sectionData})
-
-	// Rebuild data buffer and section descriptors.
-	c.data = nil
-	c.Meta.Sections = nil
-	for _, e := range entries {
-		c.Meta.Sections = append(c.Meta.Sections, Section{
-			Type:   e.typ,
-			Offset: len(c.data),
-			Length: len(e.data),
-		})
-		c.data = append(c.data, e.data...)
-	}
-}
-
-// GetSectionData returns the raw bytes for the given section type.
-func (c *Checkpoint) GetSectionData(sectionType SectionType) ([]byte, error) {
-	sec := c.Meta.FindSection(sectionType)
-	if sec == nil {
-		return nil, fmt.Errorf("section type %d not found", sectionType)
-	}
-	if sec.Offset < 0 || sec.Length < 0 || sec.Offset > len(c.data) || sec.Length > len(c.data)-sec.Offset {
-		return nil, fmt.Errorf("section type %d out of range: offset=%d length=%d dataSize=%d",
-			sectionType, sec.Offset, sec.Length, len(c.data))
-	}
-	return c.data[sec.Offset : sec.Offset+sec.Length], nil
-}
-
-// Serialize produces the binary checkpoint format:
-//
-//	[section data][JSON metadata][metaLength (4B LE)][magic "CKPT" (4B)]
-func (c *Checkpoint) Serialize() []byte {
-	metaJSON, _ := json.Marshal(c.Meta)
-
-	trailer := make([]byte, trailerSize)
-	binary.LittleEndian.PutUint32(trailer[0:4], uint32(len(metaJSON)))
-	copy(trailer[4:8], magic[:])
-
-	out := make([]byte, 0, len(c.data)+len(metaJSON)+trailerSize)
-	out = append(out, c.data...)
-	out = append(out, metaJSON...)
-	out = append(out, trailer...)
-	return out
-}
-
-// Parse deserializes a Checkpoint from its binary format.
-func Parse(raw []byte) (*Checkpoint, error) {
-	if len(raw) < trailerSize {
-		return nil, fmt.Errorf("checkpoint data too small: %d bytes", len(raw))
-	}
-
-	trailer := raw[len(raw)-trailerSize:]
-	if !bytes.Equal(trailer[4:8], magic[:]) {
-		return nil, fmt.Errorf("invalid checkpoint magic")
-	}
-
-	metaLen := int(binary.LittleEndian.Uint32(trailer[0:4]))
-	dataEnd := len(raw) - trailerSize - metaLen
-	if dataEnd < 0 {
-		return nil, fmt.Errorf("checkpoint metaLength %d exceeds data size %d", metaLen, len(raw))
-	}
-
-	var meta Meta
-	if err := json.Unmarshal(raw[dataEnd:len(raw)-trailerSize], &meta); err != nil {
-		return nil, fmt.Errorf("failed to parse checkpoint metadata: %w", err)
-	}
-
-	if meta.Version != 1 {
-		return nil, fmt.Errorf("unsupported checkpoint version %d", meta.Version)
-	}
-	for _, section := range meta.Sections {
-		if section.Offset < 0 || section.Length < 0 || section.Offset > dataEnd || section.Length > dataEnd-section.Offset {
-			return nil, fmt.Errorf("checkpoint section %d out of range", section.Type)
-		}
-	}
-
-	data := make([]byte, dataEnd)
-	copy(data, raw[:dataEnd])
-
-	return &Checkpoint{Meta: meta, data: data}, nil
-}
-
-// IsFormat returns true if data ends with the checkpoint magic bytes.
-func IsFormat(data []byte) bool {
-	if len(data) < trailerSize {
-		return false
-	}
-	return bytes.Equal(data[len(data)-4:], magic[:])
 }
