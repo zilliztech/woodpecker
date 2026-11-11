@@ -81,3 +81,19 @@ releases continue to recover from those files without using the hint.
 Fallback uses the same authoritative storage path as recovery without a
 checkpoint: genuine block/storage errors are still returned. Context cancellation
 stops recovery rather than starting another scan.
+
+## Recovery benchmark
+
+With real MinIO available, run:
+
+```sh
+go test ./tests/integration -run '^$' -bench '^BenchmarkMinioCheckpointRecovery$' -benchtime=10x -count=1 -timeout=5m
+```
+
+The benchmark writes 635 or 909 blocks with 57 KiB payloads, then recovers the
+same immutable segment without a checkpoint and with a controlled prefix
+checkpoint leaving 5 or 9 tail blocks. It reports median/min/max latency and
+ObjectStorage StatObject/GetObject call counts. Only recovery-writer construction
+is timed; seeding, Close, fence and finalize are excluded. This isolates recovery
+cost rather than measuring asynchronous checkpoint lag or Milvus crash failover.
+Each run cleans its own object prefix and asserts no wall-clock speedup.
