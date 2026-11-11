@@ -8980,6 +8980,9 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
     <span class="hl-kw">sessionMonitor</span>:
       checkInterval: <span class="hl-num">3</span>          <span class="hl-cm"># seconds</span>
       maxFailures: <span class="hl-num">5</span>            <span class="hl-cm"># consecutive fails before invalid</span>
+    <span class="hl-kw">grpc</span>:
+      clientMaxSendSize: <span class="hl-num">268435456</span> <span class="hl-cm"># 256MB</span>
+      clientMaxRecvSize: <span class="hl-num">536870912</span> <span class="hl-cm"># 512MB</span>
     <span class="hl-cm"># quorum: (service mode only, see Quorum section)</span>
   <span class="hl-kw">logstore</span>:
     <span class="hl-kw">segmentSyncPolicy</span>:
@@ -9005,8 +9008,6 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
     <span class="hl-kw">grpc</span>:
       serverMaxSendSize: <span class="hl-num">536870912</span>   <span class="hl-cm"># 512MB</span>
       serverMaxRecvSize: <span class="hl-num">268435456</span>   <span class="hl-cm"># 256MB</span>
-      clientMaxSendSize: <span class="hl-num">268435456</span>   <span class="hl-cm"># 256MB</span>
-      clientMaxRecvSize: <span class="hl-num">536870912</span>   <span class="hl-cm"># 512MB</span>
     <span class="hl-kw">processorCleanupPolicy</span>:
       cleanupInterval: <span class="hl-num">60</span>     <span class="hl-cm"># seconds</span>
       maxIdleTime: <span class="hl-num">300</span>        <span class="hl-cm"># seconds</span>
@@ -9167,10 +9168,12 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
             <h2>gRPC Configuration</h2>
             <table class="doc-table">
                 <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
-                <tr><td>grpc.serverMaxSendSize</td><td>Server max send message size</td><td>512MB</td></tr>
-                <tr><td>grpc.serverMaxRecvSize</td><td>Server max receive message size</td><td>256MB</td></tr>
-                <tr><td>grpc.clientMaxSendSize</td><td>Client max send message size</td><td>256MB</td></tr>
-                <tr><td>grpc.clientMaxRecvSize</td><td>Client max receive message size</td><td>512MB</td></tr>
+                <tr><td>logstore.grpc.serverMaxSendSize</td><td>Server max send message size</td><td>512MB</td></tr>
+                <tr><td>logstore.grpc.serverMaxRecvSize</td><td>Server max receive message size</td><td>256MB</td></tr>
+                <tr><td>client.grpc.clientMaxSendSize</td><td>Client max send message size</td><td>256MB</td></tr>
+                <tr><td>client.grpc.clientMaxRecvSize</td><td>Client max receive message size</td><td>512MB</td></tr>
+                <tr><td>logstore.grpc.clientMaxSendSize</td><td>Deprecated; used with a warning only when client.grpc.clientMaxSendSize is unset.</td><td>—</td></tr>
+                <tr><td>logstore.grpc.clientMaxRecvSize</td><td>Deprecated; used with a warning only when client.grpc.clientMaxRecvSize is unset.</td><td>—</td></tr>
             </table>
 
             <div class="doc-pagination">
