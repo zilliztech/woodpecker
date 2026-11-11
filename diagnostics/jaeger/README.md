@@ -16,7 +16,6 @@ sources:
       local:
         settings:
           endpoint: http://127.0.0.1:16686  # Query/UI endpoint, not OTLP collector.
-          deployment: milvus-stack
           services:                       # Exact operator-supplied bindings.
             proxy: proxy
             streamingnode: streamingnode
@@ -52,7 +51,10 @@ Use actual exported service names. Supported roles are `proxy`, `streamingnode`,
 `querynode`, `segcore`, `wp_client`, `wp_server` and context-only `other`.
 A streamingnode can contain WP-client spans; recognized `LogWriter`/`LogReader`
 instrumentation scopes distinguish them from Milvus work. A service binding is
-configuration, not an automatically proven deployment identity. Without explicit
+configuration, not an automatically proven deployment identity. Current `wp diag`
+and `wp webui` connections use the enclosing context name as their environment
+label; a separate `deployment` setting is not required. Legacy source settings
+remain readable. Without explicit
 deployment tags, `deployment_binding_configured_only` remains a gap. Optional
 `match_tags` accepts deployment selectors (`service.namespace`,
 `deployment.environment[.name]`, `cluster`, `namespace`, `woodpecker_id`);

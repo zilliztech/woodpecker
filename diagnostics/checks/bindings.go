@@ -32,7 +32,7 @@ type Scope struct {
 	Trace           string                  `json:"trace,omitempty" yaml:"trace,omitempty"`
 	MetricsEndpoint string                  `json:"metrics_endpoint,omitempty" yaml:"metrics_endpoint,omitempty"`
 	TraceEndpoint   string                  `json:"trace_endpoint,omitempty" yaml:"trace_endpoint,omitempty"`
-	Deployment      string                  `json:"deployment,omitempty" yaml:"deployment,omitempty"`
+	Deployment      string                  `json:"deployment,omitempty" yaml:"deployment,omitempty"` // Legacy input; Context takes precedence.
 	MetricLabels    map[string]string       `json:"metric_labels,omitempty" yaml:"metric_labels,omitempty"`
 	TraceService    string                  `json:"trace_service,omitempty" yaml:"trace_service,omitempty"`
 	LogNamespace    string                  `json:"log_namespace,omitempty" yaml:"log_namespace,omitempty"`
@@ -74,11 +74,11 @@ func validateScope(s Scope) error {
 			return fmt.Errorf("metric population labels cannot override check-owned outcome/operation filters")
 		}
 	}
-	if s.MetricsEndpoint != "" && (s.Deployment == "" || len(s.MetricLabels) == 0) {
-		return fmt.Errorf("a manual Prometheus endpoint needs a deployment name and at least one population label")
+	if s.MetricsEndpoint != "" && len(s.MetricLabels) == 0 {
+		return fmt.Errorf("a manual Prometheus endpoint needs at least one population label")
 	}
-	if s.TraceEndpoint != "" && (s.Deployment == "" || s.TraceService == "") {
-		return fmt.Errorf("a manual Trace endpoint needs a deployment name and a Trace service")
+	if s.TraceEndpoint != "" && s.TraceService == "" {
+		return fmt.Errorf("a manual Trace endpoint needs a Trace service")
 	}
 	if s.Milvus != nil {
 		return fmt.Errorf("Milvus diagnostic associations are no longer supported")
@@ -145,6 +145,9 @@ func ResolveBindings(c d.Config, b *Bindings) (d.Config, map[string]evidence.Tar
 			settings := map[string]any{}
 			if endpoint != "" {
 				settings["endpoint"], settings["deployment"] = endpoint, s.Deployment
+				if s.Context != "" {
+					settings["deployment"] = s.Context
+				}
 				if source == "trace" {
 					settings["services"] = map[string]string{s.TraceService: "wp_" + role}
 					settings["search"] = map[string]string{"service": s.TraceService}

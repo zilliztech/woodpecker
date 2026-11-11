@@ -18,7 +18,7 @@ import (
 func TestConnectionAndSelectionBoundaries(t *testing.T) {
 	for _, modify := range []func(*Settings){
 		func(s *Settings) { s.Endpoint = "http://user:sentinel-secret@host" }, func(s *Settings) { s.Endpoint = "http://host?token=sentinel-secret" },
-		func(s *Settings) { s.Deployment = "" }, func(s *Settings) { s.Services = nil }, func(s *Settings) { s.Services["proxy"] = "unknown" }, func(s *Settings) { s.MatchTags = map[string]string{"authorization": "sentinel-secret"} },
+		func(s *Settings) { s.Deployment = strings.Repeat("x", 257) }, func(s *Settings) { s.Services = nil }, func(s *Settings) { s.Services["proxy"] = "unknown" }, func(s *Settings) { s.MatchTags = map[string]string{"authorization": "sentinel-secret"} },
 		func(s *Settings) { s.Search.Service = "unbound" }, func(s *Settings) { s.RequestIDTag = "not a tag" }, func(s *Settings) { s.Limits.MaxSpans = 0 }, func(s *Settings) { s.Limits.MaxTraces = 101 }, func(s *Settings) { s.Limits.MaxQueries = 0 }, func(s *Settings) { s.Limits.MaxResponseBytes = 1 }, func(s *Settings) { s.Policy.SlowSpanMS = 0 },
 		func(s *Settings) { s.BearerTokenEnv = "bad-env" }, func(s *Settings) {
 			s.BasicAuth = &BasicAuth{Username: "user", PasswordEnv: "PASSWORD"}

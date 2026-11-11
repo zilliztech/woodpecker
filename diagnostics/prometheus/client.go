@@ -143,10 +143,11 @@ func (c client) query(ctx context.Context, expr string, sig signal, target d.Tar
 		return data, "response_read_failed"
 	}
 	var wire struct {
-		Status   string            `json:"status"`
-		Warnings []json.RawMessage `json:"warnings"`
-		Infos    []json.RawMessage `json:"infos"`
-		Data     struct {
+		Status    string            `json:"status"`
+		IsPartial bool              `json:"isPartial"`
+		Warnings  []json.RawMessage `json:"warnings"`
+		Infos     []json.RawMessage `json:"infos"`
+		Data      struct {
 			Type   string `json:"resultType"`
 			Result []struct {
 				Metric     map[string]string   `json:"metric"`
@@ -157,6 +158,9 @@ func (c client) query(ctx context.Context, expr string, sig signal, target d.Tar
 	}
 	if json.Unmarshal(body, &wire) != nil || wire.Status != "success" || wire.Data.Type != "matrix" {
 		return data, "invalid_prometheus_response"
+	}
+	if wire.IsPartial {
+		return data, "partial_response"
 	}
 	if len(wire.Warnings) > 0 || len(wire.Infos) > 0 {
 		data.Notes = append(data.Notes, "backend_annotations_withheld")

@@ -31,7 +31,7 @@ func TestConnectionCheckUsesCurrentFormWithoutRunningDiagnostics(t *testing.T) {
 	require.NoError(t, err)
 	// Bad assessment rules do not prevent testing the independent source connection.
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(path), "diag-metrics.yaml"), []byte("invalid: true\n"), 0o600))
-	request := map[string]any{"source": "metrics", "bindings": map[string]any{"server": map[string]any{"metrics_endpoint": api.URL, "deployment": "fixture", "metric_labels": map[string]string{"namespace": "fixture"}, "log_id": "invalid-but-unused", "metadata": map[string]string{"etcd": "not-used", "prefix": "not-used"}}}}
+	request := map[string]any{"source": "metrics", "bindings": map[string]any{"server": map[string]any{"metrics_endpoint": api.URL, "metric_labels": map[string]string{"namespace": "fixture"}, "log_id": "invalid-but-unused", "metadata": map[string]string{"etcd": "not-used", "prefix": "not-used"}}}}
 	code, body := wsCall(t, client, server.URL, app.token, "POST", "/api/workspace/connections/check", request)
 	require.Equal(t, 200, code, string(body))
 	var result struct {

@@ -11,7 +11,7 @@ import (
 type AppendModule struct{}
 
 func (AppendModule) Descriptor() d.Descriptor {
-	desc := d.Descriptor{Source: "prometheus", Issue: 463, RequiredSettings: []string{"endpoint", "deployment", "match_labels"}}
+	desc := d.Descriptor{Source: "prometheus", Issue: 463, RequiredSettings: []string{"endpoint", "match_labels"}}
 	for _, scope := range []string{"milvus", "e2e"} {
 		desc.Profiles = append(desc.Profiles, d.Profile{ID: scope + ".append.steps.metrics", Version: 1, Scope: scope, Flow: "write", Stage: "append", Modes: []string{"live", "historical"}, TargetFields: []string{"deployment", "instance"}, Description: "Append-step source facts, independent exporter populations; no inferred collection/channel/WP tenant joins"})
 	}

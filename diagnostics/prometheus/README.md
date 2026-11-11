@@ -17,7 +17,6 @@ sources:
       stack:
         settings:
           endpoint: http://127.0.0.1:9090
-          deployment: my-stack
           match_labels:
             cluster: wp-ops-v0146
             namespace: milvus-stack
@@ -26,10 +25,12 @@ sources:
           # bearer_token_env: PROMETHEUS_TOKEN
 ```
 
-Use actual selectors from your scrape configuration. `deployment` is an explicit
-operator-defined connection binding; it does not discover Kubernetes resources
-or establish a WP-client metadata namespace. `match_labels` are exact deployment
-selectors applied to every query. Metric-specific component/operation/status
+Use actual selectors from your scrape configuration. Current `wp diag` and
+`wp webui` connections use the enclosing context name as their environment label;
+no separate `deployment` setting is required. Legacy source settings remain
+readable. This label does not discover Kubernetes resources or establish a
+WP-client metadata namespace. `match_labels` are exact population selectors
+applied to every query. Metric-specific component/operation/status
 filters are added by the profile, with no user-supplied PromQL interpolation.
 No instance/channel/log association is inferred across components.
 

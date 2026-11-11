@@ -19,6 +19,8 @@ import (
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
 	"github.com/zilliztech/woodpecker/diagnostics/checks"
+	"github.com/zilliztech/woodpecker/diagnostics/jaeger"
+	"github.com/zilliztech/woodpecker/diagnostics/prometheus"
 )
 
 func writeConfig(t *testing.T, endpoint string) string {
@@ -91,6 +93,63 @@ func TestExplicitMissingConfigDoesNotFallThrough(t *testing.T) {
 	t.Setenv("WOODPECKER_CLI_CONFIG", filepath.Join(t.TempDir(), "absent.yaml"))
 	_, _, err := Load("", "")
 	require.ErrorContains(t, err, "WOODPECKER_CLI_CONFIG")
+}
+
+func TestContextOwnsEvidenceEnvironment(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, wrapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("legacy=%t/wrapped=%t", legacy, wrapped), func(t *testing.T) {
+				contexts := map[string]any{}
+				for _, name := range []string{"first", "second"} {
+					metrics := map[string]any{"endpoint": "http://prom.invalid:9090", "match_labels": map[string]string{"cluster": "actual-cluster"}, "bearer_token_env": "WP_TEST_TOKEN"}
+					trace := map[string]any{"endpoint": "http://trace.invalid:16686", "services": map[string]string{"wp": "wp_server"}, "search": map[string]string{"service": "wp"}}
+					if legacy {
+						metrics["deployment"], trace["deployment"] = "old-metrics-name", "old-trace-name"
+					}
+					var m, tr any = metrics, trace
+					if wrapped {
+						m = map[string]any{"enabled": false, "settings": metrics}
+						tr = map[string]any{"settings": trace}
+					}
+					contexts[name] = map[string]any{"observability": map[string]any{"metrics": m, "trace": tr}}
+				}
+				body, err := yaml.Marshal(map[string]any{"current-context": "first", "contexts": contexts})
+				require.NoError(t, err)
+				path := filepath.Join(t.TempDir(), "cli.yaml")
+				require.NoError(t, os.WriteFile(path, body, 0o600))
+				f, abs, err := LoadDocument(path)
+				require.NoError(t, err)
+				before, err := yaml.Marshal(f)
+				require.NoError(t, err)
+				c, err := EnvironmentConfig(f, abs)
+				require.NoError(t, err)
+				for name := range contexts {
+					for _, source := range []string{"prometheus", "trace"} {
+						conn := c.Sources[source].Connections[config.SourceReference(name, source)]
+						var settings map[string]any
+						require.NoError(t, conn.Settings.Decode(&settings))
+						require.Equal(t, name, settings["deployment"])
+						if source == "prometheus" {
+							require.Equal(t, !wrapped, conn.IsEnabled())
+							require.Equal(t, "WP_TEST_TOKEN", settings["bearer_token_env"])
+							require.NoError(t, (prometheus.Module{}).ValidateConnection(conn))
+						} else {
+							require.NoError(t, (jaeger.Module{}).ValidateConnection(conn))
+						}
+					}
+				}
+				after, err := yaml.Marshal(f)
+				require.NoError(t, err)
+				require.Equal(t, before, after, "runtime context labels must not rewrite cli.yaml settings")
+				_, target, err := Load(path, "second")
+				require.NoError(t, err)
+				require.Equal(t, "context-second", target)
+				stored, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.Equal(t, body, stored)
+			})
+		}
+	}
 }
 
 func TestAtomicChecksDoNotExecuteOtherChecks(t *testing.T) {

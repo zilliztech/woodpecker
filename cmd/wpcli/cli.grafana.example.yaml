@@ -1,0 +1,25 @@
+# Metrics-only context through a Grafana Prometheus-compatible data source.
+# Copy to a private cli.yaml and replace the URL, UID and actual metric labels.
+current-context: remote-wp
+contexts:
+  remote-wp:
+    observability:
+      grafana: https://grafana.example
+      prometheus:
+        # Use the selected data source UID, not the dashboard UID or Explore URL.
+        # The same proxy path works with a Prometheus-compatible VictoriaMetrics source.
+        endpoint: https://grafana.example/api/datasources/proxy/uid/YOUR_DATASOURCE_UID
+        # The variable must be available to the process starting wp webui/diag.
+        # The token itself is never a YAML value or URL query parameter.
+        bearer_token_env: WP_GRAFANA_TOKEN
+        # Exact values, not Grafana's All/regex variable expansion.
+        # Retain only labels exported by the selected metric population.
+        match_labels:
+          cluster: YOUR_CLUSTER
+          namespace: YOUR_NAMESPACE
+          woodpecker_id: YOUR_WP_SERVICE_ID
+    agent:
+      enabled: false
+# Trace and WP Admin are optional for historical Metrics checks.
+# Add an Admin endpoint/node_admin_urls only for native service operations.
+# Node ID, log namespace/ID and client metadata remain per-run inputs.

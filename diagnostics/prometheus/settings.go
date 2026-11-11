@@ -15,7 +15,7 @@ import (
 
 type Settings struct {
 	Endpoint       string            `yaml:"endpoint"`
-	Deployment     string            `yaml:"deployment"`
+	Deployment     string            `yaml:"deployment,omitempty"` // Runtime context label; accepts legacy source settings.
 	MatchLabels    map[string]string `yaml:"match_labels"`
 	BearerTokenEnv string            `yaml:"bearer_token_env,omitempty"`
 	BasicAuth      *BasicAuth        `yaml:"basic_auth,omitempty"`
@@ -76,8 +76,8 @@ func settingsFor(c d.Connection, planKind queryPlanKind) (Settings, error) {
 		return s, fmt.Errorf("invalid Prometheus connection settings (values withheld)")
 	}
 	u, err := url.Parse(s.Endpoint)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || s.Deployment == "" || len(s.Deployment) > 256 || len(s.MatchLabels) == 0 || len(s.MatchLabels) > 16 {
-		return s, fmt.Errorf("endpoint must be an HTTP(S) base URL without credentials/query/fragment, with an explicit deployment and match_labels")
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(s.Deployment) > 256 || len(s.MatchLabels) == 0 || len(s.MatchLabels) > 16 {
+		return s, fmt.Errorf("endpoint must be an HTTP(S) base URL without credentials/query/fragment, with explicit match_labels")
 	}
 	for k, v := range s.MatchLabels {
 		if !labelName.MatchString(k) || strings.HasPrefix(k, "__") || d.Has([]string{"instance", "node_id", "le", "operation", "status", "component"}, k) || v == "" || len(v) > 256 || strings.ContainsAny(v, "\x00\r\n") {

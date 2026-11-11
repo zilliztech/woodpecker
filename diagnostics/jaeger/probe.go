@@ -10,7 +10,7 @@ import (
 func CheckConnection(ctx context.Context, conn d.Connection) d.ConnectionCheck {
 	s, err := settings(conn)
 	if err != nil {
-		return d.FailedConnection("invalid_connection_settings", err.Error(), "Review the Jaeger query address, deployment and service bindings in this form or server context.")
+		return d.FailedConnection("invalid_connection_settings", err.Error(), "Review the Jaeger query address and service bindings in this form or server context.")
 	}
 	token, user, password, err := auth(s)
 	if err != nil {

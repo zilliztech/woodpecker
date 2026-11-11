@@ -80,7 +80,6 @@ function commandParameterExample(c,input){
   scenario:['Metrics scenario','Native runtime metrics scenario; use metrics report --list to see supported names.','stuck-write'],
   metrics:['Prometheus address','Prometheus query API origin, reachable by the process running wp webui.','http://127.0.0.1:19099'],
   trace:['Trace address','Jaeger query API origin, reachable by the process running wp webui.','http://127.0.0.1:16686'],
-  deployment:['Deployment name','Logical deployment identity for this evidence source.','wp-prod'],
   trace_service:['Trace service','Exact service name retained by the selected Jaeger source.','woodpecker-0'],
   node_id:['Node ID','Exact node identity label for the selected evidence source.','woodpecker-0'],
  };

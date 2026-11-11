@@ -69,8 +69,8 @@ function bindingsError(req=connectionRequirements()){
  if(req.contextRequired&&!(state.info.available_contexts||[]).includes(sharedContext()))return 'Choose a WP context with an Admin endpoint.';
  const meta=sharedMetadata();if(req.metadata&&(!meta.etcd||!req.raw&&!meta.prefix))return req.raw?'Enter etcd endpoints.':'Enter client etcd endpoints and a full metadata prefix.';
  for(const [role,need]of Object.entries(req.roles)){const v=initialBindings()[role];
-  if(need.wpMetrics&&v.metrics==='__manual'&&(!v.metrics_endpoint||!v.deployment||!Object.keys(v.metric_labels||{}).length))return componentName(role)+': Prometheus endpoint, deployment and population labels are required.';
-  if(need.sources.has('trace')&&v.trace==='__manual'&&(!v.trace_endpoint||!v.deployment||!v.trace_service))return componentName(role)+': Trace endpoint, deployment and Trace service are required.';
+  if(need.wpMetrics&&v.metrics==='__manual'&&(!v.metrics_endpoint||!Object.keys(v.metric_labels||{}).length))return componentName(role)+': Prometheus endpoint and population labels are required.';
+  if(need.sources.has('trace')&&v.trace==='__manual'&&(!v.trace_endpoint||!v.trace_service))return componentName(role)+': Trace endpoint and Trace service are required.';
   if(need.wpMetrics&&v._labels_error)return componentName(role)+': metric labels must be a JSON object of strings.';
  }
  if(req.definitions.length===1){const missing=missingForCheck(req.definitions[0]);if(missing.length)return 'Required: '+missing.join(', ');}
@@ -113,7 +113,6 @@ function setSharedEvidenceAddress(source,value){
   const v=b[role],previous=sourceConnection(v,source),reference=[v[source],contextRef].find(ref=>state.info.connections[source]?.some(c=>c.enabled&&c.name===ref&&url&&normalizedSourceURL(c.endpoint||'')===url));
   if(!endpoint){v[source]='';delete v[source+'_endpoint'];continue;}
   if(reference){v[source]=reference;delete v[source+'_endpoint'];continue;}
-  if(!v.deployment&&previous?.deployment)v.deployment=previous.deployment;
   if(source==='metrics'&&!Object.keys(v.metric_labels||{}).length&&previous?.metric_labels)v.metric_labels=structuredClone(previous.metric_labels);
   if(source==='trace'&&!v.trace_service&&previous?.trace_service)v.trace_service=previous.trace_service;
   v[source]='__manual';v[source+'_endpoint']=endpoint;
@@ -136,8 +135,7 @@ function connectionFieldsHTML(req,part='all'){
   const traceCoverage=need.trace?`<p class="field-hint trace-scope-note">${Object.keys(conn?.identity_tags||{}).length?'Trace identity filters use this source’s configured tag mappings. Actual tag coverage is reported with the evidence.':'Trace is scoped to its service. This source has no WP identity tag mapping; Log or Node filters do not establish a Trace association.'}</p>`:'';
   const sourceNames=[...need.sources].map(source=>source==='metrics'?'Prometheus':'Trace').join(' + ');
   parameters+=`<section class="component-config"><h3>${componentName(role)} evidence filters</h3><p class="field-hint evidence-filter-source">Queries ${sourceNames}. No etcd connection required.</p>${scope||'<p class="field-hint">This check has no additional Log or Node parameters.</p>'}${traceCoverage}
-  ${need.wpMetrics||need.trace?`<details class="binding-details" data-binding-panel="${role}-evidence-scope" ${manual&&(!v.deployment||need.wpMetrics&&v.metrics==='__manual'&&!Object.keys(v.metric_labels||{}).length||need.trace&&v.trace==='__manual'&&!v.trace_service)?'open':''}><summary>Evidence scope <span>${manual?'Review for this address':'Optional overrides'}</span></summary><div class="binding-fields">
-  ${manual?input(role,'deployment','Deployment name',v.deployment,'local-stack',true):''}
+  ${need.wpMetrics||need.trace?`<details class="binding-details" data-binding-panel="${role}-evidence-scope" ${manual&&(need.wpMetrics&&v.metrics==='__manual'&&!Object.keys(v.metric_labels||{}).length||need.trace&&v.trace==='__manual'&&!v.trace_service)?'open':''}><summary>Evidence scope <span>${manual?'Review for this address':'Optional overrides'}</span></summary><div class="binding-fields">
   ${need.trace&&v.trace?input(role,'trace_service','Trace service',v.trace_service,'Use the context’s saved search service',v.trace==='__manual'):''}
   ${need.wpMetrics?`<label>Exact metric labels (JSON)<textarea data-binding-role="${role}" data-binding-labels rows="3" placeholder='{"namespace":"my-stack"}'>${esc(Object.keys(v.metric_labels||{}).length?JSON.stringify(v.metric_labels,null,2):'')}</textarea></label><p class="field-hint">Saved source labels apply unless overridden. A new address requires an explicit population.</p>`:''}
   </div></details>`:''}
@@ -183,7 +181,7 @@ function renderCommandTime(c){const host=$('#command-incident-window');if(!host)
 const evidenceConnectionChecks=new Map();
 function connectionProbeRequest(source,req){
  const bindings={};
- for(const role of Object.keys(req.roles)){if(!req.roles[role].sources.has(source))continue;const v=initialBindings()[role],s={deployment:v.deployment||''};
+ for(const role of Object.keys(req.roles)){if(!req.roles[role].sources.has(source))continue;const v=initialBindings()[role],s={context:sharedContext()};
  if(source==='metrics'){if(v.metrics==='__manual')s.metrics_endpoint=v.metrics_endpoint||'';else s.metrics=v.metrics||'';s.metric_labels=v.metric_labels||{};}
  else{if(v.trace==='__manual')s.trace_endpoint=v.trace_endpoint||'';else s.trace=v.trace||'';s.trace_service=v.trace_service||'';}
  bindings[role]=s;
@@ -234,7 +232,6 @@ function diagnosticFormIssues(defs){
   for(const key of def.requires?.parameters||[]){if(['window'].includes(key))continue;if(!String(v[key]||'').trim())add(diagnosticField(key,role),'Enter '+key+'.');}
  }
  for(const [role,need]of Object.entries(req.roles)){const v=initialBindings()[role],manualMetrics=need.wpMetrics&&v.metrics==='__manual'&&!!v.metrics_endpoint?.trim(),manualTrace=need.trace&&v.trace==='__manual'&&!!v.trace_endpoint?.trim();
-  if((manualMetrics||manualTrace)&&!v.deployment?.trim())add(diagnosticField('deployment',role),'Enter the deployment name for this address.');
   if(manualTrace&&!v.trace_service?.trim())add(diagnosticField('trace_service',role),'Enter the Trace service.');
   const labels=document.querySelector(`#diagnostics-view [data-binding-role="${role}"][data-binding-labels]`);if(need.wpMetrics&&(v._labels_error||manualMetrics&&!Object.keys(v.metric_labels||{}).length))add(labels,'Enter population labels as a JSON object of strings.');
  }
@@ -252,7 +249,6 @@ function updateDiagnosticValidation(defs=configuredDefinitions()){
  const result=diagnosticFormIssues(defs),{req,configured,issues}=result;
  for(const input of document.querySelectorAll('#diagnostic-observability [data-binding-key]')){const role=input.dataset.bindingRole,key=input.dataset.bindingKey,v=initialBindings()[role],need=req.roles[role];if(!need)continue;
   if(key==='node_id')setFieldRequirement(input,configured.some(d=>checkComponent(d)===role&&d.requires?.parameters.includes('node_id')));
-  if(key==='deployment')setFieldRequirement(input,!!(need.wpMetrics&&v.metrics==='__manual'&&v.metrics_endpoint?.trim()||need.trace&&v.trace==='__manual'&&v.trace_endpoint?.trim()));
   if(key==='trace_service')setFieldRequirement(input,!!(need.trace&&v.trace==='__manual'&&v.trace_endpoint?.trim()));
  }
  for(const source of requiredEvidenceSources(req)){const input=diagnosticField(source);if(!input)continue;const alternative=requiredEvidenceSources(req).length>1&&req.definitions.length>1;setFieldRequirement(input,true,alternative?'At least one':'Required',alternative);input.closest('.evidence-address').querySelectorAll('[data-workflow-help]').forEach(icon=>icon.remove());}

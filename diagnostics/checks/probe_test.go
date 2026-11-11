@@ -49,6 +49,44 @@ func TestConnectionProbesUseQueryAPIsAndIgnoreUnrelatedScope(t *testing.T) {
 	require.EqualValues(t, 2, calls.Load())
 }
 
+func TestManualConnectionsNeedNoDeployment(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/query":
+			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"value":[1,"1"]}]}}`)
+		case "/api/services":
+			fmt.Fprint(w, `{"data":["wp"]}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	for _, contextName := range []string{"", "selected-context"} {
+		b := &Bindings{Server: &Scope{Context: contextName, MetricsEndpoint: server.URL, TraceEndpoint: server.URL, MetricLabels: map[string]string{"cluster": "fixture"}, TraceService: "wp"}}
+		cfg, targets, err := ResolveBindings(d.Config{}, b)
+		require.NoError(t, err)
+		for source, ref := range map[string]string{"prometheus": targets["server"].Metrics, "trace": targets["server"].Trace} {
+			var settings map[string]any
+			conn := cfg.Sources[source].Connections[ref]
+			require.NoError(t, conn.Settings.Decode(&settings))
+			require.Equal(t, contextName, settings["deployment"])
+		}
+		for _, source := range []string{"metrics", "trace"} {
+			result := ProbeConnections(context.Background(), d.Config{}, source, b)
+			require.Len(t, result, 1)
+			require.Equal(t, "ready", result[0].Status, result)
+		}
+		b.Server.MetricLabels = nil
+		_, _, err = ResolveBindings(d.Config{}, b)
+		require.ErrorContains(t, err, "population label")
+		b.Server.MetricLabels = map[string]string{"cluster": "fixture"}
+		b.Server.TraceService = ""
+		_, _, err = ResolveBindings(d.Config{}, b)
+		require.ErrorContains(t, err, "Trace service")
+	}
+}
+
 func TestConnectionProbeFailureReasons(t *testing.T) {
 	for _, tc := range []struct {
 		name, body, code string

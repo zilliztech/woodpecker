@@ -11,7 +11,7 @@ type Module struct{}
 
 func (Module) ValidateConnection(c d.Connection) error { _, err := settings(c); return err }
 func (Module) Descriptor() d.Descriptor {
-	result := d.Descriptor{Source: "trace", Issue: 461, RequiredSettings: []string{"endpoint", "deployment", "services"}, Profiles: []d.Profile{}}
+	result := d.Descriptor{Source: "trace", Issue: 461, RequiredSettings: []string{"endpoint", "services"}, Profiles: []d.Profile{}}
 	for _, scope := range []string{"wp", "milvus", "e2e"} {
 		for _, flow := range []string{"write", "read"} {
 			stage := "append"
