@@ -155,7 +155,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		// Verify that the objects were created
 		var dataObjects []string
 		err := minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-			if strings.HasSuffix(objInfo.FilePath, ".blk") {
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") {
 				dataObjects = append(dataObjects, objInfo.FilePath)
 				// Get object size for logging
 				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
@@ -288,7 +288,7 @@ func TestAdvMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 
 	// Now read the objects directly and check their content
 	err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-		if strings.HasSuffix(objInfo.FilePath, ".blk") {
+		if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") {
 			// Get object size for logging
 			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
 			if statErr != nil {
@@ -1527,7 +1527,7 @@ func TestAdvMinioFileWriter_HeaderRecordVerification(t *testing.T) {
 	// Now read the first object and verify it starts with HeaderRecord
 	var firstDataObject string
 	err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-		if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "footer.blk") {
+		if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") && !strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 			// This should be the first data object (0.blk)
 			if strings.HasSuffix(objInfo.FilePath, "/0.blk") {
 				firstDataObject = objInfo.FilePath
@@ -2547,9 +2547,9 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 				lockFiles = append(lockFiles, objInfo.FilePath)
 			} else if strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 				footerFound = true
-			} else if strings.Contains(objInfo.FilePath, "/m_") && strings.HasSuffix(objInfo.FilePath, ".blk") {
+			} else if strings.Contains(objInfo.FilePath, "/m_") && strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") {
 				mergedBlocks = append(mergedBlocks, objInfo.FilePath)
-			} else if strings.HasSuffix(objInfo.FilePath, ".blk") {
+			} else if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "/checkpoint.blk") {
 				regularBlocks = append(regularBlocks, objInfo.FilePath)
 			}
 

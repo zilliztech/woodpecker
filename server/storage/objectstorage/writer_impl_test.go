@@ -1252,6 +1252,8 @@ func TestMinioFileWriter_RecoverFromStorage_NoFooter_NoBlocks(t *testing.T) {
 	// StatObject for footer.blk returns not found
 	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything).
 		Return(int64(0), false, notFoundErr).Once()
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/checkpoint.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
 	mockClient.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Maybe()
 
 	// StatObject for block 0 returns not found too (no blocks)
@@ -2100,6 +2102,8 @@ func TestNewMinioFileWriterWithMode_RecoveryMode_NoExistingData(t *testing.T) {
 	notFoundErr := mockNoSuchKeyError()
 	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything).
 		Return(int64(0), false, notFoundErr).Once()
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/checkpoint.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
 	mockClient.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
 
 	// recoverFromFullListing: block 0 not found
@@ -2134,6 +2138,8 @@ func TestNewMinioFileWriterWithMode_RecoveryMode_WithExistingData(t *testing.T) 
 	// Footer not found
 	notFoundErr := mockNoSuchKeyError()
 	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/checkpoint.blk", mock.Anything, mock.Anything).
 		Return(int64(0), false, notFoundErr).Once()
 	mockClient.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
 
@@ -2965,6 +2971,8 @@ func TestMinioFileWriter_Fence_RetryWithRecovery(t *testing.T) {
 	// 1. StatObject for footer.blk returns not found → goes to recoverFromFullListing
 	notFoundErr := werr.ErrEntryNotFound.WithCauseErrMsg("not found")
 	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/checkpoint.blk", mock.Anything, mock.Anything).
 		Return(int64(0), false, notFoundErr).Once()
 	mockClient.EXPECT().IsObjectNotExistsError(mock.Anything).Return(true).Maybe()
 

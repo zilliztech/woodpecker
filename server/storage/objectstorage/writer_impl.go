@@ -48,6 +48,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
+	"github.com/zilliztech/woodpecker/server/storage/codec/checkpoint"
 )
 
 var SegmentWriterScope = "MinioFileWriter"
@@ -87,6 +88,18 @@ type MinioFileWriter struct {
 	footerRecord     *codec.FooterRecord // exists if the segment is finalized
 	headerWritten    atomic.Bool         // Ensure a header record is written before writing data
 	lastModifiedTime atomic.Int64        // lastModifiedTime
+
+	// Optional recovery hints for the direct object-storage writer used by
+	// embedded MinIO-compatible mode. Checkpoint writes do not gate data acks;
+	// missing or unusable hints fall back to normal full block-scan recovery.
+	checkpointThreshold       int
+	lastCheckpointBlockCount  atomic.Int32
+	checkpointStoredSize      atomic.Int64         // Last successful checkpoint size accounted by this writer; zero before its first success.
+	checkpointMu              sync.Mutex           // guards worker admission, cancellation and the pending snapshot
+	checkpointRunning         bool                 // true while a checkpoint goroutine is active
+	checkpointCancel          context.CancelFunc   // cancels the current worker, including its in-flight PUT
+	checkpointWG              sync.WaitGroup       // Add under checkpointMu after checking closed; Close joins all workers
+	checkpointPendingSnapshot []*codec.IndexRecord // latest snapshot waiting to be written; nil means nothing pending
 
 	// async upload blocks task pool
 	syncMu                        sync.Mutex
@@ -147,6 +160,8 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 		pool:                conc.NewPool[*blockUploadResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
 
 		flushingTaskList: make(chan *blockUploadTask, cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads),
+
+		checkpointThreshold: syncPolicyConfig.CheckpointThreshold,
 	}
 	segmentFileWriter.firstEntryID.Store(-1)
 	segmentFileWriter.lastEntryID.Store(-1)
@@ -201,7 +216,11 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 	return segmentFileWriter, nil
 }
 
-// recoverFromStorage attempts to recover the writer state from existing objects in MinIO
+// recoverFromStorageUnsafe restores state from the finalized footer when present.
+// For embedded MinIO-compatible object storage, a checkpoint is an optional fast
+// path: missing or unusable hints fall back to the normal contiguous block scan.
+// The hint is not required for recovery; errors in the authoritative storage
+// path are still returned, and a canceled context stops recovery.
 func (f *MinioFileWriter) recoverFromStorageUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromStorage")
 	defer sp.End()
@@ -212,6 +231,14 @@ func (f *MinioFileWriter) recoverFromStorageUnsafe(ctx context.Context) error {
 	footerBlockSize, _, err := f.client.StatObject(ctx, f.bucket, footerBlockKey, f.logNs, f.logIdStr)
 	if err != nil {
 		if f.client.IsObjectNotExistsError(err) {
+			if cpErr := f.recoverFromCheckpoint(ctx); cpErr == nil {
+				return nil
+			} else if ctx.Err() != nil {
+				return cpErr
+			} else {
+				logger.Ctx(ctx).Debug("checkpoint recovery not available, falling back to full listing",
+					zap.String("segmentFileKey", f.segmentFileKey), zap.Error(cpErr))
+			}
 			return f.recoverFromFullListing(ctx)
 		}
 		// Propagate all other errors (timeout, context canceled, permission denied, etc.)
@@ -355,6 +382,80 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 	return nil
 }
 
+// recoverFromCheckpoint reads checkpoint.blk, restores blockIndexes from it,
+// then scans only the blocks written after the checkpoint, avoiding a full
+// sequential scan. Invalid or unsupported checkpoint formats fall back to the
+// authoritative block scan in recoverFromStorageUnsafe.
+func (f *MinioFileWriter) recoverFromCheckpoint(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromCheckpoint")
+	defer sp.End()
+	startTime := time.Now()
+
+	cpKey := getCheckpointBlockKey(f.segmentFileKey)
+	cpSize, _, err := f.client.StatObject(ctx, f.bucket, cpKey, f.logNs, f.logIdStr)
+	if err != nil {
+		return err
+	}
+
+	cpObj, err := f.client.GetObject(ctx, f.bucket, cpKey, 0, cpSize, f.logNs, f.logIdStr)
+	if err != nil {
+		return err
+	}
+	defer cpObj.Close()
+
+	cpData, err := minioHandler.ReadObjectFull(ctx, cpObj, cpSize, f.logNs, f.logIdStr)
+	if err != nil {
+		return err
+	}
+
+	cp, err := checkpoint.Parse(cpData)
+	if err != nil {
+		return err
+	}
+	recoveredIndexes := checkpoint.Indexes(cp)
+	checkpointBlockCount := len(recoveredIndexes)
+	logger.Ctx(ctx).Info("recovered checkpoint, scanning incremental blocks",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("checkpointBlocks", checkpointBlockCount),
+		zap.Int64("maxBlockID", int64(checkpointBlockCount)-1))
+
+	scan, err := f.scanContiguousBlocks(ctx, int64(checkpointBlockCount), cp.LastEntryId)
+	if err != nil {
+		return err
+	}
+	recoveredIndexes = append(recoveredIndexes, scan.indexes...)
+	firstEntryID, lastEntryID, maxBlockID := int64(-1), int64(-1), int64(-1)
+	if len(recoveredIndexes) > 0 {
+		firstEntryID = recoveredIndexes[0].FirstEntryID
+		lastBlock := recoveredIndexes[len(recoveredIndexes)-1]
+		lastEntryID = lastBlock.LastEntryID
+		maxBlockID = int64(lastBlock.BlockNumber)
+	}
+
+	// Commit once, replacing the previous snapshot on a fence retry. Failed
+	// incremental scans leave the existing writer state untouched.
+	f.blockIndexes = recoveredIndexes
+	f.fenced.Store(scan.fenceBlockID >= 0)
+	f.firstEntryID.Store(firstEntryID)
+	f.lastEntryID.Store(lastEntryID)
+	f.lastBlockID.Store(maxBlockID)
+	f.lastSubmittedUploadingBlockID.Store(maxBlockID)
+	f.lastSubmittedUploadingEntryID.Store(lastEntryID)
+	f.lastModifiedTime.Store(time.Now().UnixMilli())
+	f.lastCheckpointBlockCount.Store(int32(checkpointBlockCount))
+
+	logger.Ctx(ctx).Info("successfully recovered from checkpoint",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("totalBlocks", len(f.blockIndexes)),
+		zap.Int64("firstEntryID", firstEntryID),
+		zap.Int64("lastEntryID", lastEntryID),
+		zap.Int64("lastBlockID", maxBlockID))
+
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr, "recover_checkpoint", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr, "recover_checkpoint", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return nil
+}
+
 func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromFullListing")
 	defer sp.End()
@@ -362,94 +463,16 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	logger.Ctx(ctx).Info("recovering from storage by sequentially reading blocks",
 		zap.String("segmentFileKey", f.segmentFileKey))
 
-	// Try to read each data object to rebuild block indexes
-	var firstEntryID int64 = -1
-	var lastEntryID int64 = -1
-	var tempIndexRecords []*codec.IndexRecord
-	lastModifiedTime := int64(0)
-
-	// fence state recover
-	fenceBlockId := int64(-1)
-
-	// Sequentially try to read blocks starting from ID 0
-	// Block sequence must be continuous without gaps - if any block is missing, stop recovery
-	blockID := int64(0)
-	for {
-		blockKey := getBlockKey(f.segmentFileKey, blockID)
-
-		// Try to get object info first to check if it exists
-		objSize, isFenced, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, f.logNs, f.logIdStr)
-		if stateErr != nil {
-			if f.client.IsObjectNotExistsError(stateErr) {
-				// Block doesn't exist, we've reached the end of continuous sequence
-				logger.Ctx(ctx).Debug("block not found, stopping recovery as sequence must be continuous",
-					zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockID", blockID), zap.String("blockKey", blockKey))
-				break
-			}
-			// Other errors (network issues, permissions, etc.) should also stop recovery
-			logger.Ctx(ctx).Warn("failed to stat object during recovery, please retry later",
-				zap.String("blockKey", blockKey), zap.Error(stateErr))
-			return stateErr
-		}
-		if isFenced {
-			logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
-				zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fenceBlockID", blockID), zap.String("blockKey", blockKey))
-			fenceBlockId = blockID
-			break
-		}
-
-		// Update last modified time (use current time since we don't have exact modification time)
-		currentTime := time.Now().UnixMilli()
-		if currentTime > lastModifiedTime {
-			lastModifiedTime = currentTime
-		}
-
-		// Parse the data to find blockHeaderRecord
-		logger.Ctx(ctx).Debug("attempting to parse block header record during recovery",
-			zap.String("blockKey", blockKey),
-			zap.Int64("dataSize", objSize))
-
-		blockHeaderRecord, parseBlockHeaderErr := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
-		if parseBlockHeaderErr != nil {
-			logger.Ctx(ctx).Warn("failed to parse block header record during recovery, please retry later",
-				zap.String("blockKey", blockKey),
-				zap.Error(parseBlockHeaderErr))
-			return parseBlockHeaderErr
-		}
-
-		// Create index record for this block
-		indexRecord := &codec.IndexRecord{
-			BlockNumber:  int32(blockID),
-			StartOffset:  blockID,
-			BlockSize:    uint32(objSize), // Use object size as block size
-			FirstEntryID: blockHeaderRecord.FirstEntryID,
-			LastEntryID:  blockHeaderRecord.LastEntryID,
-		}
-
-		tempIndexRecords = append(tempIndexRecords, indexRecord)
-
-		if firstEntryID == -1 || blockHeaderRecord.FirstEntryID < firstEntryID {
-			firstEntryID = blockHeaderRecord.FirstEntryID
-		}
-		if blockHeaderRecord.LastEntryID > lastEntryID {
-			lastEntryID = blockHeaderRecord.LastEntryID
-		}
-
-		logger.Ctx(ctx).Debug("recovered block during recovery",
-			zap.String("blockKey", blockKey),
-			zap.Int64("blockID", blockID),
-			zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
-			zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
-			zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
-
-		blockID++
+	scan, err := f.scanContiguousBlocks(ctx, 0, -1)
+	if err != nil {
+		return err
 	}
-
-	f.lastModifiedTime.Store(lastModifiedTime)
-	if fenceBlockId > -1 {
+	tempIndexRecords := scan.indexes
+	f.lastModifiedTime.Store(scan.lastModifiedTime)
+	if scan.fenceBlockID >= 0 {
 		logger.Ctx(ctx).Info("fence block found, fence state recovered",
 			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Int64("fenceBlockId", fenceBlockId))
+			zap.Int64("fenceBlockId", scan.fenceBlockID))
 		f.fenced.Store(true)
 	}
 
@@ -461,26 +484,17 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 		return nil
 	}
 
-	// Index records are already in correct order since we read them sequentially
+	// Only publish index and entry state after the complete scan succeeds.
 	f.blockIndexes = tempIndexRecords
-
-	// Update writer state
-	if firstEntryID != -1 {
-		f.firstEntryID.Store(firstEntryID)
-	}
-	if lastEntryID != -1 {
-		f.lastEntryID.Store(lastEntryID)
-	}
-
-	// Calculate maxBlockID from the recovered blocks
-	var maxBlockID int64 = -1
-	if len(tempIndexRecords) > 0 {
-		// Since blocks are sequential, the last block has the maximum ID
-		maxBlockID = int64(tempIndexRecords[len(tempIndexRecords)-1].BlockNumber)
-		f.lastBlockID.Store(maxBlockID)
-		f.lastSubmittedUploadingBlockID.Store(maxBlockID)
-		f.lastSubmittedUploadingEntryID.Store(lastEntryID)
-	}
+	firstEntryID := tempIndexRecords[0].FirstEntryID
+	lastBlock := tempIndexRecords[len(tempIndexRecords)-1]
+	lastEntryID := lastBlock.LastEntryID
+	maxBlockID := int64(lastBlock.BlockNumber)
+	f.firstEntryID.Store(firstEntryID)
+	f.lastEntryID.Store(lastEntryID)
+	f.lastBlockID.Store(maxBlockID)
+	f.lastSubmittedUploadingBlockID.Store(maxBlockID)
+	f.lastSubmittedUploadingEntryID.Store(lastEntryID)
 
 	logger.Ctx(ctx).Info("successfully recovered writer state from storage",
 		zap.String("segmentFileKey", f.segmentFileKey),
@@ -495,7 +509,88 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	return nil
 }
 
-// parseBlockHeaderRecord extracts the BlockHeaderRecord from the end of block data
+type blockScanResult struct {
+	indexes          []*codec.IndexRecord
+	fenceBlockID     int64
+	lastModifiedTime int64
+}
+
+// scanContiguousBlocks reads blocks sequentially from startBlockID (inclusive),
+// stopping at the first missing block or fence. previousEntryID is the last
+// entry in an already recovered prefix, or -1 for a scan from block zero.
+// Both full and checkpoint recovery use the same header validation. Indexes
+// remain local to the result so a failed scan cannot publish partial index/LAC state.
+func (f *MinioFileWriter) scanContiguousBlocks(ctx context.Context, startBlockID, previousEntryID int64) (_ *blockScanResult, retErr error) {
+	result := &blockScanResult{fenceBlockID: -1}
+	startTime := time.Now()
+	blockID := startBlockID
+	operation := "stat"
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		fields := []zap.Field{
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.String("blockKey", getBlockKey(f.segmentFileKey, blockID)),
+			zap.Int64("startBlockID", startBlockID), zap.Int64("blockID", blockID),
+			zap.Int("scannedBlocks", len(result.indexes)), zap.String("operation", operation),
+			zap.Duration("elapsed", time.Since(startTime)), zap.Error(retErr),
+		}
+		if ctx.Err() != nil {
+			logger.Ctx(ctx).Debug("block recovery scan canceled", fields...)
+		} else {
+			logger.Ctx(ctx).Warn("block recovery scan failed", fields...)
+		}
+	}()
+	for ; ; blockID++ {
+		operation = "stat"
+		blockKey := getBlockKey(f.segmentFileKey, blockID)
+		objSize, isFenced, err := f.client.StatObject(ctx, f.bucket, blockKey, f.logNs, f.logIdStr)
+		if err != nil {
+			if f.client.IsObjectNotExistsError(err) {
+				logger.Ctx(ctx).Debug("block not found, stopping recovery as sequence must be continuous",
+					zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockID", blockID), zap.String("blockKey", blockKey))
+				return result, nil
+			}
+			return nil, err
+		}
+		if isFenced {
+			logger.Ctx(ctx).Debug("object is fenced, stopping recovery",
+				zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fenceBlockID", blockID), zap.String("blockKey", blockKey))
+			result.fenceBlockID = blockID
+			return result, nil
+		}
+
+		operation = "read_header"
+		header, err := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
+		if err != nil {
+			return nil, err
+		}
+		operation = "validate_header"
+		if int64(header.BlockNumber) != blockID || header.FirstEntryID < 0 || header.LastEntryID < header.FirstEntryID ||
+			(previousEntryID >= 0 && header.FirstEntryID != previousEntryID+1) {
+			return nil, fmt.Errorf("non-contiguous block header during recovery: block %d, header block %d, entry range [%d,%d], previous entry %d",
+				blockID, header.BlockNumber, header.FirstEntryID, header.LastEntryID, previousEntryID)
+		}
+
+		result.indexes = append(result.indexes, &codec.IndexRecord{
+			BlockNumber:  int32(blockID),
+			StartOffset:  blockID,
+			BlockSize:    uint32(objSize),
+			FirstEntryID: header.FirstEntryID,
+			LastEntryID:  header.LastEntryID,
+		})
+		previousEntryID = header.LastEntryID
+		result.lastModifiedTime = time.Now().UnixMilli()
+		logger.Ctx(ctx).Debug("recovered block during recovery",
+			zap.String("blockKey", blockKey), zap.Int64("blockID", blockID),
+			zap.Int32("readBlockNumber", header.BlockNumber),
+			zap.Int64("firstEntryID", header.FirstEntryID), zap.Int64("lastEntryID", header.LastEntryID))
+	}
+}
+
+// parseBlockHeaderRecord extracts the BlockHeaderRecord from the start of a
+// block. Its caller owns recovery error logging to avoid duplicate warnings.
 func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID int64, blockKey string) (*codec.BlockHeaderRecord, error) {
 	// For the first block (block 0), we need to read more data to account for the HeaderRecord
 	// For other blocks, we only need to read the BlockHeaderRecord
@@ -510,17 +605,11 @@ func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID in
 	// get block header record from the beginning of the block
 	headerRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, 0, readSize, f.logNs, f.logIdStr)
 	if getErr != nil {
-		logger.Ctx(ctx).Warn("Error getting block header record",
-			zap.String("blockKey", blockKey),
-			zap.Error(getErr))
 		return nil, getErr
 	}
 	defer headerRecordObj.Close()
 	data, readErr := minioHandler.ReadObjectFull(ctx, headerRecordObj, readSize, f.logNs, f.logIdStr)
 	if readErr != nil {
-		logger.Ctx(ctx).Warn("failed to read object data during prefetch, please retry later",
-			zap.String("blockKey", blockKey),
-			zap.Error(readErr))
 		return nil, readErr
 	}
 
@@ -528,41 +617,23 @@ func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID in
 		return nil, errors.New("empty data")
 	}
 
-	logger.Ctx(ctx).Info("parsing block data for BlockHeaderRecord",
-		zap.Int("dataSize", len(data)))
-
 	// Parse all records in the data to find the BlockHeaderRecord
 	// The BlockHeaderRecord should be at the beginning of the block
 	records, err := codec.DecodeRecordList(data)
 	if err != nil {
-		logger.Ctx(ctx).Info("failed to decode records",
-			zap.Error(err),
-			zap.Int("dataSize", len(data)))
 		return nil, fmt.Errorf("failed to decode records: %w", err)
 	}
-
-	logger.Ctx(ctx).Info("decoded records from block data",
-		zap.Int("recordCount", len(records)))
 
 	// Check if the first record is HeaderRecord (to determine if header was written)
 	if len(records) > 0 {
 		if _, ok := records[0].(*codec.HeaderRecord); ok {
-			logger.Ctx(ctx).Info("found HeaderRecord in existing block, marking header as written")
 			f.headerWritten.Store(true)
 		}
 	}
 
 	// Look for BlockHeaderRecord from the beginning (after optional HeaderRecord)
 	for i := 0; i < len(records); i++ {
-		logger.Ctx(ctx).Info("checking record type",
-			zap.Int("recordIndex", i),
-			zap.String("recordType", fmt.Sprintf("%T", records[i])))
-
 		if blockHeaderRecord, ok := records[i].(*codec.BlockHeaderRecord); ok {
-			logger.Ctx(ctx).Info("found BlockHeaderRecord",
-				zap.Int32("blockNumber", blockHeaderRecord.BlockNumber),
-				zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
-				zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
 			return blockHeaderRecord, nil
 		}
 	}
@@ -1058,7 +1129,8 @@ func (f *MinioFileWriter) sync(ctx context.Context, allowClosed bool) (retErr er
 		return nil
 	}
 
-	logger.Ctx(ctx).Debug("Sync start to submit flush tasks",
+	logger.Ctx(ctx).Debug(
+		"Sync start to submit flush tasks",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int64("syncLockWait", time.Since(syncLockWaitFinishTime).Milliseconds()),
 		zap.Int64("writeLockWait", time.Since(lockWaitFinishTime).Milliseconds()),
@@ -1151,8 +1223,128 @@ func (f *MinioFileWriter) fastFlushSuccessUnsafe(ctx context.Context, blockInfo 
 		FirstEntryID: blockInfo.FirstEntryID,
 		LastEntryID:  blockInfo.LastEntryID,
 	})
+	f.maybeWriteCheckpointAsync(ctx)
 	for _, item := range blockData {
 		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, item.EntryId, nil, f.logNs, item.EnqueueTime)
+	}
+}
+
+// maybeWriteCheckpointAsync checks whether enough new blocks have been written
+// since the last checkpoint and, if so, stores a snapshot of blockIndexes and
+// ensures a background goroutine will write it out. When a write is already
+// in-flight, the new snapshot simply replaces the pending one so that multiple
+// triggers coalesce into a single follow-up PutObject call. This keeps the
+// mechanism lightweight even under very high write throughput.
+// The threshold controls hint generation, not durability or recovery correctness;
+// <= 0 disables new writes without preventing recovery from an existing hint.
+func (f *MinioFileWriter) maybeWriteCheckpointAsync(ctx context.Context) {
+	if f.checkpointThreshold <= 0 || f.closed.Load() || f.finalized.Load() || f.inRecoveryMode.Load() {
+		return
+	}
+	blockCount := int32(len(f.blockIndexes))
+	if int(blockCount-f.lastCheckpointBlockCount.Load()) < f.checkpointThreshold {
+		return
+	}
+
+	// Snapshot the slice – IndexRecord pointers are immutable after creation.
+	snapshot := make([]*codec.IndexRecord, len(f.blockIndexes))
+	copy(snapshot, f.blockIndexes)
+
+	f.checkpointMu.Lock()
+	// Close takes this lock before waiting, so each admitted worker is tracked
+	// by that wait, or rejected here if shutdown passed the earlier closed check.
+	if f.closed.Load() || f.finalized.Load() {
+		f.checkpointMu.Unlock()
+		return
+	}
+	f.checkpointPendingSnapshot = snapshot
+	if f.checkpointRunning {
+		// A goroutine is already active; it will pick up this snapshot.
+		f.checkpointMu.Unlock()
+		return
+	}
+	f.checkpointRunning = true
+	// Data acknowledgments and their contexts do not control hint lifetime.
+	// The writer owns cancellation and joins the worker during Close instead.
+	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	f.checkpointCancel = cancel
+	f.checkpointWG.Add(1)
+	f.checkpointMu.Unlock()
+
+	go func() {
+		defer f.checkpointWG.Done()
+		defer cancel()
+		f.writeCheckpointLoop(workerCtx)
+	}()
+}
+
+// writeCheckpointLoop drains pending checkpoint snapshots and writes them.
+// Multiple triggers that arrive while a PutObject is in-flight are coalesced:
+// only the latest snapshot is kept and written in the next iteration. The loop
+// exits when no pending snapshot remains or the writer is closed/finalized.
+// Each PutObject call is bounded by a 30-second timeout to avoid hanging on
+// unresponsive object storage, and is canceled when the writer closes.
+func (f *MinioFileWriter) writeCheckpointLoop(ctx context.Context) {
+	for {
+		// Stop immediately if the writer has been closed or finalized.
+		if f.closed.Load() || f.finalized.Load() {
+			f.checkpointMu.Lock()
+			f.checkpointPendingSnapshot = nil
+			f.checkpointRunning = false
+			f.checkpointMu.Unlock()
+			return
+		}
+
+		f.checkpointMu.Lock()
+		snapshot := f.checkpointPendingSnapshot
+		f.checkpointPendingSnapshot = nil
+		if snapshot == nil {
+			f.checkpointRunning = false
+			f.checkpointMu.Unlock()
+			return
+		}
+		f.checkpointMu.Unlock()
+
+		snapshotCount := int32(len(snapshot))
+		cpKey := getCheckpointBlockKey(f.segmentFileKey)
+
+		data, err := checkpoint.Serialize(checkpoint.New(snapshot))
+		if err == nil {
+			writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err = f.client.PutObject(writeCtx, f.bucket, cpKey, bytes.NewReader(data), int64(len(data)), f.logNs, f.logIdStr)
+			cancel()
+		}
+
+		if err != nil {
+			fields := []zap.Field{
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.String("checkpointKey", cpKey),
+				zap.Error(err),
+			}
+			if ctx.Err() != nil {
+				logger.Ctx(ctx).Debug("checkpoint writer stopped", fields...)
+			} else {
+				logger.Ctx(ctx).Warn("failed to write checkpoint.blk (best-effort)", fields...)
+			}
+			// On error, clear any pending snapshot and stop the loop;
+			// the next trigger from the ack goroutine will retry.
+			f.checkpointMu.Lock()
+			f.checkpointPendingSnapshot = nil
+			f.checkpointRunning = false
+			f.checkpointMu.Unlock()
+			return
+		}
+		// The same key is overwritten: count its first successful write once,
+		// then adjust bytes by the size delta. Failed writes leave both unchanged.
+		previousSize := f.checkpointStoredSize.Swap(int64(len(data)))
+		metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr).Add(float64(int64(len(data)) - previousSize))
+		if previousSize == 0 {
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr).Inc()
+		}
+		f.lastCheckpointBlockCount.Store(snapshotCount)
+		logger.Ctx(ctx).Debug("checkpoint.blk written",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int32("blockCount", snapshotCount))
 	}
 }
 
@@ -1215,7 +1407,8 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 			blockKey := getBlockKey(f.segmentFileKey, blockId)
 			blockRawData := f.serialize(blockId, blockDataBuff)
 			actualDataSize = int64(len(blockRawData))
-			flushErr := retry.Do(ctx,
+			flushErr := retry.Do(
+				ctx,
 				func() error {
 					putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, blockKey, bytes.NewReader(blockRawData), actualDataSize, f.logNs, f.logIdStr)
 					if putErr != nil && werr.ErrObjectAlreadyExists.Is(putErr) {
@@ -1427,6 +1620,17 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return nil
 	}
+	// Stop checkpoint admission, cancel the in-flight PUT and join the worker.
+	// Cancellation alone is insufficient: a PUT may already have committed, so
+	// cleanup must not list/delete objects until its result and metrics settle.
+	f.checkpointMu.Lock()
+	f.checkpointPendingSnapshot = nil
+	if f.checkpointCancel != nil {
+		f.checkpointCancel()
+	}
+	f.checkpointMu.Unlock()
+	f.checkpointWG.Wait()
+
 	// Ensure goroutine, channel, pool, and lock cleanup always runs,
 	// even if awaitAllFlushTasks fails (e.g., timeout or context cancellation).
 	defer func() {
@@ -1512,7 +1716,8 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	firstFenceAttempt := true
 
 	// Use retry.Do to handle the fence object creation with retries
-	err := retry.Do(ctx,
+	err := retry.Do(
+		ctx,
 		func() error {
 			// recover to find incremental new blocks
 			if !firstFenceAttempt {
@@ -2510,6 +2715,10 @@ func getFooterBlockKey(segmentFileKey string) string {
 	return fmt.Sprintf("%s/footer.blk", segmentFileKey)
 }
 
+func getCheckpointBlockKey(segmentFileKey string) string {
+	return fmt.Sprintf("%s/checkpoint.blk", segmentFileKey)
+}
+
 // utils to parse object key
 func parseBlockIdFromBlockKey(key string) (id int64, isMerge bool, err error) {
 	filename := filepath.Base(key)
@@ -2549,7 +2758,7 @@ func serializeFooterAndIndexes(ctx context.Context, blocks []*codec.IndexRecord)
 
 	// Verify that indexLength is a multiple of IndexRecordSize (IndexRecord size)
 	expectedRecordSize := codec.RecordHeaderSize + codec.IndexRecordSize // 9 + 40 = 49 bytes per IndexRecord
-	if indexLength%(expectedRecordSize) != 0 {
+	if indexLength%expectedRecordSize != 0 {
 		logger.Ctx(ctx).Warn("Index length is not a multiple of expected record size",
 			zap.Int("indexLength", indexLength),
 			zap.Int("expectedRecordSize", expectedRecordSize),

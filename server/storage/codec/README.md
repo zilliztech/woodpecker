@@ -119,3 +119,33 @@ Object N: [IndexRecord...] [FooterRecord]
 ```
 
 Recovery only needs to read the tail of each object to get BlockLastRecord.
+
+## Intermediate segment checkpoints
+
+The direct object-storage writer used by embedded MinIO-compatible mode
+(`storage.type: minio/default`) can persist `checkpoint.blk` as an optional
+recovery accelerator. It contains indexes for the contiguous prefix of
+successfully acknowledged blocks. Local and service/staged writers do not
+use this checkpoint setting.
+
+`segmentSyncPolicy.checkpointThreshold` controls the number of newly committed
+blocks that triggers an asynchronous snapshot (default: 10). Smaller thresholds
+write more often and normally shorten the recovery tail; larger values reduce
+checkpoint writes. Zero or negative disables new checkpoint writes, while
+recovery may still use an existing valid checkpoint.
+
+Recovery prefers `footer.blk`. If the segment is unfinished, it tries the
+checkpoint and scans only the subsequent contiguous block sequence, stopping
+at the first missing block or fence. A missing, unreadable or invalid checkpoint
+falls back to the existing full scan. Fence, finalization and metadata ordering
+are unchanged.
+
+Checkpoint writes are asynchronous and best effort: failures do not fail data
+acknowledgments, and a slow or failed write can leave a larger recovery tail.
+The threshold is therefore not a strict upper bound on recovery work. Checkpoint
+contents scale with the number of indexed blocks, while per-block reads normally
+scale with the uncheckpointed tail.
+
+Checkpoints use typed protobuf messages with a fixed magic and payload CRC.
+See [checkpoint format](checkpoint/README.md) for the schema, evolution rules and
+full-scan fallback for earlier unpublished checkpoint formats.

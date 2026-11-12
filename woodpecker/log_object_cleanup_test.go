@@ -70,24 +70,28 @@ func TestLogObjectPrefixMatchesWriterKeys(t *testing.T) {
 func TestIsLogObject(t *testing.T) {
 	for _, rel := range []string{
 		"0/0.blk", "12/345.blk", "12/m_0.blk", "12/m_345.blk",
-		"12/footer.blk", "12/write.lock",
+		"12/footer.blk", "12/write.lock", "12/checkpoint.blk",
 	} {
 		assert.True(t, isLogObject(rel), "should match: %s", rel)
 	}
 	for _, rel := range []string{
-		"",                  // empty
-		"12",                // no object part
-		"12/",               // empty object name
-		"abc/0.blk",         // segment id is not numeric
-		"12/34/0.blk",       // nested deeper than the layout
-		"12/notes.txt",      // foreign file
-		"12/0.blk.bak",      // near miss
-		"12/blk",            // near miss
-		"12/m_.blk",         // merged block without an id
-		"12/x_1.blk",        // wrong merged prefix
-		"12/FOOTER.BLK",     // case matters
-		"12/write.lock.tmp", // near miss
-		"../../etc/passwd",  // traversal
+		"",                      // empty
+		"12",                    // no object part
+		"12/",                   // empty object name
+		"abc/0.blk",             // segment id is not numeric
+		"12/34/0.blk",           // nested deeper than the layout
+		"12/notes.txt",          // foreign file
+		"12/0.blk.bak",          // near miss
+		"12/blk",                // near miss
+		"12/m_.blk",             // merged block without an id
+		"12/x_1.blk",            // wrong merged prefix
+		"12/FOOTER.BLK",         // case matters
+		"12/write.lock.tmp",     // near miss
+		"12/checkpoint.blk.bak", // near miss
+		"12/CHECKPOINT.BLK",     // case matters
+		"abc/checkpoint.blk",    // segment id is not numeric
+		"12/34/checkpoint.blk",  // nested deeper than the layout
+		"../../etc/passwd",      // traversal
 	} {
 		assert.False(t, isLogObject(rel), "should NOT match: %s", rel)
 	}
@@ -122,6 +126,7 @@ func TestDeleteLogObjectsDeletesOnlyMatchingKeys(t *testing.T) {
 		storage,
 		"root/7/0/0.blk",
 		"root/7/0/footer.blk",
+		"root/7/0/checkpoint.blk",
 		"root/7/1/write.lock",
 		"root/7/1/m_3.blk",
 		"root/7/somebody-elses-file.txt",
@@ -140,11 +145,11 @@ func TestDeleteLogObjectsDeletesOnlyMatchingKeys(t *testing.T) {
 
 	deleted, skipped, err := deleteLogObjects(context.Background(), storage, newCleanupCfg(), 7)
 	require.NoError(t, err)
-	assert.Equal(t, 4, deleted)
+	assert.Equal(t, 5, deleted)
 
 	sort.Strings(removed)
 	assert.Equal(t, []string{
-		"root/7/0/0.blk", "root/7/0/footer.blk", "root/7/1/m_3.blk", "root/7/1/write.lock",
+		"root/7/0/0.blk", "root/7/0/checkpoint.blk", "root/7/0/footer.blk", "root/7/1/m_3.blk", "root/7/1/write.lock",
 	}, removed)
 
 	sort.Strings(skipped)
@@ -213,12 +218,12 @@ func TestSweepParkedLogObjectsReclaimsSoftDeletedLogs(t *testing.T) {
 	md.EXPECT().ListParkedLogIds(mock.Anything).Return([]int64{7}, nil)
 
 	storage := mocks_objectstorage.NewObjectStorage(t)
-	walkReturning(storage, "root/7/0/0.blk", "root/7/0/footer.blk")
+	walkReturning(storage, "root/7/0/0.blk", "root/7/0/footer.blk", "root/7/0/checkpoint.blk")
 	storage.EXPECT().RemoveObject(mock.Anything, "bucket", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	deleted, err := sweepParkedLogObjects(ctx, md, cfg, storage)
 	require.NoError(t, err)
-	assert.Equal(t, 2, deleted)
+	assert.Equal(t, 3, deleted)
 }
 
 // A sweep that cannot reach object storage must not let the caller clear the metadata: the
