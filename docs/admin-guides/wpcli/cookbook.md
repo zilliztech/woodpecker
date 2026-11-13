@@ -375,6 +375,24 @@ replicas before declaring it idle.
 
 Buffer growth, flush queue saturation and scheduler waiting/running counts separate
 arrival, backpressure and flush execution. See recipe 2 for supporting metrics and profiles.
+`woodpecker_server_file_flush_queue_wait_latency` measures each local, service/staged,
+or embedded-object-storage flush task from submission until processing starts, in
+milliseconds. It includes blocked queue/pool admission and worker scheduling, but excludes
+buffer accumulation and the task's own serialization, disk sync or object upload. Shutdown
+markers and tasks that never start are not counted. Compare it with
+`woodpecker_server_file_flush_latency` (execution) and
+`woodpecker_server_buffer_wait_latency` (buffer residence through flush completion).
+These histograms describe different populations; subtracting their P99s does not produce
+a valid queue-wait P99. The queue-wait P99 can be queried directly:
+
+```promql
+histogram_quantile(0.99,
+  sum by (le, node_id, log_ns, log_id) (
+    rate(woodpecker_server_file_flush_queue_wait_latency_bucket[5m])
+  )
+)
+```
+
 Metrics live where the work lives: client frontiers belong to the embedding application,
 not to the Woodpecker servers. `metrics list` lists names, not values:
 

@@ -92,6 +92,39 @@ func TestRegisterServerMetricsWithRegisterer(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestRegisterFlushQueueWaitMetric(t *testing.T) {
+	WpServerRegisterOnce = sync.Once{}
+	registry := prometheus.NewRegistry()
+	RegisterServerMetricsWithRegisterer(registry)
+
+	labels := []string{"registration-node", t.Name(), "17"}
+	defer WpFileFlushQueueWaitLatency.DeleteLabelValues(labels...)
+	WpFileFlushQueueWaitLatency.WithLabelValues(labels...).Observe(0.25)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != "woodpecker_server_file_flush_queue_wait_latency" {
+			continue
+		}
+		require.Equal(t, dto.MetricType_HISTOGRAM, family.GetType())
+		for _, sample := range family.GetMetric() {
+			values := make(map[string]string)
+			for _, label := range sample.GetLabel() {
+				values[label.GetName()] = label.GetValue()
+			}
+			if values["log_ns"] != t.Name() {
+				continue
+			}
+			assert.Equal(t, map[string]string{"node_id": labels[0], "log_ns": labels[1], "log_id": labels[2]}, values)
+			assert.EqualValues(t, 1, sample.GetHistogram().GetSampleCount())
+			assert.Equal(t, 0.25, sample.GetHistogram().GetSampleSum(), "retain sub-millisecond observations")
+			return
+		}
+	}
+	t.Fatal("flush queue wait histogram was not exported")
+}
+
 func TestRegisterCompactedCleanupAndFrontierMetrics(t *testing.T) {
 	t.Run("client", func(t *testing.T) {
 		WpClientRegisterOnce = sync.Once{}

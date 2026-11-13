@@ -1392,7 +1392,13 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 		}
 
 		// try to submit flush task
+		queuedAt := time.Now()
 		resultFuture := f.pool.Submit(func() (*blockUploadResult, error) {
+			queueWait := time.Since(queuedAt)
+			// The pool may block admission until a worker is available. Observe
+			// before serialization/upload, not when this future reaches the ACK queue.
+			metrics.WpFileFlushQueueWaitLatency.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr).
+				Observe(float64(queueWait) / float64(time.Millisecond))
 			op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(f.logId, f.segmentId))
 			status := "error"
 			var actualDataSize int64

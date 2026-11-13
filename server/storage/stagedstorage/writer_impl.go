@@ -55,6 +55,7 @@ type blockFlushTask struct {
 	firstEntryId int64
 	lastEntryId  int64
 	blockNumber  int32
+	queuedAt     time.Time // Set before submission; immutable once visible to the consumer.
 }
 
 // StagedFileWriter implements staged storage for segment files:
@@ -493,6 +494,9 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 		zap.Int32("blockNumber", flushTask.blockNumber),
 		zap.Int("entriesCount", len(flushTask.entries)))
 
+	// Stamp before publishing the task: the consumer may run before the send returns.
+	// A full channel's admission wait is part of waiting for this task to execute.
+	flushTask.queuedAt = time.Now()
 	select {
 	case w.flushTaskChan <- flushTask:
 		logger.Ctx(ctx).Debug("Flush task submitted successfully",
@@ -649,12 +653,17 @@ func (w *StagedFileWriter) hasSyncableEntries() bool {
 
 // processFlushTask processes a flush task by writing data to disk
 func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
+	startedAt := time.Now()
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
 
 	// Nil task is a sentinel termination signal — not a real flush, skip metrics.
 	if task == nil {
 		return
+	}
+	if len(task.entries) > 0 && !task.queuedAt.IsZero() {
+		metrics.WpFileFlushQueueWaitLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).
+			Observe(float64(startedAt.Sub(task.queuedAt)) / float64(time.Millisecond))
 	}
 
 	op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
