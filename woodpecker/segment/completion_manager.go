@@ -88,6 +88,9 @@ func (cm *completionManager) run(ctx context.Context) {
 	select {
 	case <-cm.triggerCh:
 		cm.result = cm.executeWithRetry(ctx)
+		if cm.segment.replicaSenders != nil {
+			cm.segment.replicaSenders.wait() // outside the segment lock
+		}
 		close(cm.doneCh)
 	case <-ctx.Done():
 		cm.result = ctx.Err()
