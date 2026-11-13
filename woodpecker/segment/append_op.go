@@ -88,6 +88,8 @@ type AppendOp struct {
 	channelErrors   []error // Each channel has its own error
 	finalFailureSet *bitset.BitSet
 
+	replicaLease *replicaReservation // service-mode admission, retained through all replica results
+
 	completed  atomic.Bool
 	fastCalled atomic.Bool // Prevent repeated calls to FastFail/FastSuccess
 }
@@ -458,6 +460,9 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 	if !op.fastCalled.CompareAndSwap(false, true) {
 		return // Already called
 	}
+	if op.replicaLease != nil {
+		defer op.replicaLease.replicaDone() // retain payload credit through ordered delivery
+	}
 
 	for index, ch := range op.resultChannels {
 		if ch == nil {
@@ -492,11 +497,14 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 }
 
 func (op *AppendOp) FastSuccess(ctx context.Context) {
-	op.mu.Lock()
-	defer op.mu.Unlock()
+	// Only immutable callback arguments and the terminal CAS are accessed here.
+	// A replica waiting for Buffered must not delay an already durable quorum.
 	// Use atomic operation to ensure it is executed only once
 	if !op.fastCalled.CompareAndSwap(false, true) {
 		return // Already called
+	}
+	if op.replicaLease != nil {
+		defer op.replicaLease.replicaDone() // retain payload credit through ordered delivery
 	}
 
 	// FastSuccess deliberately touches no result channel, unlike FastFail.

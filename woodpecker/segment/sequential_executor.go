@@ -28,6 +28,7 @@ import (
 
 // SequentialExecutor is a sequential append executor
 type SequentialExecutor struct {
+	replicas       *replicaSenders // service-mode sends; configured before Start
 	operationQueue chan Operation
 	done           chan struct{}
 	wg             sync.WaitGroup
@@ -103,6 +104,10 @@ func (se *SequentialExecutor) executeOp(op Operation) {
 				zap.Any("panic", r))
 		}
 	}()
+	if appendOp, ok := op.(*AppendOp); ok && se.replicas != nil {
+		se.replicas.dispatch([]*AppendOp{appendOp})
+		return
+	}
 	op.Execute()
 }
 
@@ -162,6 +167,10 @@ func (se *SequentialExecutor) executeAppendBatch(batch []*AppendOp) {
 				zap.Any("panic", r))
 		}
 	}()
+	if se.replicas != nil {
+		se.replicas.dispatch(batch)
+		return
+	}
 	NewBatchAppendOp(batch).Execute()
 }
 

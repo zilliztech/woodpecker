@@ -40,8 +40,11 @@ type SegmentRollingPolicyConfig struct {
 }
 
 type SegmentAppendConfig struct {
-	QueueSize  int `yaml:"queueSize"`
-	MaxRetries int `yaml:"maxRetries"`
+	// MaxPendingBytes bounds service-mode payloads awaiting all replica results.
+	// Zero uses 64 MiB. One larger entry may enter an otherwise empty sender.
+	MaxPendingBytes ByteSize `yaml:"maxPendingBytes"`
+	QueueSize       int      `yaml:"queueSize"`
+	MaxRetries      int      `yaml:"maxRetries"`
 	// MaxBatchEntries is the maximum number of consecutive append ops coalesced
 	// into a single AddEntries request (client-side group commit). The batch is
 	// opportunistic: it only coalesces ops already waiting in the queue, so it
@@ -53,11 +56,9 @@ type SegmentAppendConfig struct {
 	// 0 = no byte limit. Ignored when MaxBatchEntries <= 1.
 	MaxBatchBytes ByteSize `yaml:"maxBatchBytes"`
 	// SendTimeout bounds sending an append to one replica: opening the stream
-	// and receiving the replica's first (buffered) response. The send runs on
-	// the segment's executor, so every later append of the log waits while it
-	// does. Buffering an entry takes milliseconds; a replica that has not
-	// answered by then is taken as unreachable, so the segment can roll away
-	// from it. Zero means the default, 2s.
+	// and receiving the replica's first (buffered) response. Service-mode
+	// replicas advance independently; a failed lane stops admission and triggers
+	// rolling. Zero means the default, 2s.
 	SendTimeout DurationMilliseconds `yaml:"sendTimeout"`
 }
 
@@ -844,6 +845,9 @@ func (c *Configuration) validateClientConfig() error {
 	client := &c.Woodpecker.Client
 
 	// Validate SegmentAppend configuration
+	if client.SegmentAppend.MaxPendingBytes.Int64() < 0 {
+		return fmt.Errorf("segment append max pending bytes cannot be negative")
+	}
 	if client.SegmentAppend.QueueSize <= 0 {
 		return fmt.Errorf("segment append queue size must be positive, got %d", client.SegmentAppend.QueueSize)
 	}
