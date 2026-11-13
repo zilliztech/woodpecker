@@ -1352,6 +1352,9 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 	blockDataList, blockFirstEntryIdList, blockSizeList := f.prepareMultiBlockDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 	flushResultFutures := make([]*conc.Future[*blockUploadResult], 0, len(toFlushData))
 
+	// All blocks are ready now. Share this timestamp so later blocks include
+	// quota, earlier ACK-window admission, and pool waits before they can start.
+	queuedAt := time.Now()
 	var waitBuffErr error
 	for i, blockData := range blockDataList {
 		blockId := f.lastSubmittedUploadingBlockID.Add(1) // block id
@@ -1393,6 +1396,10 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 
 		// try to submit flush task
 		resultFuture := f.pool.Submit(func() (*blockUploadResult, error) {
+			queueWait := time.Since(queuedAt)
+			// Stop at worker entry, before this block's serialization/upload.
+			metrics.WpFileFlushQueueWaitLatency.WithLabelValues(metrics.NodeID, f.logNs, f.logIdStr).
+				Observe(float64(queueWait) / float64(time.Millisecond))
 			op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(f.logId, f.segmentId))
 			status := "error"
 			var actualDataSize int64

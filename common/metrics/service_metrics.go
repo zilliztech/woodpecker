@@ -194,6 +194,16 @@ var (
 		Help:      "Total bytes read in batch operations",
 	}, []string{"node_id", "log_ns", "log_id"})
 
+	// Queue wait runs from a flush task being ready for submission until it starts
+	// processing, before serialization or storage I/O. Object-storage blocks share
+	// their batch-ready timestamp to include backpressure before pool submission.
+	WpFileFlushQueueWaitLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "file_flush_queue_wait_latency",
+		Help:      "Time from a flush task being ready for submission until processing starts, including admission and scheduling but excluding flush execution (ms)",
+		Buckets:   prometheus.ExponentialBuckets(0.1, 2, 20), // 0.1ms to ~52s
+	}, []string{"node_id", "log_ns", "log_id"})
 	WpFileFlushLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
@@ -444,6 +454,7 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpFileWriters)
 		registerer.MustRegister(WpFileReadBatchLatency)
 		registerer.MustRegister(WpFileReadBatchBytes)
+		registerer.MustRegister(WpFileFlushQueueWaitLatency)
 		registerer.MustRegister(WpFileFlushLatency)
 		registerer.MustRegister(WpFileFlushBytesWritten)
 		registerer.MustRegister(WpFileCompactLatency)
