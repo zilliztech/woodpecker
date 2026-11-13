@@ -1235,12 +1235,19 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	nodeCount := len(quorumInfo.Nodes)
 	ackQuorum := int(quorumInfo.Aq)
 
+	// A child context retires surplus RPCs without cancelling the caller or the
+	// next recovery phase. Buffered result slots let cancelled workers finish
+	// even after the collector returns.
+	rpcCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	earlyQuorum := s.cfg != nil && s.cfg.Woodpecker.Storage.Type == "service" && ackQuorum > 0
+
 	// Channel to collect results from all nodes
 	resultChan := make(chan nodeCompleteResult, nodeCount)
 
 	// Send requests to all nodes in parallel
 	for _, node := range quorumInfo.Nodes {
-		go s.completeSegmentOnNode(ctx, node, lac, resultChan)
+		go s.completeSegmentOnNode(rpcCtx, node, lac, resultChan)
 	}
 
 	// Collect results from nodes
@@ -1248,9 +1255,13 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	var qualifiedResults []int64
 	var lastError error
 
+collect:
 	for i := 0; i < nodeCount; i++ {
 		select {
 		case result := <-resultChan:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if result.err != nil {
 				logger.Ctx(ctx).Warn("Failed to complete segment on node",
 					zap.String("logName", s.logName),
@@ -1271,7 +1282,7 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 				if result.lastEntryId >= lac {
 					qualifiedResults = append(qualifiedResults, result.lastEntryId)
 				} else {
-					logger.Ctx(ctx).Warn("Replica finalized but does not cover target LAC; excluding it from completion quorum",
+					logger.Ctx(ctx).Warn("Replica finalized but does not locally cover target LAC",
 						zap.String("logName", s.logName),
 						zap.Int64("logId", s.logId),
 						zap.Int64("segmentId", s.segmentId),
@@ -1279,6 +1290,11 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 						zap.Int64("localLastEntryId", result.lastEntryId),
 						zap.Int64("targetLAC", lac))
 				}
+			}
+			// The target is already fixed. A successful Finalize records that
+			// boundary even when the replica's local data stops below it.
+			if earlyQuorum && len(finalizedResults) >= ackQuorum {
+				break collect
 			}
 		case <-ctx.Done():
 			return ctx.Err()
@@ -1317,7 +1333,7 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	}
 
 	if len(qualifiedResults) < ackQuorum {
-		logger.Ctx(ctx).Warn("Segment completed with fewer covering replicas than the ack quorum; "+
+		logger.Ctx(ctx).Warn("Collected completion replies contain fewer covering replicas than the ack quorum; "+
 			"the tail is durable on those replicas until compaction uploads the segment",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -1336,7 +1352,7 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 		zap.Int("finalizedCount", len(finalizedResults)),
 		zap.Int("qualifiedCount", len(qualifiedResults)),
 		zap.Int("ackQuorum", ackQuorum),
-		zap.Int64s("allFinalizedResults", finalizedResults),
+		zap.Int64s("receivedFinalizedResults", finalizedResults),
 		zap.Int64s("qualifiedResults", qualifiedResults))
 	s.observeFinalLAC(lac)
 	return nil
@@ -1590,21 +1606,32 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 	// reachable ensemble sizes (3 and 5) the two are equal, so the threshold is unchanged.
 	ackQuorum := int(quorumInfo.Aq)
 
+	rpcCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Scope the proof to the service quorum we are optimizing. Other quorum
+	// shapes keep collecting all replies before using resolveFenceLAC.
+	earlyQuorum := s.cfg != nil && s.cfg.Woodpecker.Storage.Type == "service" &&
+		nodeCount == 3 && quorumInfo.Es == 3 && quorumInfo.Wq == 3 && ackQuorum == 2
+
 	// Channel to collect results from all nodes
 	resultChan := make(chan nodeFenceResult, nodeCount)
 
 	// Send requests to all nodes in parallel
 	for _, node := range quorumInfo.Nodes {
-		go s.fenceSegmentOnNode(ctx, node, resultChan)
+		go s.fenceSegmentOnNode(rpcCtx, node, resultChan)
 	}
 
 	// Collect results from nodes
 	var successResults []int64
 	var lastError error
 
+collect:
 	for i := 0; i < nodeCount; i++ {
 		select {
 		case result := <-resultChan:
+			if err := ctx.Err(); err != nil {
+				return -1, err
+			}
 			if result.err != nil {
 				logger.Ctx(ctx).Warn("Failed to fence segment on node",
 					zap.String("logName", s.logName),
@@ -1621,6 +1648,13 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 					zap.Int64("segmentId", s.segmentId),
 					zap.String("node", result.node),
 					zap.Int64("lastEntryId", result.lastEntryId))
+			}
+			// With Wq=3/Aq=2, resolveFenceLAC chooses sorted index 1.
+			// Two equal successful tails fix that value regardless of the third
+			// tail or an error. They also fence every possible write ACK quorum.
+			// Unequal tails MUST wait: a third reply can still change the target.
+			if earlyQuorum && len(successResults) == 2 && successResults[0] == successResults[1] {
+				break collect
 			}
 		case <-ctx.Done():
 			return -1, ctx.Err()
@@ -1650,7 +1684,7 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 		zap.Int64("lac", lac),
 		zap.Int("successCount", len(successResults)),
 		zap.Int("ackQuorum", ackQuorum),
-		zap.Int64s("allResults", successResults))
+		zap.Int64s("receivedResults", successResults))
 
 	return lac, nil
 }
