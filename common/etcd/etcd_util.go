@@ -26,7 +26,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/uber/jaeger-client-go/crossdock/log"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/server/v3/embed"
 	"google.golang.org/grpc"
 )
 
@@ -206,27 +205,4 @@ func buildKvGroup(keys, values []string) (map[string]string, error) {
 		ret[k] = values[i]
 	}
 	return ret, nil
-}
-
-// StartTestEmbedEtcdServer returns a newly created embed etcd server.
-// ### USED FOR UNIT TEST ONLY ###
-func StartTestEmbedEtcdServer() (*embed.Etcd, string, error) {
-	dir, err := os.MkdirTemp(os.TempDir(), "embed_ut")
-	if err != nil {
-		return nil, "", err
-	}
-	config := embed.NewConfig()
-	config.Dir = dir
-	config.LogLevel = "warn"
-	server, err := embed.StartEtcd(config)
-	return server, dir, err
-}
-
-// GetEmbedEtcdEndpoints returns etcd listener address for endpoint config.
-func GetEmbedEtcdEndpoints(server *embed.Etcd) []string {
-	addrs := make([]string, 0, len(server.Clients))
-	for _, l := range server.Clients {
-		addrs = append(addrs, l.Addr().String())
-	}
-	return addrs
 }
