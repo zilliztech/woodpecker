@@ -114,14 +114,14 @@ func (s *shellSession) execute(parent context.Context, args []string) (bool, err
 
 func (s *shellSession) applyPrerequisites(cmd *cobra.Command, args *[]string) error {
 	metadata := cmd.Flags().Lookup("etcd") != nil
-	metadataOverride := shellMetadataOverride(cmd)
+	metadataOverride := clientMetadataOverride(cmd)
 	if cmd.Name() == "diagnose" {
 		metadata = metadataOverride
 		for _, name := range []string{"log-name", "segment", "reader", "etcd-cert", "etcd-key", "etcd-cacert", "etcd-tls-min-version", "etcd-username", "etcd-password"} {
 			metadata = metadata || cmd.Flags().Changed(name)
 		}
 	}
-	if metadata && s.tenant == nil && !metadataOverride {
+	if metadata && (s.tenant == nil || len(s.tenant.etcd.Endpoints) == 0) && !metadataOverride {
 		return wperrors.NewPrerequisiteError("no tenant metadata connection configured. Connect with: connect <tenant> --etcd <host:port> --meta-prefix <prefix>. Physical inspection also needs --bucket <bucket> --root-path <root-path>. Run status to view the session")
 	}
 	if metadata {
@@ -156,6 +156,14 @@ func (s *shellSession) applyPrerequisites(cmd *cobra.Command, args *[]string) er
 	}
 	bucket, _ := cmd.Flags().GetString("bucket")
 	root, _ := cmd.Flags().GetString(rootFlag)
+	if s.sessionConfig && (cmd.Flags().Changed("bucket") || cmd.Flags().Changed(rootFlag)) {
+		if !cmd.Flags().Changed("bucket") || !cmd.Flags().Changed(rootFlag) {
+			return wperrors.NewUsageError("storage overrides require both --bucket and --" + rootFlag)
+		}
+		if err := (config.StorageConfig{Bucket: bucket, RootPath: root}).Validate(); err != nil {
+			return wperrors.NewUsageError(err.Error())
+		}
+	}
 	if s.tenant != nil && !metadataOverride {
 		if !cmd.Flags().Changed("bucket") {
 			bucket = s.tenant.bucket
@@ -180,10 +188,6 @@ func (s *shellSession) applyPrerequisites(cmd *cobra.Command, args *[]string) er
 	return nil
 }
 
-func shellMetadataOverride(cmd *cobra.Command) bool {
-	return cmd.Flags().Changed("etcd") || cmd.Flags().Changed("meta-prefix") || cmd.Flags().Changed("client-parameters-file") || cmd.Flags().Changed("standalone")
-}
-
 func (s *shellSession) dispatch(ctx context.Context, leaf *cobra.Command, args []string) error {
 	// Store only the current session's selected target in a private transient
 	// cli.yaml. Never copy the service context's tenant settings into this file.
@@ -205,7 +209,7 @@ func (s *shellSession) dispatch(ctx context.Context, leaf *cobra.Command, args [
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
-	if s.tenant != nil && leaf.Flags().Lookup("client-parameters-file") != nil && !shellMetadataOverride(leaf) {
+	if s.tenant != nil && len(s.tenant.etcd.Endpoints) > 0 && leaf.Flags().Lookup("client-parameters-file") != nil && !clientMetadataOverride(leaf) {
 		//nolint:gosec // G117: credentials go only to a private 0600 temporary parameter file, removed after execution.
 		params, err := yaml.Marshal(s.tenant.etcd)
 		if err != nil {

@@ -6,19 +6,35 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 const SessionConfigEnv = "WOODPECKER_SESSION_CONFIG"
 
-// SessionConfig supplies independent service and client metadata targets for one
-// invocation. Scope is descriptive only and never establishes authorization.
+// SessionConfig supplies independent service, client metadata and storage
+// settings for one invocation. Scope never establishes authorization.
 type SessionConfig struct {
-	SchemaVersion  int          `yaml:"schema_version"`
-	Scope          SessionScope `yaml:"scope,omitempty"`
-	ServiceContext *Context     `yaml:"service_context,omitempty"`
-	ClientMeta     *EtcdConfig  `yaml:"client_meta,omitempty"`
+	SchemaVersion  int            `yaml:"schema_version"`
+	Scope          SessionScope   `yaml:"scope,omitempty"`
+	ServiceContext *Context       `yaml:"service_context,omitempty"`
+	ClientMeta     *EtcdConfig    `yaml:"client_meta,omitempty"`
+	ClientStorage  *StorageConfig `yaml:"client_storage,omitempty"`
+}
+
+// StorageConfig identifies the selected client's physical data independently of
+// its etcd namespace. Field names match the existing client configuration.
+type StorageConfig struct {
+	Bucket   string `yaml:"bucket"`
+	RootPath string `yaml:"root_path"`
+}
+
+func (c StorageConfig) Validate() error {
+	if strings.TrimSpace(c.Bucket) == "" || strings.TrimSpace(c.RootPath) == "" {
+		return fmt.Errorf("client_storage requires a nonempty bucket and root_path together")
+	}
+	return nil
 }
 
 type SessionScope struct {

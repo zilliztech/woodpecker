@@ -21,11 +21,11 @@ on every v0.1.46 image. No kernel changes are introduced by this CLI/WebUI chang
 | Capability | Required configuration | Not required |
 | --- | --- | --- |
 | List checks / read a saved report | No reachable service | WP Admin, Prometheus, Jaeger, Agent |
-| `wp diagnose` | WP Admin context; explicit metadata only for scoped reader/quorum evidence | Historical monitoring |
+| `wp diagnose` | WP Admin context; client metadata for scoped reader/quorum evidence | Historical monitoring |
 | Metrics check | Prometheus connection and incident window; required scope fields | Jaeger, Agent, etcd |
 | Trace check | Jaeger connection, configured WP service and incident window | Prometheus, Agent, etcd |
 | Scenario | At least one Metrics or Trace connection and incident window | Both sources together, Agent |
-| Native metadata operations | Explicit etcd endpoints and full client metadata prefix | Monitoring connections |
+| Native metadata operations | Etcd endpoints and full client metadata prefix, from flags, a parameter file or session JSON | Monitoring connections |
 | Agent analysis | Saved findings and explicit Agent configuration | Automatic source queries or repairs |
 
 `wp diagnose --window 30s` starts native sampling **now**. `wp diag --window 15m`
@@ -63,7 +63,32 @@ Use `WOODPECKER_CLI_CONFIG=/path/to/cli.yaml`, or pass `--config` to `diag`,
 Context configuration contains server addresses, host maps, Kubernetes settings
 and evidence connections. The context name identifies the environment; a separate
 `deployment` setting is not required for Metrics or Trace. It does not contain
-tenant metadata prefixes, bucket, root path or log namespace. Those are explicit inputs to applicable commands.
+tenant metadata prefixes, bucket, root path or log namespace. Applicable commands
+accept client metadata and storage from explicit inputs or the independent
+sections of [session JSON](configuration.md#session-connection-configuration).
+
+### Session connections
+
+Cloud Terminal can supply `WOODPECKER_SESSION_CONFIG=/path/to/session.json`.
+Place the same `observability` object shown above under `service_context`, using
+JSON syntax. `wp diag` then selects its Prometheus and Trace connections without
+`--config` or `--context`; explicit configuration selection takes precedence.
+The command still selects the check, incident window and optional log/node filters:
+
+```bash
+wp diag metrics check writer-throughput --window 15m
+wp diag trace check server-append-duration --window 15m
+```
+
+Provider settings retain their existing structure, including `match_labels`,
+`match_tags`, `services`, `search`, authentication environment references and TLS.
+Supply referenced environment variables alongside the JSON file. Use absolute
+certificate paths when also using `wp shell`. Session `scope` identifiers are
+descriptive; configure the appropriate provider selectors explicitly in the file.
+
+The configuration layer can preserve additional provider objects, including
+`observability.loki`. This is forward-compatible connection transport: the
+current `wp diag` command exposes Metrics and Trace analysis, not Loki analysis.
 
 ### Direct Prometheus connection
 

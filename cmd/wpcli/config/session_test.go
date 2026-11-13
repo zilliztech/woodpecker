@@ -25,7 +25,8 @@ func TestLoadSessionPreservesConfigurationTypes(t *testing.T) {
     "endpoints": ["https://etcd:2379"], "meta_prefix": "tenant/woodpecker",
     "username": "user", "password": "secret", "cert": "client.pem", "key": "client-key.pem",
     "cacert": "ca.pem", "tls_min_version": "1.3", "tls_enabled": false
-  }
+  },
+  "client_storage": {"bucket": "instance-bucket", "root_path": "instance/root"}
 }`), 0o600))
 	s, err := LoadSession(path)
 	require.NoError(t, err)
@@ -43,6 +44,7 @@ func TestLoadSessionPreservesConfigurationTypes(t *testing.T) {
 	require.Equal(t, "1.3", s.ClientMeta.TLSMinVersion)
 	require.NotNil(t, s.ClientMeta.TLSEnabled)
 	require.False(t, *s.ClientMeta.TLSEnabled)
+	require.Equal(t, &StorageConfig{Bucket: "instance-bucket", RootPath: "instance/root"}, s.ClientStorage)
 }
 
 func TestLoadSessionIndependentSections(t *testing.T) {
@@ -60,18 +62,20 @@ func TestLoadSessionIndependentSections(t *testing.T) {
 
 func TestLoadSessionRejectsInvalidInputWithoutLeakingValues(t *testing.T) {
 	for name, body := range map[string]string{
-		"yaml":                 "schema_version: 1\nclient_meta: {password: private-value}",
-		"malformed":            `{"schema_version":1,"password":"private-value"`,
-		"trailing document":    `{"schema_version":1} {"password":"private-value"}`,
-		"unknown field":        `{"schema_version":1,"private-value":"private-value"}`,
-		"unknown nested field": `{"schema_version":1,"client_meta":{"etcd":{"password":"private-value"}}}`,
-		"duration type":        `{"schema_version":1,"service_context":{"timeout":"private-value"}}`,
-		"unsupported version":  `{"schema_version":2}`,
-		"missing version":      `{}`,
-		"null":                 `null`,
-		"array":                `[]`,
-		"duplicate key":        `{"schema_version":1,"schema_version":1}`,
-		"too large":            `{"schema_version":1,"scope":{"woodpecker_id":"` + strings.Repeat("x", 1<<20) + `"}}`,
+		"yaml":                    "schema_version: 1\nclient_meta: {password: private-value}",
+		"malformed":               `{"schema_version":1,"password":"private-value"`,
+		"trailing document":       `{"schema_version":1} {"password":"private-value"}`,
+		"unknown field":           `{"schema_version":1,"private-value":"private-value"}`,
+		"unknown nested field":    `{"schema_version":1,"client_meta":{"etcd":{"password":"private-value"}}}`,
+		"unknown storage field":   `{"schema_version":1,"client_storage":{"bucket_name":"private-value"}}`,
+		"provider must be object": `{"schema_version":1,"service_context":{"observability":{"loki":"private-value"}}}`,
+		"duration type":           `{"schema_version":1,"service_context":{"timeout":"private-value"}}`,
+		"unsupported version":     `{"schema_version":2}`,
+		"missing version":         `{}`,
+		"null":                    `null`,
+		"array":                   `[]`,
+		"duplicate key":           `{"schema_version":1,"schema_version":1}`,
+		"too large":               `{"schema_version":1,"scope":{"woodpecker_id":"` + strings.Repeat("x", 1<<20) + `"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "session.json")

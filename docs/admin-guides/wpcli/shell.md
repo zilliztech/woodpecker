@@ -13,10 +13,12 @@ check `wp shell --help` when using a released binary.
 ## Start from session JSON
 
 When `WOODPECKER_SESSION_CONFIG` points to a valid [session JSON file](configuration.md#session-connection-configuration),
-`wp shell` uses its service context and attaches its client metadata configuration
-without prompting for a saved context. This also supports piped input. Either
-connection section can be omitted; a metadata-only session does not need an Admin
-endpoint. Startup selects settings without checking network reachability; use
+`wp shell` uses its service context, including observability connections, and
+attaches its client metadata and `client_storage.bucket/root_path` defaults
+without prompting for a saved context. This also supports piped input. These
+sections are independent: a metadata-only session does not need an Admin
+endpoint, and service inventory filters can use storage without etcd.
+Startup selects settings without checking network reachability; use
 `status --check` to verify connections.
 
 ```bash
@@ -30,12 +32,18 @@ does not retain JSON node mappings. `connect <tenant>` can explicitly reattach t
 JSON metadata, while `connect <tenant> --client-parameters-file /path/to/client.yaml`
 or a complete `--etcd`/`--meta-prefix` pair selects a new target.
 
-`disconnect` clears metadata and `use` retains its existing detach-on-switch
-behavior. Child commands cannot silently reattach the original JSON metadata.
+`disconnect` clears metadata and storage, and `use` retains its existing
+detach-on-switch behavior. Child commands cannot silently reattach the original
+JSON client settings.
 Per-command metadata target overrides do not reuse the previous tenant's
-credentials, prefix, or storage settings. Provide storage bucket/root options
-separately for physical inspection. Configuration is held in the shell and is not
-written back to the JSON file or saved contexts.
+credentials, prefix, or storage settings. When `client_storage` is supplied,
+`segment inspect`, `segment probe` and `log scan` do not need repeated storage
+options; `instance data` and `node log-health` inherit the same filter.
+Explicit storage overrides must supply a complete bucket/root pair.
+Configuration is held in the shell and is not written back to the JSON file or
+saved contexts. Observability provider objects remain intact in child commands;
+use absolute certificate paths so temporary child configuration files do not
+change path resolution.
 
 The following sections describe startup without `WOODPECKER_SESSION_CONFIG`.
 

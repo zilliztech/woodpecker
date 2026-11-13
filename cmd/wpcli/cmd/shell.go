@@ -164,16 +164,25 @@ func newShellCommand() *cobra.Command {
 			if err := s.validateService(); err != nil {
 				return err
 			}
-			if session != nil && session.ClientMeta != nil {
-				conn, err := resolveMetaEtcd(&metaEtcdFlags{})
-				if err != nil {
-					return err
-				}
+			if session != nil && (session.ClientMeta != nil || session.ClientStorage != nil) {
 				tenantName := session.Scope.MilvusInstanceID
 				if !validShellName(tenantName) || tenantName == "disconnected" {
 					tenantName = "session"
 				}
-				s.tenant = &shellTenant{name: tenantName, etcd: conn.config()}
+				s.tenant = &shellTenant{name: tenantName}
+				if session.ClientMeta != nil {
+					conn, err := resolveMetaEtcd(&metaEtcdFlags{})
+					if err != nil {
+						return err
+					}
+					s.tenant.etcd = conn.config()
+				}
+				if session.ClientStorage != nil {
+					if err := session.ClientStorage.Validate(); err != nil {
+						return wperrors.NewConfigError(err.Error())
+					}
+					s.tenant.bucket, s.tenant.rootPath = session.ClientStorage.Bucket, session.ClientStorage.RootPath
+				}
 			}
 			s.printStatus(false, cmd.Context())
 			return s.loop(cmd.Context(), input, interactive)

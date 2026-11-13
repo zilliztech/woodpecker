@@ -256,7 +256,7 @@ func (s *shellSession) printStatus(check bool, parent context.Context) error {
 		printShellCheck(s.out, "Admin", adminErr)
 	}
 	var etcdErr error
-	if s.tenant == nil {
+	if s.tenant == nil || len(s.tenant.etcd.Endpoints) == 0 {
 		fmt.Fprintln(s.out, "Etcd check: skipped (no tenant configured)")
 	} else {
 		etcdErr = s.checkEtcd(parent, s.tenant)
