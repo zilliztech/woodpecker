@@ -194,14 +194,14 @@ var (
 		Help:      "Total bytes read in batch operations",
 	}, []string{"node_id", "log_ns", "log_id"})
 
-	// Queue wait ends when a submitted flush task starts processing, before any
-	// block serialization or storage I/O. It includes blocked queue admission and
-	// worker scheduling, but excludes time spent accumulating entries in a buffer.
+	// Queue wait runs from a flush task being ready for submission until it starts
+	// processing, before serialization or storage I/O. Object-storage blocks share
+	// their batch-ready timestamp to include backpressure before pool submission.
 	WpFileFlushQueueWaitLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: serverRole,
 		Name:      "file_flush_queue_wait_latency",
-		Help:      "Time from flush task submission to start of processing, including queue admission and worker scheduling but excluding flush execution (ms)",
+		Help:      "Time from a flush task being ready for submission until processing starts, including admission and scheduling but excluding flush execution (ms)",
 		Buckets:   prometheus.ExponentialBuckets(0.1, 2, 20), // 0.1ms to ~52s
 	}, []string{"node_id", "log_ns", "log_id"})
 	WpFileFlushLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{

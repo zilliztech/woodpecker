@@ -375,11 +375,15 @@ replicas before declaring it idle.
 
 Buffer growth, flush queue saturation and scheduler waiting/running counts separate
 arrival, backpressure and flush execution. See recipe 2 for supporting metrics and profiles.
-`woodpecker_server_file_flush_queue_wait_latency` measures each local, service/staged,
-or embedded-object-storage flush task from submission until processing starts, in
-milliseconds. It includes blocked queue/pool admission and worker scheduling, but excludes
-buffer accumulation and the task's own serialization, disk sync or object upload. Shutdown
-markers and tasks that never start are not counted. Compare it with
+`woodpecker_server_file_flush_queue_wait_latency` measures the milliseconds from a
+flush task being ready for submission until processing starts. Local and service/staged
+writers start immediately before queue submission. Embedded object-storage writers use
+one timestamp after preparing a batch's blocks, before the per-block submission loop;
+each block records its own sample at worker entry. This includes quota backpressure,
+earlier blocks' ACK-window admission waits, pool admission and worker scheduling.
+It excludes buffer accumulation, waiting for the Sync lock, and the task's own
+serialization, disk sync or object upload. Shutdown markers and tasks that never start
+are not counted. Compare it with
 `woodpecker_server_file_flush_latency` (execution) and
 `woodpecker_server_buffer_wait_latency` (buffer residence through flush completion).
 These histograms describe different populations; subtracting their P99s does not produce
