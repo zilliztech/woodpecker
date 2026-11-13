@@ -41,6 +41,8 @@ type ObservabilityConfig struct {
 	Trace      string `yaml:"trace,omitempty"`
 	Grafana    string `yaml:"grafana,omitempty"`
 	// Connections are inline source settings owned by this server environment.
+	// Source modules validate their own fields; the configuration transport keeps
+	// additional provider objects and nested settings intact.
 	Connections map[string]yaml.Node `yaml:"-"`
 }
 

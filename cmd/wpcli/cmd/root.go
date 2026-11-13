@@ -3,12 +3,14 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	diagcommand "github.com/zilliztech/woodpecker/diagnostics/command"
 )
 
 // NewRootCommand creates the root cobra command for wp with all global flags.
 func NewRootCommand() *cobra.Command {
+	Globals.changed = nil
 	root := &cobra.Command{
 		Use:          "wp",
 		Short:        "Woodpecker operational CLI",
@@ -17,8 +19,11 @@ func NewRootCommand() *cobra.Command {
 		// Capture the command's error stream so resolveAndDiscover can name the cluster this
 		// run is pointed at. It goes to stderr rather than stdout so piping a command into a
 		// parser is unaffected.
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			sourceWriter = cmd.ErrOrStderr()
+			Globals.changed = make(map[string]bool)
+			cmd.Flags().Visit(func(flag *pflag.Flag) { Globals.changed[flag.Name] = true })
+			return applySessionCommandDefaults(cmd)
 		},
 		PersistentPostRun: rememberCommandInputs,
 		// RunE prints help when wp is invoked with no sub-command so that

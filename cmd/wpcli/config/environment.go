@@ -43,7 +43,13 @@ func (o *ObservabilityConfig) UnmarshalYAML(n *yaml.Node) error {
 				o.Prometheus = ref
 			}
 		default:
-			return fmt.Errorf("unknown observability setting %q", key)
+			// Provider-owned objects are transported without a central list of
+			// fields or providers. The consuming backend validates its settings.
+			// Scalar references remain limited to the legacy named sources above.
+			if node.Kind != yaml.MappingNode {
+				return fmt.Errorf("observability connection %q must be an object", key)
+			}
+			o.Connections[key] = node
 		}
 	}
 	return nil

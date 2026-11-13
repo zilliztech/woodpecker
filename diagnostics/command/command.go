@@ -268,7 +268,7 @@ func (f *frontend) catalog() *cobra.Command {
 	var source, name string
 	c := &cobra.Command{Use: "catalog", Short: "List implemented checks, formulas, references and scenario manifests; no source/model queries", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg := d.Config{}
-		configured := f.path != "" || os.Getenv("WOODPECKER_CLI_CONFIG") != "" || f.metricsRules != "" || f.traceRules != ""
+		configured := f.path != "" || os.Getenv("WOODPECKER_CLI_CONFIG") != "" || os.Getenv(config.SessionConfigEnv) != "" || f.metricsRules != "" || f.traceRules != ""
 		for _, path := range config.DefaultConfigPaths() {
 			if _, err := os.Stat(path); err == nil {
 				configured = true

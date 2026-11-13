@@ -17,7 +17,7 @@ type resolved struct {
 	Context config.Context
 	Client  *client.Client
 	Members *client.Memberlist
-	// ConfigPath is the cli.yaml that supplied Context, empty when none was found.
+	// ConfigPath is the cli.yaml or session JSON that supplied Context, empty for an explicit endpoint.
 	// Reported so a run can never silently act on a cluster the operator did not pick.
 	ConfigPath string
 	// ContextName is the context ResolveContext settled on, which is cli.yaml's
@@ -46,41 +46,38 @@ func resolveAndDiscover() (*resolved, error) {
 // resolveConfiguration shares connection precedence without network access or
 // output. Bounded commands can attach their own cancellation to discovery.
 func resolveConfiguration() (*resolved, error) {
-	// 1. Load cli.yaml (if present).
-	var ctx config.Context
-	var configPath, contextName string
-	for _, p := range config.DefaultConfigPaths() {
-		f, err := config.Load(p)
-		if err == nil {
-			c, err := f.ResolveContext(Globals.Context)
-			if err != nil {
-				return nil, wperrors.NewConfigError(err.Error())
-			}
-			ctx = c
-			configPath = p
-			// Mirror ResolveContext's own fallback: an absent --context means current-context.
-			contextName = Globals.Context
-			if contextName == "" {
-				contextName = f.CurrentContext
-			}
-			break
-		}
+	ctx, configPath, contextName, err := loadServiceContext()
+	if err != nil {
+		return nil, err
 	}
-
-	// 2. Flag / env overrides on top of context.
-	// Endpoint precedence: --endpoint flag > $WOODPECKER_ENDPOINT > cli.yaml context.
-	ctx.Endpoint = resolveEndpoint(Globals.Endpoint, os.Getenv("WOODPECKER_ENDPOINT"), ctx.Endpoint)
-	if Globals.AdminPort != 0 {
+	sessionSelected := os.Getenv(config.SessionConfigEnv) != ""
+	if sessionSelected {
+		if Globals.Endpoint != "" {
+			ctx.Endpoint = Globals.Endpoint
+		}
+	} else {
+		ctx.Endpoint = resolveEndpoint(Globals.Endpoint, os.Getenv("WOODPECKER_ENDPOINT"), ctx.Endpoint)
+	}
+	apply := func(name string, nonzero bool) bool {
+		if sessionSelected && Globals.changed != nil {
+			return Globals.changed[name]
+		}
+		return nonzero
+	}
+	if apply("admin-port", Globals.AdminPort != 0) {
 		ctx.AdminPort = Globals.AdminPort
 	}
-	if Globals.Timeout != 0 {
+	if apply("timeout", Globals.Timeout != 0) {
 		ctx.Timeout = Globals.Timeout
 	}
-	if Globals.Concurrency != 0 {
+	if apply("concurrency", Globals.Concurrency != 0) {
 		ctx.Concurrency = Globals.Concurrency
 	}
-	if Globals.Strict || os.Getenv(shellChildEnv) == "1" {
+	if apply("strict", Globals.Strict || os.Getenv(shellChildEnv) == "1") {
 		ctx.Strict = Globals.Strict
+	}
+	if sessionSelected {
+		Globals.AdminPort, Globals.Timeout, Globals.Concurrency, Globals.Strict = ctx.AdminPort, ctx.Timeout, ctx.Concurrency, ctx.Strict
 	}
 
 	// Merge per-invocation overrides without mutating the context's stored map.
@@ -97,21 +94,78 @@ func resolveConfiguration() (*resolved, error) {
 	}
 	normalized, err := client.ValidateNodeAdminURLs(mappings)
 	if err != nil {
+		if sessionSelected {
+			return nil, wperrors.NewConfigError("invalid node_admin_urls: values must be HTTP(S) origins without credentials, path, query, or fragment")
+		}
 		return nil, wperrors.NewConfigError(err.Error())
 	}
 	ctx.NodeAdminURLs = normalized
-	// 3. Validate.
 	if ctx.Endpoint == "" {
-		return nil, wperrors.NewUsageError("no endpoint configured (set --endpoint, $WOODPECKER_ENDPOINT, or cli.yaml context)")
+		return nil, wperrors.NewUsageError("no endpoint configured (set --endpoint, $WOODPECKER_SESSION_CONFIG service_context.endpoint, $WOODPECKER_ENDPOINT, or cli.yaml context)")
 	}
-
-	// 4. Build the seed client and fetch memberlist.
+	if sessionSelected {
+		origins, err := client.ValidateNodeAdminURLs(map[string]string{"seed": ctx.Endpoint})
+		if err != nil {
+			return nil, wperrors.NewConfigError("service endpoint must be an HTTP(S) origin without credentials, path, query, or fragment")
+		}
+		ctx.Endpoint = origins["seed"]
+	}
 	c := client.New(ctx.Endpoint, client.ClientOpts{
-		Timeout:       ctx.Timeout,
-		AdminPort:     ctx.AdminPort,
-		NodeAdminURLs: ctx.NodeAdminURLs,
+		Timeout: ctx.Timeout, AdminPort: ctx.AdminPort, NodeAdminURLs: ctx.NodeAdminURLs,
 	})
 	return &resolved{Context: ctx, Client: c, ConfigPath: configPath, ContextName: contextName}, nil
+}
+
+// loadServiceContext selects a whole target before applying transport overrides.
+// With session configuration enabled, explicit targets never inherit the
+// session's mappings or credentials.
+func loadServiceContext() (config.Context, string, string, error) {
+	if path := os.Getenv(config.SessionConfigEnv); path != "" {
+		if Globals.changed["endpoint"] && Globals.Endpoint == "" || Globals.changed["context"] && Globals.Context == "" {
+			return config.Context{}, "", "", wperrors.NewUsageError("explicit --endpoint and --context must not be empty")
+		}
+		if Globals.Endpoint != "" {
+			f := config.File{Contexts: map[string]config.Context{"explicit": {Endpoint: Globals.Endpoint}}}
+			ctx, err := f.ResolveContext("explicit")
+			return ctx, "", "", err
+		}
+		if Globals.Context == "" {
+			session, err := config.LoadSession(path)
+			if err != nil {
+				return config.Context{}, "", "", wperrors.NewConfigError(err.Error())
+			}
+			f, err := session.ServiceFile()
+			if err != nil {
+				return config.Context{}, "", "", wperrors.NewConfigError(err.Error())
+			}
+			ctx, err := f.ResolveContext("session")
+			return ctx, path, "session", err
+		}
+	}
+	var ctx config.Context
+	var configPath, contextName string
+	for _, p := range config.DefaultConfigPaths() {
+		f, err := config.Load(p)
+		if err == nil {
+			c, err := f.ResolveContext(Globals.Context)
+			if err != nil {
+				return config.Context{}, "", "", wperrors.NewConfigError(err.Error())
+			}
+			ctx = c
+			configPath = p
+			// Mirror ResolveContext's own fallback: an absent --context means current-context.
+			contextName = Globals.Context
+			if contextName == "" {
+				contextName = f.CurrentContext
+			}
+			break
+		}
+	}
+
+	if os.Getenv(config.SessionConfigEnv) != "" && configPath == "" {
+		return config.Context{}, "", "", wperrors.NewConfigError("explicit --context requires a configured cli.yaml context")
+	}
+	return ctx, configPath, contextName, nil
 }
 
 func (r *resolved) announceMappings() {
