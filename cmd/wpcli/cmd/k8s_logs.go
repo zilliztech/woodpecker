@@ -19,7 +19,10 @@ func newK8sLogsCommand() *cobra.Command {
 		Short: "Tail logs from a Woodpecker pod",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cliK8s := resolveK8sConfig()
+			cliK8s, err := resolveK8sConfig()
+			if err != nil {
+				return err
+			}
 			executor := flags.ResolveExecutor(cliK8s)
 			cluster := flags.ResolveCluster(cliK8s)
 			logsArgs := k8s.LogsCommand(cluster, args[0], follow, tail, since)

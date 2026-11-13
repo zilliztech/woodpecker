@@ -60,7 +60,21 @@ func NativeConnection(path, name string) (d.Connection, error) {
 
 // Load resolves only environment connections; all client filters are request inputs.
 func Load(path, contextName string, overrides ...map[string]string) (d.Config, string, error) {
-	f, abs, err := LoadDocument(path)
+	var f *config.File
+	var abs string
+	var err error
+	if sessionPath := os.Getenv(config.SessionConfigEnv); sessionPath != "" && path == "" && contextName == "" {
+		var session *config.SessionConfig
+		session, err = config.LoadSession(sessionPath)
+		if err == nil {
+			f, err = session.ServiceFile()
+		}
+		if err == nil {
+			abs, err = filepath.Abs(sessionPath)
+		}
+	} else {
+		f, abs, err = LoadDocument(path)
+	}
 	if err != nil {
 		return d.Config{}, "", err
 	}

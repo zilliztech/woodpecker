@@ -3,12 +3,14 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	diagcommand "github.com/zilliztech/woodpecker/diagnostics/command"
 )
 
 // NewRootCommand creates the root cobra command for wp with all global flags.
 func NewRootCommand() *cobra.Command {
+	Globals.changed = nil
 	root := &cobra.Command{
 		Use:          "wp",
 		Short:        "Woodpecker operational CLI",
@@ -19,6 +21,8 @@ func NewRootCommand() *cobra.Command {
 		// parser is unaffected.
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			sourceWriter = cmd.ErrOrStderr()
+			Globals.changed = make(map[string]bool)
+			cmd.Flags().Visit(func(flag *pflag.Flag) { Globals.changed[flag.Name] = true })
 		},
 		PersistentPostRun: rememberCommandInputs,
 		// RunE prints help when wp is invoked with no sub-command so that

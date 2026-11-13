@@ -19,7 +19,10 @@ func newK8sScaleCommand() *cobra.Command {
 			if replicas <= 0 {
 				return wperrors.NewUsageError("--replicas must be > 0")
 			}
-			cliK8s := resolveK8sConfig()
+			cliK8s, err := resolveK8sConfig()
+			if err != nil {
+				return err
+			}
 			executor := flags.ResolveExecutor(cliK8s)
 			cluster := flags.ResolveCluster(cliK8s)
 			scaleArgs := k8s.ScaleCommand(cluster, replicas)

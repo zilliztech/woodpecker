@@ -17,6 +17,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"gopkg.in/yaml.v3"
 
+	"github.com/zilliztech/woodpecker/cmd/wpcli/client"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
 	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
@@ -28,10 +29,8 @@ import (
 // (root/marking/<logId>/<segId> in etcd). These records live in cluster metadata rather
 // than on a node, so the commands connect to etcd directly.
 //
-// The LogStore server does not connect to etcd, so the etcd section of its /admin/config is
-// unvalidated, and by default points at loopback. Discovery from it is attempted as a
-// convenience and refused when the address is unlikely to work; --etcd and --meta-prefix are
-// the reliable path, for these commands and for any metadata command added later.
+// The LogStore server cannot identify a client's metadata authority. Resolve it
+// from explicit parameters or the session's client_meta, never /admin/config.
 
 func newMarkingCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -72,12 +71,12 @@ type metaEtcdFlags struct {
 
 func (f *metaEtcdFlags) register(cmd *cobra.Command) {
 	f.command = cmd
-	cmd.Flags().StringVar(&f.parametersFile, "client-parameters-file", "", "Private temporary etcd parameters file; not cli.yaml or a candidate profile")
+	cmd.Flags().StringVar(&f.parametersFile, "client-parameters-file", "", "Private etcd parameters file; overrides session metadata")
 	cmd.Flags().StringVar(&f.clientMeta, "client-meta", "", "Deprecated; pass explicit --etcd and --meta-prefix")
 	_ = cmd.Flags().MarkHidden("client-meta")
 	cmd.Flags().BoolVar(&f.standalone, "standalone", false, "Use explicit etcd settings only; requires --etcd and --meta-prefix, skips context and Admin discovery")
-	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "Required client etcd endpoints (comma-separated); independent of server context")
-	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "Required full client metadata prefix")
+	cmd.Flags().StringVar(&f.etcdEndpoints, "etcd", "", "Client etcd endpoints (comma-separated); selects an independent metadata target")
+	cmd.Flags().StringVar(&f.metaPrefix, "meta-prefix", "", "Full client metadata prefix; required with an explicit metadata target")
 	cmd.Flags().StringVar(&f.etcdCert, "etcd-cert", "", "Local etcd TLS client cert file; explicit per-run setting")
 	cmd.Flags().StringVar(&f.etcdKey, "etcd-key", "", "Local etcd TLS client key file; explicit per-run setting")
 	cmd.Flags().StringVar(&f.etcdCACert, "etcd-cacert", "", "Local etcd TLS CA cert file; explicit per-run setting")
@@ -113,7 +112,7 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 		return nil, wperrors.NewConfigError("--client-meta profiles are no longer used; pass --etcd and --meta-prefix explicitly")
 	}
 	ctx := config.EtcdConfig{}
-	if f.parametersFile != "" {
+	if f.isSet("client-parameters-file", f.parametersFile) {
 		info, err := os.Stat(f.parametersFile)
 		if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<10 {
 			return nil, wperrors.NewConfigError("invalid client parameters file")
@@ -127,6 +126,15 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 		if decoder.Decode(&ctx) != nil {
 			return nil, wperrors.NewConfigError("invalid client parameters file")
 		}
+	} else if path := os.Getenv(config.SessionConfigEnv); path != "" && !f.standalone && !f.isSet("etcd", f.etcdEndpoints) && !f.isSet("meta-prefix", f.metaPrefix) {
+		session, err := config.LoadSession(path)
+		if err != nil {
+			return nil, wperrors.NewConfigError(err.Error())
+		}
+		if session.ClientMeta == nil {
+			return nil, wperrors.NewConfigError("WOODPECKER_SESSION_CONFIG requires client_meta for metadata commands")
+		}
+		ctx = *session.ClientMeta
 	}
 	prefix := ctx.MetaPrefix
 	if f.isSet("meta-prefix", f.metaPrefix) {
@@ -141,6 +149,9 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 	}
 	if discover && strings.TrimSpace(prefix) == "" {
 		return nil, wperrors.NewConfigError("client metadata requires --meta-prefix")
+	}
+	if discover && os.Getenv(config.SessionConfigEnv) != "" && (prefix == "." || strings.Trim(prefix, "/ ") == "") {
+		return nil, wperrors.NewConfigError("client metadata requires a complete, nonempty meta_prefix")
 	}
 	conn := &metaEtcdConn{endpoints: endpoints}
 
@@ -180,7 +191,52 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 		return nil, wperrors.NewUsageError("no etcd endpoints; pass --etcd")
 	}
 	conn.kb = meta.NewKeyBuilder(prefix)
+	if os.Getenv(config.SessionConfigEnv) != "" {
+		if err := conn.validate(discover); err != nil {
+			return nil, err
+		}
+	}
 	return conn, nil
+}
+
+// validate checks connection settings without dialing or echoing secret values.
+func (conn *metaEtcdConn) validate(requirePrefix bool) error {
+	if requirePrefix && strings.Trim(conn.kb.Prefix(), "/ ") == "" {
+		return wperrors.NewConfigError("--meta-prefix must specify the complete, nonempty tenant metadata prefix")
+	}
+	for _, endpoint := range conn.endpoints {
+		origin := endpoint
+		if !strings.Contains(origin, "://") {
+			origin = "http://" + origin
+		}
+		if _, err := client.ValidateNodeAdminURLs(map[string]string{"etcd": origin}); err != nil {
+			return wperrors.NewConfigError("invalid etcd endpoint; configure username and password separately")
+		}
+	}
+	if conn.password != "" && conn.username == "" {
+		return wperrors.NewConfigError("etcd password requires an etcd username")
+	}
+	if conn.useSSL {
+		if (conn.tlsCert == "") != (conn.tlsKey == "") {
+			return wperrors.NewConfigError("etcd TLS client cert and key must be provided together")
+		}
+		switch conn.tlsMinVer {
+		case "", "1.0", "1.1", "1.2", "1.3":
+		default:
+			return wperrors.NewConfigError("invalid etcd TLS minimum version (expected 1.0, 1.1, 1.2, or 1.3)")
+		}
+	}
+	return nil
+}
+
+func (conn *metaEtcdConn) config() config.EtcdConfig {
+	useSSL := conn.useSSL
+	return config.EtcdConfig{
+		Endpoints: conn.endpoints, MetaPrefix: conn.kb.Prefix(),
+		Username: conn.username, Password: conn.password,
+		Cert: conn.tlsCert, Key: conn.tlsKey, CACert: conn.tlsCACert,
+		TLSMinVersion: conn.tlsMinVer, TLSEnabled: &useSSL,
+	}
 }
 
 // metaEtcdClient uses host-local TLS/auth material, including server-auth TLS

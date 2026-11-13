@@ -24,14 +24,15 @@ type shellTenant struct {
 }
 
 type shellSession struct {
-	file        *config.File
-	configPath  string
-	contextName string
-	service     config.Context
-	tenant      *shellTenant
-	preferences []string
-	in          io.Reader
-	out, errOut io.Writer
+	file          *config.File
+	configPath    string
+	contextName   string
+	service       config.Context
+	sessionConfig bool
+	tenant        *shellTenant
+	preferences   []string
+	in            io.Reader
+	out, errOut   io.Writer
 	// Tests can exercise session transitions and dispatch without starting another CLI.
 	checkTenant func(context.Context, *shellTenant) error
 	runChild    func(context.Context, []string, string) error
@@ -75,6 +76,9 @@ func (s *shellSession) use(name string) error {
 }
 
 func (s *shellSession) validateService() error {
+	if s.sessionConfig && s.service.Endpoint == "" {
+		return nil // A metadata-only session has no Admin target.
+	}
 	origin, err := client.ValidateNodeAdminURLs(map[string]string{"service": s.service.Endpoint})
 	if err != nil {
 		return shellConfigError(fmt.Errorf("service endpoint must be an HTTP(S) origin without credentials, path, query, or fragment"), s.configPath)
@@ -134,42 +138,21 @@ func (s *shellSession) connectCommand() *cobra.Command {
 	flags.register(cmd)
 	cmd.Flags().StringVar(&bucket, "bucket", "", "Storage bucket (pair with --root-path)")
 	cmd.Flags().StringVar(&rootPath, "root-path", "", "Storage instance root path (pair with --bucket)")
-	_ = cmd.MarkFlagRequired("etcd")
-	_ = cmd.MarkFlagRequired("meta-prefix")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if !validShellName(args[0]) || args[0] == "disconnected" {
 			return wperrors.NewUsageError("tenant names must be nonempty, not 'disconnected', and contain no control characters or []|>")
 		}
-		if strings.TrimSpace(flags.metaPrefix) == "" || strings.Trim(flags.metaPrefix, "/") == "" {
-			return wperrors.NewUsageError("--meta-prefix must specify the complete, nonempty tenant metadata prefix")
-		}
 		if (bucket == "") != (rootPath == "") {
 			return wperrors.NewUsageError("--bucket and --root-path must be provided together")
 		}
-		candidate := &shellTenant{name: args[0], bucket: bucket, rootPath: rootPath, etcd: config.EtcdConfig{
-			MetaPrefix: flags.metaPrefix, Username: flags.etcdUsername, Password: flags.etcdPassword,
-			Cert: flags.etcdCert, Key: flags.etcdKey, CACert: flags.etcdCACert, TLSMinVersion: flags.etcdTLSMinVersion,
-		}}
-		for _, endpoint := range strings.Split(flags.etcdEndpoints, ",") {
-			endpoint = strings.TrimSpace(endpoint)
-			if endpoint == "" {
-				return wperrors.NewUsageError("--etcd must contain nonempty endpoints")
-			}
-			origin := endpoint
-			if !strings.Contains(origin, "://") {
-				origin = "http://" + origin
-			}
-			if _, err := client.ValidateNodeAdminURLs(map[string]string{"etcd": origin}); err != nil {
-				return wperrors.NewUsageError("invalid etcd endpoint; pass credentials using --etcd-username and --etcd-password")
-			}
-			candidate.etcd.Endpoints = append(candidate.etcd.Endpoints, endpoint)
+		conn, err := resolveMetaEtcd(&flags)
+		if err != nil {
+			return err
 		}
-		if (candidate.etcd.Cert == "") != (candidate.etcd.Key == "") {
-			return wperrors.NewUsageError("--etcd-cert and --etcd-key must be provided together")
+		if err := conn.validate(true); err != nil {
+			return err
 		}
-		if candidate.etcd.Password != "" && candidate.etcd.Username == "" {
-			return wperrors.NewUsageError("--etcd-password requires --etcd-username")
-		}
+		candidate := &shellTenant{name: args[0], bucket: bucket, rootPath: rootPath, etcd: conn.config()}
 		check := s.checkTenant
 		if check == nil {
 			check = s.checkEtcd
@@ -189,6 +172,9 @@ func (s *shellSession) checkEtcd(parent context.Context, tenant *shellTenant) er
 		endpoints: e.Endpoints, username: e.Username, password: e.Password,
 		tlsCert: e.Cert, tlsKey: e.Key, tlsCACert: e.CACert, tlsMinVer: e.TLSMinVersion,
 		useSSL: e.Cert != "" || e.Key != "" || e.CACert != "",
+	}
+	if e.TLSEnabled != nil {
+		conn.useSSL = *e.TLSEnabled
 	}
 	for _, endpoint := range e.Endpoints {
 		if strings.HasPrefix(endpoint, "https://") {
@@ -250,19 +236,25 @@ func (s *shellSession) printStatus(check bool, parent context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(parent, s.timeout())
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.service.Endpoint, "/")+"/admin/memberlist", nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	response, adminErr := http.DefaultClient.Do(req)
-	if adminErr == nil {
-		response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			adminErr = fmt.Errorf("HTTP %d", response.StatusCode)
+	var adminErr error
+	if s.service.Endpoint == "" {
+		fmt.Fprintln(s.out, "Admin check: skipped (no service configured)")
+	} else {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.service.Endpoint, "/")+"/admin/memberlist", nil)
+		if err != nil {
+			return err
 		}
+		req.Header.Set("Accept", "application/json")
+		response, err := http.DefaultClient.Do(req)
+		adminErr = err
+		if adminErr == nil {
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				adminErr = fmt.Errorf("HTTP %d", response.StatusCode)
+			}
+		}
+		printShellCheck(s.out, "Admin", adminErr)
 	}
-	printShellCheck(s.out, "Admin", adminErr)
 	var etcdErr error
 	if s.tenant == nil {
 		fmt.Fprintln(s.out, "Etcd check: skipped (no tenant configured)")

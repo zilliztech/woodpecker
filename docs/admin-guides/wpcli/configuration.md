@@ -94,9 +94,90 @@ with `connect`, independently of the server context. See the
 | `k8s.kubeconfig` | string | | Path to kubeconfig |
 | `k8s.kubectl` | string | kubectl | Path to kubectl binary |
 
+## Session connection configuration
+
+Cloud Terminal and other launchers can provide a private JSON file for the current
+session. The environment variable holds a **file path**, not inline JSON:
+
+```bash
+export WOODPECKER_SESSION_CONFIG=/run/cloud-terminal/sessions/example/wp/session.json
+wp node list
+wp meta log list
+wp shell
+```
+
+```json
+{
+  "schema_version": 1,
+  "scope": {
+    "woodpecker_id": "abc",
+    "milvus_instance_id": "in01-example"
+  },
+  "service_context": {
+    "endpoint": "http://10.0.12.34:9091",
+    "admin_port": 9091,
+    "timeout": "30s",
+    "node_admin_urls": {
+      "wp-abc-0.wp-abc-headless.woodpecker-pool.svc.cluster.local:18080": "http://10.0.12.34:9091"
+    }
+  },
+  "client_meta": {
+    "endpoints": ["http://10.0.20.11:2379"],
+    "meta_prefix": "example/woodpecker"
+  }
+}
+```
+
+The example addresses and prefix must be replaced with the selected instance's
+actual values. `service_context` uses the existing context fields and duration
+strings. `client_meta` uses the flat client parameter-file fields below, including
+`username`, `password`, `cert`, `key`, `cacert`, `tls_min_version`, and `tls_enabled`.
+Certificate paths refer to files local to the CLI process. `scope` is descriptive
+and does not grant access. There is no `client_meta.etcd` wrapper.
+
+The two connection sections are independent: service-only commands work without
+`client_meta`, and metadata-only commands work without `service_context`.
+Native `diagnose` metadata checks accept this source instead of requiring repeated
+`--etcd`/`--meta-prefix` flags. `wp diag` can use inline observability connections
+from `service_context`; Kubernetes commands use its `k8s` settings.
+
+When the variable is set, targets resolve as follows:
+
+| Target | Highest to lowest precedence |
+| --- | --- |
+| Admin service | Explicit `--endpoint`, explicit `--context`, session `service_context` |
+| Client metadata | Explicit `--client-parameters-file` with explicit flag overrides, explicit metadata target flags, session `client_meta` |
+| Diagnostic evidence | Explicit `--config` or `--context`, session service observability |
+
+`WOODPECKER_ENDPOINT` and an implicitly selected saved context cannot redirect a
+session. Explicit service selection starts with that target's settings; a new
+`--endpoint` does not inherit the session's node mappings. Add any mappings needed
+by that endpoint with `--node-admin-url`. Explicit transport flags such as
+`--timeout`, `--concurrency`, and `--strict=false` override the selected context.
+
+Overriding either metadata endpoint or prefix selects an independent target:
+supply both `--etcd` and `--meta-prefix`, or select a complete parameter file.
+Session credentials and TLS material do not carry over. Raw etcd commands still
+need only endpoints and use literal keys. Authentication-only flags can override
+credentials for the selected target. `--standalone` requires explicit metadata
+settings and does not select the session metadata.
+
+The file must be valid JSON with `schema_version: 1`, known configuration fields,
+and a maximum size of 1 MiB. Missing/unreadable files, invalid JSON, unsupported
+versions, and missing command-required fields are errors. A selected session
+source never falls back to localhost or a previous target. An explicit independent
+target does not require the session file. Unset the variable to restore the legacy
+resolution rules below. Help and version commands do not need connection settings.
+
+Keep the file private and exclude it from version control. Each invocation reads
+the selected file; `wp shell` captures its initial configuration and isolates child
+commands from subsequent environment changes. See the [shell guide](shell.md#start-from-session-json).
+Storage `--bucket` and `--root-path` remain separate inputs.
+
 ## Precedence
 
-Values are resolved in this order (highest priority first):
+Without `WOODPECKER_SESSION_CONFIG`, values are resolved in this order
+(highest priority first):
 
 1. **Command-line flags** (`--endpoint`, `--timeout`, etc.)
 2. **Environment variables** — `$WOODPECKER_ENDPOINT` (the admin endpoint;
@@ -170,7 +251,7 @@ meta_prefix: tenant/woodpecker
 wp meta log list --client-parameters-file /path/to/client-parameters.yaml
 ```
 
-Fields resolve as **explicit flags → explicit parameter file**. Missing authority
+Without session configuration, fields resolve as **explicit flags → explicit parameter file**. Missing authority
 is an error; there is no server-context or Admin-config discovery fallback.
 Certificate files must exist locally; cert/key must be supplied together.
 Use `--etcd-username`, `--etcd-password`, `--etcd-cacert`, `--etcd-cert`,

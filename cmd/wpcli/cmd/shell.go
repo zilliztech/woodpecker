@@ -68,11 +68,35 @@ func newShellCommand() *cobra.Command {
 		Use:   "shell",
 		Short: "Open a session with separate service and tenant metadata targets",
 		Long: "Open an interactive operational shell. Without --context, choose a context from cli.yaml.\n" +
-			"Start with no tenant metadata attached; use connect to attach a tenant.\n" +
-			"For piped input, specify --context explicitly. Type help for commands or exit to leave.",
+			"WOODPECKER_SESSION_CONFIG supplies initial service and client metadata settings when set.\n" +
+			"Otherwise start with no tenant metadata attached; use connect to attach a tenant.\n" +
+			"For piped input, select a session JSON file or specify --context. Type help or exit to leave.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			file, path, err := loadFileFromEnvOrDefault()
+			var session *config.SessionConfig
+			var file *config.File
+			var path string
+			var err error
+			sessionPath := os.Getenv(config.SessionConfigEnv)
+			if sessionPath != "" {
+				session, err = config.LoadSession(sessionPath)
+				if err != nil {
+					return wperrors.NewConfigError(err.Error())
+				}
+			}
+			if session != nil && !cmd.Flags().Changed("context") {
+				service := config.Context{}
+				if session.ServiceContext != nil {
+					service = *session.ServiceContext
+				}
+				if cmd.Flags().Changed("endpoint") {
+					service = config.Context{Endpoint: Globals.Endpoint}
+				}
+				file = &config.File{CurrentContext: "session", Contexts: map[string]config.Context{"session": service}}
+				path = sessionPath
+			} else {
+				file, path, err = loadFileFromEnvOrDefault()
+			}
 			if err != nil {
 				return shellConfigError(err, path)
 			}
@@ -83,10 +107,10 @@ func newShellCommand() *cobra.Command {
 			if f, ok := cmd.InOrStdin().(*os.File); ok {
 				interactive = readline.IsTerminal(int(f.Fd()))
 			}
-			if !interactive && !cmd.Flags().Changed("context") {
+			if !interactive && !cmd.Flags().Changed("context") && session == nil {
 				return wperrors.NewUsageError("non-interactive shell input requires --context <name>; run wp ctx list to see configured contexts")
 			}
-			s := &shellSession{file: file, configPath: path, in: cmd.InOrStdin(), out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
+			s := &shellSession{file: file, configPath: path, sessionConfig: session != nil, in: cmd.InOrStdin(), out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
 			// Capture explicitly supplied preferences before building any command trees:
 			// existing constructors bind a per-process Globals singleton.
 			s.preferences = shellPreferences(cmd)
@@ -105,7 +129,9 @@ func newShellCommand() *cobra.Command {
 			}
 			defer input.Close()
 			name := startup.Context
-			if !cmd.Flags().Changed("context") {
+			if !cmd.Flags().Changed("context") && session != nil {
+				name = "session"
+			} else if !cmd.Flags().Changed("context") {
 				name, err = selectShellContext(file, path, input, s.errOut)
 				if errors.Is(err, io.EOF) || errors.Is(err, readline.ErrInterrupt) {
 					return nil
@@ -124,6 +150,9 @@ func newShellCommand() *cobra.Command {
 			// An environment endpoint must not silently retarget a named shell context.
 			if cmd.Flags().Changed("endpoint") {
 				s.service.Endpoint = startup.Endpoint
+				if session != nil {
+					s.service.NodeAdminURLs = map[string]string{}
+				}
 			}
 			for _, entry := range startup.NodeAdminURLs {
 				key, value, ok := strings.Cut(entry, "=")
@@ -134,6 +163,17 @@ func newShellCommand() *cobra.Command {
 			}
 			if err := s.validateService(); err != nil {
 				return err
+			}
+			if session != nil && session.ClientMeta != nil {
+				conn, err := resolveMetaEtcd(&metaEtcdFlags{})
+				if err != nil {
+					return err
+				}
+				tenantName := session.Scope.MilvusInstanceID
+				if !validShellName(tenantName) || tenantName == "disconnected" {
+					tenantName = "session"
+				}
+				s.tenant = &shellTenant{name: tenantName, etcd: conn.config()}
 			}
 			s.printStatus(false, cmd.Context())
 			return s.loop(cmd.Context(), input, interactive)
