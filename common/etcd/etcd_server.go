@@ -1,3 +1,5 @@
+//go:build !noembedetcd
+
 // Licensed to the LF AI & Data foundation under one
 // or more contributor license agreements. See the NOTICE file
 // distributed with this work for additional information
@@ -18,6 +20,7 @@ package etcd
 
 import (
 	"log"
+	"os"
 	"sync"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -102,4 +105,27 @@ func StartEtcdServerUnsafe(useEmbedEtcd bool,
 
 func ShutdownEtcdServerUnsafe() {
 	etcdServer.Close()
+}
+
+// StartTestEmbedEtcdServer returns a newly created embed etcd server.
+// ### USED FOR UNIT TEST ONLY ###
+func StartTestEmbedEtcdServer() (*embed.Etcd, string, error) {
+	dir, err := os.MkdirTemp(os.TempDir(), "embed_ut")
+	if err != nil {
+		return nil, "", err
+	}
+	config := embed.NewConfig()
+	config.Dir = dir
+	config.LogLevel = "warn"
+	server, err := embed.StartEtcd(config)
+	return server, dir, err
+}
+
+// GetEmbedEtcdEndpoints returns etcd listener address for endpoint config.
+func GetEmbedEtcdEndpoints(server *embed.Etcd) []string {
+	addrs := make([]string, 0, len(server.Clients))
+	for _, l := range server.Clients {
+		addrs = append(addrs, l.Addr().String())
+	}
+	return addrs
 }
