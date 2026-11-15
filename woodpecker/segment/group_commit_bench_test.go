@@ -62,7 +62,6 @@ func benchGroupCommit(b *testing.B, maxBatchEntries int, rtt time.Duration) {
 	}
 
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 	// Single-entry path: one round-trip per entry (the serial gate).
 	mockClient.EXPECT().
 		AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).

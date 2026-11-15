@@ -84,6 +84,7 @@ type AppendOp struct {
 	quorumInfo      *proto.QuorumInfo
 	nodeScopes      []string // per node index: how far that replica sits from this client
 	resultChannels  []channel.ResultChannel
+	channelCancels  []context.CancelFunc
 	channelAttempts []int
 	channelErrors   []error // Each channel has its own error
 	finalFailureSet *bitset.BitSet
@@ -111,6 +112,7 @@ func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int6
 		quorumInfo:      quorumInfo,
 		nodeScopes:      nodeScopes,
 		resultChannels:  make([]channel.ResultChannel, 0),
+		channelCancels:  make([]context.CancelFunc, len(quorumInfo.Nodes)),
 		channelAttempts: make([]int, len(quorumInfo.Nodes)),
 		channelErrors:   make([]error, len(quorumInfo.Nodes)),
 		finalFailureSet: &bitset.BitSet{},
@@ -155,11 +157,9 @@ func replicaOutcome(result *channel.AppendResult, entryId int64) string {
 // self-inflicted cancellations into the error series, which is the same mistake
 // this change removes from the logs.
 //
-// The result, not the error, is what decides that. A remote channel reports a
-// server that answered "sync failed" as a non-nil result AND a non-nil error,
-// while a local one reports the same answer with no error at all; keying on the
-// error would drop a genuinely failing replica on the service-mode path and keep
-// it on the embedded one.
+// The result, not the error, is what decides that. Both local and remote
+// clients report a server that answered "sync failed" as a non-nil result AND
+// a non-nil error; keying on the error would drop a genuinely failing replica.
 func (op *AppendOp) recordReplicaAnswer(serverIndex int, result *channel.AppendResult) {
 	if status := replicaOutcome(result, op.entryId); status != "" {
 		op.recordReplicaResult(serverIndex, status)
@@ -261,28 +261,24 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 		// the stream it just opened - which fails this attempt, spends another retry,
 		// and can repeat until the budget is gone.
 		//
-		// Nothing worth carrying over survives an attempt anyway. Every attempt opens
-		// its own stream, context and cancel; InitResponseStream overwrites all three
-		// without cancelling the previous ones, and leaves any result already recorded
-		// in place for the next read to return instead of the new stream's.
-		//
-		// Building it fresh also picks the type the client requires, which is what the
-		// type check here existed for: a remote client's single-entry AppendEntry
-		// rejects the LocalResultChannel the batch path leaves in this slot.
-		if cli.IsRemoteClient() {
-			op.resultChannels[serverIndex] = channel.NewRemoteResultChannel(op.Identifier())
-		} else {
-			op.resultChannels[serverIndex] = channel.NewLocalResultChannel(op.Identifier())
-		}
+		// Nothing worth carrying over survives an attempt, so give each send a
+		// fresh mailbox.
+		op.resultChannels[serverIndex] = channel.NewLocalResultChannel(op.Identifier())
 	}
 
+	sendCtx, sendCancel := context.WithCancel(ctx)
+	op.channelCancels[serverIndex] = sendCancel
 	// order request
-	entryId, err := cli.AppendEntry(ctx, op.bucketName, op.rootPath, op.logId, op.toLogEntry(), op.resultChannels[serverIndex])
+	entryId, err := cli.AppendEntry(sendCtx, op.bucketName, op.rootPath, op.logId, op.toLogEntry(), op.resultChannels[serverIndex])
+	resultChan := op.resultChannels[serverIndex]
 	sp.AddEvent("AppendEntryCall", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex)))
 
 	// TODO: Consider using a centralized register and notification mechanism for improved efficiency
 	// async received ack without order
-	go op.receivedAckCallback(ctx, startRequestTime, entryId, op.resultChannels[serverIndex], err, serverIndex, serverAddr)
+	go func() {
+		defer sendCancel()
+		op.receivedAckCallback(ctx, startRequestTime, entryId, resultChan, err, serverIndex, serverAddr)
+	}()
 }
 
 func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, resultChan channel.ResultChannel, err error, serverIndex int, serverAddr string) {
@@ -293,10 +289,8 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	// stream behind it, so it owns retiring both.
 	//
 	// Retiring them HERE rather than in FastSuccess is the point. FastSuccess runs
-	// the moment the ack quorum is reached, while the replica outside that quorum
-	// is still answering perfectly normally; for a RemoteResultChannel, Close()
-	// cancels that replica's gRPC stream, so its normal completion came back as
-	// "rpc error: code = Canceled" and was logged as a failure once per entry.
+	// the moment the ack quorum is reached, while replicas outside that quorum are
+	// still answering normally.
 	//
 	// The deferred call guarantees it happens on every exit path; the explicit
 	// calls below make it happen as soon as the replica's answer is in, so the
@@ -479,6 +473,9 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 			logger.Ctx(ctx).Warn("send FastFail result to channel failed",
 				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(sendErr))
 		}
+		if index < len(op.channelCancels) && op.channelCancels[index] != nil {
+			op.channelCancels[index]()
+		}
 		closeErr := ch.Close(ctx)
 		if closeErr != nil {
 			logger.Ctx(ctx).Warn("failed to close channel in FastFail",
@@ -511,8 +508,7 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 	// synthetic result while the replica's actual ack was dropped as
 	// "channel is full".
 	//
-	// Closing is likewise left to each channel's reader; for a
-	// RemoteResultChannel, Close cancels the replica's stream mid-answer.
+	// Closing is likewise left to each channel's reader.
 
 	op.callback(op.segmentId, op.entryId, nil)
 	logger.Ctx(ctx).Debug("FastSuccess completed",

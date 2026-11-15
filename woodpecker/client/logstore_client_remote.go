@@ -156,15 +156,33 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 		streamCancel()
 		return -1, l.appendTimedOut(ctx, "append first response", logId, entry.SegId, context.DeadlineExceeded, zap.Int64("entryId", entry.EntryId))
 	}
-	// Then use the stream for async monitoring of the second AddEntryResponse status
+	// Then use the stream for async monitoring of the second AddEntryResponse status.
 	if addEntryFirstResponse.GetState() == proto.AddEntryState_Buffered {
-		remoteChannel, isRemote := syncedResultCh.(*channel.RemoteResultChannel)
-		if !isRemote {
-			streamCancel() // Cancel context if wrong channel type
-			return -1, werr.ErrInternalError.WithCauseErrMsg("append result channel type invalid: expected RemoteResultChannel for remote client")
-		}
-		// set respStream to remoteChannel with context and cancel function
-		remoteChannel.InitResponseStream(respStream, streamCtx, streamCancel)
+		go func() {
+			defer streamCancel()
+			result := &channel.AppendResult{}
+			response, recvErr := respStream.Recv()
+			if recvErr != nil {
+				result.SyncedId = -1
+				result.Err = recvErr
+			} else if response.GetState() == proto.AddEntryState_Synced {
+				result.SyncedId = response.GetEntryId()
+			} else {
+				result.SyncedId = response.GetEntryId()
+				if response.GetStatus() == nil {
+					result.Err = werr.ErrUnknownError
+				} else {
+					result.Err = werr.ErrFileWriterSyncFailed.WithCauseErrMsg(
+						fmt.Sprintf("write entry failed, err code:%d", response.GetStatus().GetCode()))
+				}
+			}
+			if sendErr := syncedResultCh.SendResult(context.Background(), result); sendErr != nil &&
+				!werr.ErrAppendOpResultChannelClosed.Is(sendErr) {
+				logger.Ctx(ctx).Warn("send async append result failed",
+					zap.Int64("logId", logId), zap.Int64("segId", entry.SegId),
+					zap.Int64("entryId", entry.EntryId), zap.Error(sendErr))
+			}
+		}()
 		return addEntryFirstResponse.GetEntryId(), nil
 	} else if addEntryFirstResponse.GetState() == proto.AddEntryState_Synced {
 		streamCancel() // Cancel context since we don't need the stream anymore

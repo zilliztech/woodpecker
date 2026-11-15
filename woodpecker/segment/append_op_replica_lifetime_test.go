@@ -28,7 +28,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/metadata"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/metrics"
@@ -44,54 +43,32 @@ import (
 // then retired by whoever was reading it, never cancelled by the completion of
 // the quorum it was not part of.
 
-// silentAckStream stands in for a replica that accepted the entry and has not
-// sent its durability ack yet: Recv blocks until the stream's own context ends,
-// exactly as a real gRPC stream does.
-type silentAckStream struct {
-	streamCtx context.Context
-}
-
-func (s *silentAckStream) Recv() (*proto.AddEntryResponse, error) {
-	<-s.streamCtx.Done()
-	return nil, s.streamCtx.Err()
-}
-
-func (s *silentAckStream) CloseSend() error             { return nil }
-func (s *silentAckStream) Header() (metadata.MD, error) { return nil, nil }
-func (s *silentAckStream) Trailer() metadata.MD         { return nil }
-func (s *silentAckStream) Context() context.Context     { return s.streamCtx }
-func (s *silentAckStream) SendMsg(m any) error          { return nil }
-func (s *silentAckStream) RecvMsg(m any) error          { return nil }
-
-// inFlightReplicas installs n RemoteResultChannels on the op, each holding a
-// stream that has not answered yet, and reports which of their cancels have
-// fired.
-func inFlightReplicas(t *testing.T, op *AppendOp, n int) ([]*channel.RemoteResultChannel, []*atomic.Bool) {
+// inFlightReplicas installs n open result channels on the op and reports which
+// per-replica send contexts have been cancelled.
+func inFlightReplicas(t *testing.T, op *AppendOp, n int) ([]*channel.LocalResultChannel, []*atomic.Bool) {
 	t.Helper()
-	channels := make([]*channel.RemoteResultChannel, n)
+	channels := make([]*channel.LocalResultChannel, n)
 	cancelled := make([]*atomic.Bool, n)
 	op.resultChannels = make([]channel.ResultChannel, n)
+	op.channelCancels = make([]context.CancelFunc, n)
 	for i := 0; i < n; i++ {
 		flag := &atomic.Bool{}
-		streamCtx, streamCancel := context.WithCancel(context.Background())
-		rc := channel.NewRemoteResultChannel(op.Identifier())
-		rc.InitResponseStream(&silentAckStream{streamCtx: streamCtx}, streamCtx, func() {
+		_, sendCancel := context.WithCancel(context.Background())
+		rc := channel.NewLocalResultChannel(op.Identifier())
+		op.channelCancels[i] = func() {
 			flag.Store(true)
-			streamCancel()
-		})
+			sendCancel()
+		}
 		channels[i] = rc
 		cancelled[i] = flag
 		op.resultChannels[i] = rc
-		t.Cleanup(streamCancel)
+		t.Cleanup(sendCancel)
 	}
 	return channels, cancelled
 }
 
-// TestAppendOp_FastSuccess_DoesNotCancelInFlightReplicaStreams is the regression
-// test for the defect itself. FastSuccess used to close every result channel,
-// and for a RemoteResultChannel Close cancels the replica's gRPC stream — so the
-// replica outside the quorum had its normal completion turned into
-// "rpc error: code = Canceled", logged as a failure once per entry.
+// TestAppendOp_FastSuccess_DoesNotCancelInFlightReplicaStreams confirms that
+// FastSuccess leaves replicas outside the quorum running.
 func TestAppendOp_FastSuccess_DoesNotCancelInFlightReplicaStreams(t *testing.T) {
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"),
 		func(int64, int64, error) {}, nil, nil,
@@ -425,50 +402,24 @@ func TestReplicaOutcome_ClassifiesTheSameWayTheAckPathsDo(t *testing.T) {
 		"a replica still catching up has not answered for this entry")
 }
 
-// remoteAnswerChannel is a RemoteResultChannel whose stream answers "sync
-// failed" - the shape a server-reported write failure actually reaches the
-// client in on the service-mode path, where ReadResult returns a non-nil result
-// AND a non-nil error. A local channel reports the same answer with no error, so
-// keying the post-quorum recording on the error rather than the result would
-// count it in embedded mode and drop it in service mode.
-func remoteAnswerChannel(t *testing.T, identifier string, entryId int64) *channel.RemoteResultChannel {
+func failedAnswerChannel(t *testing.T, identifier string, entryId int64) *channel.LocalResultChannel {
 	t.Helper()
-	resultChan := channel.NewRemoteResultChannel(identifier)
-	streamCtx, streamCancel := context.WithCancel(context.Background())
-	t.Cleanup(streamCancel)
-	resultChan.InitResponseStream(&failedAckStream{
-		streamCtx: streamCtx,
-		response: &proto.AddEntryResponse{
-			EntryId: entryId,
-			State:   proto.AddEntryState_Failed,
-			Status:  &proto.Status{Code: 500},
-		},
-	}, streamCtx, streamCancel)
+	resultChan := channel.NewLocalResultChannel(identifier)
+	require.NoError(t, resultChan.SendResult(context.Background(), &channel.AppendResult{
+		SyncedId: entryId,
+		Err:      werr.ErrFileWriterSyncFailed,
+	}))
 	return resultChan
 }
 
-type failedAckStream struct {
-	streamCtx context.Context
-	response  *proto.AddEntryResponse
-}
-
-func (s *failedAckStream) Recv() (*proto.AddEntryResponse, error) { return s.response, nil }
-func (s *failedAckStream) CloseSend() error                       { return nil }
-func (s *failedAckStream) Header() (metadata.MD, error)           { return nil, nil }
-func (s *failedAckStream) Trailer() metadata.MD                   { return nil }
-func (s *failedAckStream) Context() context.Context               { return s.streamCtx }
-func (s *failedAckStream) SendMsg(m any) error                    { return nil }
-func (s *failedAckStream) RecvMsg(m any) error                    { return nil }
-
 // TestAppendOp_RemoteReplicaAnsweringWithAFailureAfterQuorumIsCounted is the
-// service-mode form of the post-quorum rule: a replica that answered is counted
-// even though its answer arrives alongside an error.
+// post-quorum rule: a replica that answered with a write failure is counted.
 func TestAppendOp_RemoteReplicaAnsweringWithAFailureAfterQuorumIsCounted(t *testing.T) {
 	op, _ := answeringOp(t, 909005, 3, 3)
 	op.fastCalled.Store(true)
 	before := replicaOutcomeCount(op, "error")
 
-	answered := remoteAnswerChannel(t, op.Identifier(), 3)
+	answered := failedAnswerChannel(t, op.Identifier(), 3)
 	op.resultChannels[0] = answered
 	op.receivedAckCallback(context.Background(), time.Now(), 3, answered, nil, 0, "n0")
 

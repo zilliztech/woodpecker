@@ -102,7 +102,6 @@ func TestAppendOp_Retry_SecondAttemptSucceeds(t *testing.T) {
 		func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
 	op.resultChannels = make([]channel.ResultChannel, 1)
 
-	mockClient.EXPECT().IsRemoteClient().Return(false).Maybe()
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 
 	var mu sync.Mutex
@@ -178,7 +177,6 @@ func TestSegmentHandle_AckReadTimeout_FailsTheEntryAfterItsRetries(t *testing.T)
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	// Giving up on an entry puts the segment into rolling, which fences and

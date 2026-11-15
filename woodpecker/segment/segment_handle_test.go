@@ -82,7 +82,6 @@ func TestAppendAsync_Success(t *testing.T) {
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(0, nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -154,7 +153,6 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
-	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	for i := 0; i < 20; i++ {
 		mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), &proto.LogEntry{
@@ -268,7 +266,6 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(1), nil).Maybe()
-	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	for i := 0; i < 5; i++ {
@@ -417,7 +414,6 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(1), nil).Maybe()
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(1), nil).Maybe()
-	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 
 	// Mock for successful entries (0,1) and timeout entry (2)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
@@ -618,7 +614,6 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
-	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	for i := 0; i < 5; i++ {
 		mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
@@ -731,7 +726,6 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
-	mockClient.EXPECT().IsRemoteClient().Return(false).Maybe()
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	for i := 0; i < 20; i++ {
 		mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
@@ -1956,10 +1950,6 @@ func TestSegmentHandle_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 	mockClient2.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient3.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 
-	mockClient1.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient2.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient3.EXPECT().IsRemoteClient().Return(true).Maybe()
-
 	// Setup client pool to return appropriate clients
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil).Maybe()
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil).Maybe()
@@ -2133,10 +2123,6 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 	mockClient1.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient2.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient3.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
-
-	mockClient1.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient2.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient3.EXPECT().IsRemoteClient().Return(true).Maybe()
 
 	// Mock FenceSegment and CompleteSegment calls (will be triggered when rolling state is triggered)
 	mockClient1.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
@@ -2361,10 +2347,6 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 	mockClient1.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient2.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient3.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
-
-	mockClient1.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient2.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient3.EXPECT().IsRemoteClient().Return(true).Maybe()
 
 	// Mock FenceSegment and CompleteSegment calls (will be triggered when rolling state is triggered)
 	mockClient1.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(0), nil).Maybe()
@@ -2614,10 +2596,6 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 	mockClient2.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient3.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 
-	mockClient1.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient2.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient3.EXPECT().IsRemoteClient().Return(true).Maybe()
-
 	// Mock FenceSegment and CompleteSegment calls (will be triggered when rolling state is triggered)
 	mockClient1.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
 	mockClient2.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
@@ -2851,10 +2829,6 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 	mockClient1.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient2.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient3.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
-
-	mockClient1.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient2.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockClient3.EXPECT().IsRemoteClient().Return(true).Maybe()
 
 	// Mock FenceSegment and CompleteSegment calls (will be triggered when rolling state is triggered)
 	mockClient1.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()

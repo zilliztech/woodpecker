@@ -72,13 +72,8 @@ func cleanupAppendOp(t *testing.T, op *AppendOp) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// TestAppendOp_Retry_RebuildsResultChannelForRemoteClient is a regression test for
-// issue #225 (#1): the group-commit batch path installs a LocalResultChannel in
-// op.resultChannels[serverIndex]. A subsequent single-entry retry must NOT reuse
-// that Local channel against a remote client — the remote AppendEntry requires a
-// RemoteResultChannel and rejects a Local one with ErrInternalError, which would
-// make every retry deterministically fail and force a segment roll. The retry must
-// instead rebuild a fresh channel whose type matches the client.
+// TestAppendOp_Retry_RebuildsResultChannel ensures every retry gets a fresh
+// mailbox instead of reusing the channel from an earlier attempt.
 func TestAppendOp_Retry_RebuildsResultChannelForRemoteClient(t *testing.T) {
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
@@ -93,8 +88,8 @@ func TestAppendOp_Retry_RebuildsResultChannelForRemoteClient(t *testing.T) {
 	// Simulate the batch path having installed a LocalResultChannel in the slot.
 	op.resultChannels = make([]channel.ResultChannel, 1)
 	op.resultChannels[0] = channel.NewLocalResultChannel(op.Identifier())
+	previousChannel := op.resultChannels[0]
 
-	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 
 	var captured channel.ResultChannel
@@ -122,14 +117,44 @@ func TestAppendOp_Retry_RebuildsResultChannelForRemoteClient(t *testing.T) {
 		t.Fatal("receivedAckCallback did not complete")
 	}
 
-	remoteChannel, isRemote := captured.(*channel.RemoteResultChannel)
-	require.True(t, isRemote,
-		"retry must rebuild a RemoteResultChannel for a remote client, not reuse the batch's LocalResultChannel")
+	require.NotSame(t, previousChannel, captured,
+		"retry must rebuild a result channel instead of reusing the batch's mailbox")
 
 	// done is signalled from inside HandleAppendRequestFailure, which runs before
 	// receivedAckCallback's deferred close.
 	waitAckGoroutinesDone(t, op)
-	assert.True(t, remoteChannel.IsClosed(), "the ack goroutine must close the channel it was handed")
+	localChannel, ok := captured.(*channel.LocalResultChannel)
+	require.True(t, ok, "AppendEntry must receive the shared local mailbox implementation")
+	assert.True(t, localChannel.IsClosed(), "the ack goroutine must close the channel it was handed")
+}
+
+func TestAppendOp_FastFail_CancelsSendContext(t *testing.T) {
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+
+	var sendCtx context.Context
+	mockClient.EXPECT().
+		AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, _ string, _ string, _ int64, _ *proto.LogEntry, _ channel.ResultChannel) (int64, error) {
+			sendCtx = ctx
+			return 10, nil
+		})
+
+	op := NewAppendOp("bucket", "root", 1, 2, 10, []byte("v"),
+		func(int64, int64, error) {}, mockPool, nil,
+		&proto.QuorumInfo{Wq: 1, Aq: 1, Es: 1, Nodes: []string{"node1"}}, nil)
+	op.Execute()
+
+	require.NotNil(t, sendCtx)
+	op.FastFail(context.Background(), werr.ErrSegmentFenced)
+
+	select {
+	case <-sendCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("FastFail did not cancel the in-flight append context")
+	}
+	waitAckGoroutinesDone(t, op)
 }
 
 // newApplyNodeAckOp builds an AppendOp wired only for applyNodeAck unit tests
@@ -233,7 +258,6 @@ func TestAppendOp_RetryChannelRebuild_RacesWithFastFail(t *testing.T) {
 		op.resultChannels = make([]channel.ResultChannel, 1)
 		op.resultChannels[0] = channel.NewLocalResultChannel(op.Identifier())
 
-		mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
 		mockPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 		mockClient.EXPECT().
 			AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -321,7 +345,6 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 	// Setup expectations
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	done := make(chan struct{})
 	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Run(func(_ context.Context, _ int64) {
@@ -711,7 +734,6 @@ func TestAppendOp_Retry_UsesAFreshResultChannelPerAttempt(t *testing.T) {
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
@@ -773,7 +795,6 @@ func TestAppendOp_Retry_BuildsFreshChannelsAcrossQuorumRefresh(t *testing.T) {
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
@@ -815,7 +836,6 @@ func TestAppendOp_sendWriteRequest_BuildsANewChannelEachCall(t *testing.T) {
 	}
 
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
@@ -857,7 +877,6 @@ func TestAppendOp_Execute_ReplacesBothExistingAndNilChannels(t *testing.T) {
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
@@ -865,7 +884,7 @@ func TestAppendOp_Execute_ReplacesBothExistingAndNilChannels(t *testing.T) {
 	// One slot already holds a channel of the right type, the other is nil. Both
 	// are replaced: a slot's previous contents are never carried into a send.
 	op.resultChannels = make([]channel.ResultChannel, 2)
-	op.resultChannels[0] = channel.NewRemoteResultChannel("test-channel-0")
+	op.resultChannels[0] = channel.NewLocalResultChannel("test-channel-0")
 	op.resultChannels[1] = nil
 
 	preExistingChannel0 := op.resultChannels[0]
@@ -898,7 +917,6 @@ func TestAppendOp_Retry_ChannelKeepsTheOpIdentifier(t *testing.T) {
 	// mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(quorumInfo, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, nil)
 	t.Cleanup(func() { cleanupAppendOp(t, op) })
@@ -962,9 +980,6 @@ func TestAppendOp_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 	mockClient1.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient2.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient3.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient1.EXPECT().IsRemoteClient().Return(true)
-	mockClient2.EXPECT().IsRemoteClient().Return(true)
-	mockClient3.EXPECT().IsRemoteClient().Return(true)
 
 	// Expect SendAppendSuccessCallbacks to be called when quorum (aq=2) is reached
 	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Run(func(ctx context.Context, entryId int64) {
@@ -1054,9 +1069,6 @@ func TestAppendOp_QuorumWrite_Case2_TwoSuccessOneFail(t *testing.T) {
 	mockClient1.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient2.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient3.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient1.EXPECT().IsRemoteClient().Return(true)
-	mockClient2.EXPECT().IsRemoteClient().Return(true)
-	mockClient3.EXPECT().IsRemoteClient().Return(true)
 
 	// Expect SendAppendSuccessCallbacks to be called when quorum (aq=2) is reached
 	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Run(func(ctx context.Context, entryId int64) {
@@ -1156,7 +1168,6 @@ func TestAppendOp_QuorumWrite_Case3_SingleNodeSuccess(t *testing.T) {
 	// Setup expectations
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	// Expect SendAppendSuccessCallbacks to be called when quorum (aq=1) is reached
 	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Run(func(ctx context.Context, entryId int64) {
@@ -1229,7 +1240,6 @@ func TestAppendOp_QuorumWrite_Case4_SingleNodeFailure(t *testing.T) {
 
 	failureErr := errors.New("node1 failure")
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	// Expect HandleAppendRequestFailure for the failing node
 	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, 0, "node1").Return()
@@ -1351,7 +1361,6 @@ func testSimpleQuorum(t *testing.T, nodeCount, ackQuorum, successCount int, expe
 		mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, fmt.Sprintf("node%d", i+1)).Return(mockClients[i], nil)
 
 		mockClients[i].EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
-		mockClients[i].EXPECT().IsRemoteClient().Return(true)
 
 		if i >= successCount {
 			// Expect failure callback for failed nodes
@@ -1436,7 +1445,6 @@ func TestAppendOp_Execute_ParallelFanout(t *testing.T) {
 
 	var sends atomic.Int32
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
-	mockClient.EXPECT().IsRemoteClient().Return(true)
 	mockClient.EXPECT().
 		AppendEntry(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(_ context.Context, _ string, _ string, _ int64, _ *proto.LogEntry, _ channel.ResultChannel) {

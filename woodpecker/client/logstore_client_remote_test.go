@@ -216,6 +216,29 @@ func (s *silentAddEntryStream) Context() context.Context     { return s.ctx }
 func (s *silentAddEntryStream) SendMsg(m any) error          { return nil }
 func (s *silentAddEntryStream) RecvMsg(m any) error          { return nil }
 
+type cancellableAckAddEntryStream struct {
+	ctx            context.Context
+	bufferedSent   bool
+	ackWaitStarted chan struct{}
+}
+
+func (s *cancellableAckAddEntryStream) Recv() (*proto.AddEntryResponse, error) {
+	if !s.bufferedSent {
+		s.bufferedSent = true
+		return &proto.AddEntryResponse{State: proto.AddEntryState_Buffered, EntryId: 5}, nil
+	}
+	close(s.ackWaitStarted)
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *cancellableAckAddEntryStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *cancellableAckAddEntryStream) Trailer() metadata.MD         { return nil }
+func (s *cancellableAckAddEntryStream) CloseSend() error             { return nil }
+func (s *cancellableAckAddEntryStream) Context() context.Context     { return s.ctx }
+func (s *cancellableAckAddEntryStream) SendMsg(m any) error          { return nil }
+func (s *cancellableAckAddEntryStream) RecvMsg(m any) error          { return nil }
+
 // silentAddEntriesStream is the AddEntries counterpart of silentAddEntryStream.
 type silentAddEntriesStream struct {
 	ctx context.Context
@@ -250,7 +273,7 @@ func TestRemoteClient_AppendEntry_FirstResponseTimeout(t *testing.T) {
 	go func() {
 		_, err := client.AppendEntry(context.Background(), "bucket", "root", 1,
 			&proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("v")},
-			channel.NewRemoteResultChannel("ch"))
+			channel.NewLocalResultChannel("ch"))
 		done <- err
 	}()
 
@@ -753,25 +776,57 @@ func TestRemoteClient_AppendEntry_Synced(t *testing.T) {
 	assert.Equal(t, int64(10), entryId)
 }
 
-func TestRemoteClient_AppendEntry_Buffered_WrongChannelType(t *testing.T) {
+func TestRemoteClient_AppendEntry_Buffered_SendsResultToMailbox(t *testing.T) {
 	client, mockClient := newRemoteClientWithMock(t)
 	ctx := context.Background()
 
 	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
-	// Use a local result channel which is NOT a RemoteResultChannel
 	resultCh := channel.NewLocalResultChannel("ch")
 
 	stream := &mockAddEntryStream{
 		responses: []*proto.AddEntryResponse{
 			{State: proto.AddEntryState_Buffered, EntryId: 5},
+			{State: proto.AddEntryState_Synced, EntryId: 5},
 		},
 	}
 	mockClient.On("AddEntry", mock.Anything, mock.Anything).
 		Return(stream, nil)
 
-	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
-	assert.Error(t, err)
-	assert.True(t, werr.ErrInternalError.Is(err))
+	entryId, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), entryId)
+
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	result, err := resultCh.ReadResult(readCtx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), result.SyncedId)
+	assert.NoError(t, result.Err)
+}
+
+func TestRemoteClient_AppendEntry_Buffered_FailureResultToMailbox(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	resultCh := channel.NewLocalResultChannel("ch")
+	stream := &mockAddEntryStream{
+		responses: []*proto.AddEntryResponse{
+			{State: proto.AddEntryState_Buffered, EntryId: 5},
+			{State: proto.AddEntryState_Failed, EntryId: 5, Status: werr.Status(werr.ErrSegmentFenced)},
+		},
+	}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).Return(stream, nil)
+
+	entryId, err := client.AppendEntry(context.Background(), "bucket", "root", 1,
+		&proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}, resultCh)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), entryId)
+
+	readCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := resultCh.ReadResult(readCtx)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, int64(5), result.SyncedId)
+	assert.True(t, werr.ErrFileWriterSyncFailed.Is(result.Err))
 }
 
 func TestRemoteClient_AppendEntry_Failed_WithStatus(t *testing.T) {
@@ -827,12 +882,12 @@ func TestRemoteClient_AppendEntry_AfterClose(t *testing.T) {
 	assert.Contains(t, err.Error(), "client is closed")
 }
 
-func TestRemoteClient_AppendEntry_Buffered_WithRemoteChannel(t *testing.T) {
+func TestRemoteClient_AppendEntry_Buffered_StreamErrorToMailbox(t *testing.T) {
 	client, mockClient := newRemoteClientWithMock(t)
 	ctx := context.Background()
 
 	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}
-	resultCh := channel.NewRemoteResultChannel("remote-ch")
+	resultCh := channel.NewLocalResultChannel("ch")
 
 	stream := &mockAddEntryStream{
 		responses: []*proto.AddEntryResponse{
@@ -843,8 +898,45 @@ func TestRemoteClient_AppendEntry_Buffered_WithRemoteChannel(t *testing.T) {
 		Return(stream, nil)
 
 	entryId, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, int64(5), entryId)
+
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	result, err := resultCh.ReadResult(readCtx)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, int64(-1), result.SyncedId)
+	assert.ErrorIs(t, result.Err, io.EOF)
+}
+
+func TestRemoteClient_AppendEntry_CallerCancelStopsAckReader(t *testing.T) {
+	client, mockClient := newRemoteClientWithMock(t)
+	resultCh := channel.NewLocalResultChannel("ch")
+	stream := &cancellableAckAddEntryStream{ackWaitStarted: make(chan struct{})}
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { stream.ctx = args.Get(0).(context.Context) }).
+		Return(stream, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	entryId, err := client.AppendEntry(ctx, "bucket", "root", 1,
+		&proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("data")}, resultCh)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), entryId)
+
+	select {
+	case <-stream.ackWaitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("ack reader did not start")
+	}
+	cancel()
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), time.Second)
+	defer readCancel()
+	result, err := resultCh.ReadResult(readCtx)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.ErrorIs(t, result.Err, context.Canceled)
 }
 
 // =====================================================================
@@ -1088,7 +1180,7 @@ func TestRemoteClient_AppendEntry_StreamOpenTimeout(t *testing.T) {
 	go func() {
 		_, err := client.AppendEntry(context.Background(), "bucket", "root", 1,
 			&proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("v")},
-			channel.NewRemoteResultChannel("ch"))
+			channel.NewLocalResultChannel("ch"))
 		done <- err
 	}()
 
