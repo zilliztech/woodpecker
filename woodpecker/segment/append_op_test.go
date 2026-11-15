@@ -758,6 +758,7 @@ func TestAppendOp_Retry_UsesAFreshResultChannelPerAttempt(t *testing.T) {
 	assert.NotSame(t, firstChannel1, op.resultChannels[1], "retry must build its own channel")
 
 	secondChannel0 := op.resultChannels[0]
+	secondChannel1 := op.resultChannels[1]
 
 	// Third execution (simulating another retry)
 	op.Execute()
@@ -769,9 +770,15 @@ func TestAppendOp_Retry_UsesAFreshResultChannelPerAttempt(t *testing.T) {
 	// The decisive property: retiring an earlier attempt's channel must not
 	// touch the live one. This is what a shared container would have broken -
 	// the earlier ack goroutine's close would have cancelled the newest stream.
+	// This test closes the mailbox directly, so mark the op complete first; the
+	// callback should then treat the closed mailbox as cleanup, not a replica error.
+	op.fastCalled.Store(true)
 	_ = firstChannel0.Close(context.Background())
 	assert.False(t, op.resultChannels[0].IsClosed(),
 		"closing an earlier attempt's channel must leave the current attempt alone")
+	_ = firstChannel1.Close(context.Background())
+	_ = secondChannel0.Close(context.Background())
+	_ = secondChannel1.Close(context.Background())
 }
 
 // TestAppendOp_Retry_BuildsFreshChannelsAcrossQuorumRefresh covers the same rule
