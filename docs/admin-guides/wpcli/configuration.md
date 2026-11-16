@@ -108,7 +108,6 @@ wp shell
 
 ```json
 {
-  "schema_version": 1,
   "service_context": {
     "endpoint": "http://10.0.12.34:9091",
     "admin_port": 9091,
@@ -221,12 +220,18 @@ client's bucket/root. Supply the new pair when needed. Without `client_storage`,
 commands retain their existing behavior, including server-side location discovery
 where supported.
 
-The file must be valid JSON with `schema_version: 1`, known configuration fields,
-and a maximum size of 1 MiB. Missing/unreadable files, invalid JSON, unsupported
-versions, and missing command-required fields are errors. A selected session
+The file must be a JSON object with known configuration fields and a maximum size
+of 1 MiB. Missing/unreadable files, invalid JSON, invalid fields or types, and
+missing command-required fields are errors. Each command validates the settings
+it needs; no separate format version is required. A selected session
 source never falls back to localhost or a previous target. An explicit independent
 target does not require the session file. Unset the variable to restore the legacy
 resolution rules below. Help and version commands do not need connection settings.
+
+Compatibility is handled per field: new optional settings can have defaults,
+while renamed fields or changed meanings may need explicit compatibility handling.
+Older CLIs reject unknown core fields, so launchers must emit settings supported
+by the installed CLI.
 
 Keep the file private and exclude it from version control. Each invocation reads
 the selected file; `wp shell` captures its initial configuration and isolates child

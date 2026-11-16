@@ -32,7 +32,7 @@ func withSessionJSON(t *testing.T, body string) string {
 func TestSessionServicePrecedenceAndTransportDefaults(t *testing.T) {
 	withCliYAML(t, "http://saved:9091")
 	t.Setenv("WOODPECKER_ENDPOINT", "http://localhost:9091")
-	path := withSessionJSON(t, `{"schema_version":1,"service_context":{"endpoint":"http://session:19091","admin_port":19091,"timeout":"250ms","concurrency":2,"strict":true,"node_admin_urls":{"node":"http://mapped:19091"}}}`)
+	path := withSessionJSON(t, `{"service_context":{"endpoint":"http://session:19091","admin_port":19091,"timeout":"250ms","concurrency":2,"strict":true,"node_admin_urls":{"node":"http://mapped:19091"}}}`)
 	for _, tc := range []struct {
 		name     string
 		args     []string
@@ -86,7 +86,7 @@ func TestSessionServicePrecedenceAndTransportDefaults(t *testing.T) {
 func TestSessionServiceDiscoveryAndMappedFanout(t *testing.T) {
 	server := spinTestServer(t, `{"members":[{"id":"node-1","service_addr":"unresolvable.invalid:18080","state":0}]}`, nil)
 	defer server.Close()
-	withSessionJSON(t, fmt.Sprintf(`{"schema_version":1,"service_context":{"endpoint":%q,"node_admin_urls":{"unresolvable.invalid:18080":%q}}}`, server.URL, server.URL))
+	withSessionJSON(t, fmt.Sprintf(`{"service_context":{"endpoint":%q,"node_admin_urls":{"unresolvable.invalid:18080":%q}}}`, server.URL, server.URL))
 	t.Setenv("WOODPECKER_ENDPOINT", "http://127.0.0.1:1")
 	root := NewRootCommand()
 	var out bytes.Buffer
@@ -101,7 +101,7 @@ func TestSessionServiceDiscoveryAndMappedFanout(t *testing.T) {
 }
 
 func TestSessionMetadataTargetSelection(t *testing.T) {
-	withSessionJSON(t, `{"schema_version":1,"client_meta":{"endpoints":["http://session-etcd:2379"],"meta_prefix":"tenant-a/wp","username":"alice","password":"session-secret","cacert":"unused.pem","tls_enabled":false}}`)
+	withSessionJSON(t, `{"client_meta":{"endpoints":["http://session-etcd:2379"],"meta_prefix":"tenant-a/wp","username":"alice","password":"session-secret","cacert":"unused.pem","tls_enabled":false}}`)
 	Globals = GlobalFlags{Context: "irrelevant"}
 	conn, err := resolveMetaEtcd(&metaEtcdFlags{})
 	require.NoError(t, err)
@@ -136,10 +136,11 @@ func TestSessionConfigurationFailuresAreClosedAndRedacted(t *testing.T) {
 	withCliYAML(t, "http://saved:9091")
 	t.Setenv("WOODPECKER_ENDPOINT", "http://localhost:9091")
 	for _, body := range []string{
-		`{"schema_version":2}`,
-		`{"schema_version":1,"service_context":{"endpoint":"http://user:private-value@node:9091"}}`,
-		`{"schema_version":1,"service_context":{"endpoint":"http://node:9091","node_admin_urls":{"node":"http://user:private-value@node:9091"}}}`,
-		`{"schema_version":1,"service_context":{}}`,
+		`{}`,
+		`null`,
+		`{"service_context":{"endpoint":"http://user:private-value@node:9091"}}`,
+		`{"service_context":{"endpoint":"http://node:9091","node_admin_urls":{"node":"http://user:private-value@node:9091"}}}`,
+		`{"service_context":{}}`,
 	} {
 		t.Run(body, func(t *testing.T) {
 			withSessionJSON(t, body)
@@ -157,7 +158,7 @@ func TestSessionConfigurationFailuresAreClosedAndRedacted(t *testing.T) {
 		`"endpoints":[""]`,
 	} {
 		t.Run(fields, func(t *testing.T) {
-			withSessionJSON(t, `{"schema_version":1,"client_meta":{"meta_prefix":"tenant/wp",`+fields+`}}`)
+			withSessionJSON(t, `{"client_meta":{"meta_prefix":"tenant/wp",`+fields+`}}`)
 			_, err := resolveMetaEtcd(&metaEtcdFlags{})
 			require.Error(t, err)
 			require.NotContains(t, err.Error(), "private-value")
@@ -180,7 +181,7 @@ func TestSessionMetadataReadAndDiagnosisPrerequisites(t *testing.T) {
 	etcd, endpoint := startShellTestEtcd(t)
 	_, err := etcd.Put(context.Background(), "tenant/wp/example", "session-value")
 	require.NoError(t, err)
-	withSessionJSON(t, fmt.Sprintf(`{"schema_version":1,"client_meta":{"endpoints":[%q],"meta_prefix":"tenant/wp"}}`, endpoint))
+	withSessionJSON(t, fmt.Sprintf(`{"client_meta":{"endpoints":[%q],"meta_prefix":"tenant/wp"}}`, endpoint))
 	root := NewRootCommand()
 	var out bytes.Buffer
 	root.SetOut(&out)
@@ -199,7 +200,7 @@ func TestSessionMetadataReadAndDiagnosisPrerequisites(t *testing.T) {
 
 func TestSessionShellStartupAndDisconnect(t *testing.T) {
 	for _, service := range []string{"", `,"service_context":{"endpoint":"http://node:9091"}`} {
-		withSessionJSON(t, `{"schema_version":1,"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"a/wp","username":"alice","password":"private-value"}`+service+`}`)
+		withSessionJSON(t, `{"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"a/wp","username":"alice","password":"private-value"}`+service+`}`)
 		root := NewRootCommand()
 		var out bytes.Buffer
 		root.SetIn(strings.NewReader("status\ndisconnect\nstatus\nexit\n"))
@@ -234,7 +235,7 @@ func TestSessionShellExplicitMetadataDoesNotReuseCredentials(t *testing.T) {
 }
 
 func TestSessionShellConnectUsesSharedMetadataResolver(t *testing.T) {
-	withSessionJSON(t, `{"schema_version":1,"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"a/wp","username":"alice","password":"private-value","tls_enabled":false}}`)
+	withSessionJSON(t, `{"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"a/wp","username":"alice","password":"private-value","tls_enabled":false}}`)
 	s, out := newTestShell(t)
 	require.NoError(t, shellExecute(t, s, "connect", "client-a"))
 	require.Equal(t, "private-value", s.tenant.etcd.Password)
@@ -258,7 +259,7 @@ func TestSessionShellConnectUsesSharedMetadataResolver(t *testing.T) {
 func TestSessionK8sAndNativeDiagnosis(t *testing.T) {
 	server := diagnoseTestServer(t, "")
 	defer server.Close()
-	withSessionJSON(t, fmt.Sprintf(`{"schema_version":1,"service_context":{"endpoint":%q,"timeout":"1s","node_admin_urls":{"node-1":%q},"k8s":{"namespace":"session-pool","cluster":"session-cluster"}}}`, server.URL, server.URL))
+	withSessionJSON(t, fmt.Sprintf(`{"service_context":{"endpoint":%q,"timeout":"1s","node_admin_urls":{"node-1":%q},"k8s":{"namespace":"session-pool","cluster":"session-cluster"}}}`, server.URL, server.URL))
 	Globals = GlobalFlags{}
 	k8s, err := resolveK8sConfig()
 	require.NoError(t, err)
@@ -283,7 +284,7 @@ func TestSessionK8sAndNativeDiagnosis(t *testing.T) {
 
 func TestSessionMetadataOnlyShellChecks(t *testing.T) {
 	_, endpoint := startShellTestEtcd(t)
-	withSessionJSON(t, fmt.Sprintf(`{"schema_version":1,"client_meta":{"endpoints":[%q],"meta_prefix":"tenant/wp"}}`, endpoint))
+	withSessionJSON(t, fmt.Sprintf(`{"client_meta":{"endpoints":[%q],"meta_prefix":"tenant/wp"}}`, endpoint))
 	root := NewRootCommand()
 	var out bytes.Buffer
 	root.SetIn(strings.NewReader("status --check\nexit\n"))
@@ -297,7 +298,7 @@ func TestSessionMetadataOnlyShellChecks(t *testing.T) {
 
 func TestSessionMetadataRejectsImplicitPrefixDefaults(t *testing.T) {
 	for _, prefix := range []string{"", ".", "/", "   "} {
-		withSessionJSON(t, fmt.Sprintf(`{"schema_version":1,"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":%q}}`, prefix))
+		withSessionJSON(t, fmt.Sprintf(`{"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":%q}}`, prefix))
 		_, err := resolveMetaEtcd(&metaEtcdFlags{})
 		require.Error(t, err)
 		_, err = resolveEtcd(&metaEtcdFlags{}, false)

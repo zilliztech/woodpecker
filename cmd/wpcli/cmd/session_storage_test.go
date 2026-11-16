@@ -48,7 +48,7 @@ func TestSessionStorageReachesAdminRequests(t *testing.T) {
 		_, _ = io.WriteString(w, `{"node_id":"node-1","instances":[],"outcome":"entry_not_found","first_entry":0,"last_entry":1,"survey":{"blocks":[{"block":0,"first_entry_id":0,"last_entry_id":1,"status":"ok"}],"stop_reason":"end_of_segment"}}`)
 	}))
 	defer server.Close()
-	withSessionJSON(t, fmt.Sprintf(`{"schema_version":1,"service_context":{"endpoint":%q,"node_admin_urls":{"node:18080":%q}},"client_meta":{"endpoints":[%q],"meta_prefix":"tenant/wp"},"client_storage":{"bucket":"instance-bucket","root_path":"instance/root"}}`, server.URL, server.URL, endpoint))
+	withSessionJSON(t, fmt.Sprintf(`{"service_context":{"endpoint":%q,"node_admin_urls":{"node:18080":%q}},"client_meta":{"endpoints":[%q],"meta_prefix":"tenant/wp"},"client_storage":{"bucket":"instance-bucket","root_path":"instance/root"}}`, server.URL, server.URL, endpoint))
 	for _, args := range [][]string{
 		{"instance", "data", "node-1"},
 		{"node", "log-health", "node-1"},
@@ -77,7 +77,7 @@ func TestSessionStorageReachesAdminRequests(t *testing.T) {
 // A newly registered command gets the same defaults without a command-name entry
 // in the session loader. Explicit target changes never combine two instances.
 func TestSessionStorageSharedDefaultsAndOverrides(t *testing.T) {
-	withSessionJSON(t, `{"schema_version":1,"client_storage":{"bucket":"session-bucket","root_path":"session/root"}}`)
+	withSessionJSON(t, `{"client_storage":{"bucket":"session-bucket","root_path":"session/root"}}`)
 	for _, rootFlag := range []string{"root", "root-path"} {
 		for _, tc := range []struct {
 			name                    string
@@ -125,7 +125,7 @@ func TestSessionStorageSharedDefaultsAndOverrides(t *testing.T) {
 
 func TestSessionStorageInvalidAndMissingFile(t *testing.T) {
 	for _, storage := range []string{`{"bucket":"private-value"}`, `{"root_path":"private-value"}`, `{"bucket":" ","root_path":"private-value"}`} {
-		withSessionJSON(t, `{"schema_version":1,"client_storage":`+storage+`}`)
+		withSessionJSON(t, `{"client_storage":`+storage+`}`)
 		root := NewRootCommand()
 		root.SetOut(io.Discard)
 		root.SetErr(io.Discard)
@@ -141,7 +141,7 @@ func TestSessionStorageInvalidAndMissingFile(t *testing.T) {
 }
 
 func TestSessionShellStorageOnlyStartup(t *testing.T) {
-	withSessionJSON(t, `{"schema_version":1,"client_storage":{"bucket":"instance-bucket","root_path":"instance/root"}}`)
+	withSessionJSON(t, `{"client_storage":{"bucket":"instance-bucket","root_path":"instance/root"}}`)
 	root := NewRootCommand()
 	var out bytes.Buffer
 	root.SetIn(strings.NewReader("status --check\ndisconnect\nstatus\nexit\n"))
@@ -156,7 +156,7 @@ func TestSessionShellStorageOnlyStartup(t *testing.T) {
 }
 
 func TestSessionShellStorageDefaultsAndDetach(t *testing.T) {
-	withSessionJSON(t, `{"schema_version":1,"client_storage":{"bucket":"stale-bucket","root_path":"stale/root"}}`)
+	withSessionJSON(t, `{"client_storage":{"bucket":"stale-bucket","root_path":"stale/root"}}`)
 	s, _ := newTestShell(t)
 	s.sessionConfig = true
 	s.tenant = &shellTenant{name: "client-a", bucket: "instance-bucket", rootPath: "instance/root"}
@@ -179,7 +179,7 @@ func TestSessionShellStorageDefaultsAndDetach(t *testing.T) {
 }
 
 func TestSessionShellConnectAttachesStorage(t *testing.T) {
-	withSessionJSON(t, `{"schema_version":1,"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"tenant/wp"},"client_storage":{"bucket":"instance-bucket","root_path":"instance/root"}}`)
+	withSessionJSON(t, `{"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"tenant/wp"},"client_storage":{"bucket":"instance-bucket","root_path":"instance/root"}}`)
 	s, _ := newTestShell(t)
 	s.sessionConfig = true
 	require.NoError(t, shellExecute(t, s, "connect", "client-a"))
@@ -197,7 +197,7 @@ func TestSessionShellConnectAttachesStorage(t *testing.T) {
 }
 
 func TestSessionShellPreservesProviderObjects(t *testing.T) {
-	path := withSessionJSON(t, `{"schema_version":1,"service_context":{"endpoint":"http://service:9091","observability":{"loki":{"endpoint":"http://logs:3100","match_labels":{"namespace":"wp"},"tenant_env":"LOG_TENANT"},"future_source":{"nested":{"values":[1,2]}}}}}`)
+	path := withSessionJSON(t, `{"service_context":{"endpoint":"http://service:9091","observability":{"loki":{"endpoint":"http://logs:3100","match_labels":{"namespace":"wp"},"tenant_env":"LOG_TENANT"},"future_source":{"nested":{"values":[1,2]}}}}}`)
 	session, err := config.LoadSession(path)
 	require.NoError(t, err)
 	s, _ := newTestShell(t)

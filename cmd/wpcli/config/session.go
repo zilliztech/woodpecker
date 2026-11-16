@@ -16,7 +16,6 @@ const SessionConfigEnv = "WOODPECKER_SESSION_CONFIG"
 // SessionConfig supplies independent service, client metadata and storage
 // settings for one invocation.
 type SessionConfig struct {
-	SchemaVersion  int            `yaml:"schema_version"`
 	ServiceContext *Context       `yaml:"service_context,omitempty"`
 	ClientMeta     *EtcdConfig    `yaml:"client_meta,omitempty"`
 	ClientStorage  *StorageConfig `yaml:"client_storage,omitempty"`
@@ -61,17 +60,18 @@ func LoadSession(path string) (*SessionConfig, error) {
 	if err != nil || len(body) > maxSize {
 		return nil, fmt.Errorf("%s: cannot read configuration file (maximum 1 MiB)", SessionConfigEnv)
 	}
+	body = bytes.TrimSpace(body)
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("%s: invalid JSON", SessionConfigEnv)
+	}
+	if body[0] != '{' {
+		return nil, fmt.Errorf("%s: configuration must be a JSON object", SessionConfigEnv)
 	}
 	var session SessionConfig
 	decoder := yaml.NewDecoder(bytes.NewReader(body))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&session); err != nil {
 		return nil, fmt.Errorf("%s: invalid configuration fields or types", SessionConfigEnv)
-	}
-	if session.SchemaVersion != 1 {
-		return nil, fmt.Errorf("%s: unsupported schema_version (expected 1)", SessionConfigEnv)
 	}
 	return &session, nil
 }

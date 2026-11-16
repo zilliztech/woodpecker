@@ -16,7 +16,7 @@ import (
 func TestSessionObservabilitySelection(t *testing.T) {
 	dir := t.TempDir()
 	session := filepath.Join(dir, "session.json")
-	require.NoError(t, os.WriteFile(session, []byte(`{"schema_version":1,"service_context":{"endpoint":"http://service:9091","observability":{"prometheus":{"endpoint":"http://session-metrics:9090"}}},"client_meta":{"endpoints":["etcd:2379"],"meta_prefix":"tenant/wp","password":"private-value"}}`), 0o600))
+	require.NoError(t, os.WriteFile(session, []byte(`{"service_context":{"endpoint":"http://service:9091","observability":{"prometheus":{"endpoint":"http://session-metrics:9090"}}},"client_meta":{"endpoints":["etcd:2379"],"meta_prefix":"tenant/wp","password":"private-value"}}`), 0o600))
 	t.Setenv(config.SessionConfigEnv, session)
 	saved := filepath.Join(dir, "cli.yaml")
 	require.NoError(t, os.WriteFile(saved, []byte("current-context: saved\ncontexts:\n  saved:\n    endpoint: http://saved:9091\n    observability:\n      prometheus:\n        endpoint: http://saved-metrics:9090\n"), 0o600))
@@ -51,7 +51,7 @@ func TestSessionObservabilitySelection(t *testing.T) {
 func TestSessionProviderSettingsReachDiagnostics(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.json")
-	require.NoError(t, os.WriteFile(path, []byte(`{"schema_version":1,"service_context":{"observability":{
+	require.NoError(t, os.WriteFile(path, []byte(`{"service_context":{"observability":{
 		"loki":{"endpoint":"http://logs:3100","match_labels":{"namespace":"wp"},"tenant_env":"LOG_TENANT"},
 		"future_source":{"settings":{"endpoint":"https://future","nested":{"values":[1,2],"enabled":true}}}
 	}}}`), 0o600))
@@ -92,7 +92,7 @@ func TestSessionMetricsAndTraceUseProviderConnections(t *testing.T) {
 			} else {
 				settings += `,"match_labels":{"namespace":"wp"}`
 			}
-			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf(`{"schema_version":1,"service_context":{"observability":{%q:{%s}}}}`, tc.source, settings)), 0o600))
+			require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf(`{"service_context":{"observability":{%q:{%s}}}}`, tc.source, settings)), 0o600))
 			t.Setenv(config.SessionConfigEnv, path)
 			t.Setenv("WP_SESSION_TEST_TOKEN", "private-value")
 			out, _, err := execute(t, "diag", tc.command, "check", tc.check, "--window=5m", "--output=json")

@@ -13,7 +13,6 @@ import (
 func TestLoadSessionPreservesConfigurationTypes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{
-  "schema_version": 1,
   "service_context": {
     "endpoint": "http://node:9091", "admin_port": 19091, "timeout": "250ms",
     "concurrency": 3, "strict": true, "node_admin_urls": {"node:18080": "http://localhost:19091"},
@@ -46,35 +45,42 @@ func TestLoadSessionPreservesConfigurationTypes(t *testing.T) {
 }
 
 func TestLoadSessionIndependentSections(t *testing.T) {
-	for _, body := range []string{
-		`{"schema_version":1,"service_context":{"endpoint":"http://node:9091"}}`,
-		`{"schema_version":1,"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"tenant/wp"}}`,
+	for _, tc := range []struct {
+		body                       string
+		service, metadata, storage bool
+	}{
+		{`{"service_context":{"endpoint":"http://node:9091"}}`, true, false, false},
+		{`{"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"tenant/wp"}}`, false, true, false},
+		{`{"client_storage":{"bucket":"bucket","root_path":"root"}}`, false, false, true},
+		{`{}`, false, false, false},
 	} {
 		path := filepath.Join(t.TempDir(), "session.json")
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		require.NoError(t, os.WriteFile(path, []byte(tc.body), 0o600))
 		s, err := LoadSession(path)
 		require.NoError(t, err)
-		require.NotEqual(t, s.ServiceContext == nil, s.ClientMeta == nil)
+		require.Equal(t, tc.service, s.ServiceContext != nil)
+		require.Equal(t, tc.metadata, s.ClientMeta != nil)
+		require.Equal(t, tc.storage, s.ClientStorage != nil)
 	}
 }
 
 func TestLoadSessionRejectsInvalidInputWithoutLeakingValues(t *testing.T) {
 	for name, body := range map[string]string{
-		"yaml":                    "schema_version: 1\nclient_meta: {password: private-value}",
-		"malformed":               `{"schema_version":1,"password":"private-value"`,
-		"trailing document":       `{"schema_version":1} {"password":"private-value"}`,
-		"unknown field":           `{"schema_version":1,"private-value":"private-value"}`,
-		"unrelated scope":         `{"schema_version":1,"scope":{"milvus_instance_id":"private-value"}}`,
-		"unknown nested field":    `{"schema_version":1,"client_meta":{"etcd":{"password":"private-value"}}}`,
-		"unknown storage field":   `{"schema_version":1,"client_storage":{"bucket_name":"private-value"}}`,
-		"provider must be object": `{"schema_version":1,"service_context":{"observability":{"loki":"private-value"}}}`,
-		"duration type":           `{"schema_version":1,"service_context":{"timeout":"private-value"}}`,
-		"unsupported version":     `{"schema_version":2}`,
-		"missing version":         `{}`,
+		"yaml":                    "client_meta: {password: private-value}",
+		"malformed":               `{"password":"private-value"`,
+		"trailing document":       `{} {"password":"private-value"}`,
+		"unknown field":           `{"private-value":"private-value"}`,
+		"unrelated scope":         `{"scope":{"milvus_instance_id":"private-value"}}`,
+		"unknown nested field":    `{"client_meta":{"etcd":{"password":"private-value"}}}`,
+		"unknown storage field":   `{"client_storage":{"bucket_name":"private-value"}}`,
+		"provider must be object": `{"service_context":{"observability":{"loki":"private-value"}}}`,
+		"duration type":           `{"service_context":{"timeout":"private-value"}}`,
+		"section type":            `{"client_meta":[]}`,
+		"scalar":                  `"private-value"`,
 		"null":                    `null`,
 		"array":                   `[]`,
-		"duplicate key":           `{"schema_version":1,"schema_version":1}`,
-		"too large":               `{"schema_version":1,"service_context":{"endpoint":"` + strings.Repeat("x", 1<<20) + `"}}`,
+		"duplicate key":           `{"client_meta":{},"client_meta":{}}`,
+		"too large":               `{"service_context":{"endpoint":"` + strings.Repeat("x", 1<<20) + `"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "session.json")
