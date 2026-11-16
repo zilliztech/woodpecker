@@ -35,7 +35,7 @@ func holdExecutorForBatch(h *segmentHandleImpl, size int) {
 	h.appender.executor = NewBatchingSequentialExecutor(size, size, 0, h.appender.dispatch)
 }
 
-func TestAppendBatchPartialFailureRetriesOnlyUnconfirmedEntry(t *testing.T) {
+func TestReplicaAppenderBatchPartialFailureRetriesOnlyUnconfirmedEntry(t *testing.T) {
 	var mu sync.Mutex
 	var sends [][]int64
 	c := &appenderTestClient{send: func(ctx context.Context, es []*proto.LogEntry, chs []channel.ResultChannel) error {
@@ -74,7 +74,7 @@ func TestAppendBatchPartialFailureRetriesOnlyUnconfirmedEntry(t *testing.T) {
 	require.Equal(t, [][]int64{{0, 1, 2}, {1}}, sends)
 }
 
-func TestAppendBatchBrokenStreamRetriesUnknownSuffix(t *testing.T) {
+func TestReplicaAppenderBatchBrokenStreamRetriesUnknownSuffix(t *testing.T) {
 	old := batchAckReadTimeout
 	batchAckReadTimeout = 40 * time.Millisecond
 	t.Cleanup(func() { batchAckReadTimeout = old })
@@ -110,7 +110,7 @@ func TestAppendBatchBrokenStreamRetriesUnknownSuffix(t *testing.T) {
 	require.False(t, h.rollingState.Load())
 }
 
-func TestAppendBatchEachEntryGetsItsACKBudget(t *testing.T) {
+func TestReplicaAppenderBatchEachEntryGetsItsACKBudget(t *testing.T) {
 	old := batchAckReadTimeout
 	batchAckReadTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { batchAckReadTimeout = old })

@@ -63,7 +63,7 @@ type replicaAppender struct {
 	group           *segmentAppender
 	index           int
 	address         string
-	queue           chan *AppendBatch
+	queue           chan []*AppendOp
 	results         chan replicaAttemptResult
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -80,7 +80,7 @@ func newReplicaAppender(group *segmentAppender, index int, address string, queue
 	ctx, cancel := context.WithCancel(group.ctx)
 	return &replicaAppender{
 		group: group, index: index, address: address, ctx: ctx, cancel: cancel,
-		queue: make(chan *AppendBatch, queueSize), results: make(chan replicaAttemptResult, group.maxCount),
+		queue: make(chan []*AppendOp, queueSize), results: make(chan replicaAttemptResult, group.maxCount),
 		pending: make(map[int64]*replicaTask), maxAttempts: maxAttempts,
 		ackTimeout: appendAckReadTimeout, batchAckTimeout: batchAckReadTimeout,
 	}
@@ -88,7 +88,7 @@ func newReplicaAppender(group *segmentAppender, index int, address string, queue
 
 func (r *replicaAppender) run() {
 	defer r.cancel()
-	var batch *AppendBatch
+	var batch []*AppendOp
 	for {
 		// Process all known outcomes before taking another normal send. An ACK
 		// can fail while a later request is awaiting Buffered; once that send
@@ -111,8 +111,8 @@ func (r *replicaAppender) run() {
 			continue
 		}
 		if batch != nil {
-			tasks := make([]*replicaTask, 0, len(batch.ops))
-			for _, op := range batch.ops {
+			tasks := make([]*replicaTask, 0, len(batch))
+			for _, op := range batch {
 				if r.failure != nil {
 					r.finish(op, r.failure, 0)
 					continue
@@ -234,7 +234,7 @@ func (r *replicaAppender) send(tasks []*replicaTask) {
 	if len(ops) == 1 {
 		ctx = trace.ContextWithSpanContext(ctx, first.traceParent)
 	}
-	ctx, sp := logger.NewIntentCtxWithOptions(ctx, "ReplicaAppender", "send", trace.WithLinks((&AppendBatch{ops: ops}).traceLinks()...), trace.WithAttributes(
+	ctx, sp := logger.NewIntentCtxWithOptions(ctx, "ReplicaAppender", "send", trace.WithLinks(appendTraceLinks(ops)...), trace.WithAttributes(
 		attribute.Int64("log_id", first.logId), attribute.Int64("segment_id", first.segmentId),
 		attribute.String("node", r.address), attribute.Int64("first_entry", first.entryId),
 		attribute.Int64("last_entry", ops[len(ops)-1].entryId), attribute.Int("append.entries", len(ops)),
@@ -316,4 +316,24 @@ func (r *replicaAppender) recordResult(op *AppendOp, status string) {
 	if status == "success" {
 		metrics.WpClientReplicaAppendBytesTotal.WithLabelValues(op.logNs, logID, scope).Add(float64(op.Size()))
 	}
+}
+
+// appendTraceLinks preserves distinct request spans when one send batches
+// multiple appends, without adding links for untraced or duplicate inputs.
+func appendTraceLinks(ops []*AppendOp) []trace.Link {
+	type identity struct {
+		traceID trace.TraceID
+		spanID  trace.SpanID
+	}
+	seen := make(map[identity]bool)
+	links := make([]trace.Link, 0, len(ops))
+	for _, op := range ops {
+		sc := op.traceParent
+		key := identity{sc.TraceID(), sc.SpanID()}
+		if sc.IsValid() && !seen[key] {
+			seen[key] = true
+			links = append(links, trace.Link{SpanContext: sc})
+		}
+	}
+	return links
 }

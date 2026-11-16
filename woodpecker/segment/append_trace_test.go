@@ -228,10 +228,10 @@ func TestAppendTraceLinkIdentityAndUntracedInputs(t *testing.T) {
 	_, child := otel.Tracer("upstream-fixture").Start(ctx, "other-message")
 	defer parent.End()
 	defer child.End()
-	batch := &AppendBatch{ops: []*AppendOp{{traceParent: parent.SpanContext()}, {traceParent: child.SpanContext()}, {}, {traceParent: parent.SpanContext()}}}
-	require.Len(t, batch.traceLinks(), 2, "different spans within one trace retain their distinct identities")
-	// Zero-entry execution remains a no-op, including when tracing is enabled.
-	require.Empty(t, (&AppendBatch{}).traceLinks())
+	ops := []*AppendOp{{traceParent: parent.SpanContext()}, {traceParent: child.SpanContext()}, {}, {traceParent: parent.SpanContext()}}
+	require.Len(t, appendTraceLinks(ops), 2, "different spans within one trace retain their distinct identities")
+	// Empty input creates no links or spans, including when tracing is enabled.
+	require.Empty(t, appendTraceLinks(nil))
 	require.Empty(t, exporter.GetSpans())
 }
 

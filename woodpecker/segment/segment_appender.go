@@ -165,17 +165,17 @@ func (g *segmentAppender) submit(ctx context.Context, op *AppendOp, r *appendRes
 	return false
 }
 
-func (g *segmentAppender) dispatch(batch *AppendBatch) {
+func (g *segmentAppender) dispatch(ops []*AppendOp) {
 	for _, r := range g.replicas {
 		select {
-		case r.queue <- batch:
+		case r.queue <- ops:
 		case <-g.ctx.Done():
 			return
 		}
 	}
 	if !g.service {
 		g.mu.Lock()
-		for _, op := range batch.ops {
+		for _, op := range ops {
 			if r := g.records[op.entryId]; r != nil {
 				g.releaseUnsafe(r)
 			}

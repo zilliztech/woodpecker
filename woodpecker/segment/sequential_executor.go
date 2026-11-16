@@ -25,7 +25,7 @@ import (
 // appends. It owns no transport, retry, quorum or storage-mode policy.
 type SequentialExecutor struct {
 	operationQueue  chan *AppendOp
-	dispatch        func(*AppendBatch)
+	dispatch        func([]*AppendOp)
 	done            chan struct{}
 	finished        chan struct{}
 	startOnce       sync.Once
@@ -37,11 +37,11 @@ type SequentialExecutor struct {
 	maxBatchBytes   int64
 }
 
-func NewSequentialExecutor(bufferSize int, dispatch func(*AppendBatch)) *SequentialExecutor {
+func NewSequentialExecutor(bufferSize int, dispatch func([]*AppendOp)) *SequentialExecutor {
 	return NewBatchingSequentialExecutor(bufferSize, 1, 0, dispatch)
 }
 
-func NewBatchingSequentialExecutor(bufferSize, maxBatchEntries int, maxBatchBytes int64, dispatch func(*AppendBatch)) *SequentialExecutor {
+func NewBatchingSequentialExecutor(bufferSize, maxBatchEntries int, maxBatchBytes int64, dispatch func([]*AppendOp)) *SequentialExecutor {
 	return &SequentialExecutor{
 		operationQueue: make(chan *AppendOp, max(bufferSize, 1)),
 		dispatch:       dispatch, done: make(chan struct{}), finished: make(chan struct{}), changed: make(chan struct{}),
@@ -114,11 +114,11 @@ func (se *SequentialExecutor) executeBatch(first *AppendOp) {
 			ops = append(ops, next)
 			size += next.Size()
 		default:
-			se.dispatch(&AppendBatch{ops: ops})
+			se.dispatch(ops)
 			return
 		}
 	}
-	se.dispatch(&AppendBatch{ops: ops})
+	se.dispatch(ops)
 }
 
 func (se *SequentialExecutor) stop() {

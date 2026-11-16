@@ -30,9 +30,9 @@ func executorOp(id int64) *AppendOp { return &AppendOp{entryId: id, value: []byt
 func TestSequentialExecutorOrderAndBatching(t *testing.T) {
 	for _, maxBatch := range []int{1, 3} {
 		var batches [][]int64
-		e := NewBatchingSequentialExecutor(8, maxBatch, 0, func(b *AppendBatch) {
+		e := NewBatchingSequentialExecutor(8, maxBatch, 0, func(ops []*AppendOp) {
 			ids := []int64{}
-			for _, op := range b.ops {
+			for _, op := range ops {
 				ids = append(ids, op.entryId)
 			}
 			batches = append(batches, ids)
@@ -53,7 +53,7 @@ func TestSequentialExecutorOrderAndBatching(t *testing.T) {
 }
 
 func TestSequentialExecutorCapacityCancellationAndStop(t *testing.T) {
-	e := NewSequentialExecutor(1, func(*AppendBatch) {})
+	e := NewSequentialExecutor(1, func([]*AppendOp) {})
 	require.True(t, e.Submit(context.Background(), executorOp(0)))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -69,10 +69,10 @@ func TestSequentialExecutorConcurrentSubmitAndStop(t *testing.T) {
 	for range 20 {
 		var mu sync.Mutex
 		accepted, dispatched := map[int64]bool{}, map[int64]bool{}
-		e := NewSequentialExecutor(2, func(b *AppendBatch) {
+		e := NewSequentialExecutor(2, func(ops []*AppendOp) {
 			mu.Lock()
 			defer mu.Unlock()
-			for _, op := range b.ops {
+			for _, op := range ops {
 				require.False(t, dispatched[op.entryId])
 				dispatched[op.entryId] = true
 			}
