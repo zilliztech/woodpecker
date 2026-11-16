@@ -40,11 +40,14 @@ type SegmentRollingPolicyConfig struct {
 }
 
 type SegmentAppendConfig struct {
-	// MaxPendingBytes bounds service-mode payloads awaiting all replica results.
-	// Zero uses 64 MiB. One larger entry may enter an otherwise empty sender.
+	// MaxPendingBytes bounds service-mode payloads until every replica reaches a
+	// final outcome and the ordered application callback completes. Retries keep
+	// the original credit. Zero uses 64 MiB; one larger entry may enter when empty.
 	MaxPendingBytes ByteSize `yaml:"maxPendingBytes"`
 	QueueSize       int      `yaml:"queueSize"`
-	MaxRetries      int      `yaml:"maxRetries"`
+	// MaxRetries retains the legacy total-attempts convention (including the
+	// first send), per entry and replica. Values <= 1 allow one attempt only.
+	MaxRetries int `yaml:"maxRetries"`
 	// MaxBatchEntries is the maximum number of consecutive append ops coalesced
 	// into a single AddEntries request (client-side group commit). The batch is
 	// opportunistic: it only coalesces ops already waiting in the queue, so it
@@ -57,8 +60,8 @@ type SegmentAppendConfig struct {
 	MaxBatchBytes ByteSize `yaml:"maxBatchBytes"`
 	// SendTimeout bounds sending an append to one replica: opening the stream
 	// and receiving the replica's first (buffered) response. Service-mode
-	// replicas advance independently; a failed lane stops admission and triggers
-	// rolling. Zero means the default, 2s.
+	// replicas advance independently and retry classified retryable errors in
+	// their own appender. Final failure triggers rolling. Zero defaults to 2s.
 	SendTimeout DurationMilliseconds `yaml:"sendTimeout"`
 }
 

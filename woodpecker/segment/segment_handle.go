@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,7 +76,7 @@ type SegmentHandle interface {
 	ForceCompleteAndClose(ctx context.Context) error
 	// SendAppendSuccessCallbacks called when an appendOp operation is successful
 	SendAppendSuccessCallbacks(ctx context.Context, triggerEntryId int64)
-	// HandleAppendRequestFailure called when an appendOp operation fails
+	// HandleAppendRequestFailure reports a final per-replica failure, after retry policy is exhausted.
 	HandleAppendRequestFailure(ctx context.Context, triggerEntryId int64, err error, serverIndex int, serverAddr string)
 	// GetSize get the size of the segment
 	GetSize(ctx context.Context) int64
@@ -103,9 +102,6 @@ type SegmentHandle interface {
 }
 
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool, objectStorageClient storageclient.ObjectStorage) SegmentHandle {
-	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
-	maxBatchEntries := cfg.Woodpecker.Client.SegmentAppend.MaxBatchEntries
-	maxBatchBytes := cfg.Woodpecker.Client.SegmentAppend.MaxBatchBytes.Int64()
 	segmentHandle := &segmentHandleImpl{
 		bucketName:          cfg.Minio.BucketName,
 		rootPath:            cfg.Minio.RootPath,
@@ -116,7 +112,6 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 		ClientPool:          clientPool,
 		appendOpsQueue:      list.New(),
 		quorumInfo:          segmentMeta.Metadata.Quorum,
-		executor:            NewBatchingSequentialExecutor(executeRequestMaxQueueSize, maxBatchEntries, maxBatchBytes),
 		cfg:                 cfg,
 		logNs:               metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		objectStorageClient: objectStorageClient,
@@ -147,11 +142,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 			strconv.FormatInt(segmentHandle.segmentId, 10),
 			activeSegmentNodes(segmentHandle.quorumInfo),
 		)
-		if cfg.Woodpecker.Storage.Type == "service" {
-			segmentHandle.replicaSenders = newReplicaSenders(segmentHandle, executeRequestMaxQueueSize, cfg.Woodpecker.Client.SegmentAppend.MaxPendingBytes.Int64())
-			segmentHandle.executor.replicas = segmentHandle.replicaSenders
-		}
-		segmentHandle.executor.Start(ctx)
+		segmentHandle.appender = newSegmentAppender(clientPool, segmentHandle.quorumInfo, cfg.Woodpecker.Client.SegmentAppend, cfg.Woodpecker.Storage.Type == "service", segmentHandle.handleReplicaResult)
 		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
 		segmentHandle.completionMgr.Start(context.Background())
 		segmentHandle.lacSyncStarted.Store(true)
@@ -167,7 +158,6 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 
 // NewSegmentHandleWithAppendOpsQueue TODO TestOnly
 func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List, writable bool) SegmentHandle {
-	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
 		bucketName:     cfg.Minio.BucketName,
 		rootPath:       cfg.Minio.RootPath,
@@ -186,7 +176,6 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 				"127.0.0.1",
 			},
 		},
-		executor:      NewSequentialExecutor(executeRequestMaxQueueSize),
 		cfg:           cfg,
 		logNs:         metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		lacSyncNotify: make(chan struct{}, 1),
@@ -204,6 +193,7 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 	segmentHandle.rollingState.Store(false)
 	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
 	if writable {
+		segmentHandle.appender = newSegmentAppender(clientPool, segmentHandle.quorumInfo, cfg.Woodpecker.Client.SegmentAppend, cfg.Woodpecker.Storage.Type == "service", segmentHandle.handleReplicaResult)
 		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
 		segmentHandle.completionMgr.Start(context.Background())
 		segmentHandle.lacSyncStarted.Store(true)
@@ -243,9 +233,11 @@ type segmentHandleImpl struct {
 	rollingState   atomic.Bool // For rolling ready state: true confirms it is rolling ready, once all appendOPs are completed and the segment is going to close.
 	expiredTrigger func(ctx context.Context, reason string)
 
-	replicaSenders *replicaSenders // owned by this writable segment
-	executor       *SequentialExecutor
-	completionMgr  *completionManager // nil for readonly segments
+	appender        *segmentAppender // owns execution, admission and replica lifetimes
+	callbacks       []appendCompletion
+	callbackRunning bool
+	callbackWG      sync.WaitGroup
+	completionMgr   *completionManager // nil for readonly segments
 
 	// unreachable holds the endpoints of replicas this segment failed to reach,
 	// so the next segment's quorum can be selected without them. Guarded by its
@@ -293,73 +285,55 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "AppendAsync")
 	defer sp.End()
 	s.updateAccessTime()
-
-	// Check fenced state first without lock to avoid deadlock
 	if s.fencedState.Load() {
-		callback(s.segmentId, -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] fenced", s.logId, s.segmentId)))
+		callback(s.segmentId, -1, werr.ErrSegmentFenced)
 		return
 	}
 	if s.rollingState.Load() {
-		callback(s.segmentId, -1, werr.ErrSegmentHandleSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
+		callback(s.segmentId, -1, werr.ErrSegmentHandleSegmentRolling)
+		return
+	}
+	if s.appender == nil || !s.canWriteState.Load() {
+		callback(s.segmentId, -1, werr.ErrSegmentHandleSegmentClosed)
 		return
 	}
 
-	// Reserve outside the segment lock: ACKs need that lock to make progress.
-	// Reservation precedes entry-ID assignment and covers every replica.
-	var reservation *replicaReservation
-	if s.replicaSenders != nil {
-		var err error
-		reservation, err = s.replicaSenders.reserve(ctx, int64(len(bytes)))
-		if err != nil {
-			callback(s.segmentId, -1, err)
-			return
-		}
-		defer func() {
-			if reservation != nil {
-				reservation.release()
-			}
-		}()
+	reservation, err := s.appender.reserve(ctx, int64(len(bytes)))
+	if err != nil {
+		callback(s.segmentId, -1, err)
+		return
 	}
 	s.Lock()
-	defer s.Unlock()
-	currentSegmentMeta := s.segmentMetaCache.Load()
-
-	// Check segment state
-	if currentSegmentMeta.Metadata.State != proto.SegmentState_Active {
-		callback(currentSegmentMeta.Metadata.SegNo, -1, werr.ErrSegmentHandleSegmentStateInvalid)
-		return
+	if !s.canWriteState.Load() {
+		err = werr.ErrSegmentHandleSegmentClosed
+	} else if s.segmentMetaCache.Load().Metadata.State != proto.SegmentState_Active {
+		err = werr.ErrSegmentHandleSegmentStateInvalid
+	} else if s.fencedState.Load() {
+		err = werr.ErrSegmentFenced
+	} else if s.rollingState.Load() {
+		err = werr.ErrSegmentHandleSegmentRolling
 	}
-
-	// Double-check fenced state under lock
-	if s.fencedState.Load() {
-		callback(s.segmentId, -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] fenced", s.logId, s.segmentId)))
-		return
+	if err == nil {
+		op := s.createPendingAppendOp(ctx, bytes, s.lastPushed.Load()+1, callback)
+		// Register before publication. The short lock makes entry assignment,
+		// pending registration and publication one ordered admission operation.
+		element := s.appendOpsQueue.PushBack(op)
+		if !s.appender.submit(ctx, op, reservation) {
+			s.appendOpsQueue.Remove(element)
+			err = werr.ErrSegmentHandleSegmentClosed
+		} else {
+			s.lastPushed.Store(op.entryId)
+			s.submittedSize.Add(op.Size())
+			logIdStr := strconv.FormatInt(s.logId, 10)
+			metrics.WpClientAppendRequestsTotal.WithLabelValues(s.logNs, logIdStr).Inc()
+			metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, logIdStr).Inc()
+		}
 	}
-	if s.rollingState.Load() {
-		callback(s.segmentId, -1, werr.ErrSegmentHandleSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
-		return
+	s.Unlock()
+	if err != nil {
+		reservation.release()
+		callback(s.segmentId, -1, err)
 	}
-
-	// Create pending append operation
-	appendOp := s.createPendingAppendOp(ctx, bytes, s.lastPushed.Load()+1, callback)
-
-	appendOp.replicaLease = reservation
-
-	// Try to submit first, only add to queue if successful
-	if submitOk := s.executor.Submit(ctx, appendOp); !submitOk {
-		callback(currentSegmentMeta.Metadata.SegNo, -1, werr.ErrSegmentHandleSegmentClosed.WithCauseErrMsg("submit append failed, segment closed"))
-		return
-	}
-
-	reservation = nil // dispatch now owns the reservation
-
-	// Only add to queue and update metrics after successful submit
-	s.lastPushed.Add(1)
-	s.appendOpsQueue.PushBack(appendOp)
-	s.submittedSize.Add(int64(len(bytes)))
-	logIdStr := strconv.FormatInt(s.logId, 10)
-	metrics.WpClientAppendRequestsTotal.WithLabelValues(s.logNs, logIdStr).Inc()
-	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, logIdStr).Inc()
 }
 
 func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, entryId int64, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
@@ -371,8 +345,6 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 		entryId,
 		bytes,
 		callback,
-		s.ClientPool,
-		s,
 		s.quorumInfo,
 		s.nodeScopes,
 	)
@@ -380,63 +352,15 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 	return pendingAppendOp
 }
 
-// SendAppendSuccessCallbacks will do ack sequentially
+// SendAppendSuccessCallbacks advances the contiguous ready prefix. Replica
+// appenders report through handleReplicaResult; this entry point is retained for
+// callers that already marked logical appends ready.
 func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, triggerEntryId int64) {
-	logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks trigger", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("triggerEntryId", triggerEntryId))
 	s.Lock()
 	defer s.Unlock()
 	s.updateAccessTime()
-
-	// success executed one by one in sequence
-	elementsToRemove := make([]*list.Element, 0)
-	if s.appendOpsQueue.Len() <= 0 {
-		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks with appendOps empty queue, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId))
-		return
-	}
-	newLac := int64(-1)
-	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
-		op := e.Value.(*AppendOp)
-		if !op.completed.Load() {
-			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks not completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
-			break
-		}
-		// Check if it is the next entry in the sequence.
-		if op.entryId == s.lastAddConfirmed.Load()+1 {
-			elementsToRemove = append(elementsToRemove, e)
-			// update lac
-			s.lastAddConfirmed.Store(op.entryId)
-			newLac = op.entryId
-			// update size
-			s.commitedSize.Add(int64(len(op.value)))
-			s.submittedSize.Add(-int64(len(op.value)))
-			// success callback
-			op.FastSuccess(ctx)
-		} else if op.entryId <= s.lastAddConfirmed.Load() {
-			elementsToRemove = append(elementsToRemove, e)
-			// update size
-			s.commitedSize.Add(int64(len(op.value)))
-			s.submittedSize.Add(-int64(len(op.value)))
-			// success callback
-			op.FastSuccess(ctx)
-		} else {
-			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks not the next lac", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
-			break
-		}
-	}
-	// sync lac for this round
-	if newLac >= 0 {
-		s.syncLAC(ctx, newLac)
-		metrics.SetWriteFrontier(s.logNs, strconv.FormatInt(s.logId, 10), s.segmentId, newLac)
-	}
-	for _, element := range elementsToRemove {
-		s.appendOpsQueue.Remove(element)
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
-	}
-
-	// when seg rolling state mark, if no pending appendOps, trigger completion
-	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 && s.completionMgr != nil {
-		s.completionMgr.TriggerCompletion()
-	}
+	s.collectAppendCallbacksUnsafe(ctx)
+	s.triggerCompletionIfDrainedUnsafe()
 }
 
 func (s *segmentHandleImpl) findAppendOpById(ctx context.Context, triggerEntryId int64) *list.Element {
@@ -489,110 +413,10 @@ func (s *segmentHandleImpl) UnreachableReplicas() []string {
 	return out
 }
 
+// HandleAppendRequestFailure accepts a final replica failure. Attempt retry
+// policy belongs to replicaAppender and never submits work through this method.
 func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, triggerEntryId int64, err error, serverIndex int, serverAddr string) {
-	// Recorded before anything else, including for an entry that has already
-	// completed on the other replicas: a replica that cannot be reached is worth
-	// avoiding in the next segment however its failure arrived.
-	if isReplicaUnreachable(err) && serverAddr != "" {
-		s.markUnreachable(serverAddr)
-	}
-	s.Lock()
-	defer s.Unlock()
-	s.updateAccessTime()
-	logger.Ctx(ctx).Info("HandleAppendRequestFailure", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
-
-	// all after triggerEntryId will be removed
-	elementsToRetry := make([]*list.Element, 0)      // retry if OP request not reach maxAttempts
-	finalFailureElements := make([]*list.Element, 0) // final failure if OP request reach maxAttempts
-	elementsToRemove := make([]*list.Element, 0)     // remove if OP's requests fail count reach quorum size
-	minRemoveId := int64(math.MaxInt64)
-
-	// Sender failures end admission even if quorum already removed the entry.
-	// This segment's failed lane is retired; the other lanes drain accepted work.
-	if s.replicaSenders != nil {
-		s.rollingState.Store(true)
-		s.replicaSenders.stopAdmission()
-		if s.appendOpsQueue.Len() == 0 && s.completionMgr != nil {
-			s.completionMgr.TriggerCompletion()
-		}
-	}
-
-	// found the triggerEntryId
-	element := s.findAppendOpById(ctx, triggerEntryId)
-	if element == nil {
-		logger.Ctx(ctx).Info("appendOp not found in queue", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
-		return
-	}
-	op := element.Value.(*AppendOp)
-	channelErr := op.channelErrors[serverIndex]
-	if s.replicaSenders == nil && op.channelAttempts[serverIndex]+1 < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries &&
-		(channelErr == nil || werr.IsRetryableErr(channelErr)) &&
-		(err == nil || !werr.IsSegmentNotWritableErr(err)) {
-		logger.Ctx(ctx).Debug("appendOp should retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.channelAttempts[serverIndex]), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
-		op.channelAttempts[serverIndex]++
-		elementsToRetry = append(elementsToRetry, element)
-	} else {
-		// retry max times, or encounter non-retryable error
-		finalFailureElements = append(finalFailureElements, element)
-		logger.Ctx(ctx).Debug("appendOp fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.channelAttempts[serverIndex]), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
-		failCount := op.finalFailureSet.SetAndCount(serverIndex)
-		if int32(failCount) >= (s.quorumInfo.Wq - s.quorumInfo.Aq + 1) {
-			logger.Ctx(ctx).Debug("appendOp should remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.channelAttempts[serverIndex]), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
-			elementsToRemove = append(elementsToRemove, element)
-			if minRemoveId == math.MaxInt64 || op.entryId < minRemoveId {
-				minRemoveId = op.entryId
-			}
-		}
-	}
-
-	// do not remove, just resubmit to retry again
-	for _, element := range elementsToRetry {
-		op := element.Value.(*AppendOp)
-		if !s.executor.Submit(ctx, NewAppendRequestRetryOp(ctx, serverIndex, op)) {
-			// Submit failed (queue full or executor closed), treat as final failure
-			logger.Ctx(ctx).Warn("append retry submit failed, failing op",
-				zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId),
-				zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId),
-				zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
-			s.appendOpsQueue.Remove(element)
-			op.FastFail(ctx, werr.ErrAppendOpRetrySubmitFailed)
-			metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
-			continue
-		}
-		logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
-	}
-
-	// fast fail other queue appends which Id greater then minRemoveId.
-	// because without the hole entry, their will never success
-	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
-		element := e
-		op := element.Value.(*AppendOp)
-		if op.entryId > minRemoveId {
-			logger.Ctx(ctx).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
-			elementsToRemove = append(elementsToRemove, element)
-		}
-	}
-
-	// send error callback to all elementsToRemove
-	for _, element := range elementsToRemove {
-		s.appendOpsQueue.Remove(element)
-		op := element.Value.(*AppendOp)
-		op.FastFail(ctx, err)
-		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
-	}
-
-	// mark rolling to prevent later append, and trigger rolling segment before all appendOps in queue
-	if len(finalFailureElements) > 0 {
-		// trigger rolling segment, mark rolling
-		logger.Ctx(ctx).Info("rolling segment", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
-		s.rollingState.Store(true)
-	}
-
-	// when seg rolling state mark, if no pending appendOps, trigger completion
-	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 && s.completionMgr != nil {
-		s.completionMgr.TriggerCompletion()
-	}
+	s.handleReplicaResult(replicaResult{entryID: triggerEntryId, replica: serverIndex, address: serverAddr, err: err})
 }
 
 func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
@@ -1284,10 +1108,9 @@ func (s *segmentHandleImpl) stopWritingUnsafe(ctx context.Context, lastFlushedEn
 	// fast fail all pending append operations
 	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
 
-	// shutdown segment executor
-	s.executor.Stop(ctx)
-	if s.replicaSenders != nil {
-		s.replicaSenders.stop()
+	// Signal shutdown only. Completion joins execution outside the segment lock.
+	if s.appender != nil {
+		s.appender.stop()
 	}
 
 	// stop the background LAC syncer (idempotent)
@@ -1296,37 +1119,18 @@ func (s *segmentHandleImpl) stopWritingUnsafe(ctx context.Context, lastFlushedEn
 }
 
 func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEntryId int64, err error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "fastFailAppendOpsUnsafe")
-	defer sp.End()
-	logger.Ctx(ctx).Debug("fastFailAppendOps start", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(err))
-	// check exists in queue currently, avoid delay ack
-	elementsToRemove := make([]*list.Element, 0)
-	failCount := 0
-	successCount := 0
-	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
-		element := e
-		op := element.Value.(*AppendOp)
-		if lastEntryId == -1 {
-			// fast fail all
-			op.FastFail(ctx, err)
-			failCount += 1
-		} else if op.entryId <= lastEntryId {
-			// fast success flushed appendOp
-			op.FastSuccess(ctx)
-			successCount += 1
-		} else {
-			// fast fail unflushed appendOp
-			op.FastFail(ctx, err)
-			failCount += 1
+	for e := s.appendOpsQueue.Front(); e != nil; {
+		next := e.Next()
+		op := e.Value.(*AppendOp)
+		terminalErr := err
+		if lastEntryId >= 0 && op.entryId <= lastEntryId {
+			terminalErr = nil
 		}
-		elementsToRemove = append(elementsToRemove, element)
-	}
-	// Clear the queue
-	for _, element := range elementsToRemove {
-		s.appendOpsQueue.Remove(element)
+		s.queueAppendCallbackUnsafe(op, terminalErr)
+		s.appendOpsQueue.Remove(e)
 		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
+		e = next
 	}
-	logger.Ctx(ctx).Debug("fastFailAppendOps finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("fastFailOps", len(elementsToRemove)), zap.Int("successCount", successCount), zap.Int("failCount", failCount), zap.Error(err))
 }
 
 // GetSize returns the size of the segment
@@ -2238,6 +2042,11 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 		zap.Int64("lastEntryId", lastEntryId),
 		zap.Duration("duration", time.Since(start)))
 	s.fencedState.Store(true) // Set fenced state to prevent new append operations
+	if s.appender != nil {
+		// A logical callback no longer owns streams. Retire the entire local
+		// pipeline after a successful fence; teardown runs outside this lock.
+		s.appender.stop()
+	}
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(s.logNs, logIdStr, "fence", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.logNs, logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return lastEntryId, nil
@@ -2430,19 +2239,14 @@ func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) error {
 	defer s.Unlock()
 	logger.Ctx(ctx).Info("setting segment to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Int("queueSize", s.appendOpsQueue.Len()))
 	s.rollingState.Store(true)
-	if s.replicaSenders != nil {
-		s.replicaSenders.stopAdmission()
+	if s.appender != nil {
+		s.appender.stopAdmission()
 	}
 	if s.appendOpsQueue.Len() > 0 {
 		logger.Ctx(ctx).Info("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
 		return nil
 	}
-	if s.completionMgr != nil {
-		// An empty append queue is already drained. Complete it in the same
-		// background lifecycle used when the last pending append finishes, so
-		// fencing (including fallback waits) does not block the next segment.
-		s.completionMgr.TriggerCompletion()
-	}
+	s.triggerCompletionIfDrainedUnsafe()
 	return nil
 }
 
