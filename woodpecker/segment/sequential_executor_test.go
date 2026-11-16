@@ -20,7 +20,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -52,17 +51,25 @@ func TestSequentialExecutorOrderAndBatching(t *testing.T) {
 	}
 }
 
-func TestSequentialExecutorCapacityCancellationAndStop(t *testing.T) {
-	e := NewSequentialExecutor(1, func([]*AppendOp) {})
-	require.True(t, e.Submit(context.Background(), executorOp(0)))
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	require.False(t, e.Submit(ctx, executorOp(1)))
+func TestSequentialExecutorRejectsFullCancelledOrStopped(t *testing.T) {
+	var dispatched []int64
+	e := NewSequentialExecutor(1, func(ops []*AppendOp) {
+		for _, op := range ops {
+			dispatched = append(dispatched, op.entryId)
+		}
+	})
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.False(t, e.Submit(ctx, executorOp(0)), "cancelled submission must fail even with free capacity")
+	require.True(t, e.Submit(context.Background(), executorOp(1)))
 	done := make(chan bool, 1)
 	go func() { done <- e.Submit(context.Background(), executorOp(2)) }()
-	e.Stop(context.Background()) // starts a worker to drain previously accepted work
-	require.False(t, receive(t, done))
-	e.Stop(context.Background())
+	require.False(t, receive(t, done), "full queue must reject without waiting for capacity or Stop")
+	e.Stop(context.Background()) // drains only the accepted entry
+	require.Equal(t, []int64{1}, dispatched)
+	require.False(t, e.Submit(context.Background(), executorOp(3)))
+	e.Stop(context.Background()) // idempotent
 }
 
 func TestSequentialExecutorConcurrentSubmitAndStop(t *testing.T) {

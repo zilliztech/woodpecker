@@ -32,7 +32,6 @@ type SequentialExecutor struct {
 	stopOnce        sync.Once
 	mu              sync.Mutex
 	closed          bool
-	changed         chan struct{}
 	maxBatchEntries int
 	maxBatchBytes   int64
 }
@@ -44,7 +43,7 @@ func NewSequentialExecutor(bufferSize int, dispatch func([]*AppendOp)) *Sequenti
 func NewBatchingSequentialExecutor(bufferSize, maxBatchEntries int, maxBatchBytes int64, dispatch func([]*AppendOp)) *SequentialExecutor {
 	return &SequentialExecutor{
 		operationQueue: make(chan *AppendOp, max(bufferSize, 1)),
-		dispatch:       dispatch, done: make(chan struct{}), finished: make(chan struct{}), changed: make(chan struct{}),
+		dispatch:       dispatch, done: make(chan struct{}), finished: make(chan struct{}),
 		maxBatchEntries: max(maxBatchEntries, 1), maxBatchBytes: maxBatchBytes,
 	}
 }
@@ -53,33 +52,20 @@ func (se *SequentialExecutor) Start(context.Context) {
 	se.startOnce.Do(func() { go se.worker() })
 }
 
-// Submit never holds the lifecycle mutex while waiting for capacity. Close
-// wakes blocked submitters, including when no worker was started yet.
+// Submit publishes an append whose capacity was reserved by segmentAppender.
+// The lock serializes publication with stop. A full queue is rejected rather
+// than waited on; all capacity waiting belongs to segmentAppender.reserve.
 func (se *SequentialExecutor) Submit(ctx context.Context, op *AppendOp) bool {
-	for {
-		if ctx.Err() != nil {
-			return false
-		}
-		se.mu.Lock()
-		if se.closed {
-			se.mu.Unlock()
-			return false
-		}
-		select {
-		case se.operationQueue <- op:
-			se.mu.Unlock()
-			return true
-		default:
-		}
-		changed := se.changed
-		se.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return false
-		case <-se.done:
-			return false
-		case <-changed:
-		}
+	se.mu.Lock()
+	defer se.mu.Unlock()
+	if se.closed || ctx.Err() != nil {
+		return false
+	}
+	select {
+	case se.operationQueue <- op:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -88,13 +74,11 @@ func (se *SequentialExecutor) worker() {
 	for {
 		select {
 		case first := <-se.operationQueue:
-			se.notifyCapacity()
 			se.executeBatch(first)
 		case <-se.done:
 			for {
 				select {
 				case first := <-se.operationQueue:
-					se.notifyCapacity()
 					se.executeBatch(first)
 				default:
 					return
@@ -110,7 +94,6 @@ func (se *SequentialExecutor) executeBatch(first *AppendOp) {
 	for len(ops) < se.maxBatchEntries && (se.maxBatchBytes <= 0 || size < se.maxBatchBytes) {
 		select {
 		case next := <-se.operationQueue:
-			se.notifyCapacity()
 			ops = append(ops, next)
 			size += next.Size()
 		default:
@@ -133,10 +116,3 @@ func (se *SequentialExecutor) stop() {
 
 func (se *SequentialExecutor) wait()                { <-se.finished }
 func (se *SequentialExecutor) Stop(context.Context) { se.stop(); se.wait() }
-
-func (se *SequentialExecutor) notifyCapacity() {
-	se.mu.Lock()
-	close(se.changed)
-	se.changed = make(chan struct{})
-	se.mu.Unlock()
-}
