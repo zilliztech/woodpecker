@@ -239,6 +239,59 @@ func TestSessionShellStartupAndDisconnect(t *testing.T) {
 	}
 }
 
+func TestSessionShellRejectsInvalidStartupConfiguration(t *testing.T) {
+	for name, body := range map[string]string{
+		"malformed":                  "client_meta: [",
+		"metadata missing endpoints": `{"client_meta":{"meta_prefix":"tenant/wp"}}`,
+		"storage missing root":       `{"client_storage":{"bucket":"bucket"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			withSessionJSON(t, body)
+			root := NewRootCommand()
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			root.SetIn(strings.NewReader("exit\n"))
+			root.SetArgs([]string{"shell"})
+			require.Error(t, root.Execute())
+		})
+	}
+	root := NewRootCommand()
+	root.SetArgs([]string{"shell", "--session="})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	require.ErrorContains(t, root.Execute(), "--session must name a configuration file")
+}
+
+func TestSessionShellEndpointOverrideDropsPreviousNodeMappings(t *testing.T) {
+	withSessionJSON(t, `{"service_context":{"endpoint":"http://old:9091","node_admin_urls":{"old-node":"invalid-old-origin"}}}`)
+	root := NewRootCommand()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetIn(strings.NewReader("status\nexit\n"))
+	root.SetArgs([]string{"shell", "--endpoint=http://new:9091"})
+	require.NoError(t, root.Execute(), out.String())
+	require.Contains(t, out.String(), "http://new:9091")
+	require.NotContains(t, out.String(), "old-node")
+}
+
+func TestSessionShellRejectsRetargetingAndPartialStorageOverrides(t *testing.T) {
+	s, _ := newTestShell(t)
+	s.sessionConfig = true
+	s.tenant = &shellTenant{name: "tenant", bucket: "bucket", rootPath: "root", etcd: config.EtcdConfig{
+		Endpoints: []string{"http://etcd:2379"}, MetaPrefix: "tenant/wp",
+	}}
+	s.runChild = func(context.Context, []string, string) error {
+		t.Fatal("invalid connection selection must not start a command")
+		return nil
+	}
+	require.ErrorContains(t, shellExecute(t, s, "node", "list", "--session=other.yaml"), "select --session when starting the shell")
+	require.ErrorContains(t, shellExecute(t, s, "segment", "inspect", "log", "0", "--bucket=other"), "storage overrides require both")
+	require.ErrorContains(t, shellExecute(t, s, "segment", "inspect", "log", "0", "--bucket=other", "--root-path="), "nonempty bucket and root_path")
+	require.Equal(t, "bucket", s.tenant.bucket)
+	require.Equal(t, "root", s.tenant.rootPath)
+}
+
 func TestSessionShellExplicitMetadataDoesNotReuseCredentials(t *testing.T) {
 	s, _ := newTestShell(t)
 	s.sessionConfig = true

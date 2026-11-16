@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadSessionPreservesConfigurationTypes(t *testing.T) {
@@ -62,6 +63,45 @@ func TestLoadSessionIndependentSections(t *testing.T) {
 		require.Equal(t, tc.metadata, s.ClientMeta != nil)
 		require.Equal(t, tc.storage, s.ClientStorage != nil)
 	}
+}
+
+func TestSessionServiceViewExcludesClientSettings(t *testing.T) {
+	session := &SessionConfig{
+		ServiceContext: &Context{Endpoint: "http://service:9091"},
+		ClientMeta: &EtcdConfig{
+			Endpoints: []string{"http://etcd:2379"}, MetaPrefix: "tenant/wp", Password: "private-value",
+		},
+		ClientStorage: &StorageConfig{Bucket: "bucket", RootPath: "tenant"},
+	}
+	file, err := session.ServiceFile()
+	require.NoError(t, err)
+	require.Equal(t, "session", file.CurrentContext)
+	service, err := file.ResolveContext("")
+	require.NoError(t, err)
+	require.Equal(t, "http://service:9091", service.Endpoint)
+	require.Equal(t, 30*time.Second, service.Timeout)
+	body, err := yaml.Marshal(file)
+	require.NoError(t, err)
+	for _, omitted := range []string{"client_meta", "client_storage", "private-value", "http://etcd:2379"} {
+		require.NotContains(t, string(body), omitted)
+	}
+	_, err = (&SessionConfig{ClientMeta: session.ClientMeta}).ServiceFile()
+	require.ErrorContains(t, err, "requires service_context")
+}
+
+func TestSessionStorageRequiresCompleteLocation(t *testing.T) {
+	for _, storage := range []StorageConfig{{}, {Bucket: "bucket"}, {RootPath: "root"}, {Bucket: " ", RootPath: "root"}} {
+		require.Error(t, storage.Validate())
+	}
+	require.NoError(t, (StorageConfig{Bucket: "bucket", RootPath: "tenant/root"}).Validate())
+}
+
+func TestSessionPrivateFileFailureDoesNotExposeCredentials(t *testing.T) {
+	session := SessionConfig{ClientMeta: &EtcdConfig{Password: "private-value"}}
+	path, err := session.WriteTemp(filepath.Join(t.TempDir(), "missing"))
+	require.Empty(t, path)
+	require.ErrorContains(t, err, "cannot create private session configuration")
+	require.NotContains(t, err.Error(), "private-value")
 }
 
 func TestLoadSessionRejectsInvalidInputWithoutLeakingValues(t *testing.T) {
