@@ -19,7 +19,34 @@ import (
 
 	d "github.com/zilliztech/woodpecker/diagnostics"
 	"github.com/zilliztech/woodpecker/diagnostics/evidence"
+	"github.com/zilliztech/woodpecker/diagnostics/jaeger"
 )
+
+func TestClientAppendChecksRecognizeCurrentAndLegacySpans(t *testing.T) {
+	for _, tc := range []struct{ scope, operation string }{
+		{"AppendOp", "Execute"}, {"BatchAppendOp", "Execute"}, {"ReplicaAppender", "send"},
+	} {
+		for _, check := range []string{"client-append-duration", "client-append-errors"} {
+			t.Run(tc.scope+"/"+check, func(t *testing.T) {
+				policy := evidence.Policy{}
+				def, ok := Lookup("trace", check, policy)
+				require.True(t, ok)
+				col := jaeger.Collection{Status: "completed", Traces: []jaeger.Trace{{
+					ID: "11111111111111111111111111111111", Spans: []jaeger.Span{{
+						ID: "2222222222222222", Scope: tc.scope, Operation: tc.operation,
+						Role: "streamingnode", Service: "sn", Selected: true, Error: true,
+						StartUS: time.Now().Add(-time.Minute).UnixMicro(), DurationUS: 5_000_000,
+					}},
+				}}}
+				result := evaluateTrace(def, col, policy)
+				require.Equal(t, "abnormal", result.Status)
+				require.Equal(t, []string{col.Traces[0].ID}, result.AbnormalTraceIDs)
+				col.Traces[0].Spans[0].Scope = "Unrelated"
+				require.Equal(t, "unknown", evaluateTrace(def, col, policy).Status)
+			})
+		}
+	}
+}
 
 type backend struct {
 	mu                          sync.Mutex

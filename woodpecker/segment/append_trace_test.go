@@ -196,6 +196,7 @@ func TestAppendTraceSingleRemote(t *testing.T) {
 			execution := traceSpan(t, exporter, "ReplicaAppender", "send")
 			require.Equal(t, parentSC.TraceID(), execution.SpanContext.TraceID())
 			require.Equal(t, parentSC.SpanID(), execution.Parent.SpanID())
+			require.Empty(t, execution.Links, "a single entry uses its parent without a duplicate link that can replace CHILD_OF in Jaeger")
 			assertRemoteTrace(t, exporter, "AddEntry", parentSC.TraceID())
 			writeTraceReceipt(t, name, execution, parentSC)
 		})

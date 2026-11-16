@@ -231,10 +231,15 @@ func (r *replicaAppender) send(tasks []*replicaTask) {
 		ops[i] = task.op
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
+	var links []trace.Link
 	if len(ops) == 1 {
+		// Do not also link the parent: Jaeger can retain that duplicate as
+		// FOLLOWS_FROM instead of CHILD_OF, losing the single-entry ancestry.
 		ctx = trace.ContextWithSpanContext(ctx, first.traceParent)
+	} else {
+		links = appendTraceLinks(ops)
 	}
-	ctx, sp := logger.NewIntentCtxWithOptions(ctx, "ReplicaAppender", "send", trace.WithLinks(appendTraceLinks(ops)...), trace.WithAttributes(
+	ctx, sp := logger.NewIntentCtxWithOptions(ctx, "ReplicaAppender", "send", trace.WithLinks(links...), trace.WithAttributes(
 		attribute.Int64("log_id", first.logId), attribute.Int64("segment_id", first.segmentId),
 		attribute.String("node", r.address), attribute.Int64("first_entry", first.entryId),
 		attribute.Int64("last_entry", ops[len(ops)-1].entryId), attribute.Int("append.entries", len(ops)),

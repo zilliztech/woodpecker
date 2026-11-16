@@ -63,8 +63,12 @@ def validate_trace(receipt, trace):
                 assert ref["traceID"].lower().zfill(32) == trace_id and ref["spanID"] in span_ids
     services = {p["serviceName"] for p in trace["processes"].values()}
     assert services == {"wp-client-trace-fixture", "wp-server-trace-fixture"}, services
-    execution = [s for s in spans if s["operationName"] == "Execute"]
-    assert len(execution) == 1
+    def execution_scope(span):
+        # Jaeger may retain the instrumentation scope on its process row.
+        tags = span.get("tags", []) + trace["processes"][span["processID"]].get("tags", [])
+        return {t["value"] for t in tags if t["key"] in ("otel.scope.name", "otel.library.name")}
+    execution = [s for s in spans if s["operationName"] == "send" and execution_scope(s) == {"ReplicaAppender"}]
+    assert len(execution) == 1, "Expected one ReplicaAppender/send span in the single-replica fixture"
     refs = execution[0].get("references", [])
     if receipt["case"] == "batch":
         assert not any(r["refType"] == "CHILD_OF" for r in refs)
@@ -73,6 +77,7 @@ def validate_trace(receipt, trace):
         assert actual == expected, (actual, expected)
         assert trace_id not in receipt["input_trace_ids"]
     else:
+        assert not any(r["refType"] == "FOLLOWS_FROM" for r in refs), "Single-entry execution must use its parent without duplicate links"
         assert receipt["input_trace_ids"] == [trace_id]
         expected = receipt["input_spans"][0]
         assert any(r["refType"] == "CHILD_OF" and r["traceID"].lower().zfill(32) == trace_id
@@ -131,11 +136,11 @@ def main():
                 receipt = json.loads(file.read_text())
                 trace_id = receipt["execution_trace_id"]
                 trace = retained(query, trace_id, 3)
-                check = validate_trace(receipt, trace)
                 if args.output:
                     args.output.mkdir(parents=True, exist_ok=True)
                     for suffix, value in [("receipt", receipt), ("trace", trace)]:
                         (args.output / (receipt["case"] + "-" + suffix + ".json")).write_text(json.dumps(value, indent=2) + "\n")
+                check = validate_trace(receipt, trace)
                 checks.append(check)
             result = {"schema_version": "wp.trace.propagation.validation/v1", "passed": True, "checks": checks,
                 "limits": ["Protocol fixture only; no actual Milvus Insert, disk I/O or durability claim",
