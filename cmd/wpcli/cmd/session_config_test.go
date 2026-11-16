@@ -199,7 +199,7 @@ func TestSessionMetadataReadAndDiagnosisPrerequisites(t *testing.T) {
 
 func TestSessionShellStartupAndDisconnect(t *testing.T) {
 	for _, service := range []string{"", `,"service_context":{"endpoint":"http://node:9091"}`} {
-		withSessionJSON(t, `{"schema_version":1,"scope":{"milvus_instance_id":"client-a"},"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"a/wp","username":"alice","password":"private-value"}`+service+`}`)
+		withSessionJSON(t, `{"schema_version":1,"client_meta":{"endpoints":["localhost:2379"],"meta_prefix":"a/wp","username":"alice","password":"private-value"}`+service+`}`)
 		root := NewRootCommand()
 		var out bytes.Buffer
 		root.SetIn(strings.NewReader("status\ndisconnect\nstatus\nexit\n"))
@@ -207,7 +207,7 @@ func TestSessionShellStartupAndDisconnect(t *testing.T) {
 		root.SetErr(&out)
 		root.SetArgs([]string{"shell"})
 		require.NoError(t, root.Execute())
-		require.Contains(t, out.String(), "client-a")
+		require.Contains(t, out.String(), "Tenant:          a/wp\n")
 		require.Contains(t, out.String(), "Tenant metadata: not configured")
 		require.NotContains(t, out.String(), "private-value")
 		require.NotContains(t, strings.Join(shellChildEnvironment("selected.yaml"), "\n"), config.SessionConfigEnv+"=")

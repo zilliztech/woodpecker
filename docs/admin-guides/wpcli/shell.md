@@ -21,6 +21,11 @@ endpoint, and service inventory filters can use storage without etcd.
 Startup selects settings without checking network reachability; use
 `status --check` to verify connections.
 
+The initial client display name comes from `client_storage.root_path`, then
+`client_meta.meta_prefix`. If neither is suitable for the shell prompt, the name
+is `session`. This label does not change the connection settings or require any
+additional JSON fields.
+
 ```bash
 export WOODPECKER_SESSION_CONFIG=/path/to/session.json
 wp shell

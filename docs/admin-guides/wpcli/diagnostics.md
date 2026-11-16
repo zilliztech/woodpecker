@@ -83,8 +83,8 @@ wp diag trace check server-append-duration --window 15m
 Provider settings retain their existing structure, including `match_labels`,
 `match_tags`, `services`, `search`, authentication environment references and TLS.
 Supply referenced environment variables alongside the JSON file. Use absolute
-certificate paths when also using `wp shell`. Session `scope` identifiers are
-descriptive; configure the appropriate provider selectors explicitly in the file.
+certificate paths when also using `wp shell`. Configure the appropriate provider
+selectors explicitly in the file.
 
 The configuration layer can preserve additional provider objects, including
 `observability.loki`. This is forward-compatible connection transport: the

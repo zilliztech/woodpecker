@@ -109,10 +109,6 @@ wp shell
 ```json
 {
   "schema_version": 1,
-  "scope": {
-    "woodpecker_id": "abc",
-    "milvus_instance_id": "in01-example"
-  },
   "service_context": {
     "endpoint": "http://10.0.12.34:9091",
     "admin_port": 9091,
@@ -156,8 +152,8 @@ with the selected instance's actual values. Omit unused sections.
 strings. `client_meta` uses the flat client parameter-file fields below, including
 `username`, `password`, `cert`, `key`, `cacert`, `tls_min_version`, and `tls_enabled`.
 Certificate paths refer to files local to the CLI process; use absolute paths
-when the same file will be used by shell child commands. `scope` is descriptive
-and does not grant access. There is no `client_meta.etcd` wrapper.
+when the same file will be used by shell child commands.
+There is no `client_meta.etcd` wrapper.
 
 The sections are independent: service-only commands work without `client_meta`,
 and metadata-only commands work without `service_context` or `client_storage`.
@@ -188,7 +184,7 @@ wp diag trace check server-append-duration --window 15m
 Observability objects retain the same provider fields and nesting as `cli.yaml`,
 including label/tag selectors, authentication environment references, limits and
 TLS settings. The launcher must also supply any referenced authentication
-environment variables. `scope` IDs do not automatically become query selectors.
+environment variables and configure the appropriate provider selectors in the file.
 Metrics and Trace have working `wp diag` consumers today. The `loki` object above
 illustrates connection transport for future use; this does **not** add a Loki
 analysis command. Additional provider objects and nested settings survive

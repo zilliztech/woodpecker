@@ -141,7 +141,7 @@ func TestSessionStorageInvalidAndMissingFile(t *testing.T) {
 }
 
 func TestSessionShellStorageOnlyStartup(t *testing.T) {
-	withSessionJSON(t, `{"schema_version":1,"scope":{"milvus_instance_id":"client-a"},"client_storage":{"bucket":"instance-bucket","root_path":"instance/root"}}`)
+	withSessionJSON(t, `{"schema_version":1,"client_storage":{"bucket":"instance-bucket","root_path":"instance/root"}}`)
 	root := NewRootCommand()
 	var out bytes.Buffer
 	root.SetIn(strings.NewReader("status --check\ndisconnect\nstatus\nexit\n"))
@@ -150,7 +150,7 @@ func TestSessionShellStorageOnlyStartup(t *testing.T) {
 	root.SetArgs([]string{"shell"})
 	require.NoError(t, root.Execute())
 	require.Contains(t, out.String(), "instance-bucket")
-	require.Contains(t, out.String(), "instance/root")
+	require.Contains(t, out.String(), "Tenant:          instance/root\n")
 	require.Contains(t, out.String(), "Etcd check: skipped")
 	require.Contains(t, out.String(), "Tenant metadata: not configured")
 }
