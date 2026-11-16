@@ -68,16 +68,16 @@ func newShellCommand() *cobra.Command {
 		Use:   "shell",
 		Short: "Open a session with separate service and tenant metadata targets",
 		Long: "Open an interactive operational shell. Without --context, choose a context from cli.yaml.\n" +
-			"WOODPECKER_SESSION_CONFIG supplies initial service and client metadata settings when set.\n" +
+			"--session or WOODPECKER_SESSION_CONFIG supplies initial service and client metadata settings.\n" +
 			"Otherwise start with no tenant metadata attached; use connect to attach a tenant.\n" +
-			"For piped input, select a session JSON file or specify --context. Type help or exit to leave.",
+			"For piped input, select a session JSON/YAML file or specify --context. Type help or exit to leave.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var session *config.SessionConfig
 			var file *config.File
 			var path string
 			var err error
-			sessionPath := os.Getenv(config.SessionConfigEnv)
+			sessionPath := sessionConfigPath()
 			if sessionPath != "" {
 				session, err = config.LoadSession(sessionPath)
 				if err != nil {
@@ -110,7 +110,7 @@ func newShellCommand() *cobra.Command {
 			if !interactive && !cmd.Flags().Changed("context") && session == nil {
 				return wperrors.NewUsageError("non-interactive shell input requires --context <name>; run wp ctx list to see configured contexts")
 			}
-			s := &shellSession{file: file, configPath: path, sessionConfig: session != nil, in: cmd.InOrStdin(), out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
+			s := &shellSession{file: file, configPath: path, sessionPath: sessionPath, sessionConfig: session != nil, in: cmd.InOrStdin(), out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
 			// Capture explicitly supplied preferences before building any command trees:
 			// existing constructors bind a per-process Globals singleton.
 			s.preferences = shellPreferences(cmd)

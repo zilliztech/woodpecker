@@ -139,9 +139,9 @@ async function select(body){
  state.info=await api('/api/workspace/session',body);
  const newMetadata=state.info.session.metadata;
  if(oldMetadata?.etcd!==newMetadata?.etcd||oldMetadata?.prefix!==newMetadata?.prefix)$('#meta-log').value=newMetadata?.log_name||'';
- if(body.action==='use-context'){adoptSharedContext(body.context);state.commandEditorKey='';state.clusterRev++;$('#cluster-result').textContent='Read cluster state to fetch its current memberlist.';}
+ if(body.action==='use-context'){adoptSharedContext(body.context);adoptSharedMetadata(state.info.session.metadata);state.commandEditorKey='';state.clusterRev++;$('#cluster-result').textContent='Read cluster state to fetch its current memberlist.';}
  else if(body.action==='use-target')reset();
- else{if(body.action==='connect-meta')adoptSharedMetadata(state.info.session.metadata);state.metaRev++;$('#metadata-result').textContent=state.info.session.metadata?'Choose a metadata view.':'Connect to client etcd to read its current metadata.';}
+ else{adoptSharedMetadata(state.info.session.metadata);state.metaRev++;$('#metadata-result').textContent=state.info.session.metadata?'Choose a metadata view.':'Connect to client etcd to read its current metadata.';}
  renderConnections();render();loadAgentStatus(state.info);
 }
 async function watch(id,rev,analysis=false){for(;;){const job=await api('/api/runs/'+id);if(rev!==state.rev)return;if(analysis)state.analysisJob=job;else state.job=job;if(job.report_ready){render();const result=await api('/api/runs/'+id+'/report');if(rev!==state.rev)return;if(analysis){state.analysis=result;state.analysisID=id;state.analysisJob=null;}else{rememberEvidenceConnections(result);state.report=result;state.busy=false;state.filter=result.checks.some(c=>c.status==='abnormal')?'abnormal':'all';}await loadRunHistory();render();return;}render();await new Promise(r=>setTimeout(r,500));}}

@@ -37,6 +37,7 @@ func NewRootCommand() *cobra.Command {
 	pf := root.PersistentFlags()
 	pf.StringArrayVar(&Globals.NodeAdminURLs, "node-admin-url", nil, "Map a node ID, advertised address, or host to an admin URL (KEY=URL; repeatable; overrides context mappings)")
 	pf.StringVar(&Globals.Context, "context", "", "CLI context name (overrides current-context in cli.yaml)")
+	pf.StringVar(&Globals.Session, "session", "", "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)")
 	pf.StringVar(&Globals.Endpoint, "endpoint", "", "Admin HTTP seed endpoint (e.g. http://node:9091)")
 	pf.IntVar(&Globals.AdminPort, "admin-port", d.AdminPort, "Admin port for fan-out peer discovery")
 	pf.DurationVar(&Globals.Timeout, "timeout", d.Timeout, "Per-request timeout")
@@ -64,11 +65,11 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newOpsCommand())
 	root.AddCommand(newMetricsCommand())
 	root.AddCommand(newDiagnoseCommand())
-	root.AddCommand(diagcommand.NewCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }}))
+	root.AddCommand(diagcommand.NewCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }, Session: sessionConfigPath}))
 	root.AddCommand(newK8sCommand())
 	root.AddCommand(newShellCommand())
 	root.AddCommand(newWebUICommand())
-	root.AddCommand(diagcommand.NewReportCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }}))
+	root.AddCommand(diagcommand.NewReportCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }, Session: sessionConfigPath}))
 
 	return root
 }

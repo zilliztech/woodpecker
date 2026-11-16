@@ -51,6 +51,7 @@ func shellRootDefaults() GlobalFlags {
 
 func (s *shellSession) commandRoot() *cobra.Command {
 	root := NewRootCommand()
+	Globals.Session = s.sessionPath
 	root.SetIn(s.in)
 	root.SetOut(s.out)
 	root.SetErr(s.errOut)
@@ -82,6 +83,9 @@ func (s *shellSession) execute(parent context.Context, args []string) (bool, err
 	}
 	if leaf.Flags().Changed("context") && Globals.Context != s.contextName {
 		return false, wperrors.NewUsageError("use 'use <context>' to switch the session's service context")
+	}
+	if leaf.Flags().Changed("session") {
+		return false, wperrors.NewUsageError("select --session when starting the shell; use connect/disconnect inside the session")
 	}
 	if leaf.Parent() == root {
 		switch leaf.Name() {
@@ -227,7 +231,7 @@ func (s *shellSession) dispatch(ctx context.Context, leaf *cobra.Command, args [
 	for c := leaf; c != nil; c = c.Parent() {
 		if c.Name() == "ctx" {
 			path = s.configPath
-			if s.sessionConfig && path == os.Getenv(config.SessionConfigEnv) {
+			if s.sessionConfig && path == s.sessionPath {
 				_, path, err = loadFileFromEnvOrDefault()
 				if err != nil {
 					return shellConfigError(err, path)

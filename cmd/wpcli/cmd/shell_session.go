@@ -26,6 +26,7 @@ type shellTenant struct {
 type shellSession struct {
 	file          *config.File
 	configPath    string
+	sessionPath   string
 	contextName   string
 	service       config.Context
 	sessionConfig bool
@@ -64,7 +65,6 @@ func (s *shellSession) use(name string) error {
 		mappings[key] = value
 	}
 	c.NodeAdminURLs = mappings
-	c.Etcd = config.EtcdConfig{}
 	previous := s.service
 	s.service = c
 	if err := s.validateService(); err != nil {

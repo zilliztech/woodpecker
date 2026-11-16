@@ -96,14 +96,33 @@ with `connect`, independently of the server context. See the
 
 ## Session connection configuration
 
-Cloud Terminal and other launchers can provide a private JSON file for the current
-session. The environment variable holds a **file path**, not inline JSON:
+Contexts contain service environment settings: Admin endpoints, node mappings,
+Kubernetes and observability connections. Client etcd authorities and storage
+locations belong to the session's independent `client_meta` and `client_storage`
+sections. A shared service context never selects a tenant. Legacy context `etcd`
+and `client_metas` entries in old cli.yaml files are ignored and are not saved;
+`service_context.etcd` is rejected in new session files.
+
+Ordinary single commands use saved contexts and explicit command options. Cloud
+Terminal and other launchers can additionally select a private JSON **or YAML**
+session file. Both formats decode to the same configuration structure. Select it
+with `--session` or `WOODPECKER_SESSION_CONFIG`; the explicit flag takes precedence.
+The environment variable holds a **file path**, not inline configuration:
 
 ```bash
 export WOODPECKER_SESSION_CONFIG=/run/cloud-terminal/sessions/example/wp/session.json
 wp node list
 wp meta log list
 wp shell
+wp webui
+```
+
+The equivalent explicit entry works for all three execution modes:
+
+```bash
+wp --session /path/to/session.yaml meta log list
+wp shell --session /path/to/session.yaml
+wp webui --session /path/to/session.yaml
 ```
 
 ```json
@@ -190,7 +209,7 @@ analysis command. Additional provider objects and nested settings survive
 loading and shell dispatch without a central field allowlist. Consumers validate
 the settings they use.
 
-When the variable is set, targets resolve as follows:
+When a session is selected, targets resolve as follows:
 
 | Target | Highest to lowest precedence |
 | --- | --- |
@@ -220,9 +239,9 @@ client's bucket/root. Supply the new pair when needed. Without `client_storage`,
 commands retain their existing behavior, including server-side location discovery
 where supported.
 
-The file must be a JSON object with known configuration fields and a maximum size
-of 1 MiB. Missing/unreadable files, invalid JSON, invalid fields or types, and
-missing command-required fields are errors. Each command validates the settings
+The file must contain one JSON object or YAML mapping with known fields and a
+maximum size of 1 MiB. Missing/unreadable files, malformed or multiple documents,
+invalid fields or types, and missing command-required fields are errors. Each command validates the settings
 it needs; no separate format version is required. A selected session
 source never falls back to localhost or a previous target. An explicit independent
 target does not require the session file. Unset the variable to restore the legacy
@@ -234,18 +253,26 @@ Older CLIs reject unknown core fields, so launchers must emit settings supported
 by the installed CLI.
 
 Keep the file private and exclude it from version control. Each invocation reads
-the selected file; `wp shell` captures its initial configuration and isolates child
-commands from subsequent environment changes. See the [shell guide](shell.md#start-from-session-json).
+the selected file; `wp shell` and `wp webui` capture their initial configuration
+and isolate child commands from subsequent file/environment changes. See the
+[shell guide](shell.md#start-from-a-session-file).
+
+WebUI maintains separate browser sessions. A context switch or metadata disconnect
+detaches that browser's client metadata and storage. Other browsers and already
+started operations retain their own selections. Commands receive private,
+temporary configuration snapshots; etcd credentials are not included in browser
+responses, command arguments or service configuration previews. Browser selection
+changes never rewrite the source session file or saved contexts.
 
 The common root hook supplies storage defaults to commands registering the
 existing bucket/root flags. New commands using those flags and the shared
-service/metadata resolvers reuse this configuration without their own JSON
+service/metadata resolvers reuse this configuration without their own JSON/YAML
 parsers. A new backend or analysis still needs a consumer implementation; the
 generic connection transport does not create that functionality by itself.
 
 ## Precedence
 
-Without `WOODPECKER_SESSION_CONFIG`, values are resolved in this order
+Without `--session` or `WOODPECKER_SESSION_CONFIG`, values are resolved in this order
 (highest priority first):
 
 1. **Command-line flags** (`--endpoint`, `--timeout`, etc.)
@@ -284,7 +311,7 @@ Without `WOODPECKER_SESSION_CONFIG`, values are resolved in this order
 Current source builds keep **server context** and **client metadata authority**
 separate. `cli.yaml` contains server endpoints/maps, Kubernetes and evidence
 connections. Client etcd endpoints, the full metadata prefix, authentication and
-storage locations are explicit request inputs. Older context-etcd/client-profile
+storage locations come from explicit request inputs or session configuration. Older context-etcd/client-profile
 fields are not selected by current metadata commands; named `--client-meta`
 profiles are retired. An explicit `ctx use` rewrite preserves the old file in a
 private backup before canonicalizing its contexts.
@@ -441,7 +468,7 @@ not an assumed server default. LogStore nodes do not connect to etcd, so their c
 etcd section is not validated for this purpose. An incorrect prefix can successfully
 connect while showing an empty keyspace.
 
-Metadata commands require explicit etcd settings; Admin discovery is not used. Pure metadata
+Metadata commands require explicit or session etcd settings; Admin discovery is not used. Pure metadata
 commands (`log readers`, skip-range `list`/`remove`, and `marking`) then need no seed;
 quorum operations still need a reachable seed and individually reachable replica admin
 origins. TLS and authentication overrides are `--etcd-cert`, `--etcd-key`,

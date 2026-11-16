@@ -66,21 +66,22 @@ func TestLoadSessionIndependentSections(t *testing.T) {
 
 func TestLoadSessionRejectsInvalidInputWithoutLeakingValues(t *testing.T) {
 	for name, body := range map[string]string{
-		"yaml":                    "client_meta: {password: private-value}",
-		"malformed":               `{"password":"private-value"`,
-		"trailing document":       `{} {"password":"private-value"}`,
-		"unknown field":           `{"private-value":"private-value"}`,
-		"unrelated scope":         `{"scope":{"milvus_instance_id":"private-value"}}`,
-		"unknown nested field":    `{"client_meta":{"etcd":{"password":"private-value"}}}`,
-		"unknown storage field":   `{"client_storage":{"bucket_name":"private-value"}}`,
-		"provider must be object": `{"service_context":{"observability":{"loki":"private-value"}}}`,
-		"duration type":           `{"service_context":{"timeout":"private-value"}}`,
-		"section type":            `{"client_meta":[]}`,
-		"scalar":                  `"private-value"`,
-		"null":                    `null`,
-		"array":                   `[]`,
-		"duplicate key":           `{"client_meta":{},"client_meta":{}}`,
-		"too large":               `{"service_context":{"endpoint":"` + strings.Repeat("x", 1<<20) + `"}}`,
+		"misplaced client metadata": `{"service_context":{"etcd":{"endpoints":["private-value"]}}}`,
+		"multiple YAML documents":   "client_meta: {meta_prefix: tenant/wp}\n---\nclient_storage: {bucket: private-value, root_path: root}\n",
+		"malformed":                 `{"password":"private-value"`,
+		"trailing document":         `{} {"password":"private-value"}`,
+		"unknown field":             `{"private-value":"private-value"}`,
+		"unrelated scope":           `{"scope":{"milvus_instance_id":"private-value"}}`,
+		"unknown nested field":      `{"client_meta":{"etcd":{"password":"private-value"}}}`,
+		"unknown storage field":     `{"client_storage":{"bucket_name":"private-value"}}`,
+		"provider must be object":   `{"service_context":{"observability":{"loki":"private-value"}}}`,
+		"duration type":             `{"service_context":{"timeout":"private-value"}}`,
+		"section type":              `{"client_meta":[]}`,
+		"scalar":                    `"private-value"`,
+		"null":                      `null`,
+		"array":                     `[]`,
+		"duplicate key":             `{"client_meta":{},"client_meta":{}}`,
+		"too large":                 `{"service_context":{"endpoint":"` + strings.Repeat("x", 1<<20) + `"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "session.json")
@@ -95,4 +96,44 @@ func TestLoadSessionRejectsInvalidInputWithoutLeakingValues(t *testing.T) {
 	require.ErrorContains(t, err, "cannot open")
 	_, err = LoadSession(t.TempDir())
 	require.ErrorContains(t, err, "regular file")
+}
+
+func TestLoadSessionJSONAndYAMLHaveTheSameMeaning(t *testing.T) {
+	dir := t.TempDir()
+	jsonPath, yamlPath := filepath.Join(dir, "session.json"), filepath.Join(dir, "session.yaml")
+	require.NoError(t, os.WriteFile(jsonPath, []byte(`{"service_context":{"endpoint":"http://wp:9091","timeout":"2s","observability":{"trace":{"endpoint":"http://trace:16686"}}},"client_meta":{"endpoints":["http://etcd:2379"],"meta_prefix":"tenant/wp","tls_enabled":false},"client_storage":{"bucket":"bucket","root_path":"tenant"}}`), 0o600))
+	require.NoError(t, os.WriteFile(yamlPath, []byte(`service_context:
+  endpoint: http://wp:9091
+  timeout: 2s
+  observability:
+    trace:
+      endpoint: http://trace:16686
+client_meta:
+  endpoints: [http://etcd:2379]
+  meta_prefix: tenant/wp
+  tls_enabled: false
+client_storage:
+  bucket: bucket
+  root_path: tenant
+`), 0o600))
+	a, err := LoadSession(jsonPath)
+	require.NoError(t, err)
+	b, err := LoadSession(yamlPath)
+	require.NoError(t, err)
+	// YAML node source locations/styles differ; compare their decoded values.
+	var aj, by map[string]any
+	traceA, traceB := a.ServiceContext.Observability.Connections["trace"], b.ServiceContext.Observability.Connections["trace"]
+	require.NoError(t, traceA.Decode(&aj))
+	require.NoError(t, traceB.Decode(&by))
+	require.Equal(t, aj, by)
+	a.ServiceContext.Observability, b.ServiceContext.Observability = ObservabilityConfig{}, ObservabilityConfig{}
+	require.Equal(t, a, b)
+	private, err := a.WriteTemp(dir)
+	require.NoError(t, err)
+	info, err := os.Stat(private)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	c, err := LoadSession(private)
+	require.NoError(t, err)
+	require.Equal(t, a, c)
 }

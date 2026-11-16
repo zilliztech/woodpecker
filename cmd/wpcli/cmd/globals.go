@@ -7,6 +7,7 @@ import "time"
 type GlobalFlags struct {
 	NodeAdminURLs []string
 	Context       string
+	Session       string
 	Endpoint      string
 	AdminPort     int
 	Timeout       time.Duration

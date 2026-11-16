@@ -25,7 +25,7 @@ on every v0.1.46 image. No kernel changes are introduced by this CLI/WebUI chang
 | Metrics check | Prometheus connection and incident window; required scope fields | Jaeger, Agent, etcd |
 | Trace check | Jaeger connection, configured WP service and incident window | Prometheus, Agent, etcd |
 | Scenario | At least one Metrics or Trace connection and incident window | Both sources together, Agent |
-| Native metadata operations | Etcd endpoints and full client metadata prefix, from flags, a parameter file or session JSON | Monitoring connections |
+| Native metadata operations | Etcd endpoints and full client metadata prefix, from flags, a parameter file or session JSON/YAML | Monitoring connections |
 | Agent analysis | Saved findings and explicit Agent configuration | Automatic source queries or repairs |
 
 `wp diagnose --window 30s` starts native sampling **now**. `wp diag --window 15m`
@@ -65,20 +65,29 @@ and evidence connections. The context name identifies the environment; a separat
 `deployment` setting is not required for Metrics or Trace. It does not contain
 tenant metadata prefixes, bucket, root path or log namespace. Applicable commands
 accept client metadata and storage from explicit inputs or the independent
-sections of [session JSON](configuration.md#session-connection-configuration).
+sections of [session JSON/YAML](configuration.md#session-connection-configuration).
 
 ### Session connections
 
-Cloud Terminal can supply `WOODPECKER_SESSION_CONFIG=/path/to/session.json`.
+Cloud Terminal can supply `WOODPECKER_SESSION_CONFIG=/path/to/session.json`, or
+operators can select `--session /path/to/session.yaml` explicitly.
 Place the same `observability` object shown above under `service_context`, using
-JSON syntax. `wp diag` then selects its Prometheus and Trace connections without
+JSON or YAML syntax. `wp diag` then selects its Prometheus and Trace connections without
 `--config` or `--context`; explicit configuration selection takes precedence.
 The command still selects the check, incident window and optional log/node filters:
 
 ```bash
 wp diag metrics check writer-throughput --window 15m
 wp diag trace check server-append-duration --window 15m
+wp webui --session /path/to/session.yaml
 ```
+
+WebUI loads the same service connections and initializes each browser session with
+the optional client metadata and storage. Switching contexts or disconnecting
+metadata clears that browser's client settings. Configuration previews contain
+service settings only; private client credentials are passed to operations in
+temporary files and are not sent to the browser. A single command without a
+selected session continues to use contexts and its explicit inputs.
 
 Provider settings retain their existing structure, including `match_labels`,
 `match_tags`, `services`, `search`, authentication environment references and TLS.

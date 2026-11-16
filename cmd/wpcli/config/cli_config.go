@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -53,18 +52,6 @@ func (o ObservabilityConfig) MetricsReference() string {
 	return o.Metrics
 }
 
-// ClientMetaConfig is a tenant namespace and storage locator, independent of a
-// server environment. Etcd authentication stays in this private configuration.
-type ClientMetaConfig struct {
-	Etcd         EtcdConfig `yaml:"etcd"`
-	Bucket       string     `yaml:"bucket,omitempty"`
-	RootPath     string     `yaml:"root_path,omitempty"`
-	LogNamespace string     `yaml:"log_namespace,omitempty"`
-	LogID        string     `yaml:"log_id,omitempty"`
-	ReaderName   string     `yaml:"reader_name,omitempty"`
-	TraceService string     `yaml:"trace_service,omitempty"`
-}
-
 // Context is one named cluster context in cli.yaml.
 type Context struct {
 	Endpoint         string              `yaml:"endpoint"`
@@ -73,7 +60,6 @@ type Context struct {
 	Concurrency      int                 `yaml:"concurrency"`
 	Strict           bool                `yaml:"strict"`
 	NodeAdminURLs    map[string]string   `yaml:"node_admin_urls,omitempty"`
-	Etcd             EtcdConfig          `yaml:"etcd,omitempty"`
 	K8s              K8sConfig           `yaml:"k8s,omitempty"`
 	Observability    ObservabilityConfig `yaml:"observability,omitempty"`
 	DiagnosticTarget string              `yaml:"diagnostic_target,omitempty"`
@@ -89,10 +75,9 @@ type Defaults struct {
 
 // File is the parsed cli.yaml document.
 type File struct {
-	CurrentContext string                      `yaml:"current-context"`
-	Contexts       map[string]Context          `yaml:"contexts"`
-	ClientMetas    map[string]ClientMetaConfig `yaml:"client_metas,omitempty"`
-	Defaults       Defaults                    `yaml:"defaults"`
+	CurrentContext string             `yaml:"current-context"`
+	Contexts       map[string]Context `yaml:"contexts"`
+	Defaults       Defaults           `yaml:"defaults"`
 	// Diagnostics is decoded by the diagnostic module, keeping its dependencies
 	// and source-specific connection schemas out of the operational config package.
 	Diagnostics yaml.Node         `yaml:"diagnostics,omitempty"`
@@ -166,20 +151,4 @@ func DefaultConfigPaths() []string {
 		paths = append(paths, home+"/.woodpecker/cli.yaml")
 	}
 	return paths
-}
-
-// ResolveClientMeta supports old context-etcd definitions only when explicitly
-// named as a client profile. Selecting a server context never selects this profile.
-func (f *File) ResolveClientMeta(name string) (ClientMetaConfig, error) {
-	if v, ok := f.ClientMetas[name]; ok {
-		return v, nil
-	}
-	if strings.HasPrefix(name, "context:") {
-		ctx, err := f.ResolveContext(strings.TrimPrefix(name, "context:"))
-		if err != nil {
-			return ClientMetaConfig{}, err
-		}
-		return ClientMetaConfig{Etcd: ctx.Etcd}, nil
-	}
-	return ClientMetaConfig{}, fmt.Errorf("client meta %q not found in cli.yaml", name)
 }

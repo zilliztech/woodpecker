@@ -50,7 +50,7 @@ func resolveConfiguration() (*resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	sessionSelected := os.Getenv(config.SessionConfigEnv) != ""
+	sessionSelected := sessionConfigPath() != ""
 	if sessionSelected {
 		if Globals.Endpoint != "" {
 			ctx.Endpoint = Globals.Endpoint
@@ -120,7 +120,7 @@ func resolveConfiguration() (*resolved, error) {
 // With session configuration enabled, explicit targets never inherit the
 // session's mappings or credentials.
 func loadServiceContext() (config.Context, string, string, error) {
-	if path := os.Getenv(config.SessionConfigEnv); path != "" {
+	if path := sessionConfigPath(); path != "" {
 		if Globals.changed["endpoint"] && Globals.Endpoint == "" || Globals.changed["context"] && Globals.Context == "" {
 			return config.Context{}, "", "", wperrors.NewUsageError("explicit --endpoint and --context must not be empty")
 		}
@@ -162,7 +162,7 @@ func loadServiceContext() (config.Context, string, string, error) {
 		}
 	}
 
-	if os.Getenv(config.SessionConfigEnv) != "" && configPath == "" {
+	if sessionConfigPath() != "" && configPath == "" {
 		return config.Context{}, "", "", wperrors.NewConfigError("explicit --context requires a configured cli.yaml context")
 	}
 	return ctx, configPath, contextName, nil

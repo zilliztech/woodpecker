@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
 	d "github.com/zilliztech/woodpecker/diagnostics"
 	"github.com/zilliztech/woodpecker/diagnostics/reports"
 	"github.com/zilliztech/woodpecker/diagnostics/wal"
@@ -84,7 +85,11 @@ func NewReportCommand(options Options) *cobra.Command {
 		if options.Context != nil {
 			contextName = options.Context()
 		}
-		agent, err := reportAgentConfig(configPath, contextName)
+		sessionPath := os.Getenv(config.SessionConfigEnv)
+		if options.Session != nil {
+			sessionPath = options.Session()
+		}
+		agent, err := reportAgentConfig(configPath, contextName, sessionPath)
 		if err != nil {
 			return err
 		}
@@ -113,8 +118,8 @@ func NewReportCommand(options Options) *cobra.Command {
 
 // Report analysis consumes frozen evidence. Invalid assessment rules or offline
 // observability/Admin services must not prevent reading the Agent configuration.
-func reportAgentConfig(path, contextName string) (wal.AgentConfig, error) {
-	file, _, err := LoadDocument(path)
+func reportAgentConfig(path, contextName, sessionPath string) (wal.AgentConfig, error) {
+	file, _, err := loadDocumentWithSession(path, contextName, sessionPath)
 	if err != nil {
 		return wal.AgentConfig{}, err
 	}

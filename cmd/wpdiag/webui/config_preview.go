@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"gopkg.in/yaml.v3"
+
 	d "github.com/zilliztech/woodpecker/diagnostics"
 	"github.com/zilliztech/woodpecker/diagnostics/checks"
 )
@@ -22,6 +24,15 @@ func configPreview(path string) (string, error) {
 }
 
 func (s *Server) workspaceConfigPreview(w http.ResponseWriter, r *http.Request) {
+	if s.workspace.initialSession != nil {
+		body, err := yaml.Marshal(s.workspace.file)
+		if err != nil {
+			fail(w, 422, "config_preview_unavailable", "Cannot display service configuration")
+			return
+		}
+		send(w, 200, map[string]any{"schema_version": "wp.config-preview/v1", "path": s.workspace.path, "yaml": string(body), "read_only": true, "redacted": true, "snapshot": "Loaded service configuration; private client settings omitted"})
+		return
+	}
 	content, err := configPreview(s.workspace.path)
 	if err != nil {
 		fail(w, 422, "config_preview_unavailable", err.Error())

@@ -23,6 +23,7 @@ import (
 type Options struct {
 	Context func() string
 	Output  func() string
+	Session func() string
 }
 type Error struct {
 	Code    int
@@ -113,15 +114,20 @@ func (f *frontend) load() (d.Config, string, error) {
 		return d.Config{}, "", fmt.Errorf("saved diagnostic targets/client profiles are no longer used; select --context and pass scope flags or --bindings-file")
 	}
 
+	sessionPath := os.Getenv(config.SessionConfigEnv)
+	if f.options.Session != nil {
+		sessionPath = f.options.Session()
+	}
+	rules := map[string]string{"metrics": f.metricsRules, "trace": f.traceRules}
 	if f.bindingsFile != "" {
-		file, abs, err := LoadDocument(f.path)
+		file, abs, err := loadDocumentWithSession(f.path, name, sessionPath)
 		if err != nil {
 			return d.Config{}, "", err
 		}
-		cfg, err := DiagnosticsConfig(file, abs, map[string]string{"metrics": f.metricsRules, "trace": f.traceRules})
-		return cfg, "", err
+		c, err := DiagnosticsConfig(file, abs, rules)
+		return c, "", err
 	}
-	c, target, err := Load(f.path, name, map[string]string{"metrics": f.metricsRules, "trace": f.traceRules})
+	c, target, err := LoadWithSession(f.path, name, sessionPath, rules)
 	if f.target != "" {
 		target = f.target
 	}
@@ -269,6 +275,9 @@ func (f *frontend) catalog() *cobra.Command {
 	c := &cobra.Command{Use: "catalog", Short: "List implemented checks, formulas, references and scenario manifests; no source/model queries", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg := d.Config{}
 		configured := f.path != "" || os.Getenv("WOODPECKER_CLI_CONFIG") != "" || os.Getenv(config.SessionConfigEnv) != "" || f.metricsRules != "" || f.traceRules != ""
+		if f.options.Session != nil && f.options.Session() != "" {
+			configured = true
+		}
 		for _, path := range config.DefaultConfigPaths() {
 			if _, err := os.Stat(path); err == nil {
 				configured = true

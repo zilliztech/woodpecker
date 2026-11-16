@@ -29,6 +29,30 @@ func withSessionJSON(t *testing.T, body string) string {
 	return path
 }
 
+func TestSessionFlagSelectsYAMLWithoutChangingEnvironment(t *testing.T) {
+	original := Globals
+	t.Cleanup(func() { Globals = original })
+	_, endpoint := startShellTestEtcd(t)
+	path := filepath.Join(t.TempDir(), "session.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("client_meta:\n  endpoints: [%q]\n  meta_prefix: selected/wp\nclient_storage:\n  bucket: selected-bucket\n  root_path: selected/root\n", endpoint)), 0o600))
+	wrong := filepath.Join(t.TempDir(), "missing.yaml")
+	t.Setenv(config.SessionConfigEnv, wrong)
+	for _, args := range [][]string{{"--session", path, "meta", "log", "list"}, {"shell", "--session", path}} {
+		root := NewRootCommand()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetIn(strings.NewReader("status\ndisconnect\nstatus\nexit\n"))
+		root.SetArgs(args)
+		require.NoError(t, root.Execute(), out.String())
+		if args[0] == "shell" {
+			require.Contains(t, out.String(), "selected/root")
+			require.Contains(t, out.String(), "Tenant metadata: not configured")
+		}
+		require.Equal(t, wrong, os.Getenv(config.SessionConfigEnv))
+	}
+}
+
 func TestSessionServicePrecedenceAndTransportDefaults(t *testing.T) {
 	withCliYAML(t, "http://saved:9091")
 	t.Setenv("WOODPECKER_ENDPOINT", "http://localhost:9091")

@@ -10,9 +10,10 @@ service while using different etcd clusters, metadata prefixes, and storage
 locations. Start with a source build that includes `wp shell` (`make wpcli`);
 check `wp shell --help` when using a released binary.
 
-## Start from session JSON
+## Start from a session file
 
-When `WOODPECKER_SESSION_CONFIG` points to a valid [session JSON file](configuration.md#session-connection-configuration),
+When `--session` or `WOODPECKER_SESSION_CONFIG` selects a valid
+[session JSON/YAML file](configuration.md#session-connection-configuration),
 `wp shell` uses its service context, including observability connections, and
 attaches its client metadata and `client_storage.bucket/root_path` defaults
 without prompting for a saved context. This also supports piped input. These
@@ -24,28 +25,30 @@ Startup selects settings without checking network reachability; use
 The initial client display name comes from `client_storage.root_path`, then
 `client_meta.meta_prefix`. If neither is suitable for the shell prompt, the name
 is `session`. This label does not change the connection settings or require any
-additional JSON fields.
+additional configuration fields.
 
 ```bash
 export WOODPECKER_SESSION_CONFIG=/path/to/session.json
 wp shell
+# Or select a file explicitly, ahead of the environment variable:
+wp shell --session /path/to/session.yaml
 ```
 
 An explicit startup `--context` chooses a saved service context independently of
-the JSON's client metadata. `--endpoint` selects an independent Admin target and
-does not retain JSON node mappings. `connect <tenant>` can explicitly reattach the
-JSON metadata, while `connect <tenant> --client-parameters-file /path/to/client.yaml`
+the session's client metadata. `--endpoint` selects an independent Admin target and
+does not retain session node mappings. `connect <tenant>` can explicitly reattach the
+session metadata, while `connect <tenant> --client-parameters-file /path/to/client.yaml`
 or a complete `--etcd`/`--meta-prefix` pair selects a new target.
 
 `disconnect` clears metadata and storage, and `use` retains its existing
 detach-on-switch behavior. Child commands cannot silently reattach the original
-JSON client settings.
+session client settings.
 Per-command metadata target overrides do not reuse the previous tenant's
 credentials, prefix, or storage settings. When `client_storage` is supplied,
 `segment inspect`, `segment probe` and `log scan` do not need repeated storage
 options; `instance data` and `node log-health` inherit the same filter.
 Explicit storage overrides must supply a complete bucket/root pair.
-Configuration is held in the shell and is not written back to the JSON file or
+Configuration is held in the shell and is not written back to the session file or
 saved contexts. Observability provider objects remain intact in child commands;
 use absolute certificate paths so temporary child configuration files do not
 change path resolution.

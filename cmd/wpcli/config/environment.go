@@ -132,7 +132,6 @@ func (f File) MarshalYAML() (any, error) {
 	for name, ctx := range f.Contexts {
 		type environment Context
 		copy := ctx
-		copy.Etcd = EtcdConfig{}
 		copy.DiagnosticTarget = ""
 		contexts[name] = environment(copy)
 	}

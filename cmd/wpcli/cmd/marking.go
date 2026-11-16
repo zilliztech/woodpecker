@@ -126,7 +126,7 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 		if decoder.Decode(&ctx) != nil {
 			return nil, wperrors.NewConfigError("invalid client parameters file")
 		}
-	} else if path := os.Getenv(config.SessionConfigEnv); path != "" && !f.standalone && !f.isSet("etcd", f.etcdEndpoints) && !f.isSet("meta-prefix", f.metaPrefix) {
+	} else if path := sessionConfigPath(); path != "" && !f.standalone && !f.isSet("etcd", f.etcdEndpoints) && !f.isSet("meta-prefix", f.metaPrefix) {
 		session, err := config.LoadSession(path)
 		if err != nil {
 			return nil, wperrors.NewConfigError(err.Error())
@@ -150,7 +150,7 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 	if discover && strings.TrimSpace(prefix) == "" {
 		return nil, wperrors.NewConfigError("client metadata requires --meta-prefix")
 	}
-	if discover && os.Getenv(config.SessionConfigEnv) != "" && (prefix == "." || strings.Trim(prefix, "/ ") == "") {
+	if discover && sessionConfigPath() != "" && (prefix == "." || strings.Trim(prefix, "/ ") == "") {
 		return nil, wperrors.NewConfigError("client metadata requires a complete, nonempty meta_prefix")
 	}
 	conn := &metaEtcdConn{endpoints: endpoints}
@@ -191,7 +191,7 @@ func resolveEtcd(f *metaEtcdFlags, discover bool) (*metaEtcdConn, error) {
 		return nil, wperrors.NewUsageError("no etcd endpoints; pass --etcd")
 	}
 	conn.kb = meta.NewKeyBuilder(prefix)
-	if os.Getenv(config.SessionConfigEnv) != "" {
+	if sessionConfigPath() != "" {
 		if err := conn.validate(discover); err != nil {
 			return nil, err
 		}

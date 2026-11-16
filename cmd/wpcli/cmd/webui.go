@@ -12,13 +12,13 @@ import (
 
 func newWebUICommand() *cobra.Command {
 	var path, address, metricsRules, traceRules string
-	c := &cobra.Command{Use: "webui", Short: "Open a local operations and diagnosis workspace using cli.yaml", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	c := &cobra.Command{Use: "webui", Short: "Open a local operations and diagnosis workspace using a context or session", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		// Resolve startup flags once. All subsequent HTTP requests carry their own
 		// session/context and never use the process-wide Cobra Globals singleton.
 		name := Globals.Context
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return webui.ServeWorkspace(ctx, address, path, name, cmd.OutOrStdout(), map[string]string{"metrics": metricsRules, "trace": traceRules})
+		return webui.ServeWorkspaceWithSession(ctx, address, path, name, sessionConfigPath(), cmd.OutOrStdout(), map[string]string{"metrics": metricsRules, "trace": traceRules})
 	}}
 	c.Flags().StringVar(&path, "config", "", "Shared cli.yaml (default: normal wp configuration discovery)")
 	c.Flags().StringVar(&metricsRules, "metrics-rules", "", "Metrics rules file beside cli.yaml by default")

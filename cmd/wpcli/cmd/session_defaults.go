@@ -9,11 +9,21 @@ import (
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
 )
 
+func sessionConfigPath() string {
+	if Globals.Session != "" {
+		return Globals.Session
+	}
+	return os.Getenv(config.SessionConfigEnv)
+}
+
 // applySessionCommandDefaults binds shared instance settings once at the root.
 // Commands registering the normal storage flags inherit this behavior without
 // maintaining command-name lists or loading session files themselves.
 func applySessionCommandDefaults(cmd *cobra.Command) error {
-	path := os.Getenv(config.SessionConfigEnv)
+	if cmd.Flags().Changed("session") && Globals.Session == "" {
+		return wperrors.NewUsageError("--session must name a configuration file")
+	}
+	path := sessionConfigPath()
 	if path == "" || cmd.Flags().Lookup("bucket") == nil {
 		return nil
 	}

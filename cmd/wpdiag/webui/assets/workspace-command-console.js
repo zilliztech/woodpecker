@@ -1,7 +1,7 @@
 /* A browser frontend to catalog-validated wp subprocesses. Shared values are scoped by authority. */
 'use strict';
 let commandPreferences=null,commandDrafts={},commandValidationAttempted=false,commandValidationMissing=[];
-const managedConnectionFlags=new Set(['trace-id','request-id','context','endpoint','node-admin-url','config','kubectl','etcd','meta-prefix','standalone','client','server','bindings-file','client-meta']);
+const managedConnectionFlags=new Set(['trace-id','request-id','context','session','endpoint','node-admin-url','config','kubectl','etcd','meta-prefix','standalone','client','server','bindings-file','client-meta']);
 const runtimeFlagNames=new Set(['output','timeout','concurrency','strict','no-color']);
 function commandDefinitionByName(name){return state.commands.commands.find(c=>c.name===name);}
 function metadataAuthority(){const m=sharedMetadata();return m.etcd&&m.prefix?m.etcd+'\0'+m.prefix:'unbound';}
@@ -238,23 +238,23 @@ function commandPayload(c){
   else if(input.value!=='')q.flags[f.name]=f.type==='stringArray'||f.type==='stringSlice'?input.value.split('\n').filter(Boolean):input.value;
  }
  if(commandConnection(c)==='telemetry'){q.bindings=diagnosticRequestBindings(commandCheckDefinitions(c));for(const [key,value]of Object.entries(diagnosticTraceParameters(commandCheckDefinitions(c))))q.flags[key.replaceAll('_','-')]=value;try{const window=timeSelection();q.flags.from=window.from;q.flags.to=window.to;}catch{}}
- if(['metadata','mixed','etcd'].includes(commandConnection(c))&&c.flags.some(f=>f.name==='etcd')){q.metadata={...sharedMetadata(),label:'Explicit form parameters',log_name:''};delete q.metadata.bucket;delete q.metadata.root_path;}
+ if(['metadata','mixed','etcd'].includes(commandConnection(c))&&c.flags.some(f=>f.name==='etcd')){const m=sharedMetadata(),attached=state.info.session.metadata;if(attached&&m.etcd===attached.etcd&&m.prefix===attached.prefix){q.use_metadata=true;q.metadata_authority=attached.etcd+'\0'+attached.prefix;}else{q.metadata={...m,label:'Explicit form parameters',log_name:''};delete q.metadata.bucket;delete q.metadata.root_path;}}
  if(c.name==='diagnose'&&preferences().diagnoseMode==='catalog')q.flags.list=true;
- if(commandConnection(c)==='etcd'){const endpoints=$('#console-etcd-endpoints')?.value.trim();if(endpoints)q.flags.etcd=endpoints;if(!q.context)q.flags.standalone=true;}
+ if(commandConnection(c)==='etcd'){const endpoints=$('#console-etcd-endpoints')?.value.trim();if(endpoints)q.flags.etcd=endpoints;if(!q.context&&!q.use_metadata)q.flags.standalone=true;}
  if(commandConnection(c)==='kubernetes'){for(const key of ['kubeconfig','kube-context']){const value=$('#console-'+key)?.value.trim();if(value)q.flags[key]=value;}}
  return q;
 }
 function updateCommandPreview(c){
  const q=commandPayload(c),argv=['wp'];updateCommandRequirements(c,q.flags);if(q.context)argv.push('--context',q.context);argv.push(...c.name.split(' '));
- const flags={...q.flags};if(q.metadata){flags.etcd=q.metadata.etcd;flags['meta-prefix']=q.metadata.prefix;if(c.flags.some(f=>f.name==='standalone'))flags.standalone=!q.metadata.client_meta;if(q.metadata.client_meta)flags['client-meta']=q.metadata.client_meta;}if(q.bindings)flags['bindings-file']='./wp-diagnostic-bindings.json';if(q.use_metadata){flags.etcd=state.info.session.metadata.etcd;flags['meta-prefix']=state.info.session.metadata.prefix;if(c.flags.some(f=>f.name==='standalone'))flags.standalone=true;}
+ const flags={...q.flags};if(q.metadata){flags.etcd=q.metadata.etcd;flags['meta-prefix']=q.metadata.prefix;if(c.flags.some(f=>f.name==='standalone'))flags.standalone=!q.metadata.client_meta;if(q.metadata.client_meta)flags['client-meta']=q.metadata.client_meta;}if(q.bindings)flags['bindings-file']='./wp-diagnostic-bindings.json';if(q.use_metadata&&!state.info.session_configured){flags.etcd=state.info.session.metadata.etcd;flags['meta-prefix']=state.info.session.metadata.prefix;if(c.flags.some(f=>f.name==='standalone'))flags.standalone=true;}
  for(const [name,value]of Object.entries(flags)){for(const v of Array.isArray(value)?value:[value])argv.push('--'+name+'='+String(v));}
  if(q.arguments.length){argv.push('--');for(const [i,a]of q.arguments.entries())argv.push(a||'<'+c.arguments[i].name+'>');}
- $('#command-preview').textContent='WOODPECKER_CLI_CONFIG='+shellArgument(state.info.config_path)+' '+argv.map(shellArgument).join(' ');
+ $('#command-preview').textContent=(state.info.session_configured?'# Uses the current workspace session\n':'WOODPECKER_CLI_CONFIG='+shellArgument(state.info.config_path)+' ')+argv.map(shellArgument).join(' ');
  const run=state.commandRuns[commandRunKey(c)],running=run&&!run.done;
- const connection=commandConnection(c),missing=[];
+ const connection=commandConnection(c),missing=[],metadata=q.use_metadata?state.info.session.metadata:q.metadata;
  if(['service','mixed'].includes(connection)&&!(state.info.available_contexts||[]).includes(q.context))missing.push('WP Admin context');
- if(['metadata','mixed'].includes(connection)&&(!q.metadata?.etcd||!q.metadata?.prefix))missing.push('client metadata endpoints / prefix');
- if(connection==='etcd'&&!q.metadata?.etcd)missing.push('etcd endpoints');
+ if(['metadata','mixed'].includes(connection)&&(!metadata?.etcd||!metadata?.prefix))missing.push('client metadata endpoints / prefix');
+ if(connection==='etcd'&&!metadata?.etcd)missing.push('etcd endpoints');
  if(connection==='telemetry'){if(!commandCheckDefinitions(c).length)missing.push('Choose a known check or scenario');try{timeSelection();}catch(e){missing.push(e.message);}const message=bindingsError(connectionRequirements(c));if(message)missing.push(message);}
  for(const key of commandSharedFields(c))if(requiredParameter(c,key)&&!$(`[data-shared-key="${key}"]`)?.value.trim())missing.push(key);
  if(commandSharedFields(c).includes('bucket')){const bucket=$('[data-shared-key=bucket]')?.value.trim(),root=$('[data-shared-key=rootPath]')?.value.trim();if(!!bucket!==!!root)missing.push(bucket?'rootPath':'bucket');}

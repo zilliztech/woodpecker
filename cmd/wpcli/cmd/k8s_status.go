@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -52,7 +51,7 @@ func newK8sStatusCommand() *cobra.Command {
 // resolveK8sConfig tries to load K8s config from cli.yaml.
 // Returns zero value if cli.yaml is not available.
 func resolveK8sConfig() (config.K8sConfig, error) {
-	if os.Getenv(config.SessionConfigEnv) != "" {
+	if sessionConfigPath() != "" {
 		ctx, _, _, err := loadServiceContext()
 		return ctx.K8s, err
 	}

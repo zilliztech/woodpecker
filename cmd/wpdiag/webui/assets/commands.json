@@ -224,6 +224,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -329,6 +337,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -423,6 +439,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -531,6 +555,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -633,6 +665,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -741,6 +781,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -843,6 +891,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -968,6 +1024,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -1070,6 +1134,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -1164,6 +1236,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -1269,6 +1349,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -1363,6 +1451,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -1578,6 +1674,14 @@
           "name": "request-id",
           "type": "string",
           "description": "Exact request ID; requires a configured Trace request_id_tag",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
           "global": true,
           "default": "",
           "required": false
@@ -1845,6 +1949,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -2094,6 +2206,14 @@
           "name": "request-id",
           "type": "string",
           "description": "Exact request ID; requires a configured Trace request_id_tag",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
           "global": true,
           "default": "",
           "required": false
@@ -2361,6 +2481,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -2465,7 +2593,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -2473,7 +2601,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -2553,7 +2681,7 @@
         {
           "name": "log-name",
           "type": "string",
-          "description": "Explicit WP-client metadata log; requires --segment, --etcd and --meta-prefix",
+          "description": "Explicit WP-client metadata log; requires --segment and client metadata connection settings",
           "global": false,
           "default": "",
           "required": false
@@ -2617,7 +2745,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -2735,6 +2863,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -2829,6 +2965,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -2942,6 +3086,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -2990,7 +3142,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -3006,7 +3158,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -3129,6 +3281,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -3180,7 +3340,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -3196,7 +3356,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -3319,6 +3479,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -3386,7 +3554,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -3394,7 +3562,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -3528,6 +3696,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -3654,6 +3830,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -3748,6 +3932,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -3925,6 +4117,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -4078,6 +4278,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -4223,6 +4431,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -4271,7 +4487,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -4279,7 +4495,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -4335,7 +4551,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -4405,6 +4621,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -4461,7 +4685,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -4469,7 +4693,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -4533,7 +4757,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -4627,6 +4851,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -4679,7 +4911,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -4687,7 +4919,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -4759,7 +4991,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -4853,6 +5085,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -4901,7 +5141,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -4909,7 +5149,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -4965,7 +5205,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -5035,6 +5275,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -5091,7 +5339,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -5099,7 +5347,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -5171,7 +5419,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -5249,6 +5497,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -5313,7 +5569,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -5329,7 +5585,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -5393,7 +5649,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -5476,6 +5732,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -5586,6 +5850,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -5707,6 +5979,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -5814,6 +6094,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -5940,6 +6228,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -6077,6 +6373,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -6129,7 +6433,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -6137,7 +6441,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -6193,7 +6497,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -6284,6 +6588,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -6394,6 +6706,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -6515,6 +6835,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -6567,7 +6895,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -6575,7 +6903,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -6631,7 +6959,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -6698,6 +7026,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -6819,6 +7155,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -6937,6 +7281,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -6989,7 +7341,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -6997,7 +7349,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7061,7 +7413,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7131,6 +7483,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -7182,7 +7542,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -7190,7 +7550,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7254,7 +7614,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7321,6 +7681,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -7372,7 +7740,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -7380,7 +7748,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7436,7 +7804,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7506,6 +7874,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -7549,7 +7925,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -7557,7 +7933,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7613,7 +7989,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7691,6 +8067,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -7734,7 +8118,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -7742,7 +8126,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7798,7 +8182,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -7868,6 +8252,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -7932,7 +8324,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -7940,7 +8332,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8004,7 +8396,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8098,6 +8490,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -8146,7 +8546,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -8154,7 +8554,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8210,7 +8610,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8277,6 +8677,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -8323,7 +8731,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -8331,7 +8739,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8387,7 +8795,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8454,6 +8862,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -8505,7 +8921,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -8513,7 +8929,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8569,7 +8985,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8636,6 +9052,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -8687,7 +9111,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -8695,7 +9119,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8751,7 +9175,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8818,6 +9242,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -8889,7 +9321,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -8897,7 +9329,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -8961,7 +9393,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -9055,6 +9487,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -9107,7 +9547,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -9115,7 +9555,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -9171,7 +9611,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -9238,6 +9678,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -9348,6 +9796,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -9485,6 +9941,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -9603,6 +10067,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -9713,6 +10185,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -9830,6 +10310,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -9937,6 +10425,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -10082,6 +10578,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -10200,6 +10704,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -10291,6 +10803,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -10423,6 +10943,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -10541,6 +11069,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -10643,6 +11179,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -10742,6 +11286,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -10887,6 +11439,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -10997,6 +11557,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -11096,6 +11664,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -11225,6 +11801,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -11332,6 +11916,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -11453,6 +12045,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -11567,6 +12167,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -11627,7 +12235,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -11635,7 +12243,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -11707,7 +12315,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -11785,6 +12393,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -11845,7 +12461,7 @@
         {
           "name": "client-parameters-file",
           "type": "string",
-          "description": "Private temporary etcd parameters file; not cli.yaml or a candidate profile",
+          "description": "Private etcd parameters file; overrides session metadata",
           "global": false,
           "default": "",
           "required": false
@@ -11853,7 +12469,7 @@
         {
           "name": "etcd",
           "type": "string",
-          "description": "Required client etcd endpoints (comma-separated); independent of server context",
+          "description": "Client etcd endpoints (comma-separated); selects an independent metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -11925,7 +12541,7 @@
         {
           "name": "meta-prefix",
           "type": "string",
-          "description": "Required full client metadata prefix",
+          "description": "Full client metadata prefix; required with an explicit metadata target",
           "global": false,
           "default": "",
           "required": false
@@ -12003,6 +12619,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -12040,7 +12664,7 @@
       "name": "shell",
       "category": "shell",
       "usage": "wp shell [flags]",
-      "description": "Open an interactive operational shell. Without --context, choose a context from cli.yaml.\nStart with no tenant metadata attached; use connect to attach a tenant.\nFor piped input, specify --context explicitly. Type help for commands or exit to leave.",
+      "description": "Open an interactive operational shell. Without --context, choose a context from cli.yaml.\n--session or WOODPECKER_SESSION_CONFIG supplies initial service and client metadata settings.\nOtherwise start with no tenant metadata attached; use connect to attach a tenant.\nFor piped input, select a session JSON/YAML file or specify --context. Type help or exit to leave.",
       "arguments": [],
       "flags": [
         {
@@ -12097,6 +12721,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
@@ -12197,6 +12829,14 @@
           "required": false
         },
         {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
+          "required": false
+        },
+        {
           "name": "strict",
           "type": "bool",
           "description": "Treat partial fan-out failures as errors",
@@ -12234,7 +12874,7 @@
       "name": "webui",
       "category": "local",
       "usage": "wp webui [flags]",
-      "description": "Open a local operations and diagnosis workspace using cli.yaml",
+      "description": "Open a local operations and diagnosis workspace using a context or session",
       "arguments": [],
       "flags": [
         {
@@ -12323,6 +12963,14 @@
           "description": "Output format: table|wide|json|yaml (default \"table\")",
           "global": true,
           "default": "table",
+          "required": false
+        },
+        {
+          "name": "session",
+          "type": "string",
+          "description": "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)",
+          "global": true,
+          "default": "",
           "required": false
         },
         {
