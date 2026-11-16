@@ -104,10 +104,6 @@ func newTestShell(t *testing.T) (*shellSession, *bytes.Buffer) {
 	p := writeTempConfig(t, goodYAML)
 	f, err := config.Load(p)
 	require.NoError(t, err)
-	// These fields must never implicitly attach a tenant.
-	c := f.Contexts["prod"]
-	c.Etcd = config.EtcdConfig{Endpoints: []string{"old-etcd:2379"}, MetaPrefix: "old/woodpecker", Password: "old-secret"}
-	f.Contexts["prod"] = c
 	out := &bytes.Buffer{}
 	s := &shellSession{file: f, configPath: p, in: strings.NewReader(""), out: out, errOut: out}
 	s.checkTenant = func(context.Context, *shellTenant) error { return nil }
@@ -168,7 +164,6 @@ func TestShellStartup(t *testing.T) {
 func TestShellSessionTransitions(t *testing.T) {
 	s, out := newTestShell(t)
 	require.Nil(t, s.tenant)
-	require.Empty(t, s.service.Etcd.Endpoints)
 	require.NoError(t, shellExecute(t, s, "connect", "tenant-a", "--etcd", "localhost:2379", "--meta-prefix", "a/woodpecker", "--bucket", "a-bucket", "--root-path", "a/root", "--etcd-username", "alice", "--etcd-password", "secret"))
 	require.Equal(t, "tenant-a", s.tenantName())
 	require.NoError(t, shellExecute(t, s, "status"))
@@ -209,9 +204,11 @@ func TestShellPrerequisitesAndStorageInheritance(t *testing.T) {
 		transient = path
 		file, err := config.Load(path)
 		require.NoError(t, err)
-		c, err := file.ResolveContext("")
+		_, err = file.ResolveContext("")
 		require.NoError(t, err)
-		require.Empty(t, c.Etcd.Endpoints, "temporary cli.yaml remains environment-only")
+		body, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NotContains(t, string(body), "client_meta:")
 		if s.tenant != nil && strings.Contains(strings.Join(args, " "), "--client-parameters-file=") {
 			require.Contains(t, strings.Join(args, " "), "--etcd=localhost:2379")
 		}

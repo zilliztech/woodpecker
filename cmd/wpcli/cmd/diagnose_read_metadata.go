@@ -27,7 +27,7 @@ type readDiagnosisFlags struct {
 
 func (f *readDiagnosisFlags) register(cmd *cobra.Command, o *diagnosis.Options) {
 	f.metadata.register(cmd)
-	cmd.Flags().StringVar(&f.logName, "log-name", "", "Explicit WP-client metadata log; requires --segment, --etcd and --meta-prefix")
+	cmd.Flags().StringVar(&f.logName, "log-name", "", "Explicit WP-client metadata log; requires --segment and client metadata connection settings")
 	cmd.Flags().Int64Var(&f.segment, "segment", 0, "Explicit metadata segment ID for replica/reader checks")
 	cmd.Flags().StringVar(&f.reader, "reader", "", "Select one reader by exact name; otherwise inspect up to --max-readers")
 	cmd.Flags().StringVar(&o.ReadMode, "read-mode", "unknown", "Expected reader use: unknown|tail|catch-up; not historical metrics retrieval")
@@ -40,14 +40,17 @@ func (f *readDiagnosisFlags) validate(scenario string) error {
 		return wperrors.NewUsageError("reader options require --scenario read (or all)")
 	}
 	selected := f.logName != "" || f.reader != "" || flags.Changed("segment")
-	for _, name := range []string{"etcd", "meta-prefix", "etcd-cert", "etcd-key", "etcd-cacert", "etcd-tls-min-version", "etcd-username", "etcd-password"} {
+	for _, name := range []string{"client-parameters-file", "etcd", "meta-prefix", "etcd-cert", "etcd-key", "etcd-cacert", "etcd-tls-min-version", "etcd-username", "etcd-password"} {
 		selected = selected || flags.Changed(name)
 	}
 	if !selected {
 		return nil
 	}
-	if (scenario != "write" && scenario != "read" && scenario != "all") || f.logName == "" || !flags.Changed("segment") || f.metadata.etcdEndpoints == "" || f.metadata.metaPrefix == "" {
+	if (scenario != "write" && scenario != "read" && scenario != "all") || f.logName == "" || !flags.Changed("segment") {
 		return wperrors.NewUsageError("metadata checks require --scenario write, read or all, --log-name, --segment, explicit --etcd and --meta-prefix for the WP-client namespace")
+	}
+	if _, err := resolveMetaEtcd(&f.metadata); err != nil {
+		return err
 	}
 	if strings.ContainsAny(f.reader, "/\x00\r\n") {
 		return wperrors.NewUsageError("--reader must be an exact name without slash or control characters")

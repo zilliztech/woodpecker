@@ -94,9 +94,186 @@ with `connect`, independently of the server context. See the
 | `k8s.kubeconfig` | string | | Path to kubeconfig |
 | `k8s.kubectl` | string | kubectl | Path to kubectl binary |
 
+## Session connection configuration
+
+Contexts contain service environment settings: Admin endpoints, node mappings,
+Kubernetes and observability connections. Client etcd authorities and storage
+locations belong to the session's independent `client_meta` and `client_storage`
+sections. A shared service context never selects a tenant. Legacy context `etcd`
+and `client_metas` entries in old cli.yaml files are ignored and are not saved;
+`service_context.etcd` is rejected in new session files.
+
+Ordinary single commands use saved contexts and explicit command options. Cloud
+Terminal and other launchers can additionally select a private JSON **or YAML**
+session file. Both formats decode to the same configuration structure. Select it
+with `--session` or `WOODPECKER_SESSION_CONFIG`; the explicit flag takes precedence.
+The environment variable holds a **file path**, not inline configuration:
+
+```bash
+export WOODPECKER_SESSION_CONFIG=/run/cloud-terminal/sessions/example/wp/session.json
+wp node list
+wp meta log list
+wp shell
+wp webui
+```
+
+The equivalent explicit entry works for all three execution modes:
+
+```bash
+wp --session /path/to/session.yaml meta log list
+wp shell --session /path/to/session.yaml
+wp webui --session /path/to/session.yaml
+```
+
+```json
+{
+  "service_context": {
+    "endpoint": "http://10.0.12.34:9091",
+    "admin_port": 9091,
+    "timeout": "30s",
+    "node_admin_urls": {
+      "wp-abc-0.wp-abc-headless.woodpecker-pool.svc.cluster.local:18080": "http://10.0.12.34:9091"
+    },
+    "observability": {
+      "prometheus": {
+        "endpoint": "https://metrics.example.com",
+        "bearer_token_env": "WP_METRICS_TOKEN",
+        "match_labels": {"namespace": "woodpecker-pool", "woodpecker_id": "abc"}
+      },
+      "trace": {
+        "endpoint": "https://jaeger.example.com",
+        "services": {"woodpecker": "wp_server"},
+        "search": {"service": "woodpecker"},
+        "match_tags": {"namespace": "woodpecker-pool", "woodpecker_id": "abc"}
+      },
+      "loki": {
+        "endpoint": "https://loki.example.com",
+        "match_labels": {"namespace": "woodpecker-pool", "woodpecker_id": "abc"},
+        "tenant_env": "WP_LOKI_TENANT"
+      }
+    }
+  },
+  "client_meta": {
+    "endpoints": ["http://10.0.20.11:2379"],
+    "meta_prefix": "example/woodpecker"
+  },
+  "client_storage": {
+    "bucket": "example-bucket",
+    "root_path": "in01-example"
+  }
+}
+```
+
+The example addresses, selectors, prefix and storage location must be replaced
+with the selected instance's actual values. Omit unused sections.
+`service_context` uses the existing context fields and duration
+strings. `client_meta` uses the flat client parameter-file fields below, including
+`username`, `password`, `cert`, `key`, `cacert`, `tls_min_version`, and `tls_enabled`.
+Certificate paths refer to files local to the CLI process; use absolute paths
+when the same file will be used by shell child commands.
+There is no `client_meta.etcd` wrapper.
+
+The sections are independent: service-only commands work without `client_meta`,
+and metadata-only commands work without `service_context` or `client_storage`.
+Native `diagnose` metadata checks accept this source instead of requiring repeated
+`--etcd`/`--meta-prefix` flags. `wp diag` can use inline observability connections
+from `service_context`; Kubernetes commands use its `k8s` settings.
+
+`client_storage` uses the existing `bucket` and `root_path` field names. The pair
+identifies physical data belonging to the selected client; it is independent of
+the etcd `meta_prefix`. Commands receive this pair through their existing flags:
+
+| Commands | Session defaults |
+| --- | --- |
+| `segment inspect`, `segment probe`, `log scan` | `--bucket`, `--root-path` |
+| `instance data`, `node log-health` | `--bucket`, `--root` |
+| Shell `connect` | Attached tenant bucket and root path |
+
+With the corresponding connections configured, operators can focus on the task:
+
+```bash
+wp segment inspect my-log 42
+wp log scan my-log
+wp instance data --all
+wp diag metrics check writer-throughput --window 15m
+wp diag trace check server-append-duration --window 15m
+```
+
+Observability objects retain the same provider fields and nesting as `cli.yaml`,
+including label/tag selectors, authentication environment references, limits and
+TLS settings. The launcher must also supply any referenced authentication
+environment variables and configure the appropriate provider selectors in the file.
+Metrics and Trace have working `wp diag` consumers today. The `loki` object above
+illustrates connection transport for future use; this does **not** add a Loki
+analysis command. Additional provider objects and nested settings survive
+loading and shell dispatch without a central field allowlist. Consumers validate
+the settings they use.
+
+When a session is selected, targets resolve as follows:
+
+| Target | Highest to lowest precedence |
+| --- | --- |
+| Admin service | Explicit `--endpoint`, explicit `--context`, session `service_context` |
+| Client metadata | Explicit `--client-parameters-file` with explicit flag overrides, explicit metadata target flags, session `client_meta` |
+| Client storage | Explicit bucket/root pair, session `client_storage` when the client metadata target is not overridden |
+| Diagnostic evidence | Explicit `--config` or `--context`, session service observability |
+
+`WOODPECKER_ENDPOINT` and an implicitly selected saved context cannot redirect a
+session. Explicit service selection starts with that target's settings; a new
+`--endpoint` does not inherit the session's node mappings. Add any mappings needed
+by that endpoint with `--node-admin-url`. Explicit transport flags such as
+`--timeout`, `--concurrency`, and `--strict=false` override the selected context.
+
+Overriding either metadata endpoint or prefix selects an independent target:
+supply both `--etcd` and `--meta-prefix`, or select a complete parameter file.
+Session credentials and TLS material do not carry over. Raw etcd commands still
+need only endpoints and use literal keys. Authentication-only flags can override
+credentials for the selected target. `--standalone` requires explicit metadata
+settings and does not select the session metadata.
+
+Storage overrides must supply both `--bucket` and `--root-path` (or `--root` for
+commands using that spelling), with nonempty values. They do not modify the
+session file. Explicit metadata target selection also stops inheriting session
+storage, preventing a new metadata target from being combined with the old
+client's bucket/root. Supply the new pair when needed. Without `client_storage`,
+commands retain their existing behavior, including server-side location discovery
+where supported.
+
+The file must contain one JSON object or YAML mapping with known fields and a
+maximum size of 1 MiB. Missing/unreadable files, malformed or multiple documents,
+invalid fields or types, and missing command-required fields are errors. Each command validates the settings
+it needs; no separate format version is required. A selected session
+source never falls back to localhost or a previous target. An explicit independent
+target does not require the session file. Unset the variable to restore the legacy
+resolution rules below. Help and version commands do not need connection settings.
+
+Compatibility is handled per field: new optional settings can have defaults,
+while renamed fields or changed meanings may need explicit compatibility handling.
+Older CLIs reject unknown core fields, so launchers must emit settings supported
+by the installed CLI.
+
+Keep the file private and exclude it from version control. Each invocation reads
+the selected file; `wp shell` and `wp webui` capture their initial configuration
+and isolate child commands from subsequent file/environment changes. See the
+[shell guide](shell.md#start-from-a-session-file).
+
+WebUI maintains separate browser sessions. A context switch or metadata disconnect
+detaches that browser's client metadata and storage. Other browsers and already
+started operations retain their own selections. Commands receive private,
+temporary configuration snapshots; etcd credentials are not included in browser
+responses, command arguments or service configuration previews. Browser selection
+changes never rewrite the source session file or saved contexts.
+
+The common root hook supplies storage defaults to commands registering the
+existing bucket/root flags. New commands using those flags and the shared
+service/metadata resolvers reuse this configuration without their own JSON/YAML
+parsers. A new backend or analysis still needs a consumer implementation; the
+generic connection transport does not create that functionality by itself.
+
 ## Precedence
 
-Values are resolved in this order (highest priority first):
+Without `--session` or `WOODPECKER_SESSION_CONFIG`, values are resolved in this order
+(highest priority first):
 
 1. **Command-line flags** (`--endpoint`, `--timeout`, etc.)
 2. **Environment variables** — `$WOODPECKER_ENDPOINT` (the admin endpoint;
@@ -134,7 +311,7 @@ Values are resolved in this order (highest priority first):
 Current source builds keep **server context** and **client metadata authority**
 separate. `cli.yaml` contains server endpoints/maps, Kubernetes and evidence
 connections. Client etcd endpoints, the full metadata prefix, authentication and
-storage locations are explicit request inputs. Older context-etcd/client-profile
+storage locations come from explicit request inputs or session configuration. Older context-etcd/client-profile
 fields are not selected by current metadata commands; named `--client-meta`
 profiles are retired. An explicit `ctx use` rewrite preserves the old file in a
 private backup before canonicalizing its contexts.
@@ -170,7 +347,7 @@ meta_prefix: tenant/woodpecker
 wp meta log list --client-parameters-file /path/to/client-parameters.yaml
 ```
 
-Fields resolve as **explicit flags → explicit parameter file**. Missing authority
+Without session configuration, fields resolve as **explicit flags → explicit parameter file**. Missing authority
 is an error; there is no server-context or Admin-config discovery fallback.
 Certificate files must exist locally; cert/key must be supplied together.
 Use `--etcd-username`, `--etcd-password`, `--etcd-cacert`, `--etcd-cert`,
@@ -291,7 +468,7 @@ not an assumed server default. LogStore nodes do not connect to etcd, so their c
 etcd section is not validated for this purpose. An incorrect prefix can successfully
 connect while showing an empty keyspace.
 
-Metadata commands require explicit etcd settings; Admin discovery is not used. Pure metadata
+Metadata commands require explicit or session etcd settings; Admin discovery is not used. Pure metadata
 commands (`log readers`, skip-range `list`/`remove`, and `marking`) then need no seed;
 quorum operations still need a reachable seed and individually reachable replica admin
 origins. TLS and authentication overrides are `--etcd-cert`, `--etcd-key`,

@@ -16,7 +16,10 @@ func newK8sStatusCommand() *cobra.Command {
 		Use:   "status",
 		Short: "Show cluster status via kubectl",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cliK8s := resolveK8sConfig()
+			cliK8s, err := resolveK8sConfig()
+			if err != nil {
+				return err
+			}
 			executor := flags.ResolveExecutor(cliK8s)
 			cluster := flags.ResolveCluster(cliK8s)
 			commands := k8s.StatusCommands(cluster)
@@ -47,7 +50,11 @@ func newK8sStatusCommand() *cobra.Command {
 
 // resolveK8sConfig tries to load K8s config from cli.yaml.
 // Returns zero value if cli.yaml is not available.
-func resolveK8sConfig() config.K8sConfig {
+func resolveK8sConfig() (config.K8sConfig, error) {
+	if sessionConfigPath() != "" {
+		ctx, _, _, err := loadServiceContext()
+		return ctx.K8s, err
+	}
 	for _, p := range config.DefaultConfigPaths() {
 		f, err := config.Load(p)
 		if err != nil {
@@ -57,7 +64,7 @@ func resolveK8sConfig() config.K8sConfig {
 		if err != nil {
 			continue
 		}
-		return ctx.K8s
+		return ctx.K8s, nil
 	}
-	return config.K8sConfig{}
+	return config.K8sConfig{}, nil
 }

@@ -60,7 +60,11 @@ func NativeConnection(path, name string) (d.Connection, error) {
 
 // Load resolves only environment connections; all client filters are request inputs.
 func Load(path, contextName string, overrides ...map[string]string) (d.Config, string, error) {
-	f, abs, err := LoadDocument(path)
+	return LoadWithSession(path, contextName, os.Getenv(config.SessionConfigEnv), overrides...)
+}
+
+func LoadWithSession(path, contextName, sessionPath string, overrides ...map[string]string) (d.Config, string, error) {
+	f, abs, err := loadDocumentWithSession(path, contextName, sessionPath)
 	if err != nil {
 		return d.Config{}, "", err
 	}
@@ -87,6 +91,25 @@ func Load(path, contextName string, overrides ...map[string]string) (d.Config, s
 	_ = c.Targets.Encode(map[string]evidence.Target{id: t})
 	c.Frontend, c.DefaultTarget = "wp", id
 	return c, id, nil
+}
+
+func loadDocumentWithSession(path, contextName, sessionPath string) (*config.File, string, error) {
+	var f *config.File
+	var abs string
+	var err error
+	if sessionPath != "" && path == "" && contextName == "" {
+		var session *config.SessionConfig
+		session, err = config.LoadSession(sessionPath)
+		if err == nil {
+			f, err = session.ServiceFile()
+		}
+		if err == nil {
+			abs, err = filepath.Abs(sessionPath)
+		}
+	} else {
+		f, abs, err = LoadDocument(path)
+	}
+	return f, abs, err
 }
 
 // EnvironmentConfig imports environment connections only. Older diagnostic

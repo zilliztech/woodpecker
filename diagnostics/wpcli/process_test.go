@@ -37,7 +37,7 @@ func TestProcessHelper(t *testing.T) {
 	}
 	switch os.Args[len(os.Args)-1] {
 	case "environment":
-		fmt.Print(os.Getenv("WOODPECKER_ENDPOINT") + "|" + os.Getenv("WOODPECKER_CLI_CONFIG"))
+		fmt.Print(os.Getenv("WOODPECKER_ENDPOINT") + "|" + os.Getenv("WOODPECKER_CLI_CONFIG") + "|" + os.Getenv("WOODPECKER_SESSION_CONFIG"))
 		os.Exit(0)
 	case "overflow":
 		fmt.Print(strings.Repeat("x", 100000))
@@ -57,13 +57,14 @@ func TestProcessHelper(t *testing.T) {
 func TestSubprocessBoundsEnvironmentAndCancellation(t *testing.T) {
 	t.Setenv("WOODPECKER_ENDPOINT", "http://sentinel-secret")
 	t.Setenv("WOODPECKER_CLI_CONFIG", "ambient-secret")
+	t.Setenv("WOODPECKER_SESSION_CONFIG", "ambient-session-secret")
 	s := Settings{Executable: os.Args[0], CLIConfig: "explicit-cli.yaml"}
 	run := func(ctx context.Context, mode string) execution {
 		return execute(ctx, s, []string{"-test.run=^TestProcessHelper$", "--", mode}, 4096)
 	}
 	result := run(context.Background(), "environment")
 	require.Equal(t, 0, result.ExitCode)
-	require.Equal(t, "|explicit-cli.yaml", string(result.Data))
+	require.Equal(t, "|explicit-cli.yaml|", string(result.Data))
 	for _, mode := range []string{"overflow", "stderr"} {
 		result = run(context.Background(), mode)
 		require.True(t, result.Overflow)

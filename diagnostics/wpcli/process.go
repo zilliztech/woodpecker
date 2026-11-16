@@ -47,7 +47,7 @@ func execute(ctx context.Context, s Settings, args []string, limit int64) execut
 	for _, value := range os.Environ() {
 		key, _, _ := strings.Cut(value, "=")
 		// Prevent ambient endpoint selection from overriding the named context.
-		if key != "WOODPECKER_ENDPOINT" && key != "WOODPECKER_CLI_CONFIG" {
+		if !strings.EqualFold(key, "WOODPECKER_ENDPOINT") && !strings.EqualFold(key, "WOODPECKER_CLI_CONFIG") && !strings.EqualFold(key, "WOODPECKER_SESSION_CONFIG") {
 			cmd.Env = append(cmd.Env, value)
 		}
 	}

@@ -178,6 +178,12 @@ func testGetLogSkipRangesReturnsOneLogsRanges(t *testing.T) {
 	e := etcdProviderOf(t, provider)
 
 	require.Nil(t, e.GetLogSkipRanges(ctx, 7), "no record at all")
+	// GetLogSkipRanges starts an asynchronous read. Finish that initial read
+	// before writing or aging the cache, so it cannot later replace the aged
+	// entry with a fresh pre-write record and defer the next refresh.
+	require.Eventually(t, func() bool {
+		return e.skipRangeCache.Load() != nil && !e.skipRangeRefreshing.Load()
+	}, 2*time.Second, 20*time.Millisecond, "the initial empty-cache refresh completes")
 
 	write, err := ReadSkipRangeRecord(ctx, e.client, e.keyBuilder)
 	require.NoError(t, err)
@@ -191,18 +197,17 @@ func testGetLogSkipRangesReturnsOneLogsRanges(t *testing.T) {
 
 	// The first call above primed the cache with the pre-write record, and the window is longer
 	// than this test should wait, so age the entry rather than sleeping out the interval.
-	if held := e.skipRangeCache.Load(); held != nil {
-		e.skipRangeCache.Store(&cachedSkipRanges{
-			ranges: held.ranges, readAt: time.Now().Add(-2 * config.DefaultSkipRangeRefreshInterval),
-		})
-	}
+	held := e.skipRangeCache.Load()
+	e.skipRangeCache.Store(&cachedSkipRanges{
+		ranges: held.ranges, readAt: time.Now().Add(-2 * e.skipRangeRefreshInterval),
+	})
 	require.Eventually(t, func() bool { return e.GetLogSkipRanges(ctx, 7) != nil },
 		2*time.Second, 20*time.Millisecond, "the background refresh picks the record up")
 
-	held := e.GetLogSkipRanges(ctx, 7)
+	ranges := e.GetLogSkipRanges(ctx, 7)
 	require.Equal(t, []*proto.SkipRange{{FromEntryId: 10, ToEntryId: 19, Reason: "bad disk"}},
-		held.GetBySegmentId()[3].GetRanges())
-	require.Empty(t, held.GetBySegmentId()[4].GetRanges(), "a segment listed with no ranges declares nothing")
+		ranges.GetBySegmentId()[3].GetRanges())
+	require.Empty(t, ranges.GetBySegmentId()[4].GetRanges(), "a segment listed with no ranges declares nothing")
 	require.Nil(t, e.GetLogSkipRanges(ctx, 8), "a log the record does not mention")
 }
 

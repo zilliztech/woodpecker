@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/zilliztech/woodpecker/cmd/wpcli/config"
 	"github.com/zilliztech/woodpecker/diagnostics/checks"
 )
 
@@ -45,21 +46,22 @@ type commandRequest struct {
 	BudgetMS          int64                      `json:"budget_ms"`
 }
 type commandResult struct {
-	Bindings      *checks.Bindings `json:"bindings,omitempty"`
-	SchemaVersion string           `json:"schema_version"`
-	Name          string           `json:"name"`
-	Status        string           `json:"status"`
-	Context       string           `json:"context,omitempty"`
-	Args          []string         `json:"argv"`
-	Directory     string           `json:"working_directory"`
-	Stdout        string           `json:"stdout"`
-	Stderr        string           `json:"stderr"`
-	ExitCode      *int             `json:"exit_code,omitempty"`
-	StartedAt     time.Time        `json:"started_at"`
-	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
-	InputOpen     bool             `json:"input_open"`
-	OutputLimited bool             `json:"output_limited"`
-	BudgetMS      int64            `json:"budget_ms"`
+	Connection    config.SessionConfig `json:"-"`
+	Bindings      *checks.Bindings     `json:"bindings,omitempty"`
+	SchemaVersion string               `json:"schema_version"`
+	Name          string               `json:"name"`
+	Status        string               `json:"status"`
+	Context       string               `json:"context,omitempty"`
+	Args          []string             `json:"argv"`
+	Directory     string               `json:"working_directory"`
+	Stdout        string               `json:"stdout"`
+	Stderr        string               `json:"stderr"`
+	ExitCode      *int                 `json:"exit_code,omitempty"`
+	StartedAt     time.Time            `json:"started_at"`
+	FinishedAt    *time.Time           `json:"finished_at,omitempty"`
+	InputOpen     bool                 `json:"input_open"`
+	OutputLimited bool                 `json:"output_limited"`
+	BudgetMS      int64                `json:"budget_ms"`
 }
 
 func commandDefinition(name string) (operationDefinition, error) {
@@ -102,6 +104,17 @@ func commandArguments(q commandRequest, def operationDefinition, session browser
 		}
 	}
 	if hasBucket && rootFlag != "" {
+		_, bucketSet := q.Flags["bucket"]
+		_, rootSet := q.Flags[rootFlag]
+		if storage := session.Configuration.ClientStorage; storage != nil && !bucketSet && !rootSet && q.Metadata == nil {
+			flags := make(map[string]json.RawMessage, len(q.Flags)+2)
+			for key, value := range q.Flags {
+				flags[key] = value
+			}
+			flags["bucket"], _ = json.Marshal(storage.Bucket)
+			flags[rootFlag], _ = json.Marshal(storage.RootPath)
+			q.Flags = flags
+		}
 		var bucket, root string
 		_ = json.Unmarshal(q.Flags["bucket"], &bucket)
 		_ = json.Unmarshal(q.Flags[rootFlag], &root)
@@ -141,7 +154,7 @@ func commandArguments(q commandRequest, def operationDefinition, session browser
 		if _, ok := allowed[name]; !ok {
 			return nil, fmt.Errorf("unsupported option for this command")
 		}
-		if name == "context" || name == "config" || name == "endpoint" || name == "node-admin-url" || name == "kubectl" {
+		if name == "context" || name == "config" || name == "session" || name == "endpoint" || name == "node-admin-url" || name == "kubectl" {
 			return nil, fmt.Errorf("select connections through the workspace settings")
 		}
 		flags[name] = value
@@ -186,13 +199,17 @@ func commandArguments(q commandRequest, def operationDefinition, session browser
 		if _, ok := allowed["etcd"]; !ok {
 			return nil, fmt.Errorf("this command does not accept a client metadata binding")
 		}
-		for key, value := range map[string]string{"etcd": session.Metadata.Etcd, "meta-prefix": session.Metadata.Prefix} {
-			if _, present := flags[key]; !present {
-				flags[key], _ = json.Marshal(value)
+		// A session configuration carries authentication privately. Repeating
+		// target flags here would deliberately bypass that selected connection.
+		if session.Configuration.ClientMeta == nil {
+			for key, value := range map[string]string{"etcd": session.Metadata.Etcd, "meta-prefix": session.Metadata.Prefix} {
+				if _, present := flags[key]; !present {
+					flags[key], _ = json.Marshal(value)
+				}
 			}
-		}
-		if _, ok := allowed["standalone"]; ok {
-			flags["standalone"] = json.RawMessage("true")
+			if _, ok := allowed["standalone"]; ok {
+				flags["standalone"] = json.RawMessage("true")
+			}
 		}
 	}
 	if q.Bindings != nil {
@@ -276,6 +293,13 @@ func (s *Server) commandStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session := s.session(r)
+	if q.Context == "" && (def.Connection == "service" || def.Connection == "mixed" || def.Connection == "telemetry") {
+		q.Context = session.Context
+	}
+	if def.Name == "ctx use" && s.workspace.initialSession != nil {
+		fail(w, 422, "session_configuration", "Use the workspace context selector; session files do not store a current-context")
+		return
+	}
 	if q.Context != "" {
 		if _, err := s.workspace.file.ResolveContext(q.Context); err != nil {
 			fail(w, 422, "context_missing", "choose a configured WP context")
@@ -284,6 +308,28 @@ func (s *Server) commandStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if q.BudgetMS == 0 {
 		q.BudgetMS = 120000
+	}
+	connection := session.Configuration
+	if q.Context != "" {
+		c, _ := s.workspace.file.ResolveContext(q.Context)
+		connection.ServiceContext = &c
+		if q.Context != session.Context {
+			connection.ClientMeta, connection.ClientStorage = nil, nil
+		}
+	}
+	metadataOverride := q.Metadata != nil
+	for _, name := range []string{"etcd", "meta-prefix", "client-parameters-file", "standalone"} {
+		_, set := q.Flags[name]
+		metadataOverride = metadataOverride || set
+	}
+	if metadataOverride {
+		connection.ClientMeta, connection.ClientStorage = nil, nil
+	} else if connection.ClientMeta != nil && (def.Connection == "metadata" || def.Connection == "mixed" || def.Connection == "etcd") {
+		q.UseMetadata = true
+	}
+	session.Configuration = connection
+	if connection.ClientMeta == nil && s.workspace.initialSession != nil {
+		session.Metadata = nil
 	}
 	listOnly := def.Name == "diagnose" && string(q.Flags["list"]) == "true"
 	if (def.Connection == "service" || def.Connection == "mixed") && !listOnly && q.Context == "" {
@@ -336,7 +382,7 @@ func (s *Server) commandStart(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	view := commandResult{Bindings: q.Bindings, SchemaVersion: "wp.command/v1", Name: q.Name, Status: "running", Context: q.Context, Args: redactedArguments(args), Directory: filepath.Dir(s.workspace.path), BudgetMS: q.BudgetMS, StartedAt: time.Now().UTC()}
+	view := commandResult{Connection: connection, Bindings: q.Bindings, SchemaVersion: "wp.command/v1", Name: q.Name, Status: "running", Context: q.Context, Args: redactedArguments(args), Directory: filepath.Dir(s.workspace.path), BudgetMS: q.BudgetMS, StartedAt: time.Now().UTC()}
 	s.mu.Lock()
 	j.owner = session.ID
 	j.view.Command = &view
@@ -400,6 +446,15 @@ func (s *Server) executeCommand(parent context.Context, j *job, args []string, i
 	ctx, cancel := context.WithTimeout(parent, time.Duration(initial.BudgetMS)*time.Millisecond)
 	defer cancel()
 	configPath := s.workspace.path
+	sessionPath := ""
+	var temporaryFiles []string
+	cleanup := func() {
+		for _, path := range temporaryFiles {
+			_ = os.Remove(path)
+		}
+		temporaryFiles = nil
+	}
+	defer cleanup()
 	if strings.HasPrefix(initial.Name, "diag ") {
 		for _, source := range []string{"metrics", "trace"} {
 			if path := s.workspace.rulePaths[source]; path != "" {
@@ -423,7 +478,7 @@ func (s *Server) executeCommand(parent context.Context, j *job, args []string, i
 			var params *os.File
 			params, err = os.CreateTemp("", "wp-check-inputs-*.json")
 			if err == nil {
-				defer os.Remove(params.Name())
+				temporaryFiles = append(temporaryFiles, params.Name())
 				err = json.NewEncoder(params).Encode(initial.Bindings)
 				closeErr := params.Close()
 				if err == nil {
@@ -438,6 +493,9 @@ func (s *Server) executeCommand(parent context.Context, j *job, args []string, i
 		var file *os.File
 		if err == nil {
 			file, err = os.CreateTemp(filepath.Dir(s.workspace.path), ".wp-command-*.yaml")
+			if err == nil {
+				temporaryFiles = append(temporaryFiles, file.Name())
+			}
 		}
 		if err == nil {
 			_, err = file.Write(body)
@@ -446,13 +504,17 @@ func (s *Server) executeCommand(parent context.Context, j *job, args []string, i
 				err = closeErr
 			}
 		}
-		if err != nil {
-			if file != nil {
-				os.Remove(file.Name())
+		if err == nil {
+			sessionPath, err = initial.Connection.WriteTemp(filepath.Dir(s.workspace.path))
+			if err == nil {
+				temporaryFiles = append(temporaryFiles, sessionPath)
 			}
+		}
+		if err != nil {
+			cleanup()
 			failed := initial
 			failed.Status = "failed"
-			failed.Stderr = "Cannot create a private cli.yaml snapshot beside the configuration file.\n"
+			failed.Stderr = "Cannot create private command configuration beside the configuration file.\n"
 			code := -1
 			failed.ExitCode = &code
 			now := time.Now().UTC()
@@ -465,18 +527,20 @@ func (s *Server) executeCommand(parent context.Context, j *job, args []string, i
 			return
 		}
 		configPath = file.Name()
-		defer os.Remove(configPath)
 	}
 	cmd := exec.CommandContext(ctx, s.workspace.executable, args...) // #nosec G204 -- fixed local executable, catalog-validated literal argv.
 	cmd.Dir = initial.Directory
 	cmd.Env = []string{}
 	for _, value := range os.Environ() {
 		key, _, _ := strings.Cut(value, "=")
-		if key != "WOODPECKER_ENDPOINT" && key != "WOODPECKER_CLI_CONFIG" {
+		if !strings.EqualFold(key, "WOODPECKER_ENDPOINT") && !strings.EqualFold(key, "WOODPECKER_CLI_CONFIG") && !strings.EqualFold(key, config.SessionConfigEnv) {
 			cmd.Env = append(cmd.Env, value)
 		}
 	}
 	cmd.Env = append(cmd.Env, "WOODPECKER_CLI_CONFIG="+configPath)
+	if sessionPath != "" {
+		cmd.Env = append(cmd.Env, config.SessionConfigEnv+"="+sessionPath)
+	}
 	cmd.WaitDelay = time.Second
 	configureCommandProcess(cmd)
 	cmd.Stdout = commandWriter{s: s, j: j, cancel: cancel}
@@ -504,6 +568,7 @@ func (s *Server) executeCommand(parent context.Context, j *job, args []string, i
 			code = cmd.ProcessState.ExitCode()
 		}
 	}
+	cleanup()
 	finished := time.Now().UTC()
 	s.mu.Lock()
 	result := *j.view.Command

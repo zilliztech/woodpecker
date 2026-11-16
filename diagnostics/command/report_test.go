@@ -50,10 +50,19 @@ contexts:
       auth: cli
 `), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "diag-metrics.yaml"), []byte("invalid: ["), 0o600))
-	agent, err := reportAgentConfig(path, "")
+	agent, err := reportAgentConfig(path, "", "")
 	require.NoError(t, err)
 	require.Equal(t, "codex", agent.Provider)
 	require.False(t, agent.Enabled)
-	_, err = reportAgentConfig(path, "missing")
+	_, err = reportAgentConfig(path, "missing", "")
 	require.Error(t, err)
+}
+
+func TestReportAgentConfigUsesSessionWithoutEvidenceConnections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("service_context:\n  agent: {enabled: false, provider: codex, auth: cli}\n"), 0o600))
+	agent, err := reportAgentConfig("", "", path)
+	require.NoError(t, err)
+	require.Equal(t, "codex", agent.Provider)
+	require.False(t, agent.Enabled)
 }

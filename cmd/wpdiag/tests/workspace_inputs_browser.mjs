@@ -177,15 +177,24 @@ try{
  await wait('!!document.querySelector(".recent-values [role=option]")','independent endpoint candidates');
  await click('.recent-values .recent-value-text');
  assert.equal(await evaluate('sharedMetadata().prefix'),'typed/wp','endpoint candidate does not select prefix');
- const explicit=await evaluate('sharedMetadata().etcd');
+ assert(await evaluate('!!sharedMetadata().etcd'));
+ await evaluate('state.commandName="segment probe";state.commandEditorKey="";render()');
+ await set('[data-shared-key="bucket"]','previous-bucket');await set('[data-shared-key="rootPath"]','previous-root');
  await evaluate('switchSharedContext("fixture-b")');
- assert.equal(await evaluate('sharedMetadata().etcd'),explicit);
- assert.equal(await evaluate('sharedMetadata().prefix'),'typed/wp');
- // Compatible physical parameters remain current values, with no authority-indexed restoration.
+ assert.deepEqual(await evaluate('sharedMetadata()'),{},'context switching detaches the previous client metadata');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=bucket]").value'),'','context switching clears the previous bucket');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=rootPath]").value'),'','context switching clears the previous storage root');
+ // Physical parameters remain current values across commands within this context.
  await evaluate('state.commandName="segment probe";state.commandEditorKey="";render()');
  await set('[data-shared-key="bucket"]','typed-bucket');await set('[data-shared-key="rootPath"]','typed-root');
  await evaluate('state.commandName="segment inspect";state.commandEditorKey="";render()');
  assert.equal(await evaluate('document.querySelector("[data-shared-key=bucket]").value'),'typed-bucket');
+ await evaluate('select({action:"connect-meta",etcd:"http://selected-etcd:2379",prefix:"selected/wp",bucket:"selected-bucket",root_path:"selected-root"})');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=bucket]").value'),'selected-bucket','new client storage replaces previous command overrides');
+ await evaluate('select({action:"disconnect-meta"})');
+ assert.deepEqual(await evaluate('sharedMetadata()'),{},'disconnect detaches client metadata');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=bucket]").value'),'','disconnect clears the bucket');
+ assert.equal(await evaluate('document.querySelector("[data-shared-key=rootPath]").value'),'','disconnect clears the storage root');
  // Command Explorer executes the native diagnostic command with a separate
  // bindings JSON; no client/server profiles are written into cli.yaml.
  await evaluate('showCommand("diag metrics check")');
