@@ -41,9 +41,9 @@ type SegmentRollingPolicyConfig struct {
 
 // SegmentAppendConfig controls per-segment append admission, batching and replica attempts.
 type SegmentAppendConfig struct {
-	// MaxPendingBytes budgets retained service-mode payload; 0 uses 64 MiB, with one oversized entry allowed when empty.
+	// MaxPendingBytes budgets retained payload per segment in both modes; 0 uses 64 MiB, with one oversized entry allowed when empty.
 	MaxPendingBytes ByteSize `yaml:"maxPendingBytes"`
-	// QueueSize limits entries per segment until all replica outcomes and callbacks finish (service) or dispatch (embedded).
+	// QueueSize limits admitted entries per segment until all replica outcomes and callbacks finish, in both modes.
 	QueueSize int `yaml:"queueSize"`
 	// MaxRetries limits total attempts per entry and replica, including the first send; 0 or 1 disables retries.
 	MaxRetries int `yaml:"maxRetries"`

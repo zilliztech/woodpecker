@@ -447,23 +447,57 @@ func TestSegmentAppenderCancelledAdmissionDoesNotAllocateEntryID(t *testing.T) {
 	require.NoError(t, receive(t, next))
 }
 
-func TestSegmentAppenderEmbeddedAdmissionDoesNotWaitForDurableACK(t *testing.T) {
-	acks := make(chan channel.ResultChannel, 2)
-	c := &appenderTestClient{send: func(_ context.Context, _ []*proto.LogEntry, chs []channel.ResultChannel) error {
-		acks <- chs[0]
-		return nil
-	}}
-	h := appenderFixture(t, false, config.SegmentAppendConfig{QueueSize: 1, MaxPendingBytes: 1}, c)
-	first := appendForTest(h, []byte("larger than the service byte limit"))
-	firstACK := receive(t, acks)
-	second := make(chan error, 1)
-	go h.AppendAsync(context.Background(), []byte("another oversized entry"), func(_, _ int64, err error) { second <- err })
-	secondACK := receive(t, acks) // must send before the first entry is durable
-	require.Equal(t, int64(-1), h.lastAddConfirmed.Load())
-	require.NoError(t, firstACK.SendResult(context.Background(), &channel.AppendResult{SyncedId: 0}))
-	require.NoError(t, secondACK.SendResult(context.Background(), &channel.AppendResult{SyncedId: 1}))
-	require.NoError(t, receive(t, first))
-	require.NoError(t, receive(t, second))
+func TestSegmentAppenderAdmissionWaitsForACKAndCallbackInBothModes(t *testing.T) {
+	for _, service := range []bool{false, true} {
+		for _, limit := range []struct {
+			name string
+			cfg  config.SegmentAppendConfig
+		}{
+			{"count", config.SegmentAppendConfig{QueueSize: 1, MaxPendingBytes: 1024}},
+			{"bytes", config.SegmentAppendConfig{QueueSize: 8, MaxPendingBytes: 8}},
+		} {
+			t.Run(fmt.Sprintf("service=%t/%s", service, limit.name), func(t *testing.T) {
+				acks := make(chan channel.ResultChannel, 2)
+				c := &appenderTestClient{send: func(_ context.Context, _ []*proto.LogEntry, chs []channel.ResultChannel) error {
+					acks <- chs[0]
+					return nil
+				}}
+				h := appenderFixture(t, service, limit.cfg, c)
+				callbackEntered, callbackRelease := make(chan struct{}), make(chan struct{})
+				release := sync.OnceFunc(func() { close(callbackRelease) })
+				defer release()
+				h.AppendAsync(context.Background(), []byte("12345678"), func(_, _ int64, err error) {
+					require.NoError(t, err)
+					close(callbackEntered)
+					<-callbackRelease
+				})
+				firstACK := receive(t, acks)
+				assertBlocked := func() {
+					t.Helper()
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+					defer cancel()
+					var rejectedErr error
+					var rejectedID int64
+					h.AppendAsync(ctx, []byte("x"), func(_, id int64, err error) { rejectedID, rejectedErr = id, err })
+					require.ErrorIs(t, rejectedErr, context.DeadlineExceeded)
+					require.Equal(t, int64(-1), rejectedID)
+					require.Equal(t, int64(0), h.lastPushed.Load(), "blocked admission must not allocate an entry ID")
+				}
+				assertBlocked() // Sending does not release count or byte credits.
+				require.NoError(t, firstACK.SendResult(context.Background(), &channel.AppendResult{SyncedId: 0}))
+				receive(t, callbackEntered)
+				assertBlocked() // A durable entry still retains its callback credit.
+				release()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				second := make(chan error, 1)
+				h.AppendAsync(ctx, []byte("x"), func(_, _ int64, err error) { second <- err })
+				require.Equal(t, int64(1), h.lastPushed.Load())
+				require.NoError(t, receive(t, acks).SendResult(context.Background(), &channel.AppendResult{SyncedId: 1}))
+				require.NoError(t, receive(t, second))
+			})
+		}
+	}
 }
 
 func TestReplicaAppenderLateOutcomesAndLocalCancellationMetrics(t *testing.T) {

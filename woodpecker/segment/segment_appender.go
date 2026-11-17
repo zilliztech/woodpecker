@@ -38,9 +38,8 @@ type replicaResult struct {
 }
 
 // segmentAppender owns the append execution pipeline. The segment owns logical
-// completion. In service mode, this component retains payload credits until both
-// replication and ordered callback delivery finish, even after quorum success.
-// Embedded mode releases admission credits when dispatch hands off the batch.
+// completion; admission credits remain held until all replica outcomes and
+// ordered callback delivery finish, in both service and embedded modes.
 type segmentAppender struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -57,7 +56,6 @@ type segmentAppender struct {
 	bytes            int64
 	maxCount         int
 	maxBytes         int64
-	service          bool
 	admissionStopped bool
 	changed          chan struct{}
 }
@@ -79,14 +77,13 @@ func newSegmentAppender(pool client.LogStoreClientPool, quorum *proto.QuorumInfo
 	g := &segmentAppender{
 		ctx: ctx, cancel: cancel, pool: pool, onResult: onResult,
 		records: make(map[int64]*appendReservation), maxCount: max(cfg.QueueSize, 1),
-		maxBytes: cfg.MaxPendingBytes.Int64(), service: service, changed: make(chan struct{}),
+		maxBytes: cfg.MaxPendingBytes.Int64(), changed: make(chan struct{}),
 	}
 	if g.maxBytes <= 0 {
 		g.maxBytes = 64 << 20
 	}
-	// Embedded admission retains its queue-only policy. Its single replica
-	// receives directly from the executor; no extra buffered replica queue is
-	// inserted and service-mode in-flight byte limits are not imposed on it.
+	// Buffer independent service replica queues; the single embedded replica
+	// receives directly. Both use the same count and byte admission budgets.
 	queueSize := 0
 	if service {
 		queueSize = g.maxCount
@@ -113,7 +110,7 @@ func (g *segmentAppender) reserve(ctx context.Context, size int64) (*appendReser
 			g.mu.Unlock()
 			return nil, werr.ErrSegmentHandleSegmentRolling
 		}
-		if g.count < g.maxCount && (!g.service || g.count == 0 || size <= g.maxBytes-g.bytes) {
+		if g.count < g.maxCount && (g.count == 0 || size <= g.maxBytes-g.bytes) {
 			g.count++
 			g.bytes += size
 			r := &appendReservation{owner: g, size: size, admitted: time.Now(), replicasDone: make([]bool, len(g.replicas))}
@@ -173,15 +170,6 @@ func (g *segmentAppender) dispatch(ops []*AppendOp) {
 		case <-g.ctx.Done():
 			return
 		}
-	}
-	if !g.service {
-		g.mu.Lock()
-		for _, op := range ops {
-			if r := g.records[op.entryId]; r != nil {
-				g.releaseUnsafe(r)
-			}
-		}
-		g.mu.Unlock()
 	}
 }
 
