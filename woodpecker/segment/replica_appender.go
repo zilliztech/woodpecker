@@ -59,8 +59,8 @@ type replicaAttemptResult struct {
 	started time.Time
 }
 
-// replicaAppender has one scheduling owner. ACK readers report attempt results
-// to that owner; they never schedule retries or modify a logical AppendOp.
+// replicaAppender has one scheduling owner. Send workers and ACK readers report
+// attempt results to that owner; they never schedule retries or modify a logical AppendOp.
 type replicaAppender struct {
 	group           *segmentAppender
 	index           int
@@ -69,7 +69,7 @@ type replicaAppender struct {
 	results         chan replicaAttemptResult
 	ctx             context.Context
 	cancel          context.CancelFunc
-	drains          sync.WaitGroup
+	drains          sync.WaitGroup // active sends and ACK readers
 	pending         map[int64]*replicaTask
 	retries         replicaRetryQueue
 	failure         error
@@ -91,28 +91,37 @@ func newReplicaAppender(group *segmentAppender, index int, address string, queue
 func (r *replicaAppender) run() {
 	defer r.cancel()
 	var nextBatch []*AppendOp
+	var sendDone <-chan struct{}
 	for {
 		// Ready results and retries take priority over a dequeued batch.
 		r.drainResults()
 		if r.group.ctx.Err() != nil {
 			return
 		}
-		if retry := r.nextRetry(); retry != nil {
-			retry.retry = false
-			r.send([]*replicaTask{retry})
-			continue
+		if sendDone == nil {
+			if retry := r.nextRetry(); retry != nil {
+				retry.retry = false
+				sendDone = r.startSend([]*replicaTask{retry})
+				continue
+			}
+			if nextBatch != nil {
+				sendDone = r.sendNewBatch(nextBatch)
+				nextBatch = nil
+				continue
+			}
 		}
-		if nextBatch != nil {
-			r.sendNewBatch(nextBatch)
-			nextBatch = nil
-			continue
+		queue := r.queue
+		if sendDone != nil || nextBatch != nil {
+			queue = nil
 		}
 		select {
 		case <-r.group.ctx.Done():
 			return
 		case result := <-r.results:
 			r.apply(result)
-		case nextBatch = <-r.queue:
+		case <-sendDone:
+			sendDone = nil
+		case nextBatch = <-queue:
 		}
 	}
 }
@@ -128,7 +137,7 @@ func (r *replicaAppender) drainResults() {
 	}
 }
 
-func (r *replicaAppender) sendNewBatch(ops []*AppendOp) {
+func (r *replicaAppender) sendNewBatch(ops []*AppendOp) <-chan struct{} {
 	tasks := make([]*replicaTask, 0, len(ops))
 	for _, op := range ops {
 		if r.failure != nil {
@@ -140,8 +149,27 @@ func (r *replicaAppender) sendNewBatch(ops []*AppendOp) {
 		tasks = append(tasks, task)
 	}
 	if len(tasks) > 0 {
-		r.send(tasks)
+		return r.startSend(tasks)
 	}
+	return nil
+}
+
+// Only run starts sends, with at most one in flight; attempt numbers are frozen
+// before handing I/O to a worker so ACK processing can continue independently.
+func (r *replicaAppender) startSend(tasks []*replicaTask) <-chan struct{} {
+	generations := make([]int, len(tasks))
+	for i, task := range tasks {
+		task.attempts++
+		generations[i] = task.attempts
+	}
+	done := make(chan struct{})
+	r.drains.Add(1)
+	go func() {
+		defer r.drains.Done()
+		defer close(done)
+		r.send(tasks, generations)
+	}()
+	return done
 }
 
 func (r *replicaAppender) nextRetry() *replicaTask {
@@ -227,14 +255,14 @@ func retireAppendResult(ctx context.Context, ch channel.ResultChannel) {
 	}
 }
 
-func (r *replicaAppender) send(tasks []*replicaTask) {
+func (r *replicaAppender) send(tasks []*replicaTask, generations []int) {
+	if r.ctx.Err() != nil {
+		return
+	}
 	started := time.Now()
 	first := tasks[0].op
 	ops := make([]*AppendOp, len(tasks))
-	generations := make([]int, len(tasks))
 	for i, task := range tasks {
-		task.attempts++
-		generations[i] = task.attempts
 		ops[i] = task.op
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
@@ -276,7 +304,7 @@ func (r *replicaAppender) send(tasks []*replicaTask) {
 		cancel()
 		for i, task := range tasks {
 			retireAppendResult(context.Background(), channels[i])
-			r.apply(replicaAttemptResult{task: task, attempt: generations[i], err: err, started: started})
+			r.reportResult(replicaAttemptResult{task: task, attempt: generations[i], err: err, started: started})
 		}
 		return
 	}
@@ -304,15 +332,18 @@ func (r *replicaAppender) send(tasks []*replicaTask) {
 				}
 			}
 			retireAppendResult(context.Background(), channels[i])
-			event := replicaAttemptResult{task: task, attempt: generations[i], result: result, err: err, started: started}
-			select {
-			case r.results <- event:
-			case <-r.ctx.Done():
-				// Still retire the remaining channels below; they belong to us.
-			}
+			r.reportResult(replicaAttemptResult{task: task, attempt: generations[i], result: result, err: err, started: started})
 			tasks[i] = nil
 		}
 	}()
+}
+
+func (r *replicaAppender) reportResult(result replicaAttemptResult) {
+	select {
+	case r.results <- result:
+	case <-r.ctx.Done():
+		// Cancellation discards the outcome; the worker still retires its channels.
+	}
 }
 
 // Count actual attempt outcomes, including the replica that answers after the

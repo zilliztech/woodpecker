@@ -18,15 +18,19 @@ package segment
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/topology"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -320,5 +324,216 @@ func TestReplicaAppenderRemoteBatchRetryUsesFreshRemoteChannel(t *testing.T) {
 	require.False(t, h.rollingState.Load())
 	for _, ch := range append(batch.channels, retry.channels...) {
 		require.True(t, ch.IsClosed())
+	}
+}
+
+func TestReplicaAppenderACKProgressWhileLaterSendBlocked(t *testing.T) {
+	for _, service := range []bool{false, true} {
+		for _, retrySend := range []bool{false, true} {
+			t.Run(fmt.Sprintf("service=%t/retry=%t", service, retrySend), func(t *testing.T) {
+				c, sends := controlledAppenderClient(service)
+				send := c.send
+				releaseSend := make(chan struct{})
+				release := sync.OnceFunc(func() { close(releaseSend) })
+				defer release()
+				blocked, exited := make(chan struct{}), make(chan struct{})
+				var laterAttempts atomic.Int32
+				c.send = func(ctx context.Context, es []*proto.LogEntry, chs []channel.ResultChannel) error {
+					if err := send(ctx, es, chs); err != nil {
+						return err
+					}
+					if es[0].EntryId == 1 {
+						attempt := laterAttempts.Add(1)
+						if retrySend && attempt == 1 {
+							return werr.ErrTimeoutError
+						}
+						close(blocked)
+						defer close(exited)
+						select {
+						case <-releaseSend:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					}
+					return nil
+				}
+				clients := []*appenderTestClient{c}
+				replicaSends := []<-chan capturedAppend{sends}
+				if service {
+					for range 2 {
+						other, otherSends := controlledAppenderClient(true)
+						clients = append(clients, other)
+						replicaSends = append(replicaSends, otherSends)
+					}
+				}
+				h := appenderFixture(t, service, config.SegmentAppendConfig{QueueSize: 2, MaxRetries: 2, MaxBatchEntries: 1}, clients...)
+				callbacks := appendSequenceForTest(h, 2)
+				firsts, seconds := make([]capturedAppend, len(clients)), make([]capturedAppend, len(clients))
+				for i := range clients {
+					firsts[i], seconds[i] = receive(t, replicaSends[i]), receive(t, replicaSends[i])
+					require.Equal(t, int64(0), firsts[i].entries[0].EntryId)
+					require.Equal(t, int64(1), seconds[i].entries[0].EntryId)
+					if i == 0 && retrySend {
+						seconds[i] = receive(t, replicaSends[i])
+						require.Equal(t, int64(1), seconds[i].entries[0].EntryId)
+					}
+				}
+				receive(t, blocked)
+				// In service mode, the blocked replica must supply the second quorum vote.
+				for i := 0; i < int(h.quorumInfo.Aq); i++ {
+					require.NoError(t, ackEntries(firsts[i].ctx, firsts[i].entries, firsts[i].channels))
+				}
+				first := receive(t, callbacks)
+				require.Equal(t, int64(0), first.id)
+				require.NoError(t, first.err)
+				require.Equal(t, int64(0), h.lastAddConfirmed.Load())
+				select {
+				case <-exited:
+					t.Fatal("entry 0 must complete while entry 1 is still blocked in send")
+				default:
+				}
+				for i := int(h.quorumInfo.Aq); i < len(clients); i++ {
+					require.NoError(t, ackEntries(firsts[i].ctx, firsts[i].entries, firsts[i].channels))
+				}
+				require.Eventually(t, func() bool {
+					h.appender.mu.Lock()
+					defer h.appender.mu.Unlock()
+					return h.appender.count == 1
+				}, 5*time.Second, time.Millisecond)
+				requireAppenderCredits(t, h, 1, 1)
+				require.Empty(t, callbacks)
+				for _, second := range seconds {
+					require.NoError(t, ackEntries(second.ctx, second.entries, second.channels))
+				}
+				release()
+				second := receive(t, callbacks)
+				require.Equal(t, int64(1), second.id)
+				require.NoError(t, second.err)
+				waitForAppenderDrained(t, h)
+				require.Empty(t, callbacks)
+				require.False(t, h.rollingState.Load())
+			})
+		}
+	}
+}
+
+func TestReplicaAppenderACKFailureDuringSendRetriesBeforeQueuedEntries(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remote=%t", remote), func(t *testing.T) {
+			c, sends := controlledAppenderClient(remote)
+			send := c.send
+			releaseSend := make(chan struct{})
+			release := sync.OnceFunc(func() { close(releaseSend) })
+			defer release()
+			blocked := make(chan struct{})
+			var firstAttempts, active atomic.Int32
+			var overlapped atomic.Bool
+			c.send = func(ctx context.Context, es []*proto.LogEntry, chs []channel.ResultChannel) error {
+				if active.Add(1) > 1 {
+					overlapped.Store(true)
+				}
+				defer active.Add(-1)
+				if err := send(ctx, es, chs); err != nil {
+					return err
+				}
+				if es[0].EntryId == 0 && firstAttempts.Add(1) == 1 {
+					return nil
+				}
+				if es[0].EntryId == 1 {
+					close(blocked)
+					select {
+					case <-releaseSend:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				return ackEntries(ctx, es, chs)
+			}
+			h := appenderFixture(t, remote, config.SegmentAppendConfig{QueueSize: 3, MaxRetries: 2, MaxBatchEntries: 1}, c)
+			errors := metrics.WpClientReplicaAppendTotal.WithLabelValues(h.logNs, "1", topology.ScopeUnknown, "error")
+			before := testutil.ToFloat64(errors)
+			callbacks := appendSequenceForTest(h, 3)
+			first, second := receive(t, sends), receive(t, sends)
+			require.Equal(t, int64(0), first.entries[0].EntryId)
+			require.Equal(t, int64(1), second.entries[0].EntryId)
+			receive(t, blocked)
+			require.NoError(t, first.channels[0].SendResult(context.Background(), &channel.AppendResult{SyncedId: -1, Err: werr.ErrFileWriterSyncFailed}))
+			// Observe apply(), not just channel retirement, before unblocking the send.
+			require.Eventually(t, func() bool { return testutil.ToFloat64(errors) == before+1 }, 5*time.Second, time.Millisecond)
+			require.False(t, h.rollingState.Load())
+			require.Empty(t, callbacks)
+			require.Empty(t, sends, "a retry cannot overlap the active send")
+			release()
+			retry, third := receive(t, sends), receive(t, sends)
+			require.Equal(t, int64(0), retry.entries[0].EntryId, "retry the known failure before entry 2")
+			require.Equal(t, int64(2), third.entries[0].EntryId)
+			require.NotSame(t, first.channels[0], retry.channels[0])
+			for id := range 3 {
+				result := receive(t, callbacks)
+				require.Equal(t, int64(id), result.id)
+				require.NoError(t, result.err)
+			}
+			waitForAppenderDrained(t, h)
+			require.False(t, overlapped.Load())
+			require.Equal(t, int32(2), firstAttempts.Load())
+			require.Empty(t, sends)
+			require.Empty(t, callbacks)
+			require.Equal(t, int64(2), h.lastAddConfirmed.Load())
+			require.False(t, h.rollingState.Load())
+		})
+	}
+}
+
+func TestReplicaAppenderTerminalACKCancelsBlockedSend(t *testing.T) {
+	for _, service := range []bool{false, true} {
+		t.Run(map[bool]string{false: "embed", true: "service"}[service], func(t *testing.T) {
+			c, sends := controlledAppenderClient(service)
+			send := c.send
+			cancelled := make(chan struct{})
+			c.send = func(ctx context.Context, es []*proto.LogEntry, chs []channel.ResultChannel) error {
+				if err := send(ctx, es, chs); err != nil {
+					return err
+				}
+				if es[0].EntryId == 1 {
+					<-ctx.Done()
+					close(cancelled)
+					return ctx.Err()
+				}
+				return nil
+			}
+			clients := []*appenderTestClient{c}
+			if service {
+				clients = append(clients, &appenderTestClient{remote: true, send: ackEntries}, &appenderTestClient{remote: true, send: ackEntries})
+			}
+			h := appenderFixture(t, service, config.SegmentAppendConfig{QueueSize: 2, MaxRetries: 3, MaxBatchEntries: 1}, clients...)
+			callbacks := appendSequenceForTest(h, 2)
+			first, second := receive(t, sends), receive(t, sends)
+			require.Equal(t, int64(0), first.entries[0].EntryId)
+			require.Equal(t, int64(1), second.entries[0].EntryId)
+			if service {
+				for id := range 2 {
+					result := receive(t, callbacks)
+					require.Equal(t, int64(id), result.id)
+					require.NoError(t, result.err)
+				}
+			}
+			require.NoError(t, first.channels[0].SendResult(context.Background(), &channel.AppendResult{SyncedId: -1, Err: werr.ErrSegmentFenced}))
+			receive(t, cancelled)
+			require.Eventually(t, h.rollingState.Load, 5*time.Second, time.Millisecond)
+			if !service {
+				for id := range 2 {
+					result := receive(t, callbacks)
+					require.Equal(t, int64(id), result.id)
+					require.ErrorIs(t, result.err, werr.ErrSegmentFenced)
+				}
+			}
+			waitForAppenderDrained(t, h)
+			h.appender.stop()
+			h.appender.wait()
+			require.True(t, first.channels[0].IsClosed())
+			require.True(t, second.channels[0].IsClosed(), "shutdown joins the cancelled send and retires its channel")
+			require.Empty(t, sends, "terminal errors must not retry")
+			require.Empty(t, callbacks, "late terminal failure must not repeat quorum callbacks")
+		})
 	}
 }
