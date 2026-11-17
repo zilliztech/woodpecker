@@ -17,10 +17,12 @@
 package segment
 
 import (
+	"container/list"
 	"context"
 	"strconv"
 
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 type appendCompletion struct {
@@ -28,21 +30,35 @@ type appendCompletion struct {
 	err error
 }
 
-func (s *segmentHandleImpl) handleReplicaResult(result replicaResult) {
-	if result.err != nil && isReplicaUnreachable(result.err) && result.address != "" {
-		s.markUnreachable(result.address)
+func (g *segmentAppender) handleReplicaResult(result replicaResult) {
+	g.mu.Lock()
+	if g.closed || g.ctx.Err() != nil {
+		g.mu.Unlock()
+		return
 	}
-	s.Lock()
-	defer s.Unlock()
+	record := g.records[result.entryID]
+	if record != nil {
+		if record.replicasDone[result.replica] {
+			g.mu.Unlock()
+			return
+		}
+		record.replicasDone[result.replica] = true
+	}
 	if result.err != nil {
-		// A final lane failure must roll even if the logical entry was already
-		// completed by the other replicas and removed from the pending queue.
-		s.rollingState.Store(true)
-		if s.appender != nil {
-			s.appender.stopAdmission()
+		g.stopAdmissionUnsafe(werr.ErrSegmentHandleSegmentRolling)
+		g.mu.Unlock()
+		// Publish the lifecycle failure before queuing a failure callback, without
+		// holding the appender lock across the handle's lifecycle lock.
+		if g.notify.onReplicaFailure != nil {
+			g.notify.onReplicaFailure(result.address, result.err)
+		}
+		g.mu.Lock()
+		if g.closed || g.ctx.Err() != nil {
+			g.mu.Unlock()
+			return
 		}
 	}
-	element := s.findAppendOpById(context.Background(), result.entryID)
+	element := g.findAppendOpByIDUnsafe(result.entryID)
 	if element != nil {
 		op := element.Value.(*AppendOp)
 		wasCompleted := op.completed.Load()
@@ -52,8 +68,7 @@ func (s *segmentHandleImpl) handleReplicaResult(result replicaResult) {
 			metrics.WpClientAppendBytes.WithLabelValues(op.logNs, strconv.FormatInt(op.logId, 10)).Observe(float64(op.Size()))
 		}
 		if op.terminalErr != nil {
-			// A hole that can no longer reach quorum prevents its suffix from
-			// becoming a committed prefix, even if later entries have ACKs.
+			// A permanent hole also fails its already-acknowledged suffix.
 			for e := element.Next(); e != nil; e = e.Next() {
 				later := e.Value.(*AppendOp)
 				later.terminalErr = op.terminalErr
@@ -61,67 +76,94 @@ func (s *segmentHandleImpl) handleReplicaResult(result replicaResult) {
 			}
 		}
 	}
-	s.collectAppendCallbacksUnsafe(context.Background())
-	s.triggerCompletionIfDrainedUnsafe()
+	lac := g.collectAppendCallbacksUnsafe()
+	if record != nil {
+		g.reclaimUnsafe(result.entryID, record)
+	}
+	g.mu.Unlock()
+
+	g.notifyConfirmed(lac)
+	g.notifyDrained()
 }
 
-func (s *segmentHandleImpl) collectAppendCallbacksUnsafe(ctx context.Context) {
+func (g *segmentAppender) findAppendOpByIDUnsafe(id int64) *list.Element {
+	for e := g.appendOpsQueue.Front(); e != nil; e = e.Next() {
+		if e.Value.(*AppendOp).entryId == id {
+			return e
+		}
+	}
+	return nil
+}
+
+func (g *segmentAppender) completeReadyAppends() {
+	g.mu.Lock()
+	lac := g.collectAppendCallbacksUnsafe()
+	g.mu.Unlock()
+	g.notifyConfirmed(lac)
+	g.notifyDrained()
+}
+
+func (g *segmentAppender) collectAppendCallbacksUnsafe() int64 {
 	newLAC := int64(-1)
-	for e := s.appendOpsQueue.Front(); e != nil; {
+	for e := g.appendOpsQueue.Front(); e != nil; {
 		op := e.Value.(*AppendOp)
 		if !op.completed.Load() {
 			break
 		}
 		if op.terminalErr == nil {
-			if op.entryId > s.lastAddConfirmed.Load()+1 {
+			if op.entryId > g.lastAddConfirmed.Load()+1 {
 				break
 			}
-			if op.entryId == s.lastAddConfirmed.Load()+1 {
-				s.lastAddConfirmed.Store(op.entryId)
+			if op.entryId == g.lastAddConfirmed.Load()+1 {
+				g.lastAddConfirmed.Store(op.entryId)
 				newLAC = op.entryId
 			}
-			s.commitedSize.Add(op.Size())
+			g.commitedSize.Add(op.Size())
 		}
-		s.submittedSize.Add(-op.Size())
-		s.queueAppendCallbackUnsafe(op, op.terminalErr)
+		g.submittedSize.Add(-op.Size())
+		g.queueAppendCallbackUnsafe(op, op.terminalErr)
 		next := e.Next()
-		s.appendOpsQueue.Remove(e)
-		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.logNs, strconv.FormatInt(s.logId, 10)).Dec()
+		g.appendOpsQueue.Remove(e)
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(g.logNs, strconv.FormatInt(g.logId, 10)).Dec()
 		e = next
 	}
 	if newLAC >= 0 {
-		s.syncLAC(ctx, newLAC)
-		metrics.SetWriteFrontier(s.logNs, strconv.FormatInt(s.logId, 10), s.segmentId, newLAC)
+		metrics.SetWriteFrontier(g.logNs, strconv.FormatInt(g.logId, 10), g.segmentId, newLAC)
+	}
+	return newLAC
+}
+
+func (g *segmentAppender) notifyConfirmed(lac int64) {
+	if lac >= 0 && g.notify.onConfirmed != nil {
+		g.notify.onConfirmed(lac)
 	}
 }
 
-func (s *segmentHandleImpl) queueAppendCallbackUnsafe(op *AppendOp, err error) {
-	s.callbacks = append(s.callbacks, appendCompletion{op: op, err: err})
-	if !s.callbackRunning {
-		s.callbackRunning = true
-		s.callbackWG.Add(1)
-		go s.runAppendCallbacks()
+func (g *segmentAppender) queueAppendCallbackUnsafe(op *AppendOp, err error) {
+	g.callbacks = append(g.callbacks, appendCompletion{op: op, err: err})
+	if !g.callbackRunning {
+		g.callbackRunning = true
+		g.callbackWG.Add(1)
+		go g.runAppendCallbacks()
 	}
 }
 
-func (s *segmentHandleImpl) runAppendCallbacks() {
-	defer s.callbackWG.Done()
+func (g *segmentAppender) runAppendCallbacks() {
+	defer g.callbackWG.Done()
 	for {
-		s.Lock()
-		if len(s.callbacks) == 0 {
-			s.callbackRunning = false
-			s.triggerCompletionIfDrainedUnsafe()
-			s.Unlock()
+		g.mu.Lock()
+		if len(g.callbacks) == 0 {
+			g.callbackRunning = false
+			g.mu.Unlock()
+			g.notifyDrained()
 			return
 		}
-		completion := s.callbacks[0]
-		s.callbacks[0] = appendCompletion{}
-		s.callbacks = s.callbacks[1:]
-		s.Unlock()
+		completion := g.callbacks[0]
+		g.callbacks[0] = appendCompletion{}
+		g.callbacks = g.callbacks[1:]
+		g.mu.Unlock()
 		func() {
-			if s.appender != nil {
-				defer s.appender.callbackDone(completion.op.entryId)
-			}
+			defer g.callbackDone(completion.op.entryId)
 			if completion.err == nil {
 				completion.op.FastSuccess(context.Background())
 			} else {
@@ -131,8 +173,60 @@ func (s *segmentHandleImpl) runAppendCallbacks() {
 	}
 }
 
-func (s *segmentHandleImpl) triggerCompletionIfDrainedUnsafe() {
-	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 && !s.callbackRunning && s.completionMgr != nil {
-		s.completionMgr.TriggerCompletion()
+// drained refers to logical writes and callbacks, not outstanding replica I/O.
+func (g *segmentAppender) drained() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.appendOpsQueue.Len() == 0 && !g.callbackRunning
+}
+
+func (g *segmentAppender) notifyDrained() {
+	g.mu.Lock()
+	drained := g.admissionStopped && g.appendOpsQueue.Len() == 0 && !g.callbackRunning
+	g.mu.Unlock()
+	if drained && g.notify.onDrained != nil {
+		g.notify.onDrained()
 	}
+}
+
+// observeFinalLAC accepts a position proven by Fence/Complete without duplicating
+// the writable segment's confirmed frontier in the handle.
+func (g *segmentAppender) observeFinalLAC(lac int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if lac > g.lastAddConfirmed.Load() {
+		g.lastAddConfirmed.Store(lac)
+	}
+}
+
+// closePending fixes pending callbacks from the final durable prefix, then cancels I/O.
+// It never waits or invokes a handle/user callback while the caller holds a segment lock.
+func (g *segmentAppender) closePending(lastEntryID int64, err error) {
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		return
+	}
+	g.stopAdmissionUnsafe(err)
+	g.admissionErr = err
+	g.closed = true
+	if lastEntryID > g.lastAddConfirmed.Load() {
+		g.lastAddConfirmed.Store(lastEntryID)
+	}
+	for e := g.appendOpsQueue.Front(); e != nil; {
+		next := e.Next()
+		op := e.Value.(*AppendOp)
+		terminalErr := err
+		if lastEntryID >= 0 && op.entryId <= lastEntryID {
+			terminalErr = nil
+			g.commitedSize.Add(op.Size())
+		}
+		g.submittedSize.Add(-op.Size())
+		g.queueAppendCallbackUnsafe(op, terminalErr)
+		g.appendOpsQueue.Remove(e)
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(g.logNs, strconv.FormatInt(g.logId, 10)).Dec()
+		e = next
+	}
+	g.mu.Unlock()
+	g.stop()
 }

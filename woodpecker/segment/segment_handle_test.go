@@ -126,7 +126,7 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	lastEntryId, fenceErr := segmentHandle.FenceAndComplete(context.Background())
-	segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 	assert.NoError(t, fenceErr)
 	assert.Equal(t, int64(0), lastEntryId)
 	callbackCalled := false
@@ -179,6 +179,7 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 
 	testQueue := list.New()
 	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	cleanupInjectedAppender(t, segmentHandle)
 	callbackMap := make(map[int64]func(segmentId int64, entryId int64, err error))
 	successCount := 0
 	successIds := make([]int64, 0)
@@ -211,7 +212,7 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 		ops[i].ackSet.Set(0)
 		ops[i].completed.Store(true)
 		segmentHandle.SendAppendSuccessCallbacks(context.TODO(), int64(i))
-		segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+		waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 	}
 	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
 	assert.Equal(t, 0, successCount)
@@ -219,7 +220,7 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 		ops[i].ackSet.Set(0)
 		ops[i].completed.Store(true)
 		segmentHandle.SendAppendSuccessCallbacks(context.TODO(), int64(i))
-		segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+		waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 	}
 	time.Sleep(100 * time.Millisecond) // Give some time for the async operation to complete
 	assert.Equal(t, 10, successCount)
@@ -261,6 +262,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 
 	testQueue := list.New()
 	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	cleanupInjectedAppender(t, segmentHandle)
 	callbackMap := make(map[int64]func(segmentId int64, entryId int64, err error))
 	successCount := 0
 	failedCount := 0
@@ -301,7 +303,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 			ops[i].ackSet.Set(0)
 			ops[i].completed.Store(true)
 			segmentHandle.SendAppendSuccessCallbacks(context.TODO(), int64(i))
-			segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+			waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 		}
 	}
 	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
@@ -352,6 +354,7 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 
 	testQueue := list.New()
 	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	cleanupInjectedAppender(t, segmentHandle)
 
 	// Create pending append operations with entryIds 0,1,2,3,4
 	successCallbacks := make([]bool, 5)
@@ -393,7 +396,7 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 	}
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
 	lastEntryId, err := segmentHandle.FenceAndComplete(context.Background())
-	segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), lastEntryId)
 
@@ -458,6 +461,7 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 
 	testQueue := list.New()
 	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	cleanupInjectedAppender(t, segmentHandle)
 
 	// Create pending append operations with entryIds 0,1,2
 	successCallbacks := make([]bool, 3)
@@ -497,7 +501,7 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 	}
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
 	lastEntryId, err := segmentHandle.FenceAndComplete(context.Background())
-	segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), lastEntryId)
 
@@ -620,6 +624,7 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 
 	testQueue := list.New()
 	segmentHandle := NewSegmentHandleWithAppendOpsQueueWithWritable(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue, true)
+	cleanupInjectedAppender(t, segmentHandle)
 
 	// Add some pending append operations
 	callbackResults := make([]bool, 3)
@@ -666,7 +671,7 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 		}
 		// Trigger success callback - this should trigger auto-close when queue becomes empty
 		segmentHandle.SendAppendSuccessCallbacks(context.Background(), int64(i))
-		segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+		waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 	}
 
 	// Give some time for the segment to auto-close
@@ -729,6 +734,7 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 
 	testQueue := list.New()
 	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	cleanupInjectedAppender(t, segmentHandle)
 
 	// Step 1: Add some pending append operations to the queue
 	callbackResults := make([]error, 3)
@@ -780,7 +786,7 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 		}
 		// Trigger success callback - this should trigger auto-close when queue becomes empty
 		segmentHandle.SendAppendSuccessCallbacks(context.Background(), int64(i))
-		segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+		waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 	}
 
 	// Give some time for the auto-close to happen
@@ -835,6 +841,7 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 
 	testQueue := list.New()
 	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	cleanupInjectedAppender(t, segmentHandle)
 
 	// Add operations to the queue
 	callbackResults := make([]error, 3)
@@ -874,7 +881,7 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 	// Failed entries remain behind the unfinished prefix until their ordered
 	// callbacks can be delivered. They do not advance LAC.
 	assert.Equal(t, 3, testQueue.Len())
-	assert.Equal(t, int64(-1), segmentHandle.(*segmentHandleImpl).lastAddConfirmed.Load())
+	assert.Equal(t, int64(-1), segmentHandle.(*segmentHandleImpl).confirmedLAC())
 
 	// Now complete entry 0 successfully - this should trigger auto-close since rolling is active
 	for e := testQueue.Front(); e != nil; e = e.Next() {
@@ -886,7 +893,7 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 		}
 	}
 	segmentHandle.SendAppendSuccessCallbacks(context.Background(), int64(0))
-	segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 
 	// Give some time for auto-close to happen
 	time.Sleep(200 * time.Millisecond)
@@ -894,7 +901,7 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 	// Now the queue should be empty (auto-close happened)
 	assert.Equal(t, 0, testQueue.Len())
 
-	segmentHandle.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(segmentHandle.(*segmentHandleImpl))
 	for i := 1; i < 3; i++ {
 		assert.Error(t, callbackResults[i])
 	}
@@ -3336,10 +3343,10 @@ func TestFenceAndComplete_AlreadyFenced(t *testing.T) {
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.fencedState.Store(true)
-	impl.lastAddConfirmed.Store(10)
+	impl.observeFinalLAC(10)
 
 	lastEntry, err := sh.FenceAndComplete(context.Background())
-	sh.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(sh.(*segmentHandleImpl))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(10), lastEntry)
 }
@@ -3366,7 +3373,7 @@ func TestFenceAndComplete_GetQuorumInfoError(t *testing.T) {
 	impl.quorumInfo = nil
 
 	_, err := sh.FenceAndComplete(context.Background())
-	sh.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(sh.(*segmentHandleImpl))
 	assert.Error(t, err)
 }
 
@@ -3394,7 +3401,7 @@ func TestFenceAndComplete_FenceError(t *testing.T) {
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	_, err := sh.FenceAndComplete(context.Background())
-	sh.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(sh.(*segmentHandleImpl))
 	assert.Error(t, err)
 }
 
@@ -3426,7 +3433,7 @@ func TestFenceAndComplete_CompleteError(t *testing.T) {
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	_, err := sh.FenceAndComplete(context.Background())
-	sh.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(sh.(*segmentHandleImpl))
 	assert.Error(t, err)
 }
 
@@ -3460,7 +3467,7 @@ func TestFenceAndComplete_MetaUpdateError(t *testing.T) {
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	_, err := sh.FenceAndComplete(context.Background())
-	sh.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(sh.(*segmentHandleImpl))
 	assert.Error(t, err)
 }
 
@@ -3498,7 +3505,7 @@ func TestFenceAndComplete_Success(t *testing.T) {
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	lastEntry, err := sh.FenceAndComplete(context.Background())
-	sh.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(sh.(*segmentHandleImpl))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(5), lastEntry)
 
@@ -4086,10 +4093,11 @@ func TestSendAppendSuccessCallbacks_EntryIdBelowLAC(t *testing.T) {
 
 	testQueue := list.New()
 	sh := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	cleanupInjectedAppender(t, sh)
 	impl := sh.(*segmentHandleImpl)
 
 	// Set LAC to 5 — any op with entryId <= 5 should go through the "already confirmed" branch
-	impl.lastAddConfirmed.Store(5)
+	impl.observeFinalLAC(5)
 
 	// Create ops with entryId 3, 4 (below LAC) and 7 (above, not next)
 	successIds := make([]int64, 0)
@@ -4106,7 +4114,7 @@ func TestSendAppendSuccessCallbacks_EntryIdBelowLAC(t *testing.T) {
 	}
 
 	sh.SendAppendSuccessCallbacks(context.Background(), 4)
-	sh.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(sh.(*segmentHandleImpl))
 	time.Sleep(100 * time.Millisecond)
 
 	mu.Lock()
@@ -4138,6 +4146,7 @@ func TestSendAppendSuccessCallbacks_NotCompleted_Break(t *testing.T) {
 
 	testQueue := list.New()
 	sh := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	cleanupInjectedAppender(t, sh)
 
 	// Add op that is NOT completed — should trigger the "not completed" break
 	op := NewAppendOp("b", "r", 1, 1, 0, []byte("data"), func(segmentId int64, eid int64, err error) {}, segmentMeta.Metadata.Quorum, nil)
@@ -4146,7 +4155,7 @@ func TestSendAppendSuccessCallbacks_NotCompleted_Break(t *testing.T) {
 
 	// Should not panic and should leave the queue unchanged
 	sh.SendAppendSuccessCallbacks(context.Background(), 0)
-	sh.(*segmentHandleImpl).callbackWG.Wait()
+	waitForAppendCallbacks(sh.(*segmentHandleImpl))
 	assert.Equal(t, 1, testQueue.Len()) // op still in queue since it wasn't completed
 }
 
@@ -4627,6 +4636,7 @@ func TestHandleAppendRequestFailure_OpAlreadyRemovedFromQueue(t *testing.T) {
 	sh := NewSegmentHandleWithAppendOpsQueueWithWritable(
 		context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue, false,
 	)
+	cleanupInjectedAppender(t, sh)
 	impl := sh.(*segmentHandleImpl)
 
 	// Simulate: an AppendOp for entryId=0 was added and already completed by 2 nodes
@@ -4642,9 +4652,9 @@ func TestHandleAppendRequestFailure_OpAlreadyRemovedFromQueue(t *testing.T) {
 	testQueue.PushBack(appendOp)
 
 	// SendAppendSuccessCallbacks removes the op from queue and triggers the callback once
-	impl.lastAddConfirmed.Store(-1)
+	impl.observeFinalLAC(-1)
 	sh.SendAppendSuccessCallbacks(context.Background(), 0)
-	impl.callbackWG.Wait()
+	waitForAppendCallbacks(impl)
 
 	// Verify op was removed from queue and callback was called exactly once
 	assert.Equal(t, 0, testQueue.Len(), "op should have been removed by SendAppendSuccessCallbacks")
@@ -5004,4 +5014,13 @@ func TestClassifyCompactionFailureReason_GrpcDeadlineIsTransient(t *testing.T) {
 
 	assert.Equal(t, compactionFailureReasonTransient, classifyCompactionFailureReason(grpcDeadline))
 	assert.Equal(t, compactionFailureReasonTransient, classifyCompactionFailureReason(context.DeadlineExceeded))
+}
+
+func cleanupInjectedAppender(t *testing.T, handle SegmentHandle) {
+	t.Helper()
+	t.Cleanup(func() {
+		g := handle.(*segmentHandleImpl).appender
+		g.stop()
+		g.wait()
+	})
 }

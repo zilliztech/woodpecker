@@ -91,7 +91,6 @@ func (cm *completionManager) run(ctx context.Context) {
 		if cm.segment.appender != nil {
 			cm.segment.appender.wait() // outside the segment lock
 		}
-		cm.segment.callbackWG.Wait() // callback delivery also runs outside the segment lock
 		close(cm.doneCh)
 	case <-ctx.Done():
 		cm.result = ctx.Err()

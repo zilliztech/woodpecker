@@ -17,18 +17,23 @@
 package segment
 
 import (
+	"container/list"
 	"context"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
-// replicaResult is a final per-entry, per-replica outcome. Attempts and transport
-// resources never cross the boundary into the segment's quorum state machine.
+// replicaResult is a final per-entry, per-replica outcome consumed by the appender.
 type replicaResult struct {
 	entryID int64
 	replica int
@@ -37,16 +42,39 @@ type replicaResult struct {
 	elapsed time.Duration
 }
 
-// segmentAppender owns the append execution pipeline. The segment owns logical
-// completion; admission credits remain held until all replica outcomes and
-// ordered callback delivery finish, in both service and embedded modes.
+// Notifications run outside the appender lock; the handle owns segment lifecycle
+// and metadata, while the appender owns all per-entry write state.
+type segmentAppendCallbacks struct {
+	onReplicaFailure func(address string, err error)
+	onConfirmed      func(lac int64)
+	onDrained        func()
+}
+
+// segmentAppender owns admission, entry IDs, replication, quorum, the committed
+// prefix and ordered callbacks. Credits cover final replica outcomes and callbacks.
 type segmentAppender struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	executor         *SequentialExecutor
 	replicas         []*replicaAppender
 	pool             client.LogStoreClientPool
-	onResult         func(replicaResult)
+	notify           segmentAppendCallbacks
+	bucketName       string
+	rootPath         string
+	logId            int64
+	segmentId        int64
+	logNs            string
+	quorumInfo       *proto.QuorumInfo
+	nodeScopes       []string
+	lastPushed       atomic.Int64
+	lastAddConfirmed atomic.Int64
+	commitedSize     atomic.Int64
+	submittedSize    atomic.Int64
+	appendOpsQueue   *list.List
+	callbacks        []appendCompletion
+	callbackRunning  bool
+	callbackWG       sync.WaitGroup
+	closed           bool
 	workers          sync.WaitGroup
 	stopOnce         sync.Once
 	joinOnce         sync.Once
@@ -57,6 +85,7 @@ type segmentAppender struct {
 	maxCount         int
 	maxBytes         int64
 	admissionStopped bool
+	admissionErr     error
 	changed          chan struct{}
 }
 
@@ -72,29 +101,37 @@ type appendReservation struct {
 	replicasDone []bool
 }
 
-func newSegmentAppender(pool client.LogStoreClientPool, quorum *proto.QuorumInfo, cfg config.SegmentAppendConfig, service bool, onResult func(replicaResult)) *segmentAppender {
+func newSegmentAppender(pool client.LogStoreClientPool, cfg *config.Configuration, logID int64, initial *proto.SegmentMetadata, notify segmentAppendCallbacks) *segmentAppender {
 	ctx, cancel := context.WithCancel(context.Background())
+	appendCfg := cfg.Woodpecker.Client.SegmentAppend
+	quorum := initial.Quorum
 	g := &segmentAppender{
-		ctx: ctx, cancel: cancel, pool: pool, onResult: onResult,
-		records: make(map[int64]*appendReservation), maxCount: max(cfg.QueueSize, 1),
-		maxBytes: cfg.MaxPendingBytes.Int64(), changed: make(chan struct{}),
+		ctx: ctx, cancel: cancel, pool: pool, notify: notify,
+		bucketName: cfg.Minio.BucketName, rootPath: cfg.Minio.RootPath,
+		logId: logID, segmentId: initial.SegNo, quorumInfo: quorum, nodeScopes: quorumNodeScopes(quorum),
+		logNs: metrics.BuildLogNs(cfg.Minio.BucketName, cfg.Minio.RootPath), appendOpsQueue: list.New(),
+		records: make(map[int64]*appendReservation), maxCount: max(appendCfg.QueueSize, 1),
+		maxBytes: appendCfg.MaxPendingBytes.Int64(), changed: make(chan struct{}),
 	}
+	g.lastPushed.Store(initial.LastEntryId)
+	g.lastAddConfirmed.Store(initial.LastEntryId)
+	g.commitedSize.Store(initial.Size)
 	if g.maxBytes <= 0 {
 		g.maxBytes = 64 << 20
 	}
 	// Buffer independent service replica queues; the single embedded replica
 	// receives directly. Both use the same count and byte admission budgets.
 	queueSize := 0
-	if service {
+	if cfg.Woodpecker.Storage.IsStorageService() {
 		queueSize = g.maxCount
 	}
 	for i, address := range quorum.GetNodes() {
-		r := newReplicaAppender(g, i, address, queueSize, max(cfg.MaxRetries, 1))
+		r := newReplicaAppender(g, i, address, queueSize, max(appendCfg.MaxRetries, 1))
 		g.replicas = append(g.replicas, r)
 		g.workers.Add(1)
 		go func() { defer g.workers.Done(); r.run() }()
 	}
-	g.executor = NewBatchingSequentialExecutor(g.maxCount, cfg.MaxBatchEntries, cfg.MaxBatchBytes.Int64(), g.dispatch)
+	g.executor = NewBatchingSequentialExecutor(g.maxCount, appendCfg.MaxBatchEntries, appendCfg.MaxBatchBytes.Int64(), g.dispatch)
 	g.executor.Start(context.Background())
 	return g
 }
@@ -107,8 +144,9 @@ func (g *segmentAppender) reserve(ctx context.Context, size int64) (*appendReser
 		}
 		g.mu.Lock()
 		if g.admissionStopped {
+			err := g.admissionErr
 			g.mu.Unlock()
-			return nil, werr.ErrSegmentHandleSegmentRolling
+			return nil, err
 		}
 		if g.count < g.maxCount && (g.count == 0 || size <= g.maxBytes-g.bytes) {
 			g.count++
@@ -144,22 +182,43 @@ func (g *segmentAppender) releaseUnsafe(r *appendReservation) {
 	g.changed = make(chan struct{})
 }
 
-// submit publishes an already registered logical append. Reservation guarantees
-// room in the input queue; the segment never waits for I/O while publishing it.
-func (g *segmentAppender) submit(ctx context.Context, op *AppendOp, r *appendReservation) bool {
+// append allocates an ID and publishes the op under one lock, after reservation.
+func (g *segmentAppender) append(ctx context.Context, value []byte, callback func(int64, int64, error), r *appendReservation) error {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.admissionStopped {
-		g.mu.Unlock()
+		return g.admissionErr
+	}
+	op := g.createPendingAppendOp(ctx, value, g.lastPushed.Load()+1, callback)
+	if !g.submitUnsafe(ctx, op, r) {
+		return werr.ErrSegmentHandleSegmentClosed
+	}
+	return nil
+}
+
+func (g *segmentAppender) createPendingAppendOp(ctx context.Context, value []byte, entryID int64, callback func(int64, int64, error)) *AppendOp {
+	op := NewAppendOp(g.bucketName, g.rootPath, g.logId, g.segmentId, entryID, value, callback, g.quorumInfo, g.nodeScopes)
+	op.traceParent = trace.SpanContextFromContext(ctx)
+	return op
+}
+
+// Caller holds mu. The reservation guarantees queue space, so publication never waits for I/O.
+func (g *segmentAppender) submitUnsafe(ctx context.Context, op *AppendOp, r *appendReservation) bool {
+	if g.admissionStopped {
 		return false
 	}
+	element := g.appendOpsQueue.PushBack(op)
 	g.records[op.entryId] = r
-	g.mu.Unlock()
 	if g.executor.Submit(ctx, op) {
+		g.lastPushed.Store(op.entryId)
+		g.submittedSize.Add(op.Size())
+		logID := strconv.FormatInt(g.logId, 10)
+		metrics.WpClientAppendRequestsTotal.WithLabelValues(g.logNs, logID).Inc()
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(g.logNs, logID).Inc()
 		return true
 	}
-	g.mu.Lock()
 	delete(g.records, op.entryId)
-	g.mu.Unlock()
+	g.appendOpsQueue.Remove(element)
 	return false
 }
 
@@ -170,22 +229,6 @@ func (g *segmentAppender) dispatch(ops []*AppendOp) {
 		case <-g.ctx.Done():
 			return
 		}
-	}
-}
-
-func (g *segmentAppender) replicaDone(result replicaResult) {
-	g.mu.Lock()
-	r := g.records[result.entryID]
-	if r == nil || r.replicasDone[result.replica] {
-		g.mu.Unlock()
-		return
-	}
-	r.replicasDone[result.replica] = true
-	g.reclaimUnsafe(result.entryID, r)
-	g.mu.Unlock()
-	// No appender lock is held across the segment callback.
-	if g.ctx.Err() == nil && g.onResult != nil {
-		g.onResult(result)
 	}
 }
 
@@ -223,8 +266,13 @@ func (g *segmentAppender) reclaimUnsafe(entryID int64, r *appendReservation) {
 func (g *segmentAppender) stopAdmission() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.stopAdmissionUnsafe(werr.ErrSegmentHandleSegmentRolling)
+}
+
+func (g *segmentAppender) stopAdmissionUnsafe(err error) {
 	if !g.admissionStopped {
 		g.admissionStopped = true
+		g.admissionErr = err
 		close(g.changed)
 		g.changed = make(chan struct{})
 	}
@@ -262,11 +310,12 @@ func (g *segmentAppender) join() {
 		}
 	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	for id, record := range g.records {
 		for i := range record.replicasDone {
 			record.replicasDone[i] = true
 		}
 		g.reclaimUnsafe(id, record)
 	}
+	g.mu.Unlock()
+	g.callbackWG.Wait()
 }

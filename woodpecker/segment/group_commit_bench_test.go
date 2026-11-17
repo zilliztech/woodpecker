@@ -89,9 +89,10 @@ func benchGroupCommit(b *testing.B, maxBatchEntries int, rtt time.Duration) {
 	ops := make([]*AppendOp, b.N)
 	for i := range ops {
 		ops[i] = NewAppendOp("bk", "fp", 1, 2, int64(i), []byte("v"),
-			func(int64, int64, error) {}, quorumInfo, nil)
+			func(int64, int64, error) { wg.Done() }, quorumInfo, nil)
 	}
-	g := newSegmentAppender(mockPool, quorumInfo, config.SegmentAppendConfig{QueueSize: b.N + 1, MaxRetries: 1}, true, func(result replicaResult) { wg.Done() })
+	cfg := testAppenderConfiguration(config.SegmentAppendConfig{QueueSize: b.N + 1, MaxRetries: 1}, true)
+	g := newSegmentAppender(mockPool, cfg, 1, &proto.SegmentMetadata{SegNo: 2, LastEntryId: -1, Quorum: quorumInfo}, segmentAppendCallbacks{})
 	g.executor.Stop(context.Background())
 	g.executor = NewBatchingSequentialExecutor(b.N+1, maxBatchEntries, 0, g.dispatch)
 	defer func() { g.stop(); g.wait() }()
@@ -103,16 +104,13 @@ func benchGroupCommit(b *testing.B, maxBatchEntries int, rtt time.Duration) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if !g.submit(ctx, op, reservation) {
+		if !submitTestAppend(g, ctx, op, reservation) {
 			b.Fatal("submit failed")
 		}
 	}
 	g.executor.Start(ctx)
 	wg.Wait()
 	b.StopTimer()
-	for _, op := range ops {
-		g.callbackDone(op.entryId)
-	}
 
 	secs := b.Elapsed().Seconds()
 	if secs > 0 {

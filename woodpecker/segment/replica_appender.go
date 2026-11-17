@@ -244,7 +244,7 @@ func (r *replicaAppender) apply(result replicaAttemptResult) {
 }
 
 func (r *replicaAppender) finish(op *AppendOp, err error, elapsed time.Duration) {
-	r.group.replicaDone(replicaResult{entryID: op.entryId, replica: r.index, address: r.address, err: err, elapsed: elapsed})
+	r.group.handleReplicaResult(replicaResult{entryID: op.entryId, replica: r.index, address: r.address, err: err, elapsed: elapsed})
 }
 
 func retireAppendResult(ctx context.Context, ch channel.ResultChannel) {

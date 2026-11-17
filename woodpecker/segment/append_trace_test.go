@@ -117,8 +117,8 @@ func appendTraceFixture(t *testing.T, fail bool) (*tracetest.InMemoryExporter, c
 func queuedTraceOp(t *testing.T, ctx context.Context, id int64, pool client.LogStoreClientPool, q *proto.QuorumInfo, fail bool) *AppendOp {
 	t.Helper()
 	// Use the production queue-capture boundary, then replace only the ack sink.
-	s := &segmentHandleImpl{bucketName: "fixture", rootPath: "trace", logId: 9007199254740993, segmentId: 7, ClientPool: pool, quorumInfo: q}
-	op := s.createPendingAppendOp(ctx, []byte("trace-fixture"), id, func(int64, int64, error) {})
+	g := &segmentAppender{bucketName: "fixture", rootPath: "trace", logId: 9007199254740993, segmentId: 7, pool: pool, quorumInfo: q}
+	op := g.createPendingAppendOp(ctx, []byte("trace-fixture"), id, func(int64, int64, error) {})
 	return op
 }
 
@@ -269,24 +269,27 @@ func TestAppendTraceSamplingAndLinkLimits(t *testing.T) {
 // executor after publication makes batch membership deterministic in this test.
 func executeTraceOps(t *testing.T, ops []*AppendOp, pool client.LogStoreClientPool, quorum *proto.QuorumInfo, fail bool) {
 	t.Helper()
-	results := make(chan replicaResult, len(ops))
-	g := newSegmentAppender(pool, quorum, config.SegmentAppendConfig{QueueSize: len(ops) + 1, MaxRetries: 1}, true, func(result replicaResult) { results <- result })
+	results := make(chan error, len(ops))
+	cfg := testAppenderConfiguration(config.SegmentAppendConfig{QueueSize: len(ops) + 1, MaxRetries: 1}, true)
+	first := ops[0]
+	g := newSegmentAppender(pool, cfg, first.logId, &proto.SegmentMetadata{SegNo: first.segmentId, LastEntryId: first.entryId - 1, Quorum: quorum}, segmentAppendCallbacks{})
 	defer func() { g.stop(); g.wait() }()
 	g.executor.Stop(context.Background())
 	g.executor = NewBatchingSequentialExecutor(len(ops)+1, len(ops), 0, g.dispatch)
-	for _, op := range ops {
+	for _, original := range ops {
+		op := NewAppendOp(g.bucketName, g.rootPath, g.logId, g.segmentId, original.entryId, original.value, func(_, _ int64, err error) { results <- err }, quorum, nil)
+		op.traceParent = original.traceParent
 		reservation, err := g.reserve(context.Background(), op.Size())
 		require.NoError(t, err)
-		require.True(t, g.submit(context.Background(), op, reservation))
+		require.True(t, submitTestAppend(g, context.Background(), op, reservation))
 	}
 	g.executor.Start(context.Background())
 	for range ops {
 		result := receive(t, results)
 		if fail {
-			require.Error(t, result.err)
+			require.Error(t, result)
 		} else {
-			require.NoError(t, result.err)
+			require.NoError(t, result)
 		}
-		g.callbackDone(result.entryID)
 	}
 }

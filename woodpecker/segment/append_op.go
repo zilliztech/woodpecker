@@ -29,8 +29,8 @@ import (
 )
 
 // AppendOp is one logical append. Immutable entry data can be shared by replica
-// appenders. Quorum state is updated only under the owning segment's lock; the
-// callback is delivered once by the segment's ordered callback dispatcher.
+// appenders. Quorum state is updated only under the owning appender's lock; the
+// callback is delivered once by the appender's ordered callback dispatcher.
 // Transport channels, retries, deadlines and admission credits live elsewhere.
 type AppendOp struct {
 	traceParent     trace.SpanContext
@@ -66,7 +66,7 @@ func (op *AppendOp) Identifier() string {
 func (op *AppendOp) Size() int64 { return int64(len(op.value)) }
 
 // applyReplicaResult consumes only final outcomes, never an intermediate failed
-// attempt. Caller holds the segment lock. A false return means quorum is still
+// attempt. Caller holds the appender lock. A false return means quorum is still
 // possible and this logical append must remain pending.
 func (op *AppendOp) applyReplicaResult(replica int, err error) bool {
 	if op.completed.Load() {

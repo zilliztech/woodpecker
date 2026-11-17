@@ -72,9 +72,9 @@ func appendSequenceForTest(h *segmentHandleImpl, count int) <-chan appendCallbac
 func waitForPendingQuorum(t *testing.T, h *segmentHandleImpl, id int64) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		h.RLock()
-		defer h.RUnlock()
-		e := h.findAppendOpById(context.Background(), id)
+		h.appender.mu.Lock()
+		defer h.appender.mu.Unlock()
+		e := h.appender.findAppendOpByIDUnsafe(id)
 		return e != nil && e.Value.(*AppendOp).completed.Load() && e.Value.(*AppendOp).terminalErr == nil
 	}, 5*time.Second, time.Millisecond, "entry %d must reach quorum while waiting behind the hole", id)
 }
@@ -92,11 +92,9 @@ func requireAppenderCredits(t *testing.T, h *segmentHandleImpl, count int, bytes
 func waitForAppenderDrained(t *testing.T, h *segmentHandleImpl) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		h.RLock()
-		callbacksDone := h.appendOpsQueue.Len() == 0 && !h.callbackRunning
-		h.RUnlock()
 		h.appender.mu.Lock()
 		defer h.appender.mu.Unlock()
+		callbacksDone := h.appender.appendOpsQueue.Len() == 0 && !h.appender.callbackRunning
 		return callbacksDone && h.appender.count == 0 && h.appender.bytes == 0 && len(h.appender.records) == 0
 	}, 5*time.Second, time.Millisecond, "callbacks and all replica outcomes must release credits before shutdown")
 }
@@ -129,7 +127,7 @@ func TestSegmentAppenderOutOfOrderACKsWaitForContiguousPrefix(t *testing.T) {
 					require.NoError(t, acks[r][id].SendResult(context.Background(), &channel.AppendResult{SyncedId: id}))
 				}
 				waitForPendingQuorum(t, h, id)
-				require.Equal(t, int64(-1), h.lastAddConfirmed.Load())
+				require.Equal(t, int64(-1), h.confirmedLAC())
 				require.Empty(t, callbacks, "later quorum success cannot overtake entry 0")
 				requireAppenderCredits(t, h, 3, 3)
 			}
@@ -143,7 +141,7 @@ func TestSegmentAppenderOutOfOrderACKsWaitForContiguousPrefix(t *testing.T) {
 			}
 			waitForAppenderDrained(t, h)
 			require.Empty(t, callbacks)
-			require.Equal(t, int64(2), h.lastAddConfirmed.Load())
+			require.Equal(t, int64(2), h.confirmedLAC())
 			require.False(t, h.rollingState.Load())
 		})
 	}
@@ -183,7 +181,7 @@ func TestSegmentAppenderMiddleHoleFailsAlreadyAcknowledgedSuffix(t *testing.T) {
 			require.Equal(t, int64(0), first.id)
 			require.NoError(t, first.err)
 			waitForPendingQuorum(t, h, 2)
-			require.Equal(t, int64(0), h.lastAddConfirmed.Load())
+			require.Equal(t, int64(0), h.confirmedLAC())
 			require.Empty(t, callbacks)
 
 			retries := make([]capturedAppend, failing)
@@ -206,7 +204,7 @@ func TestSegmentAppenderMiddleHoleFailsAlreadyAcknowledgedSuffix(t *testing.T) {
 			}
 			waitForAppenderDrained(t, h)
 			require.Empty(t, callbacks)
-			require.Equal(t, int64(0), h.lastAddConfirmed.Load(), "a successful suffix cannot commit across a permanent hole")
+			require.Equal(t, int64(0), h.confirmedLAC(), "a successful suffix cannot commit across a permanent hole")
 			require.True(t, h.rollingState.Load())
 			for _, sent := range sends {
 				require.Empty(t, sent, "only the failed entry is retried, within its attempt budget")
@@ -275,7 +273,7 @@ func TestReplicaAppenderLateACKAfterTimeoutCannotCompleteRetry(t *testing.T) {
 			waitForAppenderDrained(t, h)
 			require.Empty(t, callbacks, "late outcomes must not invoke another callback")
 			require.Equal(t, int32(2), attempts.Load())
-			require.Equal(t, int64(0), h.lastAddConfirmed.Load())
+			require.Equal(t, int64(0), h.confirmedLAC())
 			require.True(t, retry.channels[0].IsClosed())
 			require.False(t, h.rollingState.Load())
 		})
@@ -310,7 +308,7 @@ func TestReplicaAppenderRemoteBatchRetryUsesFreshRemoteChannel(t *testing.T) {
 	require.True(t, batch.channels[1].IsClosed())
 	waitForPendingQuorum(t, h, 2)
 	require.Empty(t, callbacks)
-	require.Equal(t, int64(0), h.lastAddConfirmed.Load())
+	require.Equal(t, int64(0), h.confirmedLAC())
 	require.NoError(t, ackEntries(retry.ctx, retry.entries, retry.channels))
 	for _, id := range []int64{1, 2} {
 		result := receive(t, callbacks)
@@ -320,7 +318,7 @@ func TestReplicaAppenderRemoteBatchRetryUsesFreshRemoteChannel(t *testing.T) {
 	waitForAppenderDrained(t, h)
 	require.Empty(t, callbacks)
 	require.Empty(t, sends, "successful batch entries must not be retried")
-	require.Equal(t, int64(2), h.lastAddConfirmed.Load())
+	require.Equal(t, int64(2), h.confirmedLAC())
 	require.False(t, h.rollingState.Load())
 	for _, ch := range append(batch.channels, retry.channels...) {
 		require.True(t, ch.IsClosed())
@@ -386,7 +384,7 @@ func TestReplicaAppenderACKProgressWhileLaterSendBlocked(t *testing.T) {
 				first := receive(t, callbacks)
 				require.Equal(t, int64(0), first.id)
 				require.NoError(t, first.err)
-				require.Equal(t, int64(0), h.lastAddConfirmed.Load())
+				require.Equal(t, int64(0), h.confirmedLAC())
 				select {
 				case <-exited:
 					t.Fatal("entry 0 must complete while entry 1 is still blocked in send")
@@ -478,7 +476,7 @@ func TestReplicaAppenderACKFailureDuringSendRetriesBeforeQueuedEntries(t *testin
 			require.Equal(t, int32(2), firstAttempts.Load())
 			require.Empty(t, sends)
 			require.Empty(t, callbacks)
-			require.Equal(t, int64(2), h.lastAddConfirmed.Load())
+			require.Equal(t, int64(2), h.confirmedLAC())
 			require.False(t, h.rollingState.Load())
 		})
 	}

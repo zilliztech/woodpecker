@@ -17,7 +17,6 @@
 package segment
 
 import (
-	"container/list"
 	"context"
 	"fmt"
 	"sync"
@@ -90,22 +89,19 @@ func appenderFixture(t *testing.T, service bool, cfg config.SegmentAppendConfig,
 	}
 	h := &segmentHandleImpl{
 		bucketName: "b", rootPath: "r", logId: 1, segmentId: 1,
-		logNs: metrics.BuildLogNs("b", "r"), appendOpsQueue: list.New(), quorumInfo: q, ClientPool: pool,
-		cfg: &config.Configuration{}, lacSyncNotify: make(chan struct{}, 1),
+		logNs: metrics.BuildLogNs("b", "r"), quorumInfo: q, ClientPool: pool,
+		cfg: testAppenderConfiguration(cfg, service), lacSyncNotify: make(chan struct{}, 1), lacSyncStop: make(chan struct{}),
 	}
-	h.lastPushed.Store(-1)
-	h.lastAddConfirmed.Store(-1)
+	h.finalLAC.Store(-1)
 	h.canWriteState.Store(true)
 	h.lacSyncStarted.Store(true) // no metadata/network LAC sync in this fixture
 	h.segmentMetaCache.Store(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, Quorum: q}})
-	h.appender = newSegmentAppender(pool, q, cfg, service, h.handleReplicaResult)
+	h.appender = newSegmentAppender(pool, h.cfg, h.logId, h.segmentMetaCache.Load().Metadata, h.appendCallbacks())
 	t.Cleanup(func() {
 		h.Lock()
-		h.fastFailAppendOpsUnsafe(context.Background(), -1, werr.ErrSegmentHandleSegmentClosed)
-		h.appender.stop()
+		h.appender.closePending(-1, werr.ErrSegmentHandleSegmentClosed)
 		h.Unlock()
 		h.appender.wait()
-		h.callbackWG.Wait()
 		h.appender.mu.Lock()
 		defer h.appender.mu.Unlock()
 		require.Zero(t, h.appender.count, "all admission credits must be released")
@@ -277,7 +273,7 @@ func TestReplicaAppenderRetryDoesNotBlockHealthyReplicas(t *testing.T) {
 	for range 3 {
 		require.NoError(t, receive(t, appendForTest(h, []byte("next"))))
 	}
-	require.Equal(t, int64(3), h.lastAddConfirmed.Load())
+	require.Equal(t, int64(3), h.confirmedLAC())
 	require.False(t, h.rollingState.Load())
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -323,8 +319,11 @@ func TestSegmentAppenderOrderedCallbacksRunOutsideLock(t *testing.T) {
 	callbacks := make(chan int64, 2)
 	h.AppendAsync(context.Background(), []byte("first"), func(_, id int64, err error) {
 		require.NoError(t, err)
+		h.appender.mu.Lock()
+		_ = h.appender.count
+		h.appender.mu.Unlock() // callbacks may inspect or reserve appender capacity
 		h.RLock()
-		_ = h.lastAddConfirmed.Load()
+		_ = h.confirmedLAC()
 		h.RUnlock() // callback may inspect its segment
 		close(entered)
 		<-release
@@ -332,7 +331,7 @@ func TestSegmentAppenderOrderedCallbacksRunOutsideLock(t *testing.T) {
 	})
 	receive(t, entered)
 	h.AppendAsync(context.Background(), []byte("second"), func(_, id int64, err error) { require.NoError(t, err); callbacks <- id })
-	require.Eventually(t, func() bool { return h.lastAddConfirmed.Load() == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return h.confirmedLAC() == 1 }, time.Second, time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, err := h.appender.reserve(ctx, 1)
@@ -366,7 +365,7 @@ func TestSegmentAppenderStopUnblocksAdmissionAndACKReaders(t *testing.T) {
 	waiting := make(chan error, 1)
 	go func() { _, err := h.appender.reserve(context.Background(), 1); waiting <- err }()
 	h.Lock()
-	h.fastFailAppendOpsUnsafe(context.Background(), -1, werr.ErrSegmentHandleSegmentClosed)
+	h.appender.closePending(-1, werr.ErrSegmentHandleSegmentClosed)
 	h.appender.stop()
 	h.Unlock()
 	require.Error(t, receive(t, waiting))
@@ -387,7 +386,7 @@ func TestSegmentAppenderStopReclaimsWithoutExplicitJoin(t *testing.T) {
 	result := appendForTest(h, []byte("v"))
 	ch := receive(t, ack)
 	h.Lock()
-	h.fastFailAppendOpsUnsafe(context.Background(), -1, werr.ErrSegmentFenced)
+	h.appender.closePending(-1, werr.ErrSegmentFenced)
 	h.appender.stop()
 	h.Unlock()
 	require.ErrorIs(t, receive(t, result), werr.ErrSegmentFenced)
@@ -418,7 +417,7 @@ func TestSegmentAppenderQuorumFailureFailsSuffixInOrder(t *testing.T) {
 	for i := range 4 {
 		require.Equal(t, int64(i), receive(t, done))
 	}
-	require.Equal(t, int64(-1), h.lastAddConfirmed.Load())
+	require.Equal(t, int64(-1), h.confirmedLAC())
 	require.True(t, h.rollingState.Load())
 }
 
@@ -438,11 +437,11 @@ func TestSegmentAppenderCancelledAdmissionDoesNotAllocateEntryID(t *testing.T) {
 	h.AppendAsync(ctx, []byte("cancelled"), func(_, id int64, err error) { rejectedID, rejectedErr = id, err })
 	require.ErrorIs(t, rejectedErr, context.DeadlineExceeded)
 	require.Equal(t, int64(-1), rejectedID)
-	require.Equal(t, int64(0), h.lastPushed.Load())
+	require.Equal(t, int64(0), h.appender.lastPushed.Load())
 	require.NoError(t, ack.SendResult(context.Background(), &channel.AppendResult{SyncedId: 0}))
 	require.NoError(t, receive(t, first))
 	next := appendForTest(h, []byte("next"))
-	require.Equal(t, int64(1), h.lastPushed.Load())
+	require.Equal(t, int64(1), h.appender.lastPushed.Load())
 	require.NoError(t, receive(t, acks).SendResult(context.Background(), &channel.AppendResult{SyncedId: 1}))
 	require.NoError(t, receive(t, next))
 }
@@ -481,7 +480,7 @@ func TestSegmentAppenderAdmissionWaitsForACKAndCallbackInBothModes(t *testing.T)
 					h.AppendAsync(ctx, []byte("x"), func(_, id int64, err error) { rejectedID, rejectedErr = id, err })
 					require.ErrorIs(t, rejectedErr, context.DeadlineExceeded)
 					require.Equal(t, int64(-1), rejectedID)
-					require.Equal(t, int64(0), h.lastPushed.Load(), "blocked admission must not allocate an entry ID")
+					require.Equal(t, int64(0), h.appender.lastPushed.Load(), "blocked admission must not allocate an entry ID")
 				}
 				assertBlocked() // Sending does not release count or byte credits.
 				require.NoError(t, firstACK.SendResult(context.Background(), &channel.AppendResult{SyncedId: 0}))
@@ -492,7 +491,7 @@ func TestSegmentAppenderAdmissionWaitsForACKAndCallbackInBothModes(t *testing.T)
 				defer cancel()
 				second := make(chan error, 1)
 				h.AppendAsync(ctx, []byte("x"), func(_, _ int64, err error) { second <- err })
-				require.Equal(t, int64(1), h.lastPushed.Load())
+				require.Equal(t, int64(1), h.appender.lastPushed.Load())
 				require.NoError(t, receive(t, acks).SendResult(context.Background(), &channel.AppendResult{SyncedId: 1}))
 				require.NoError(t, receive(t, second))
 			})
@@ -539,4 +538,26 @@ func TestReplicaAppenderLateOutcomesAndLocalCancellationMetrics(t *testing.T) {
 			require.Equal(t, wantOK*5, testutil.ToFloat64(bytes)-beforeBytes)
 		})
 	}
+}
+
+func testAppenderConfiguration(appendCfg config.SegmentAppendConfig, service bool) *config.Configuration {
+	cfg := &config.Configuration{}
+	cfg.Minio.BucketName, cfg.Minio.RootPath = "b", "r"
+	cfg.Woodpecker.Client.SegmentAppend = appendCfg
+	if service {
+		cfg.Woodpecker.Storage.Type = "service"
+	}
+	return cfg
+}
+
+func waitForAppendCallbacks(h *segmentHandleImpl) {
+	if h.appender != nil {
+		h.appender.callbackWG.Wait()
+	}
+}
+
+func submitTestAppend(g *segmentAppender, ctx context.Context, op *AppendOp, reservation *appendReservation) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.submitUnsafe(ctx, op, reservation)
 }
