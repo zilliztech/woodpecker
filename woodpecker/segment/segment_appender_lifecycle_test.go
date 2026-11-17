@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -204,4 +205,129 @@ func TestSegmentAppenderRollingWaitsForCallbacksButNotReplicaIO(t *testing.T) {
 	receive(t, h.completionMgr.triggerCh)
 	require.True(t, h.appender.drained())
 	requireAppenderCredits(t, h, 1, 1) // the silent replica is still in flight
+}
+
+func TestSegmentAppenderIgnoresDuplicateFinalReplicaResults(t *testing.T) {
+	for _, failedFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed-first=%t", failedFirst), func(t *testing.T) {
+			c, _ := controlledAppenderClient(true)
+			h := appenderFixture(t, true, config.SegmentAppendConfig{QueueSize: 1}, c, c, c)
+			g := h.appender
+			var failures atomic.Int32
+			notifyFailure := g.notify.onReplicaFailure
+			g.notify.onReplicaFailure = func(address string, err error) {
+				failures.Add(1)
+				notifyFailure(address, err)
+			}
+			callbacks := appendSequenceForTest(h, 1)
+			result := replicaResult{entryID: 0, replica: 0, address: "replica-0"}
+			if failedFirst {
+				result.err = werr.ErrSegmentFenced
+			}
+			g.handleReplicaResult(result)
+			g.handleReplicaResult(result)
+			// Even a contradictory duplicate must not change the first outcome.
+			if failedFirst {
+				result.err = nil
+			} else {
+				result.err = werr.ErrSegmentFenced
+			}
+			g.handleReplicaResult(result)
+			require.Empty(t, callbacks, "one replica cannot form a quorum or a permanent hole")
+			require.Equal(t, int64(-1), h.confirmedLAC())
+			requireAppenderCredits(t, h, 1, 1)
+			if failedFirst {
+				require.Equal(t, int32(1), failures.Load())
+			} else {
+				require.Zero(t, failures.Load())
+			}
+			require.Equal(t, failedFirst, h.rollingState.Load())
+			g.handleReplicaResult(replicaResult{entryID: 0, replica: 1, address: "replica-1"})
+			if failedFirst {
+				require.Empty(t, callbacks)
+			}
+			g.handleReplicaResult(replicaResult{entryID: 0, replica: 2, address: "replica-2"})
+			completion := receive(t, callbacks)
+			require.Equal(t, int64(0), completion.id)
+			require.NoError(t, completion.err)
+			waitForAppenderDrained(t, h)
+			require.Equal(t, int64(0), h.confirmedLAC())
+			require.Equal(t, int64(1), g.commitedSize.Load())
+			require.Zero(t, g.submittedSize.Load())
+			require.Empty(t, callbacks)
+		})
+	}
+}
+
+func TestSegmentAppenderCloseRacesWithFinalResult(t *testing.T) {
+	for _, order := range []string{"close-first", "result-first", "concurrent"} {
+		t.Run(order, func(t *testing.T) {
+			for range 20 {
+				c, _ := controlledAppenderClient(false)
+				h := appenderFixture(t, false, config.SegmentAppendConfig{QueueSize: 1}, c)
+				callbacks := appendSequenceForTest(h, 1)
+				g := h.appender
+				closeWriter := func() { g.closePending(0, werr.ErrSegmentHandleSegmentClosed) }
+				finish := func() { g.handleReplicaResult(replicaResult{entryID: 0, replica: 0}) }
+				switch order {
+				case "close-first":
+					closeWriter()
+					finish()
+				case "result-first":
+					finish()
+					closeWriter()
+				case "concurrent":
+					start, finished := make(chan struct{}), make(chan struct{})
+					go func() { <-start; finish(); close(finished) }()
+					close(start)
+					closeWriter()
+					receive(t, finished)
+				}
+				g.wait()
+				// Neither a late success nor a late failure can rewrite Close's outcome.
+				finish()
+				g.handleReplicaResult(replicaResult{entryID: 0, replica: 0, err: werr.ErrSegmentFenced})
+				completion := receive(t, callbacks)
+				require.Equal(t, int64(0), completion.id)
+				require.NoError(t, completion.err)
+				require.Empty(t, callbacks)
+				require.Equal(t, int64(0), h.confirmedLAC())
+				require.Equal(t, int64(1), g.commitedSize.Load())
+				require.Zero(t, g.submittedSize.Load())
+				require.False(t, h.rollingState.Load())
+				requireAppenderCredits(t, h, 0, 0)
+			}
+		})
+	}
+}
+
+func TestSegmentAppenderCloseDuringFailureNotification(t *testing.T) {
+	c, _ := controlledAppenderClient(false)
+	h := appenderFixture(t, false, config.SegmentAppendConfig{QueueSize: 2}, c)
+	g := h.appender
+	entered, releaseHook := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseHook) })
+	defer release()
+	g.notify.onReplicaFailure = func(string, error) { close(entered); <-releaseHook }
+	callbacks := appendSequenceForTest(h, 2)
+	finished := make(chan struct{})
+	go func() {
+		g.handleReplicaResult(replicaResult{entryID: 0, replica: 0, err: werr.ErrSegmentFenced})
+		close(finished)
+	}()
+	receive(t, entered) // handleReplicaResult has released g.mu to notify its owner
+	g.closePending(0, werr.ErrSegmentHandleSegmentClosed)
+	release()
+	receive(t, finished)
+	g.wait()
+	first, second := receive(t, callbacks), receive(t, callbacks)
+	require.Equal(t, int64(0), first.id)
+	require.NoError(t, first.err, "Close's durable prefix wins over the in-flight failure")
+	require.Equal(t, int64(1), second.id)
+	require.ErrorIs(t, second.err, werr.ErrSegmentHandleSegmentClosed)
+	require.Equal(t, int64(0), h.confirmedLAC())
+	require.Equal(t, int64(1), g.commitedSize.Load())
+	require.Zero(t, g.submittedSize.Load())
+	requireAppenderCredits(t, h, 0, 0)
+	require.Empty(t, callbacks)
 }

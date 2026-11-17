@@ -87,6 +87,11 @@ func appenderFixture(t *testing.T, service bool, cfg config.SegmentAppendConfig,
 		q.Nodes = append(q.Nodes, address)
 		pool.clients[address] = c
 	}
+	return appenderFixtureWithPool(t, service, cfg, pool, q)
+}
+
+func appenderFixtureWithPool(t *testing.T, service bool, cfg config.SegmentAppendConfig, pool client.LogStoreClientPool, q *proto.QuorumInfo) *segmentHandleImpl {
+	t.Helper()
 	h := &segmentHandleImpl{
 		bucketName: "b", rootPath: "r", logId: 1, segmentId: 1,
 		logNs: metrics.BuildLogNs("b", "r"), quorumInfo: q, ClientPool: pool,

@@ -18,9 +18,12 @@ package segment
 
 import (
 	"context"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/stretchr/testify/require"
 
@@ -149,4 +152,110 @@ func TestReplicaAppenderIgnoresStaleAttemptResult(t *testing.T) {
 	r.apply(replicaAttemptResult{task: task, attempt: 1, err: werr.ErrFileWriterNoSpace})
 	require.Same(t, task, r.pending[0])
 	require.NoError(t, r.failure)
+}
+
+func TestReplicaAppenderMalformedACK(t *testing.T) {
+	for _, malformed := range []string{"nil-result", "synced-id-behind"} {
+		for _, recover := range []bool{false, true} {
+			name := malformed + "/exhausted"
+			if recover {
+				name = malformed + "/recovered"
+			}
+			t.Run(name, func(t *testing.T) {
+				var attempts atomic.Int32
+				c := &appenderTestClient{send: func(ctx context.Context, es []*proto.LogEntry, chs []channel.ResultChannel) error {
+					if attempts.Add(1) > 1 && recover {
+						return ackEntries(ctx, es, chs)
+					}
+					var result *channel.AppendResult
+					if malformed == "synced-id-behind" {
+						result = &channel.AppendResult{SyncedId: es[0].EntryId - 1}
+					}
+					return chs[0].SendResult(ctx, result)
+				}}
+				h := appenderFixture(t, false, config.SegmentAppendConfig{QueueSize: 1, MaxRetries: 3}, c)
+				callbacks := appendSequenceForTest(h, 1)
+				result := receive(t, callbacks)
+				require.Equal(t, int64(0), result.id)
+				if recover {
+					require.NoError(t, result.err)
+					require.Equal(t, int32(2), attempts.Load())
+					require.Equal(t, int64(0), h.confirmedLAC())
+				} else {
+					require.ErrorIs(t, result.err, werr.ErrUnknownError)
+					require.Equal(t, int32(3), attempts.Load())
+					require.Equal(t, int64(-1), h.confirmedLAC())
+				}
+				require.Equal(t, !recover, h.rollingState.Load())
+				waitForAppenderDrained(t, h)
+				require.Empty(t, callbacks, "malformed ACKs must not duplicate logical completion")
+			})
+		}
+	}
+}
+
+func TestReplicaAppenderBatchReleasesPayloadBeforeTailACK(t *testing.T) {
+	// Keep only weak payload references in the fixture: retaining LogEntry or
+	// AppendOp here would hide whether the ACK worker releases its task slots.
+	const payloadSize = 1 << 20 // separate large allocations, outside the tiny-object allocator
+	type batchReferences struct {
+		payloads []weak.Pointer[byte]
+		tail     channel.ResultChannel
+	}
+	for _, service := range []bool{false, true} {
+		t.Run(map[bool]string{false: "embed", true: "service"}[service], func(t *testing.T) {
+			captured := make(chan batchReferences, 1)
+			c := &appenderTestClient{remote: service, send: func(ctx context.Context, es []*proto.LogEntry, chs []channel.ResultChannel) error {
+				refs := batchReferences{tail: chs[len(chs)-1]}
+				for _, e := range es {
+					refs.payloads = append(refs.payloads, weak.Make(&e.Values[0]))
+				}
+				captured <- refs
+				return ackEntries(ctx, es[:len(es)-1], chs[:len(chs)-1])
+			}}
+			clients := []*appenderTestClient{c}
+			if service {
+				clients = append(clients, &appenderTestClient{send: ackEntries}, &appenderTestClient{send: ackEntries})
+			}
+			h := appenderFixture(t, service, config.SegmentAppendConfig{QueueSize: 3, MaxRetries: 1}, clients...)
+			holdExecutorForBatch(h, 3)
+			callbacks := make(chan appendCallbackResult, 4)
+			for range 3 {
+				h.AppendAsync(context.Background(), make([]byte, payloadSize), func(_, id int64, err error) {
+					callbacks <- appendCallbackResult{id: id, err: err}
+				})
+			}
+			h.appender.executor.Start(context.Background())
+			refs := receive(t, captured)
+			require.Len(t, refs.payloads, 3)
+			completed := 2
+			if service {
+				completed = 3 // the healthy pair can also acknowledge the tail
+			}
+			for id := range completed {
+				result := receive(t, callbacks)
+				require.Equal(t, int64(id), result.id)
+				require.NoError(t, result.err)
+			}
+			require.Eventually(t, func() bool {
+				runtime.GC()
+				return refs.payloads[0].Value() == nil && refs.payloads[1].Value() == nil
+			}, 5*time.Second, 10*time.Millisecond, "completed payloads must be collectible while the batch reader is still blocked on the tail")
+			require.NotNil(t, refs.payloads[2].Value(), "the unacknowledged tail must remain retained")
+			requireAppenderCredits(t, h, 1, payloadSize)
+			require.False(t, refs.tail.IsClosed())
+			require.NoError(t, refs.tail.SendResult(context.Background(), &channel.AppendResult{SyncedId: 2}))
+			if !service {
+				result := receive(t, callbacks)
+				require.Equal(t, int64(2), result.id)
+				require.NoError(t, result.err)
+			}
+			waitForAppenderDrained(t, h)
+			require.Eventually(t, func() bool {
+				runtime.GC()
+				return refs.payloads[2].Value() == nil
+			}, 5*time.Second, 10*time.Millisecond)
+			require.Empty(t, callbacks)
+		})
+	}
 }

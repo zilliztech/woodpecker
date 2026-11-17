@@ -72,6 +72,42 @@ func TestSequentialExecutorRejectsFullCancelledOrStopped(t *testing.T) {
 	e.Stop(context.Background()) // idempotent
 }
 
+func TestSequentialExecutorBatchByteBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		maxEntries int
+		maxBytes   int64
+		sizes      []int
+		batches    [][]int64
+	}{
+		{"exact-limit", 8, 8, []int{4, 4, 4}, [][]int64{{0, 1}, {2}}},
+		// The threshold is checked before taking the next entry; that entry
+		// may cross it, but must never be split, dropped or reordered.
+		{"cross-limit", 8, 7, []int{4, 4, 4}, [][]int64{{0, 1}, {2}}},
+		{"oversized-first", 8, 8, []int{12, 4, 4}, [][]int64{{0}, {1, 2}}},
+		{"entry-limit-first", 2, 100, []int{4, 4, 4}, [][]int64{{0, 1}, {2}}},
+		{"batching-disabled", 1, 8, []int{4, 12, 4}, [][]int64{{0}, {1}, {2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var batches [][]int64
+			e := NewBatchingSequentialExecutor(len(tc.sizes), tc.maxEntries, tc.maxBytes, func(ops []*AppendOp) {
+				ids := make([]int64, len(ops))
+				for i, op := range ops {
+					ids[i] = op.entryId
+				}
+				batches = append(batches, ids)
+			})
+			t.Cleanup(func() { e.Stop(context.Background()) })
+			for id, size := range tc.sizes {
+				require.True(t, e.Submit(context.Background(), &AppendOp{entryId: int64(id), value: make([]byte, size)}))
+			}
+			e.Start(context.Background())
+			e.Stop(context.Background())
+			require.Equal(t, tc.batches, batches)
+		})
+	}
+}
+
 func TestSequentialExecutorConcurrentSubmitAndStop(t *testing.T) {
 	for range 20 {
 		var mu sync.Mutex
