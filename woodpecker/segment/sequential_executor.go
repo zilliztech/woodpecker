@@ -91,6 +91,8 @@ func (se *SequentialExecutor) worker() {
 func (se *SequentialExecutor) executeBatch(first *AppendOp) {
 	ops := []*AppendOp{first}
 	size := first.Size()
+	// Check the byte threshold before taking the next entry. That final entry
+	// can take the batch over the threshold; entries are never split or rejected.
 	for len(ops) < se.maxBatchEntries && (se.maxBatchBytes <= 0 || size < se.maxBatchBytes) {
 		select {
 		case next := <-se.operationQueue:

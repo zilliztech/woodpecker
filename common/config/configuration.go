@@ -39,29 +39,19 @@ type SegmentRollingPolicyConfig struct {
 	MaxBlocks   int64           `yaml:"maxBlocks"`
 }
 
+// SegmentAppendConfig controls per-segment append admission, batching and replica attempts.
 type SegmentAppendConfig struct {
-	// MaxPendingBytes bounds service-mode payloads until every replica reaches a
-	// final outcome and the ordered application callback completes. Retries keep
-	// the original credit. Zero uses 64 MiB; one larger entry may enter when empty.
+	// MaxPendingBytes budgets retained service-mode payload; 0 uses 64 MiB, with one oversized entry allowed when empty.
 	MaxPendingBytes ByteSize `yaml:"maxPendingBytes"`
-	QueueSize       int      `yaml:"queueSize"`
-	// MaxRetries retains the legacy total-attempts convention (including the
-	// first send), per entry and replica. Values <= 1 allow one attempt only.
+	// QueueSize limits entries per segment until all replica outcomes and callbacks finish (service) or dispatch (embedded).
+	QueueSize int `yaml:"queueSize"`
+	// MaxRetries limits total attempts per entry and replica, including the first send; 0 or 1 disables retries.
 	MaxRetries int `yaml:"maxRetries"`
-	// MaxBatchEntries is the maximum number of consecutive append ops coalesced
-	// into a single AddEntries request (client-side group commit). The batch is
-	// opportunistic: it only coalesces ops already waiting in the queue, so it
-	// adds no latency at low load. Enabled by default (see the default config);
-	// set to <= 1 to disable batching and send one AddEntry per append.
+	// MaxBatchEntries limits queued entries per batch without waiting for more; values <= 1 disable batching.
 	MaxBatchEntries int `yaml:"maxBatchEntries"`
-	// MaxBatchBytes caps the total payload of a coalesced batch (whichever of
-	// MaxBatchEntries / MaxBatchBytes is reached first bounds the batch).
-	// 0 = no byte limit. Ignored when MaxBatchEntries <= 1.
+	// MaxBatchBytes is the batch payload threshold in bytes; the last entry may exceed it, and <= 0 disables it.
 	MaxBatchBytes ByteSize `yaml:"maxBatchBytes"`
-	// SendTimeout bounds sending an append to one replica: opening the stream
-	// and receiving the replica's first (buffered) response. Service-mode
-	// replicas advance independently and retry classified retryable errors in
-	// their own appender. Final failure triggers rolling. Zero defaults to 2s.
+	// SendTimeout bounds remote stream opening through the first response in milliseconds, excluding final ACKs; 0 uses 2000ms.
 	SendTimeout DurationMilliseconds `yaml:"sendTimeout"`
 }
 
@@ -1164,13 +1154,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentAppend: SegmentAppendConfig{
 				QueueSize:  100,
 				MaxRetries: 2,
-				// Client-side group commit is ON by default: consecutive appends
-				// already queued are coalesced into one AddEntries request, bounded
-				// by MaxBatchEntries entries or MaxBatchBytes bytes (whichever first).
-				// Batching is opportunistic (drains only what is already queued), so
-				// it adds no latency at low load. Set MaxBatchEntries to 1 to disable.
+				// Batch queued entries without waiting for more to arrive. The byte
+				// threshold may be exceeded by the last entry; see SegmentAppendConfig.
 				MaxBatchEntries: 1000,
-				MaxBatchBytes:   ByteSize(2000000), // 2MB
+				MaxBatchBytes:   ByteSize(2000000), // 2000000 bytes; YAML "2MB" means 2 MiB.
 				SendTimeout:     NewDurationMillisecondsFromInt(2000),
 			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{

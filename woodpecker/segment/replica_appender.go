@@ -36,8 +36,10 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
-// These are per-attempt ACK budgets, beginning after Buffered. Queue time and
-// previous attempts do not consume a later attempt's ACK budget.
+// These budgets apply in both modes after the send call returns. Each entry's
+// result-channel read gets a fresh budget, including reads within one batch;
+// this is not a shared batch deadline. Admission, send time and previous attempts
+// are excluded. SegmentAppend.SendTimeout only bounds the remote send phase.
 var (
 	appendAckReadTimeout = 30 * time.Second
 	batchAckReadTimeout  = 30 * time.Second

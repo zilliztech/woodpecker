@@ -38,8 +38,9 @@ type replicaResult struct {
 }
 
 // segmentAppender owns the append execution pipeline. The segment owns logical
-// completion; this component retains payload credits until both replication and
-// ordered callback delivery have finished, even after a quorum success.
+// completion. In service mode, this component retains payload credits until both
+// replication and ordered callback delivery finish, even after quorum success.
+// Embedded mode releases admission credits when dispatch hands off the batch.
 type segmentAppender struct {
 	ctx              context.Context
 	cancel           context.CancelFunc

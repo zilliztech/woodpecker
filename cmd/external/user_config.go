@@ -268,7 +268,7 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 		dst.Meta.Prefix = src.Meta.Prefix
 	}
 
-	// Client
+	// Only positive QueueSize/MaxRetries overrides are supported here; other SegmentAppend fields retain their base values.
 	if src.Client.SegmentAppend.QueueSize > 0 {
 		dst.Client.SegmentAppend.QueueSize = src.Client.SegmentAppend.QueueSize
 	}

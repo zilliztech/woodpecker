@@ -415,10 +415,14 @@ age and auditor-outcome metrics proposed by #371 were not merged; use the server
 and the application's auditor summary logs. `metrics watch` aggregates a metric's series on
 the process, so it cannot replace a per-log/per-reader position comparison.
 
-The application's `woodpecker.client.segmentAppend.sendTimeout` defaults to **2000ms** for
-stream opening and the first buffered response. Durability confirmation, retries, ordered
-queues, segment completion and rolling are separate costs. The CLI's `--timeout` does not
-change those budgets; do not assert that total append/failover latency must be below 2s.
+The application's `woodpecker.client.segmentAppend.sendTimeout` defaults to **2000ms per
+remote AddEntry/AddEntries attempt**, from stream opening through its first response
+(normally Buffered), including connection readiness waits inside that RPC. Embedded local
+calls do not use this timeout. Admission and client-pool lookup precede that timer; final
+ACK reads use a separate **30s per-entry read budget** after sending, including within a batch.
+Retries get fresh attempt budgets. These settings are not an overall append, OpenWriter or
+Fence deadline. Ordered callbacks, segment completion and rolling are separate costs. The
+CLI's `--timeout` does not change those budgets; total append/failover latency can exceed 2s.
 Active quorum reads default to 3000ms per replica, settled reads to 20000ms, with a settled
 retry when the active bound might have coincided with a state transition. These are client
 settings under `woodpecker.client.segmentRead`, not a promise about total read latency.
