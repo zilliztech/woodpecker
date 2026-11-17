@@ -142,7 +142,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 			strconv.FormatInt(segmentHandle.segmentId, 10),
 			activeSegmentNodes(segmentHandle.quorumInfo),
 		)
-		segmentHandle.appender = newSegmentAppender(clientPool, segmentHandle.quorumInfo, cfg.Woodpecker.Client.SegmentAppend, cfg.Woodpecker.Storage.Type == "service", segmentHandle.handleReplicaResult)
+		segmentHandle.appender = newSegmentAppender(clientPool, segmentHandle.quorumInfo, cfg.Woodpecker.Client.SegmentAppend, cfg.Woodpecker.Storage.IsStorageService(), segmentHandle.handleReplicaResult)
 		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
 		segmentHandle.completionMgr.Start(context.Background())
 		segmentHandle.lacSyncStarted.Store(true)
@@ -193,7 +193,7 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 	segmentHandle.rollingState.Store(false)
 	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
 	if writable {
-		segmentHandle.appender = newSegmentAppender(clientPool, segmentHandle.quorumInfo, cfg.Woodpecker.Client.SegmentAppend, cfg.Woodpecker.Storage.Type == "service", segmentHandle.handleReplicaResult)
+		segmentHandle.appender = newSegmentAppender(clientPool, segmentHandle.quorumInfo, cfg.Woodpecker.Client.SegmentAppend, cfg.Woodpecker.Storage.IsStorageService(), segmentHandle.handleReplicaResult)
 		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
 		segmentHandle.completionMgr.Start(context.Background())
 		segmentHandle.lacSyncStarted.Store(true)
