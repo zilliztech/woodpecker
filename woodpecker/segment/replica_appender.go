@@ -90,20 +90,10 @@ func newReplicaAppender(group *segmentAppender, index int, address string, queue
 
 func (r *replicaAppender) run() {
 	defer r.cancel()
-	var batch []*AppendOp
+	var nextBatch []*AppendOp
 	for {
-		// Process all known outcomes before taking another normal send. An ACK
-		// can fail while a later request is awaiting Buffered; once that send
-		// returns, the failed entry gets the next available send opportunity.
-		for {
-			select {
-			case result := <-r.results:
-				r.apply(result)
-			default:
-				goto drained
-			}
-		}
-	drained:
+		// Ready results and retries take priority over a dequeued batch.
+		r.drainResults()
 		if r.group.ctx.Err() != nil {
 			return
 		}
@@ -112,21 +102,9 @@ func (r *replicaAppender) run() {
 			r.send([]*replicaTask{retry})
 			continue
 		}
-		if batch != nil {
-			tasks := make([]*replicaTask, 0, len(batch))
-			for _, op := range batch {
-				if r.failure != nil {
-					r.finish(op, r.failure, 0)
-					continue
-				}
-				task := &replicaTask{op: op}
-				r.pending[op.entryId] = task
-				tasks = append(tasks, task)
-			}
-			batch = nil
-			if len(tasks) > 0 {
-				r.send(tasks)
-			}
+		if nextBatch != nil {
+			r.sendNewBatch(nextBatch)
+			nextBatch = nil
 			continue
 		}
 		select {
@@ -134,8 +112,35 @@ func (r *replicaAppender) run() {
 			return
 		case result := <-r.results:
 			r.apply(result)
-		case batch = <-r.queue:
+		case nextBatch = <-r.queue:
 		}
+	}
+}
+
+func (r *replicaAppender) drainResults() {
+	for {
+		select {
+		case result := <-r.results:
+			r.apply(result)
+		default:
+			return
+		}
+	}
+}
+
+func (r *replicaAppender) sendNewBatch(ops []*AppendOp) {
+	tasks := make([]*replicaTask, 0, len(ops))
+	for _, op := range ops {
+		if r.failure != nil {
+			r.finish(op, r.failure, 0)
+			continue
+		}
+		task := &replicaTask{op: op}
+		r.pending[op.entryId] = task
+		tasks = append(tasks, task)
+	}
+	if len(tasks) > 0 {
+		r.send(tasks)
 	}
 }
 
