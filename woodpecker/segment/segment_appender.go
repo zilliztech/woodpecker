@@ -47,56 +47,70 @@ type replicaResult struct {
 type segmentAppendCallbacks struct {
 	onReplicaFailure func(address string, err error)
 	onConfirmed      func(lac int64)
-	onDrained        func()
+	onDrained        func() // logical writes and callbacks drained after admission stops
 }
 
 // segmentAppender owns admission, entry IDs, replication, quorum, the committed
 // prefix and ordered callbacks. Credits cover final replica outcomes and callbacks.
 type segmentAppender struct {
-	ctx              context.Context
-	cancel           context.CancelFunc
-	executor         *SequentialExecutor
-	replicas         []*replicaAppender
-	pool             client.LogStoreClientPool
-	notify           segmentAppendCallbacks
-	bucketName       string
-	rootPath         string
-	logId            int64
-	segmentId        int64
-	logNs            string
-	quorumInfo       *proto.QuorumInfo
-	nodeScopes       []string
+	// Segment identity and replica configuration, fixed at construction.
+	bucketName string
+	rootPath   string
+	logId      int64
+	segmentId  int64
+	logNs      string
+	quorumInfo *proto.QuorumInfo
+	nodeScopes []string
+
+	// Pipeline dependencies and shutdown: signal once, then join all workers.
+	pool     client.LogStoreClientPool
+	notify   segmentAppendCallbacks
+	executor *SequentialExecutor
+	replicas []*replicaAppender
+	ctx      context.Context
+	cancel   context.CancelFunc
+	workers  sync.WaitGroup // replica schedulers; I/O workers are tracked by replicaAppender.drains
+	stopOnce sync.Once
+	joinOnce sync.Once
+
+	// Progress is updated under mu and can be read without taking it.
 	lastPushed       atomic.Int64
 	lastAddConfirmed atomic.Int64
 	commitedSize     atomic.Int64
 	submittedSize    atomic.Int64
-	appendOpsQueue   *list.List
-	callbacks        []appendCompletion
-	callbackRunning  bool
-	callbackWG       sync.WaitGroup
-	closed           bool
-	workers          sync.WaitGroup
-	stopOnce         sync.Once
-	joinOnce         sync.Once
-	mu               sync.Mutex
-	records          map[int64]*appendReservation
-	count            int
-	bytes            int64
+
+	// Protects admission, pending ops, quorum state and callback scheduling.
+	mu sync.Mutex
+
+	// Admission limits and usage; count/bytes include unpublished reservations.
 	maxCount         int
 	maxBytes         int64
+	count            int
+	bytes            int64
+	records          map[int64]*appendReservation // published entries retaining credits
 	admissionStopped bool
 	admissionErr     error
-	changed          chan struct{}
+	changed          chan struct{} // closed and replaced to wake admission waiters
+	closed           bool          // pending callbacks are fixed; ignore late replica results
+
+	// Logical writes awaiting ordered completion; scheduling is protected by mu.
+	appendOpsQueue  *list.List
+	callbacks       []appendCompletion
+	callbackRunning bool
+	callbackWG      sync.WaitGroup // joins callback delivery separately from replica I/O
 }
 
 // appendReservation belongs only to segmentAppender. Before Submit, its caller
 // owns the provisional credit and must abandon it on error. Afterwards the
 // appender's entry table owns it; AppendOp never stores a lease or a deadline.
 type appendReservation struct {
-	owner        *segmentAppender
-	size         int64
-	admitted     time.Time
-	released     bool // protected by owner.mu
+	// Fixed when capacity is reserved.
+	owner    *segmentAppender
+	size     int64
+	admitted time.Time
+
+	// Completion and release state, protected by owner.mu.
+	released     bool
 	callbackDone bool
 	replicasDone []bool
 }

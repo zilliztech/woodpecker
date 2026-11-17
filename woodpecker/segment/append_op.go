@@ -33,22 +33,27 @@ import (
 // callback is delivered once by the appender's ordered callback dispatcher.
 // Transport channels, retries, deadlines and admission credits live elsewhere.
 type AppendOp struct {
-	traceParent     trace.SpanContext
-	bucketName      string
-	rootPath        string
-	logId           int64
-	segmentId       int64
-	entryId         int64
-	value           []byte
-	callback        func(segmentId, entryId int64, err error)
-	logNs           string
-	quorumInfo      *proto.QuorumInfo
-	nodeScopes      []string
+	// Entry data and observation context, fixed before publication.
+	bucketName  string
+	rootPath    string
+	logId       int64
+	segmentId   int64
+	entryId     int64
+	value       []byte
+	quorumInfo  *proto.QuorumInfo
+	traceParent trace.SpanContext
+	logNs       string
+	nodeScopes  []string
+
+	// Logical quorum outcome, protected by segmentAppender.mu.
 	ackSet          *bitset.BitSet
 	finalFailureSet *bitset.BitSet
 	terminalErr     error
 	completed       atomic.Bool
-	fastCalled      atomic.Bool
+
+	// The ordered dispatcher invokes the callback once, outside the appender lock.
+	callback   func(segmentId, entryId int64, err error)
+	fastCalled atomic.Bool
 }
 
 func NewAppendOp(bucketName, rootPath string, logId, segmentId, entryId int64, value []byte, callback func(int64, int64, error), quorumInfo *proto.QuorumInfo, nodeScopes []string) *AppendOp {

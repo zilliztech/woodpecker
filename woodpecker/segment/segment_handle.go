@@ -162,58 +162,53 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 var _ SegmentHandle = (*segmentHandleImpl)(nil)
 
 type segmentHandleImpl struct {
-	bucketName       string
-	rootPath         string
-	logId            int64
-	logName          string
-	segmentId        int64
-	segmentMetaCache atomic.Pointer[meta.SegmentMeta]
+	// Segment identity and storage namespace.
+	bucketName string
+	rootPath   string
+	logId      int64
+	logName    string
+	segmentId  int64
+	logNs      string
+
+	// Shared dependencies and cached segment metadata.
+	cfg              *config.Configuration
 	metadata         meta.MetadataProvider
 	ClientPool       client.LogStoreClientPool
+	segmentMetaCache atomic.Pointer[meta.SegmentMeta]
 	quorumInfo       *proto.QuorumInfo
-	cfg              *config.Configuration
-	logNs            string
 
+	// Serializes lifecycle transitions and append publication against closing.
 	sync.RWMutex
-	finalLAC atomic.Int64 // confirmed position for handles without a write appender
-
-	fencedState    atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
+	fencedState    atomic.Bool // false requires checking the backend fence marker
 	canWriteState  atomic.Bool
-	rollingState   atomic.Bool // For rolling ready state: true confirms it is rolling ready, once all appendOPs are completed and the segment is going to close.
+	rollingState   atomic.Bool  // rejects new appends while accepted writes finish
+	finalLAC       atomic.Int64 // confirmed position for handles without a write appender
 	expiredTrigger func(ctx context.Context, reason string)
 
-	appender      *segmentAppender   // owns the complete write pipeline and its progress
+	// The handle coordinates lifecycle; the appender owns per-entry write state.
+	appender      *segmentAppender
 	completionMgr *completionManager // nil for readonly segments
 
-	// unreachable holds the endpoints of replicas this segment failed to reach,
-	// so the next segment's quorum can be selected without them. Guarded by its
-	// own mutex: it is read by the log handle while it rolls the segment.
+	// Failed endpoints excluded from the next quorum; protected by unreachableMu.
 	unreachableMu sync.Mutex
 	unreachable   map[string]struct{}
 
-	// LAC sync coalescing: instead of spawning a fresh syncLACToQuorumAsync
-	// goroutine (which fans out an UpdateLastAddConfirmed RPC per quorum node)
-	// on every ack round, one background syncer pushes only the LATEST LAC.
-	// LAC is monotonic and this path is fire-and-forget/advisory, so pushing
-	// the latest value is observably equivalent to pushing every value, while
-	// collapsing the ~per-entry goroutine+RPC storm to ~one in-flight push.
+	// One background syncer coalesces advisory LAC updates to the latest value.
 	lacSyncLatest   atomic.Int64
 	lacSyncNotify   chan struct{}
 	lacSyncStop     chan struct{}
 	lacSyncStopOnce sync.Once
 	lacSyncStarted  atomic.Bool // false for readonly/test handles: fall back to per-call fan-out
 
-	doingCompact atomic.Bool
-
+	// Maintenance: prevent concurrent compaction and track idle time.
+	doingCompact   atomic.Bool
 	lastAccessTime atomic.Int64
 
-	// slowReadNodes are replicas a quorum read of this segment timed out on,
-	// asked last until one answers again, so a replica that went silent does
-	// not cost every tail poll a full read bound.
+	// Read routing: timed-out nodes are tried last; protected by slowReadMu.
 	slowReadMu    sync.Mutex
 	slowReadNodes map[string]struct{}
 
-	// Direct read from object storage for sealed segments
+	// Direct object-storage reads for sealed segments; reader guarded by directReaderMu.
 	objectStorageClient storageclient.ObjectStorage
 	directReader        *objectstorage.MinioFileReaderAdv
 	directReaderMu      sync.Mutex
@@ -1071,7 +1066,7 @@ func (s *segmentHandleImpl) stopWritingUnsafe(ctx context.Context, lastFlushedEn
 		strconv.FormatInt(s.segmentId, 10),
 	)
 
-	// fast fail all pending append operations
+	// Resolve pending writes against the final durable prefix and stop I/O.
 	if s.appender != nil {
 		s.appender.closePending(lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
 	}

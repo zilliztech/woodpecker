@@ -24,16 +24,19 @@ import (
 // SequentialExecutor preserves submission order and opportunistically batches
 // appends. It owns no transport, retry, quorum or storage-mode policy.
 type SequentialExecutor struct {
+	// Ordered input and fixed batching policy.
 	operationQueue  chan *AppendOp
 	dispatch        func([]*AppendOp)
-	done            chan struct{}
-	finished        chan struct{}
-	startOnce       sync.Once
-	stopOnce        sync.Once
-	mu              sync.Mutex
-	closed          bool
 	maxBatchEntries int
 	maxBatchBytes   int64
+
+	// Publication and shutdown are serialized by mu.
+	mu        sync.Mutex
+	closed    bool
+	done      chan struct{} // stop signal; queued work is drained before exit
+	finished  chan struct{} // closed when the worker exits
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
 func NewSequentialExecutor(bufferSize int, dispatch func([]*AppendOp)) *SequentialExecutor {

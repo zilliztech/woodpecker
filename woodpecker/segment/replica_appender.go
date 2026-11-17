@@ -47,8 +47,8 @@ var (
 
 type replicaTask struct {
 	op       *AppendOp
-	attempts int
-	retry    bool
+	attempts int  // send generations, updated only by the scheduler
+	retry    bool // queued for retry; results from the previous attempt are ignored
 }
 
 type replicaAttemptResult struct {
@@ -62,20 +62,25 @@ type replicaAttemptResult struct {
 // replicaAppender has one scheduling owner. Send workers and ACK readers report
 // attempt results to that owner; they never schedule retries or modify a logical AppendOp.
 type replicaAppender struct {
+	// Fixed replica identity and attempt policy.
 	group           *segmentAppender
 	index           int
 	address         string
-	queue           chan []*AppendOp
-	results         chan replicaAttemptResult
-	ctx             context.Context
-	cancel          context.CancelFunc
-	drains          sync.WaitGroup // active sends and ACK readers
-	pending         map[int64]*replicaTask
-	retries         replicaRetryQueue
-	failure         error
 	maxAttempts     int
 	ackTimeout      time.Duration
 	batchAckTimeout time.Duration
+
+	// Inputs and worker lifetime; workers return outcomes through results.
+	queue   chan []*AppendOp
+	results chan replicaAttemptResult
+	ctx     context.Context
+	cancel  context.CancelFunc
+	drains  sync.WaitGroup // active sends and ACK readers
+
+	// Owned by run; shutdown clears these only after the scheduler exits.
+	pending map[int64]*replicaTask
+	retries replicaRetryQueue
+	failure error // terminal replica failure; subsequent queued entries fail without I/O
 }
 
 func newReplicaAppender(group *segmentAppender, index int, address string, queueSize, maxAttempts int) *replicaAppender {
@@ -91,7 +96,7 @@ func newReplicaAppender(group *segmentAppender, index int, address string, queue
 func (r *replicaAppender) run() {
 	defer r.cancel()
 	var nextBatch []*AppendOp
-	var sendDone <-chan struct{}
+	var sendDone <-chan struct{} // nil means the send slot is free; ACKs may still be pending
 	for {
 		// Ready results and retries take priority over a dequeued batch.
 		r.drainResults()
@@ -226,9 +231,8 @@ func (r *replicaAppender) apply(result replicaAttemptResult) {
 		heap.Push(&r.retries, task)
 		return
 	}
-	// This lane can no longer supply a complete prefix. Report a FINAL failure,
-	// including for entries whose application callback already succeeded. Only
-	// the segment decides to roll and closes global admission in response.
+	// Terminal failure retires this replica. The appender stops admission and
+	// notifies the handle to roll, even if the entry already reached quorum.
 	r.failure = err
 	r.cancel()
 	ids := make([]int64, 0, len(r.pending))
@@ -288,6 +292,7 @@ func (r *replicaAppender) send(tasks []*replicaTask, generations []int) {
 		entries := make([]*proto.LogEntry, len(tasks))
 		for i, task := range tasks {
 			entries[i] = task.op.toLogEntry()
+			// Remote single-entry calls attach a stream; batches fan out into local channels.
 			if len(tasks) == 1 && cli.IsRemoteClient() {
 				channels[i] = channel.NewRemoteResultChannel(task.op.Identifier())
 			} else {
