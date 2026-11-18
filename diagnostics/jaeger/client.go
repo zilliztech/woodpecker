@@ -93,7 +93,7 @@ func scopeName(tags []tag) string {
 			result = v
 		}
 	}
-	if d.Has([]string{"milvus.streaming.wal", "LogWriter", "LogReader", "LogHandle", "AppendOp", "BatchAppendOp", "LogStore", "SegmentProcessor", "StagedFileWriter", "LocalFileWriter", "MinioFileWriter"}, result) {
+	if d.Has([]string{"milvus.streaming.wal", "LogWriter", "LogReader", "LogHandle", "AppendOp", "BatchAppendOp", "ReplicaAppender", "LogStore", "SegmentProcessor", "StagedFileWriter", "LocalFileWriter", "MinioFileWriter"}, result) {
 		return result
 	}
 	return ""

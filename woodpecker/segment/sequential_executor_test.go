@@ -18,628 +18,125 @@ package segment
 
 import (
 	"context"
-	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// MockOperation is a mock implementation of Operation interface for testing
-type MockOperation struct {
-	executed atomic.Bool
-	delay    time.Duration
-}
+func executorOp(id int64) *AppendOp { return &AppendOp{entryId: id, value: []byte("data")} }
 
-func (m *MockOperation) Execute() {
-	if m.delay > 0 {
-		time.Sleep(m.delay)
-	}
-	m.executed.Store(true)
-}
-
-func (m *MockOperation) IsExecuted() bool {
-	return m.executed.Load()
-}
-
-func (m *MockOperation) Identifier() string {
-	return ""
-}
-
-// OrderedMockOperation is a mock operation that records execution order
-type OrderedMockOperation struct {
-	executed atomic.Bool
-	delay    time.Duration
-	index    int
-	recorder func(int)
-}
-
-func (m *OrderedMockOperation) Execute() {
-	if m.delay > 0 {
-		time.Sleep(m.delay)
-	}
-	m.executed.Store(true)
-	if m.recorder != nil {
-		m.recorder(m.index)
+func TestSequentialExecutorOrderAndBatching(t *testing.T) {
+	for _, maxBatch := range []int{1, 3} {
+		var batches [][]int64
+		e := NewBatchingSequentialExecutor(8, maxBatch, 0, func(ops []*AppendOp) {
+			ids := []int64{}
+			for _, op := range ops {
+				ids = append(ids, op.entryId)
+			}
+			batches = append(batches, ids)
+		})
+		for i := range 8 {
+			require.True(t, e.Submit(context.Background(), executorOp(int64(i))))
+		}
+		e.Start(context.Background())
+		e.Stop(context.Background())
+		var ids []int64
+		for _, batch := range batches {
+			require.LessOrEqual(t, len(batch), maxBatch)
+			ids = append(ids, batch...)
+		}
+		require.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7}, ids)
+		require.False(t, e.Submit(context.Background(), executorOp(9)))
 	}
 }
 
-func (m *OrderedMockOperation) IsExecuted() bool {
-	return m.executed.Load()
+func TestSequentialExecutorRejectsFullCancelledOrStopped(t *testing.T) {
+	var dispatched []int64
+	e := NewSequentialExecutor(1, func(ops []*AppendOp) {
+		for _, op := range ops {
+			dispatched = append(dispatched, op.entryId)
+		}
+	})
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.False(t, e.Submit(ctx, executorOp(0)), "cancelled submission must fail even with free capacity")
+	require.True(t, e.Submit(context.Background(), executorOp(1)))
+	done := make(chan bool, 1)
+	go func() { done <- e.Submit(context.Background(), executorOp(2)) }()
+	require.False(t, receive(t, done), "full queue must reject without waiting for capacity or Stop")
+	e.Stop(context.Background()) // drains only the accepted entry
+	require.Equal(t, []int64{1}, dispatched)
+	require.False(t, e.Submit(context.Background(), executorOp(3)))
+	e.Stop(context.Background()) // idempotent
 }
 
-func (m *OrderedMockOperation) Identifier() string {
-	return fmt.Sprintf("%d", m.index)
-}
-
-// BlockingMockOperation is a mock operation that can be controlled to block
-type BlockingMockOperation struct {
-	executed atomic.Bool
-	blocker  *sync.WaitGroup
-}
-
-func (m *BlockingMockOperation) Execute() {
-	if m.blocker != nil {
-		m.blocker.Wait() // Block until released
-	}
-	m.executed.Store(true)
-}
-
-func (m *BlockingMockOperation) IsExecuted() bool {
-	return m.executed.Load()
-}
-
-func (m *BlockingMockOperation) Identifier() string {
-	return ""
-}
-
-// createMockOperation creates a mock operation for testing
-func createMockOperation(delay time.Duration) *MockOperation {
-	return &MockOperation{delay: delay}
-}
-
-// createOrderedMockOperation creates an ordered mock operation for testing
-func createOrderedMockOperation(index int, delay time.Duration, recorder func(int)) *OrderedMockOperation {
-	return &OrderedMockOperation{
-		index:    index,
-		delay:    delay,
-		recorder: recorder,
-	}
-}
-
-func createBlockingMockOperation(blocker *sync.WaitGroup) *BlockingMockOperation {
-	return &BlockingMockOperation{blocker: blocker}
-}
-
-func TestNewSequentialExecutor(t *testing.T) {
-	bufferSize := 10
-	executor := NewSequentialExecutor(bufferSize)
-
-	assert.NotNil(t, executor)
-	assert.NotNil(t, executor.operationQueue)
-	assert.Equal(t, bufferSize, cap(executor.operationQueue))
-	assert.NotNil(t, executor.done)
-	assert.False(t, executor.closed)
-}
-
-func TestSequentialExecutor_BasicExecution(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	// Create a mock operation
-	mockOp := createMockOperation(0)
-
-	// Submit the operation
-	success := executor.Submit(context.TODO(), mockOp)
-	assert.True(t, success)
-
-	// Wait for execution
-	time.Sleep(100 * time.Millisecond)
-
-	// Verify the operation was executed
-	assert.True(t, mockOp.IsExecuted())
-}
-
-func TestSequentialExecutor_MultipleOperations(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	numOps := 5
-	mockOps := make([]*MockOperation, numOps)
-
-	// Submit multiple operations
-	for i := 0; i < numOps; i++ {
-		mockOps[i] = createMockOperation(0)
-		success := executor.Submit(context.TODO(), mockOps[i])
-		assert.True(t, success)
-	}
-
-	// Wait for all executions
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify all operations were executed
-	for i := 0; i < numOps; i++ {
-		assert.True(t, mockOps[i].IsExecuted(), "Operation %d should be executed", i)
+func TestSequentialExecutorBatchByteBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		maxEntries int
+		maxBytes   int64
+		sizes      []int
+		batches    [][]int64
+	}{
+		{"exact-limit", 8, 8, []int{4, 4, 4}, [][]int64{{0, 1}, {2}}},
+		// The threshold is checked before taking the next entry; that entry
+		// may cross it, but must never be split, dropped or reordered.
+		{"cross-limit", 8, 7, []int{4, 4, 4}, [][]int64{{0, 1}, {2}}},
+		{"oversized-first", 8, 8, []int{12, 4, 4}, [][]int64{{0}, {1, 2}}},
+		{"entry-limit-first", 2, 100, []int{4, 4, 4}, [][]int64{{0, 1}, {2}}},
+		{"batching-disabled", 1, 8, []int{4, 12, 4}, [][]int64{{0}, {1}, {2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var batches [][]int64
+			e := NewBatchingSequentialExecutor(len(tc.sizes), tc.maxEntries, tc.maxBytes, func(ops []*AppendOp) {
+				ids := make([]int64, len(ops))
+				for i, op := range ops {
+					ids[i] = op.entryId
+				}
+				batches = append(batches, ids)
+			})
+			t.Cleanup(func() { e.Stop(context.Background()) })
+			for id, size := range tc.sizes {
+				require.True(t, e.Submit(context.Background(), &AppendOp{entryId: int64(id), value: make([]byte, size)}))
+			}
+			e.Start(context.Background())
+			e.Stop(context.Background())
+			require.Equal(t, tc.batches, batches)
+		})
 	}
 }
 
-func TestSequentialExecutor_SequentialOrder(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	var executionOrder []int
-	var mu sync.Mutex
-
-	// Create a recorder function that safely appends to the execution order
-	recorder := func(index int) {
-		mu.Lock()
-		executionOrder = append(executionOrder, index)
-		mu.Unlock()
-	}
-
-	numOps := 5
-
-	for i := 0; i < numOps; i++ {
-		mockOp := createOrderedMockOperation(i, 10*time.Millisecond, recorder)
-		success := executor.Submit(context.TODO(), mockOp)
-		assert.True(t, success)
-	}
-
-	// Wait for all executions
-	time.Sleep(500 * time.Millisecond)
-
-	// Verify sequential execution order
-	mu.Lock()
-	assert.Equal(t, numOps, len(executionOrder))
-	for i := 0; i < numOps; i++ {
-		assert.Equal(t, i, executionOrder[i], "Operations should execute in order")
-	}
-	mu.Unlock()
-}
-
-func TestSequentialExecutor_SubmitAfterStop(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-	executor.Start(context.TODO())
-
-	// Stop the executor
-	executor.Stop(context.TODO())
-
-	// Try to submit after stop
-	mockOp := createMockOperation(0)
-	success := executor.Submit(context.TODO(), mockOp)
-
-	// Should return false
-	assert.False(t, success)
-
-	// Operation should not be executed
-	time.Sleep(100 * time.Millisecond)
-	assert.False(t, mockOp.IsExecuted())
-}
-
-func TestSequentialExecutor_ConcurrentSubmitAndStop(t *testing.T) {
-	// This test verifies the race condition fix
-	for i := 0; i < 100; i++ { // Run multiple times to increase chance of hitting race condition
-		executor := NewSequentialExecutor(10)
-		executor.Start(context.TODO())
-
+func TestSequentialExecutorConcurrentSubmitAndStop(t *testing.T) {
+	for range 20 {
+		var mu sync.Mutex
+		accepted, dispatched := map[int64]bool{}, map[int64]bool{}
+		e := NewSequentialExecutor(2, func(ops []*AppendOp) {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, op := range ops {
+				require.False(t, dispatched[op.entryId])
+				dispatched[op.entryId] = true
+			}
+		})
+		e.Start(context.Background())
 		var wg sync.WaitGroup
-		var successCount atomic.Int32
-
-		// Start multiple goroutines submitting operations
-		numSubmitters := 10
-		for j := 0; j < numSubmitters; j++ {
+		for i := range 20 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				mockOp := createMockOperation(0)
-				if executor.Submit(context.TODO(), mockOp) {
-					successCount.Add(1)
+				if e.Submit(context.Background(), executorOp(int64(i))) {
+					mu.Lock()
+					accepted[int64(i)] = true
+					mu.Unlock()
 				}
 			}()
 		}
-
-		// Stop the executor concurrently
-		go func() {
-			time.Sleep(1 * time.Millisecond) // Small delay to let some submits happen
-			executor.Stop(context.TODO())
-		}()
-
+		e.Stop(context.Background())
 		wg.Wait()
-
-		// Should not panic and some operations might succeed
-		// The exact count depends on timing, but it should be >= 0 and <= numSubmitters
-		count := successCount.Load()
-		assert.GreaterOrEqual(t, int(count), 0)
-		assert.LessOrEqual(t, int(count), numSubmitters)
-	}
-}
-
-func TestSequentialExecutor_FullBufferBlocking(t *testing.T) {
-	bufferSize := 2
-	executor := NewSequentialExecutor(bufferSize)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	// Create a blocker to control when the first operation completes
-	var workerBlocked sync.WaitGroup
-	workerBlocked.Add(1)
-
-	// Submit the blocking operation first - this will block the worker
-	blockingOp := createBlockingMockOperation(&workerBlocked)
-	success := executor.Submit(context.TODO(), blockingOp)
-	assert.True(t, success)
-
-	// Give the worker time to pick up the blocking op
-	time.Sleep(20 * time.Millisecond)
-
-	// Fill the buffer
-	fillOps := make([]*MockOperation, bufferSize)
-	for i := 0; i < bufferSize; i++ {
-		fillOps[i] = createMockOperation(0)
-		success := executor.Submit(context.TODO(), fillOps[i])
-		assert.True(t, success)
-	}
-
-	// Now the buffer should be full. Submit in a goroutine — it should block.
-	blocked := make(chan bool, 1)
-	extraOp := createMockOperation(0)
-	go func() {
-		result := executor.Submit(context.TODO(), extraOp)
-		blocked <- result
-	}()
-
-	// Verify that Submit is still blocking after a short wait
-	select {
-	case <-blocked:
-		t.Fatal("Submit should block when queue is full")
-	case <-time.After(100 * time.Millisecond):
-		// expected: Submit is still blocked
-	}
-
-	// Release the worker to drain the queue — this should unblock Submit
-	workerBlocked.Done()
-
-	// Now the blocked Submit should succeed
-	select {
-	case result := <-blocked:
-		assert.True(t, result, "Submit should succeed after queue drains")
-	case <-time.After(2 * time.Second):
-		t.Fatal("Submit did not unblock after worker drained")
-	}
-}
-
-func TestSequentialExecutor_FullBufferBlockingThenDrain(t *testing.T) {
-	bufferSize := 2
-	executor := NewSequentialExecutor(bufferSize)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	// Create a blocker to control when the first operation completes
-	var workerBlocked sync.WaitGroup
-	workerBlocked.Add(1)
-
-	// Submit the blocking operation first - this will block the worker
-	blockingOp := createBlockingMockOperation(&workerBlocked)
-	success := executor.Submit(context.TODO(), blockingOp)
-	assert.True(t, success)
-
-	// Give the worker time to pick up the blocking op
-	time.Sleep(20 * time.Millisecond)
-
-	// Fill the buffer
-	fillOps := make([]*MockOperation, bufferSize)
-	for i := 0; i < bufferSize; i++ {
-		fillOps[i] = createMockOperation(0)
-		success := executor.Submit(context.TODO(), fillOps[i])
-		assert.True(t, success)
-	}
-
-	// Submit another op in a goroutine — it should block because queue is full
-	blockedResult := make(chan bool, 1)
-	extraOp := createMockOperation(0)
-	go func() {
-		blockedResult <- executor.Submit(context.TODO(), extraOp)
-	}()
-
-	// Confirm it's blocked
-	select {
-	case <-blockedResult:
-		t.Fatal("Submit should block when queue is full")
-	case <-time.After(100 * time.Millisecond):
-		// expected
-	}
-
-	// Release the worker so it can drain the queue
-	workerBlocked.Done()
-
-	// The blocked Submit should succeed after draining
-	select {
-	case result := <-blockedResult:
-		assert.True(t, result, "Submit should succeed after queue is drained")
-	case <-time.After(2 * time.Second):
-		t.Fatal("Submit did not unblock after worker drained")
-	}
-
-	// Wait for execution of all ops
-	time.Sleep(200 * time.Millisecond)
-
-	assert.True(t, extraOp.IsExecuted(), "Extra operation should be executed after queue drained")
-
-	// All fill ops should also have been executed
-	for i, op := range fillOps {
-		assert.True(t, op.IsExecuted(), "Fill operation %d should be executed", i)
-	}
-}
-
-func TestSequentialExecutor_StopWaitsForCompletion(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-	executor.Start(context.TODO())
-
-	// Submit a slow operation
-	slowOp := createMockOperation(200 * time.Millisecond)
-	success := executor.Submit(context.TODO(), slowOp)
-	assert.True(t, success)
-
-	// Stop should wait for the operation to complete
-	start := time.Now()
-	executor.Stop(context.TODO())
-	duration := time.Since(start)
-
-	// Stop should have waited for the slow operation
-	assert.Greater(t, duration, 150*time.Millisecond)
-	assert.True(t, slowOp.IsExecuted())
-}
-
-func TestSequentialExecutor_MultipleStopCalls(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-	executor.Start(context.TODO())
-
-	// Multiple stop calls should not panic or cause issues
-	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			executor.Stop(context.TODO())
-		}()
-	}
-
-	// Should not panic
-	wg.Wait()
-}
-
-func TestSequentialExecutor_StopWithoutStart(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-
-	// Stop without start should not panic
-	require.NotPanics(t, func() {
-		executor.Stop(context.TODO())
-	})
-}
-
-func TestSequentialExecutor_SubmitWithoutStart(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-
-	mockOp := createMockOperation(0)
-
-	// Submit without start should work (but operation won't be processed)
-	success := executor.Submit(context.TODO(), mockOp)
-	assert.True(t, success)
-
-	// Operation should not be executed since worker is not running
-	time.Sleep(100 * time.Millisecond)
-	assert.False(t, mockOp.IsExecuted())
-
-	// Note: We don't call executor.Stop() here because there's no worker running
-	// to process the submitted operation, which would cause WaitGroup to hang
-}
-
-func TestSequentialExecutor_ConcurrentSubmits(t *testing.T) {
-	numGoroutines := 50
-	numOpsPerGoroutine := 10
-	totalOps := numGoroutines * numOpsPerGoroutine
-
-	// Use a buffer large enough to hold all operations so none are rejected
-	// due to queue-full (this test focuses on concurrent submit correctness,
-	// not queue-full behavior).
-	executor := NewSequentialExecutor(totalOps)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	var wg sync.WaitGroup
-	var successCount atomic.Int32
-	allOps := make([]*MockOperation, totalOps)
-
-	// Start multiple goroutines submitting operations concurrently
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(startIdx int) {
-			defer wg.Done()
-			for j := 0; j < numOpsPerGoroutine; j++ {
-				opIdx := startIdx*numOpsPerGoroutine + j
-				allOps[opIdx] = createMockOperation(0)
-				if executor.Submit(context.TODO(), allOps[opIdx]) {
-					successCount.Add(1)
-				}
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	// All submits should succeed
-	assert.Equal(t, int32(totalOps), successCount.Load())
-
-	// Wait for all operations to complete
-	time.Sleep(500 * time.Millisecond)
-
-	// All operations should be executed
-	for i, op := range allOps {
-		assert.True(t, op.IsExecuted(), "Operation %d should be executed", i)
-	}
-}
-
-func TestSequentialExecutor_FullBufferContextCancel(t *testing.T) {
-	bufferSize := 2
-	executor := NewSequentialExecutor(bufferSize)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	// Block the worker
-	var workerBlocked sync.WaitGroup
-	workerBlocked.Add(1)
-	blockingOp := createBlockingMockOperation(&workerBlocked)
-	success := executor.Submit(context.TODO(), blockingOp)
-	assert.True(t, success)
-
-	// Give worker time to pick up the blocking op
-	time.Sleep(20 * time.Millisecond)
-
-	// Fill the buffer
-	for i := 0; i < bufferSize; i++ {
-		success := executor.Submit(context.TODO(), createMockOperation(0))
-		assert.True(t, success)
-	}
-
-	// Submit with a cancellable context — should block, then return false on cancel
-	ctx, cancel := context.WithCancel(context.Background())
-	submitResult := make(chan bool, 1)
-	go func() {
-		submitResult <- executor.Submit(ctx, createMockOperation(0))
-	}()
-
-	// Confirm it's blocked
-	select {
-	case <-submitResult:
-		t.Fatal("Submit should block when queue is full")
-	case <-time.After(100 * time.Millisecond):
-		// expected
-	}
-
-	// Cancel the context — Submit should return false
-	cancel()
-
-	select {
-	case result := <-submitResult:
-		assert.False(t, result, "Submit should return false when context is cancelled")
-	case <-time.After(2 * time.Second):
-		t.Fatal("Submit did not unblock after context cancel")
-	}
-
-	// Release the worker
-	workerBlocked.Done()
-}
-
-func TestSequentialExecutor_DoubleStart(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	// Second Start should be a no-op
-	assert.NotPanics(t, func() {
-		executor.Start(context.TODO())
-	})
-}
-
-type PanicMockOperation struct{}
-
-func (p *PanicMockOperation) Execute()           { panic("test panic in executor") }
-func (p *PanicMockOperation) Identifier() string { return "panic-op" }
-
-func TestSequentialExecutor_PanicRecovery(t *testing.T) {
-	executor := NewSequentialExecutor(10)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	// Submit an operation that panics
-	success := executor.Submit(context.TODO(), &PanicMockOperation{})
-	assert.True(t, success)
-
-	// Submit a normal operation after to verify executor still works
-	normalOp := createMockOperation(0)
-	success = executor.Submit(context.TODO(), normalOp)
-	assert.True(t, success)
-
-	// Give time for execution
-	time.Sleep(100 * time.Millisecond)
-	assert.True(t, normalOp.IsExecuted(), "executor should recover from panic and continue")
-}
-
-// TestSequentialExecutor_SubmitWhileDoneClosedButNotMarkedClosed tests the defensive
-// case <-se.done branch in Submit (L130-L133). This simulates the scenario where the
-// done channel is closed but the closed flag hasn't been observed yet by Submit.
-// We bypass Stop() and close done directly to create this state deterministically.
-func TestSequentialExecutor_SubmitReturnsFalseWhenDoneClosed(t *testing.T) {
-	// Buffer size 0: sends always block unless there's a receiver
-	executor := NewSequentialExecutor(0)
-	// Don't start the worker — no goroutine to receive from the channel
-
-	// Directly close the done channel (bypassing Stop), leaving closed=false
-	close(executor.done)
-
-	// Submit: closed is false → passes check → wg.Add(1) → enters select →
-	// can't send to unbuffered queue (no receiver) → <-se.done fires → returns false
-	mockOp := createMockOperation(0)
-	result := executor.Submit(context.Background(), mockOp)
-
-	assert.False(t, result, "Submit should return false when done channel is closed")
-	assert.False(t, mockOp.IsExecuted(), "operation should not be executed")
-}
-
-func TestSequentialExecutor_FullBufferStopUnblocks(t *testing.T) {
-	bufferSize := 2
-	executor := NewSequentialExecutor(bufferSize)
-	executor.Start(context.TODO())
-
-	// Block the worker
-	var workerBlocked sync.WaitGroup
-	workerBlocked.Add(1)
-	blockingOp := createBlockingMockOperation(&workerBlocked)
-	success := executor.Submit(context.TODO(), blockingOp)
-	assert.True(t, success)
-
-	// Give worker time to pick up the blocking op
-	time.Sleep(20 * time.Millisecond)
-
-	// Fill the buffer
-	for i := 0; i < bufferSize; i++ {
-		success := executor.Submit(context.TODO(), createMockOperation(0))
-		assert.True(t, success)
-	}
-
-	// Submit in a goroutine — should block because queue is full
-	submitResult := make(chan bool, 1)
-	go func() {
-		submitResult <- executor.Submit(context.TODO(), createMockOperation(0))
-	}()
-
-	// Confirm it's blocked
-	select {
-	case <-submitResult:
-		t.Fatal("Submit should block when queue is full")
-	case <-time.After(100 * time.Millisecond):
-		// expected
-	}
-
-	// Release the worker first so Stop() can complete (worker needs to drain)
-	workerBlocked.Done()
-
-	// Stop the executor — should unblock the blocked Submit
-	executor.Stop(context.TODO())
-
-	select {
-	case result := <-submitResult:
-		// Submit returns false because the executor is stopping,
-		// OR true if the worker drained fast enough to make space before done closed.
-		// Either outcome is valid — the key point is it doesn't deadlock.
-		_ = result
-	case <-time.After(2 * time.Second):
-		t.Fatal("Submit did not unblock after Stop")
+		mu.Lock()
+		require.Equal(t, accepted, dispatched)
+		mu.Unlock()
 	}
 }

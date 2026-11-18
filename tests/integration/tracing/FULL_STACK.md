@@ -126,10 +126,10 @@ linked mode fails if no exact asynchronous input link is retained.
 
 For every Insert the runner requires either an observed parent path through
 Proxy → actual SN WAL scope → embedded WP client → WP server, or an exact
-`FOLLOWS_FROM(input_trace_id,input_span_id)` from a retained BatchAppendOp Execute
-span whose children reach a WP server. A batch can serve several requests; it is
-not attributed to one arbitrary request parent. Matching service names or nearby
-timestamps are insufficient evidence.
+`FOLLOWS_FROM(input_trace_id,input_span_id)` from a retained `ReplicaAppender/send`
+span (or legacy `BatchAppendOp/Execute`) whose children reach a WP server. A batch
+can serve several requests; it is not attributed to one arbitrary request parent.
+Matching service names or nearby timestamps are insufficient evidence.
 
 The independent `wpdiag trace diagnose` and `wpdiag run --modules trace` must
 produce equal finding semantics for the same request and retained batch trace.

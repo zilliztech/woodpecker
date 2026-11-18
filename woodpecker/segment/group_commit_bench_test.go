@@ -26,14 +26,14 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
-	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
 // BenchmarkGroupCommit measures single-log append throughput through the real
-// executor + AppendOp/BatchAppendOp path with an injected per-round-trip
+// segmentAppender + SequentialExecutor path with an injected per-round-trip
 // latency, isolating the client send-gate that client-side group commit
 // amortizes. It does NOT model the server-side flush/object-storage ceiling, so
 // the numbers are an upper bound on the send-path speedup; real-cluster
@@ -51,7 +51,6 @@ func BenchmarkGroupCommit(b *testing.B) {
 }
 
 func benchGroupCommit(b *testing.B, maxBatchEntries int, rtt time.Duration) {
-	mockHandle := mocks_segment_handle.NewSegmentHandle(b)
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(b)
 	mockClient := mocks_logstore_client.NewLogStoreClient(b)
 
@@ -85,26 +84,33 @@ func benchGroupCommit(b *testing.B, maxBatchEntries int, rtt time.Duration) {
 		}).Maybe()
 
 	var wg sync.WaitGroup
-	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, mock.Anything).
-		Run(func(context.Context, int64) { wg.Done() }).Return().Maybe()
 
 	ctx := context.Background()
 	ops := make([]*AppendOp, b.N)
 	for i := range ops {
 		ops[i] = NewAppendOp("bk", "fp", 1, 2, int64(i), []byte("v"),
-			func(int64, int64, error) {}, mockPool, mockHandle, quorumInfo, nil)
+			func(int64, int64, error) { wg.Done() }, quorumInfo, nil)
 	}
-	exec := NewBatchingSequentialExecutor(b.N+1, maxBatchEntries, 0)
+	cfg := testAppenderConfiguration(config.SegmentAppendConfig{QueueSize: b.N + 1, MaxRetries: 1}, true)
+	g := newSegmentAppender(mockPool, cfg, 1, &proto.SegmentMetadata{SegNo: 2, LastEntryId: -1, Quorum: quorumInfo}, segmentAppendCallbacks{})
+	g.executor.Stop(context.Background())
+	g.executor = NewBatchingSequentialExecutor(b.N+1, maxBatchEntries, 0, g.dispatch)
+	defer func() { g.stop(); g.wait() }()
 	wg.Add(b.N)
 
 	b.ResetTimer()
 	for _, op := range ops {
-		exec.Submit(ctx, op)
+		reservation, err := g.reserve(ctx, op.Size())
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !submitTestAppend(g, ctx, op, reservation) {
+			b.Fatal("submit failed")
+		}
 	}
-	exec.Start(ctx)
+	g.executor.Start(ctx)
 	wg.Wait()
 	b.StopTimer()
-	exec.Stop(ctx)
 
 	secs := b.Elapsed().Seconds()
 	if secs > 0 {

@@ -24,11 +24,12 @@ woodpecker:
   # Configuration of Woodpecker Client.
   client:
     segmentAppend:
-      queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
-      maxRetries: 3 # Maximum number of retries for segment append operations
-      maxBatchEntries: 1000 # Client-side group commit: max consecutive appends coalesced into one AddEntries request. Opportunistic (only batches already-queued ops, adds no latency at low load). Set to 1 to disable batching.
-      maxBatchBytes: 2000000 # Max total payload (bytes) of a coalesced batch, default 2MB; whichever of maxBatchEntries/maxBatchBytes is hit first bounds the batch. Ignored when maxBatchEntries <= 1.
-      sendTimeout: 2000 # Milliseconds allowed for sending an append to one replica: opening the stream and receiving its first (buffered) response. Every later append of the log waits while a send does, so a replica that has not answered by then is taken as unreachable and the segment rolls away from it. Default 2000.
+      queueSize: 10000 # Per-segment entry limit until all replica outcomes and callbacks finish, in both modes.
+      maxRetries: 3 # Total attempts per entry and replica, including the first send; 0 or 1 disables retries.
+      maxBatchEntries: 1000 # Max queued entries per batch without waiting for more; <= 1 disables batching.
+      maxBatchBytes: 2000000 # Batch payload threshold in bytes; the last entry may exceed it; <= 0 disables it.
+      maxPendingBytes: 64MB # Per-segment retained payload budget in both modes; 0 uses 64 MiB, with one oversized entry allowed when empty.
+      sendTimeout: 2000 # Remote stream opening through the first response in ms, excluding final ACKs; 0 uses 2000ms.
     segmentRollingPolicy:
       maxSize: 256000000 # Maximum segment size in bytes, default is 256MB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes

@@ -8969,8 +8969,12 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
     prefix: <span class="hl-str">woodpecker</span>
   <span class="hl-kw">client</span>:
     <span class="hl-kw">segmentAppend</span>:
-      queueSize: <span class="hl-num">100</span>            <span class="hl-cm"># max queued append requests</span>
-      maxRetries: <span class="hl-num">2</span>             <span class="hl-cm"># max retries per append</span>
+      queueSize: <span class="hl-num">100</span>            <span class="hl-cm"># admitted entries per segment through all replica outcomes and callbacks</span>
+      maxRetries: <span class="hl-num">2</span>             <span class="hl-cm"># total attempts per entry and replica, including the first send</span>
+      maxBatchEntries: <span class="hl-num">1000</span>     <span class="hl-cm"># queued entries per batch; no wait for more entries</span>
+      maxBatchBytes: <span class="hl-num">2000000</span>     <span class="hl-cm"># payload threshold; the last entry may exceed it</span>
+      maxPendingBytes: <span class="hl-num">0</span>        <span class="hl-cm"># retained payload budget in both modes; 0 uses 64 MiB</span>
+      sendTimeout: <span class="hl-num">2000</span>         <span class="hl-cm"># ms per remote send attempt through its first response</span>
     <span class="hl-kw">segmentRollingPolicy</span>:
       maxSize: <span class="hl-num">100000000</span>        <span class="hl-cm"># 100MB per segment</span>
       maxInterval: <span class="hl-num">800</span>          <span class="hl-cm"># seconds between rolls</span>
@@ -9018,11 +9022,16 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
             </div>
 
             <h2>Client Configuration</h2>
+            <p>The defaults below are built into the client. The repository's <code>config/woodpecker.yaml</code> explicitly overrides <code>queueSize</code> to 10000 and <code>maxRetries</code> to 3. Append admission limits apply per writable segment handle, not to the whole client process.</p>
+            <p><code>sendTimeout</code> is not an overall append, OpenWriter or Fence deadline. After sending, each entry's final ACK read has a separate internal 30-second budget in both modes, including reads within a batch. Each retry gets fresh attempt budgets.</p>
             <table class="doc-table">
                 <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
-                <tr><td>segmentAppend.queueSize</td><td>Maximum queued segment append requests</td><td>100</td></tr>
-                <tr><td>segmentAppend.maxRetries</td><td>Maximum retries for append operations</td><td>2</td></tr>
-                <tr><td>segmentAppend.sendTimeout</td><td>Time allowed for sending an append to one replica (opening the stream and its first response), in ms; a replica that misses it is treated as unreachable</td><td>2000</td></tr>
+                <tr><td>segmentAppend.queueSize</td><td>Positive entry-count admission limit in both modes, covering queued, sending, ACK-waiting and retrying entries until all replica outcomes and the ordered callback finish, even after quorum success.</td><td>100</td></tr>
+                <tr><td>segmentAppend.maxRetries</td><td>Total attempts per entry and replica, including the initial send. 0 or 1 disables retries. Both modes retry eligible send/ACK failures on the affected replica; non-retryable failure or exhaustion requests rolling, even after quorum success.</td><td>2</td></tr>
+                <tr><td>segmentAppend.maxBatchEntries</td><td>Maximum consecutive queued entries per dispatched batch in both modes. Service mode sends one AddEntries RPC per replica; embedded mode uses local calls. Does not wait for more entries. Values &le; 1 disable batching; retries are individual.</td><td>1000</td></tr>
+                <tr><td>segmentAppend.maxBatchBytes</td><td>Payload threshold for stopping batch collection. The last entry may exceed it; an oversized first entry is sent alone. Values &le; 0 disable the threshold; ignored when maxBatchEntries &le; 1. This is not a strict RPC-size limit. The YAML string 2MB means 2097152 bytes, unlike the numeric default.</td><td>2000000 bytes</td></tr>
+                <tr><td>segmentAppend.maxPendingBytes</td><td>Admitted payload budget in both modes, counted once per entry, with the same credit lifetime as queueSize. Retries reuse credits. 0 uses 64 MiB; one oversized entry may enter when empty. Excludes transport buffers and bookkeeping.</td><td>0 &rarr; 64 MiB</td></tr>
+                <tr><td>segmentAppend.sendTimeout</td><td>Milliseconds per remote AddEntry/AddEntries attempt, from stream opening through the first response (normally Buffered), including connection readiness waits inside the RPC. Excludes admission, client-pool lookup and final ACK reads. Embedded local calls do not use it. 0 uses 2000ms.</td><td>2000</td></tr>
                 <tr><td>grpc.dialTimeout</td><td>Time allowed for one connection attempt to a logstore, in ms (gRPC MinConnectTimeout); also bounds a call to an address that never answers</td><td>1000</td></tr>
                 <tr><td>grpc.connectBackoff.baseDelay</td><td>First delay before reconnecting after a failed attempt, in ms</td><td>100</td></tr>
                 <tr><td>grpc.connectBackoff.multiplier</td><td>Growth factor of the reconnect delay</td><td>1.6</td></tr>

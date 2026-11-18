@@ -186,8 +186,8 @@ woodpecker:
     prefix: woodpecker # The Prefix of the metadata provider. default is woodpecker.
   client:
     segmentAppend:
-      queueSize: 10000 # The size of the queue for pending messages to be sent of each log.
-      maxRetries: 3 # Maximum number of retries for segment append operations.
+      queueSize: 10000 # Per-segment entry limit until all replica outcomes and callbacks finish, in both modes.
+      maxRetries: 3 # Total attempts per entry and replica, including the first send; 1 disables retries, 0 keeps the base config.
     segmentRollingPolicy:
       maxSize: 256M # Maximum size of a segment.
       maxInterval: 10m # Maximum interval between two segments, default is 10 minutes.

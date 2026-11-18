@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -39,8 +38,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
-	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
@@ -117,16 +116,9 @@ func appendTraceFixture(t *testing.T, fail bool) (*tracetest.InMemoryExporter, c
 
 func queuedTraceOp(t *testing.T, ctx context.Context, id int64, pool client.LogStoreClientPool, q *proto.QuorumInfo, fail bool) *AppendOp {
 	t.Helper()
-	handle := mocks_segment_handle.NewSegmentHandle(t)
-	if fail {
-		handle.EXPECT().HandleAppendRequestFailure(mock.Anything, id, mock.Anything, 0, q.Nodes[0]).Return().Once()
-	} else {
-		handle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, id).Return().Once()
-	}
 	// Use the production queue-capture boundary, then replace only the ack sink.
-	s := &segmentHandleImpl{bucketName: "fixture", rootPath: "trace", logId: 9007199254740993, segmentId: 7, ClientPool: pool, quorumInfo: q}
-	op := s.createPendingAppendOp(ctx, []byte("trace-fixture"), id, func(int64, int64, error) {})
-	op.handle = handle
+	g := &segmentAppender{bucketName: "fixture", rootPath: "trace", logId: 9007199254740993, segmentId: 7, pool: pool, quorumInfo: q}
+	op := g.createPendingAppendOp(ctx, []byte("trace-fixture"), id, func(int64, int64, error) {})
 	return op
 }
 
@@ -200,14 +192,11 @@ func TestAppendTraceSingleRemote(t *testing.T) {
 			cancel()
 			parent.End()
 			// An expired request must not newly cancel an already queued append.
-			executor := NewSequentialExecutor(4)
-			executor.Start(context.Background())
-			require.True(t, executor.Submit(context.Background(), op))
-			executor.Stop(context.Background())
-			waitAckGoroutinesDone(t, op)
-			execution := traceSpan(t, exporter, "AppendOp", "Execute")
+			executeTraceOps(t, []*AppendOp{op}, pool, quorum, fail)
+			execution := traceSpan(t, exporter, "ReplicaAppender", "send")
 			require.Equal(t, parentSC.TraceID(), execution.SpanContext.TraceID())
 			require.Equal(t, parentSC.SpanID(), execution.Parent.SpanID())
+			require.Empty(t, execution.Links, "a single entry uses its parent without a duplicate link that can replace CHILD_OF in Jaeger")
 			assertRemoteTrace(t, exporter, "AddEntry", parentSC.TraceID())
 			writeTraceReceipt(t, name, execution, parentSC)
 		})
@@ -222,12 +211,8 @@ func TestAppendTraceBatchRemote(t *testing.T) {
 	ops := []*AppendOp{queuedTraceOp(t, ctx1, 21, pool, quorum, false), queuedTraceOp(t, ctx2, 22, pool, quorum, false), queuedTraceOp(t, ctx1, 23, pool, quorum, false)}
 	parent1.End()
 	parent2.End()
-	batch := NewBatchAppendOp(ops)
-	batch.Execute()
-	for _, op := range ops {
-		waitAckGoroutinesDone(t, op)
-	}
-	execution := traceSpan(t, exporter, "BatchAppendOp", "Execute")
+	executeTraceOps(t, ops, pool, quorum, false)
+	execution := traceSpan(t, exporter, "ReplicaAppender", "send")
 	require.False(t, execution.Parent.IsValid(), "independent requests are linked, not assigned an arbitrary common parent")
 	require.NotEqual(t, sc1.TraceID(), execution.SpanContext.TraceID())
 	require.NotEqual(t, sc2.TraceID(), execution.SpanContext.TraceID())
@@ -244,10 +229,10 @@ func TestAppendTraceLinkIdentityAndUntracedInputs(t *testing.T) {
 	_, child := otel.Tracer("upstream-fixture").Start(ctx, "other-message")
 	defer parent.End()
 	defer child.End()
-	batch := NewBatchAppendOp([]*AppendOp{{traceParent: parent.SpanContext()}, {traceParent: child.SpanContext()}, {}, {traceParent: parent.SpanContext()}})
-	require.Len(t, batch.traceLinks(), 2, "different spans within one trace retain their distinct identities")
-	// Zero-entry execution remains a no-op, including when tracing is enabled.
-	NewBatchAppendOp(nil).Execute()
+	ops := []*AppendOp{{traceParent: parent.SpanContext()}, {traceParent: child.SpanContext()}, {}, {traceParent: parent.SpanContext()}}
+	require.Len(t, appendTraceLinks(ops), 2, "different spans within one trace retain their distinct identities")
+	// Empty input creates no links or spans, including when tracing is enabled.
+	require.Empty(t, appendTraceLinks(nil))
 	require.Empty(t, exporter.GetSpans())
 }
 
@@ -263,17 +248,48 @@ func TestAppendTraceSamplingAndLinkLimits(t *testing.T) {
 	for i := byte(1); i <= 3; i++ {
 		contexts = append(contexts, trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{i}, SpanID: trace.SpanID{i}, TraceFlags: trace.FlagsSampled}))
 	}
-	NewBatchAppendOp([]*AppendOp{{traceParent: contexts[0], quorumInfo: &proto.QuorumInfo{}}, {traceParent: contexts[1]}, {traceParent: contexts[2]}}).Execute()
-	batch := traceSpan(t, exporter, "BatchAppendOp", "Execute")
+	pool := &appenderTestPool{clients: map[string]*appenderTestClient{"node": {send: ackEntries}}}
+	quorum := &proto.QuorumInfo{Nodes: []string{"node"}, Wq: 1, Aq: 1, Es: 1}
+	executeTraceOps(t, []*AppendOp{{entryId: 0, traceParent: contexts[0]}, {entryId: 1, traceParent: contexts[1]}, {entryId: 2, traceParent: contexts[2]}}, pool, quorum, false)
+	batch := traceSpan(t, exporter, "ReplicaAppender", "send")
 	require.Len(t, batch.Links, 2)
 	require.Equal(t, 1, batch.DroppedLinks)
 	// A single queued unsampled request must not be forced into sampling.
 	unsampled := trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{9}, SpanID: trace.SpanID{9}})
-	(&AppendOp{traceParent: unsampled, quorumInfo: &proto.QuorumInfo{}}).Execute()
+	executeTraceOps(t, []*AppendOp{{traceParent: unsampled}}, pool, quorum, false)
 	for _, span := range exporter.GetSpans() {
 		require.NotEqual(t, unsampled.TraceID(), span.SpanContext.TraceID())
 	}
-	(&AppendOp{quorumInfo: &proto.QuorumInfo{}}).Execute()
-	root := traceSpan(t, exporter, "AppendOp", "Execute")
+	executeTraceOps(t, []*AppendOp{{}}, pool, quorum, false)
+	root := traceSpan(t, exporter, "ReplicaAppender", "send")
 	require.False(t, root.Parent.IsValid())
+}
+
+// Exercise the owned executor as well as the actual transport. Starting the
+// executor after publication makes batch membership deterministic in this test.
+func executeTraceOps(t *testing.T, ops []*AppendOp, pool client.LogStoreClientPool, quorum *proto.QuorumInfo, fail bool) {
+	t.Helper()
+	results := make(chan error, len(ops))
+	cfg := testAppenderConfiguration(config.SegmentAppendConfig{QueueSize: len(ops) + 1, MaxRetries: 1}, true)
+	first := ops[0]
+	g := newSegmentAppender(pool, cfg, first.logId, &proto.SegmentMetadata{SegNo: first.segmentId, LastEntryId: first.entryId - 1, Quorum: quorum}, segmentAppendCallbacks{})
+	defer func() { g.stop(); g.wait() }()
+	g.executor.Stop(context.Background())
+	g.executor = NewBatchingSequentialExecutor(len(ops)+1, len(ops), 0, g.dispatch)
+	for _, original := range ops {
+		op := NewAppendOp(g.bucketName, g.rootPath, g.logId, g.segmentId, original.entryId, original.value, func(_, _ int64, err error) { results <- err }, quorum, nil)
+		op.traceParent = original.traceParent
+		reservation, err := g.reserve(context.Background(), op.Size())
+		require.NoError(t, err)
+		require.True(t, submitTestAppend(g, context.Background(), op, reservation))
+	}
+	g.executor.Start(context.Background())
+	for range ops {
+		result := receive(t, results)
+		if fail {
+			require.Error(t, result)
+		} else {
+			require.NoError(t, result)
+		}
+	}
 }
