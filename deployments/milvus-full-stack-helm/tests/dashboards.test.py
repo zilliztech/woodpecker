@@ -61,6 +61,34 @@ class DashboardTests(unittest.TestCase):
             self.assertTrue(target["expr"].endswith(" * 1000"))
         self.assertNotIn(" * 1000", dashboards.latency("Example", "wp_latency")["targets"][0]["expr"])
 
+    def test_open_writer_recovery_panels_follow_client_targets_across_logs(self):
+        templates = ROOT.parents[1] / "tests"
+        k8s = json.loads((templates / "k8s/monitor/grafana/templates/dashboard_client_k8s.json").read_text())
+        packaged = json.loads((dashboards.DEST / "woodpecker-client.json").read_text())
+        self.assertEqual(k8s["panels"], packaged["panels"])
+        docker = json.loads((templates / "docker/monitor/grafana/templates/dashboard_client.json").read_text())
+        for dashboard, datasource in [(docker, "__DATASOURCE_UID__"), (k8s, "${prometheus}")]:
+            rows = [p["title"] for p in dashboard["panels"] if p["type"] == "row"]
+            self.assertEqual(rows[rows.index("Log Handle Operations") + 1], "OpenWriter Recovery")
+            plots = [p for p in dashboard["panels"] if any("open_writer_" in target.get("expr", "")
+                     for target in p.get("targets", []))]
+            self.assertEqual(len(plots), 4)
+            for plot in plots:
+                self.assertEqual(plot["datasource"]["uid"], datasource)
+                for target in plot["targets"]:
+                    expr = target["expr"]
+                    self.assertIn("woodpecker_id=", expr)
+                    self.assertNotIn("log_ns", expr)
+                    self.assertNotIn("log_id", expr)
+                    self.assertNotIn("$", checker.expand(expr, {}))
+        stage = next(s for s in dashboards.definitions()[0][3] if s["key"] == "wp-client")
+        recovery = [p for p in stage["probes"] if "open_writer_" in p["metric"]]
+        self.assertEqual(len(recovery), 2)
+        for probe in recovery:
+            self.assertFalse(probe["required"])
+            self.assertIn('component="streamingnode"', probe["expression"])
+            self.assertNotRegex(probe["expression"], "log_ns|log_id|channel_name")
+
     def test_quota_reduction_and_memory_join_explain_observed_backpressure(self):
         stages = dashboards.definitions()[0][3]
         quota = next(plot for plot in stages[0]["plots"] if "Quota write-rate reduction" in plot["title"])

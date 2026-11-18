@@ -42,7 +42,7 @@ def expand(expression, defaults):
                  "app_name": "milvus", "collection": ".*",
                  "pod": "milvus-(datanode|mixcoord|proxy|querynode|streamingnode).*",
                  "woodpecker_id": "milvus", "log_ns": ".*", "log_id": ".*",
-                 "node_id": ".*", "__rate_interval": "1m", "__interval": "1m",
+                 "node_id": ".*", "__rate_interval": "1m", "__interval": "1m", "__range": "30m",
                  "channel": ".*",
                  "__interval_ms": "15000", "__from": str((now - 1800) * 1000),
                  "__to": str(now * 1000), "__fromTime": str(now - 1800),

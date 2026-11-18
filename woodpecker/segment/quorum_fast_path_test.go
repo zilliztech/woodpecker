@@ -25,13 +25,17 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
@@ -93,6 +97,55 @@ func captureQuorumLogs(t *testing.T) *observer.ObservedLogs {
 	core, logs := observer.New(zap.InfoLevel)
 	t.Cleanup(logger.ReplaceGlobals(zap.New(core)))
 	return logs
+}
+
+// Compare deltas because other recovery tests use the same process-wide collectors.
+type recoveryObservation struct {
+	count uint64
+	ms    float64
+}
+
+func trackRecoveryMetrics(t *testing.T) func(map[string]recoveryObservation) {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(metrics.WpClientOpenWriterQuorumLatency, metrics.WpClientOpenWriterReplicaTaskLatency)
+	snapshot := func() map[string]recoveryObservation {
+		families, err := reg.Gather()
+		require.NoError(t, err)
+		samples := map[string]recoveryObservation{}
+		for _, family := range families {
+			kind := "quorum"
+			if family.GetName() == "woodpecker_client_open_writer_replica_task_latency" {
+				kind = "task"
+			}
+			for _, item := range family.Metric {
+				labels := map[string]string{}
+				for _, label := range item.Label {
+					labels[label.GetName()] = label.GetValue()
+				}
+				h := item.GetHistogram()
+				samples[kind+"/"+labels["operation"]+"/"+labels["result"]] = recoveryObservation{h.GetSampleCount(), h.GetSampleSum()}
+			}
+		}
+		return samples
+	}
+	before := snapshot()
+	return func(want map[string]recoveryObservation) {
+		t.Helper()
+		diff := map[string]recoveryObservation{}
+		for key, after := range snapshot() {
+			base := before[key]
+			if after.count != base.count {
+				diff[key] = recoveryObservation{after.count - base.count, after.ms - base.ms}
+			}
+		}
+		require.Len(t, diff, len(want), "observations: %v", diff)
+		for key, sample := range want {
+			require.Contains(t, diff, key)
+			require.Equal(t, sample.count, diff[key].count, key)
+			require.InDelta(t, sample.ms, diff[key].ms, 0.00001, key)
+		}
+	}
 }
 
 func TestFenceQuorumEqualTailsLetSlowReplicaFinish(t *testing.T) {
@@ -394,11 +447,16 @@ func TestCompleteQuorumWaitsForOnlyReplicaThatCanCompact(t *testing.T) {
 	h, q := newQuorumFastHandle(clients, "service")
 	var lac int64
 	synctest.Test(t, func(t *testing.T) {
+		check := trackRecoveryMetrics(t)
 		lac, err = h.fenceSegmentQuorum(t.Context(), q, returnOnSafeQuorum)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, lac)
 		// Virtual time advances to A's reply after the fast replies have arrived.
 		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, lac, returnOnSafeQuorum))
+		check(map[string]recoveryObservation{
+			"quorum/fence/all_replies_success": {1, 0}, "task/fence/success": {2, 0}, "task/fence/error": {1, 0},
+			"quorum/complete/all_replies_success": {1, 1000}, "task/complete/success": {3, 1000},
+		})
 	})
 	size, err := covering.Compact(ctx, lac)
 	require.NoError(t, err)
@@ -495,9 +553,62 @@ func TestCompleteQuorumSingleEmbeddedReplica(t *testing.T) {
 	}
 }
 
+func TestRecoverySingleReplicaMetrics(t *testing.T) {
+	for _, tc := range []struct {
+		name, quorumResult, taskResult string
+		rpcErr                         error
+	}{
+		{"success", "all_replies_success", "success", nil},
+		{"caller already canceled", "canceled", "", nil},
+		{"RPC deadline", "deadline_exceeded", "deadline_exceeded", status.Error(codes.DeadlineExceeded, "late")},
+		{"RPC cancellation", "canceled", "canceled", status.Error(codes.Canceled, "canceled")},
+		{"RPC unavailable", "error", "error", status.Error(codes.Unavailable, "offline")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				check := trackRecoveryMetrics(t)
+				reply := func(context.Context) (int64, error) {
+					time.Sleep(250 * time.Microsecond)
+					return 1, tc.rpcErr
+				}
+				replica := &quorumFastClient{fence: reply, complete: func(ctx context.Context, _ int64) (int64, error) {
+					return reply(ctx)
+				}}
+				h, q := newQuorumFastHandle([]*quorumFastClient{replica}, "local")
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if tc.taskResult == "" {
+					cancel()
+				}
+				_, fenceErr := h.fenceSegmentQuorum(ctx, q, returnOnSafeQuorum)
+				completeErr := h.completeSegmentQuorum(ctx, q, 1, returnOnSafeQuorum)
+				if tc.taskResult == "" {
+					require.ErrorIs(t, fenceErr, context.Canceled)
+					require.ErrorIs(t, completeErr, context.Canceled)
+					check(map[string]recoveryObservation{"quorum/fence/canceled": {1, 0}, "quorum/complete/canceled": {1, 0}})
+					return
+				}
+				require.Equal(t, tc.rpcErr, fenceErr)
+				completeResult := "all_replies_success"
+				if tc.rpcErr != nil {
+					require.ErrorIs(t, completeErr, werr.ErrAppendOpQuorumFailed)
+					completeResult = "error"
+				} else {
+					require.NoError(t, completeErr)
+				}
+				check(map[string]recoveryObservation{
+					"quorum/fence/" + tc.quorumResult: {1, 0.25}, "task/fence/" + tc.taskResult: {1, 0.25},
+					"quorum/complete/" + completeResult: {1, 0.25}, "task/complete/" + tc.taskResult: {1, 0.25},
+				})
+			})
+		})
+	}
+}
+
 func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
 	logs := captureQuorumLogs(t)
 	synctest.Test(t, func(t *testing.T) {
+		check := trackRecoveryMetrics(t)
 		const tail int64 = 100
 		releaseFence := make(chan struct{})
 		completed := make(chan error, 1)
@@ -545,9 +656,17 @@ func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
 			require.EqualValues(t, 2, decision[0].ContextMap()["receivedCount"])
 			require.EqualValues(t, 3, decision[0].ContextMap()["nodeCount"])
 		}
-		time.Sleep(50 * time.Millisecond)
+		check(map[string]recoveryObservation{
+			"quorum/fence/early_success": {1, 0}, "quorum/complete/early_success": {1, 0},
+			"task/fence/success": {2, 0}, "task/complete/success": {2, 0},
+		})
+		time.Sleep(50250 * time.Microsecond)
 		close(releaseFence)
 		synctest.Wait()
+		check(map[string]recoveryObservation{
+			"quorum/fence/early_success": {1, 0}, "quorum/complete/early_success": {1, 0},
+			"task/fence/success": {3, 50.25}, "task/complete/success": {3, 50.25},
+		})
 		require.Len(t, completed, 1, "the same replica must now complete at the chosen target")
 		require.NoError(t, <-completed)
 		results := logs.FilterMessage("Segment replica RPC succeeded")
@@ -560,7 +679,7 @@ func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
 		for _, entry := range late {
 			require.Equal(t, zap.InfoLevel, entry.Level)
 			require.Equal(t, tail, entry.ContextMap()["lastEntryId"])
-			require.Equal(t, 50*time.Millisecond, entry.ContextMap()["duration"])
+			require.Equal(t, 50250*time.Microsecond, entry.ContextMap()["duration"])
 		}
 	})
 }
@@ -595,12 +714,17 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		require.Equal(t, len(q.Nodes), pool.Cap())
 
 		// Only the slow replica covers the target. Its Complete is still queued when the caller times out.
+		check := trackRecoveryMetrics(t)
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, target, returnOnSafeQuorum), context.DeadlineExceeded)
 		require.Same(t, pool, h.quorumRPCPool)
 		close(releaseFence)
 		synctest.Wait()
+		check(map[string]recoveryObservation{
+			"quorum/complete/deadline_exceeded": {1, 1000}, "task/complete/deadline_exceeded": {1, 1000},
+			"task/complete/success": {2, 0}, "task/fence/success": {1, 1000},
+		})
 		require.Zero(t, slowCompletes)
 		require.Empty(t, h.pendingReplicaTasks)
 		require.Nil(t, h.quorumRPCPool)
@@ -625,6 +749,7 @@ func TestRecoveryBackgroundTimeoutStartsAfterQuorum(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			logs := captureQuorumLogs(t)
 			synctest.Test(t, func(t *testing.T) {
+				check := trackRecoveryMetrics(t)
 				stopped := make(chan error, 1)
 				hang := func(ctx context.Context) (int64, error) {
 					<-ctx.Done()
@@ -668,6 +793,10 @@ func TestRecoveryBackgroundTimeoutStartsAfterQuorum(t *testing.T) {
 				require.Equal(t, false, fields["skippedInQueue"])
 				require.Equal(t, errReplicaGracePeriodExpired.Error(), fields["cancelCause"])
 				require.Equal(t, 3*openWriterReplicaGracePeriod, fields["duration"])
+				check(map[string]recoveryObservation{
+					"quorum/" + phase + "/early_success": {1, 60000}, "task/" + phase + "/success": {2, 120000},
+					"task/" + phase + "/grace_expired": {1, 90000},
+				})
 			})
 		})
 	}

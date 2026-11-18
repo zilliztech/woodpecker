@@ -586,6 +586,8 @@ func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 // TestSegmentHandle_Rolling_AutoCompleteAndClose tests that when segment is marked as rolling
 // and all pending appendOps are completed, the segment automatically triggers completion
 func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
+	checkRecovery := trackRecoveryMetrics(t)
+	defer checkRecovery(nil)
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -913,6 +915,8 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 // TestSegmentHandle_ForceCompleteAndClose_WithRollingState tests ForceCompleteAndClose behavior
 // when segment is in rolling state
 func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
+	checkRecovery := trackRecoveryMetrics(t)
+	defer checkRecovery(nil)
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)

@@ -68,6 +68,8 @@ def definitions():
     query_fn = proxy + ',function_name=~"Search|Query|HybridSearch"'
     wp = 'component="woodpecker",' + LOG
     client = 'component!="woodpecker",' + LOG
+    recovery_client = 'component="streamingnode"'
+    recovery_quorum = "woodpecker_client_open_writer_quorum_latency"
     c_labels = "pod,log_id"
     n_labels = "pod,node_id,log_id"
     ch_labels = "pod,channel_name"
@@ -122,12 +124,18 @@ def definitions():
               ], [probe("milvus_wal_append_message_duration_seconds_count", sn, True), probe("milvus_wal_impls_append_message_duration_seconds_count", sn, True)]),
         stage("wp-client", "4. WP Client inside Milvus — pending appends and replica results",
               "The WP client runs inside SN; it is not a separate Pod. Compare pending appends and writer outcomes with per-log append latency. "
-              "Replica counters are attempts, not acknowledged Milvus rows. For failing/slow replicas continue to stage 5; use wp meta log list and wp node list to resolve identities.", [
+              "Replica counters are attempts, not acknowledged Milvus rows. For failing/slow replicas continue to stage 5; use wp meta log list and wp node list to resolve identities. "
+              "During OpenWriter recovery, compare the foreground Fence and Complete phases across logs. "
+              "Open the WP client reference dashboard for slow replica tasks and grace expiry.", [
                   latency("WP append latency", "woodpecker_client_append_latency", c_labels, client),
                   line("Pending append operations", gauge("woodpecker_client_segment_handle_pending_append_ops", c_labels, client, "sum"), legend="{{pod}} log={{log_id}}"),
                   line("Writer outcomes / second", rate("woodpecker_client_writer_operation_latency_count", "pod,log_id,status", client + ',operation="write"'), "ops", "{{pod}} log={{log_id}} {{status}}"),
                   line("Replica append outcomes / second", rate("woodpecker_client_replica_append_total", "pod,log_id,status", client), "ops", "{{pod}} log={{log_id}} {{status}}"),
-              ], [probe("woodpecker_client_append_requests_total", client, True), probe("woodpecker_client_segment_handle_pending_append_ops", client, True)]),
+                  latency("OpenWriter foreground recovery latency", recovery_quorum, "pod,operation", recovery_client),
+                  line("OpenWriter foreground outcomes / second", rate(recovery_quorum + "_count", "pod,operation,result", recovery_client),
+                       "ops", "{{pod}} {{operation}} {{result}}", "One outcome per segment and recovery phase across all logs."),
+              ], [probe("woodpecker_client_append_requests_total", client, True), probe("woodpecker_client_segment_handle_pending_append_ops", client, True),
+                  probe(recovery_quorum + "_count", recovery_client), probe("woodpecker_client_open_writer_replica_task_latency_count", recovery_client)]),
         stage("wp-server", "5. WP services — append, buffer wait and local disk flush",
               "Compare individual nodes rather than only a cluster-wide quantile. High buffer wait plus flush time suggests local disk/sync pressure. "
               "Check scheduler queues and node resources before changing concurrency. wp ops, wp node log-health and component logs provide the next evidence.", [
