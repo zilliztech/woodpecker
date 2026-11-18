@@ -22,13 +22,17 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
@@ -185,8 +189,8 @@ func TestFenceQuorumFallbackHonorsCallerDeadline(t *testing.T) {
 	}
 }
 
-func TestCompleteQuorumDoesNotWaitForEqualLocalTails(t *testing.T) {
-	for _, tails := range [][]int64{{100, 100}, {100, 90}, {90, 80}} {
+func TestCompleteQuorumWithCoveringReplicaCancelsStraggler(t *testing.T) {
+	for _, tails := range [][]int64{{100, 100}, {100, 90}, {90, 101}} {
 		t.Run(fmt.Sprint(tails), func(t *testing.T) {
 			entered, exited := make(chan struct{}), make(chan struct{})
 			clients := []*quorumFastClient{{complete: func(ctx context.Context, _ int64) (int64, error) {
@@ -208,6 +212,85 @@ func TestCompleteQuorumDoesNotWaitForEqualLocalTails(t *testing.T) {
 			require.EqualValues(t, 100, <-targets)
 			require.EqualValues(t, 100, <-targets)
 			waitQuorumWorker(t, exited)
+		})
+	}
+}
+
+func TestCompleteQuorumWaitsForOnlyReplicaThatCanCompact(t *testing.T) {
+	ctx := t.Context()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	store := mocks_objectstorage.NewObjectStorage(t)
+	missing := errors.New("remote footer missing")
+	store.EXPECT().StatObject(mock.Anything, "bucket", "root/1/0/footer.blk", mock.Anything, mock.Anything).Return(0, false, missing)
+	store.EXPECT().IsObjectNotExistsError(missing).Return(true)
+	store.EXPECT().PutObject(mock.Anything, "bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	covering, err := stagedstorage.NewStagedFileWriter(ctx, "bucket", "root", t.TempDir(), 1, 0, store, cfg)
+	require.NoError(t, err)
+	defer covering.Close(ctx)
+	for id := int64(0); id <= 1; id++ {
+		_, err := covering.WriteDataAsync(ctx, id, []byte("entry"), nil)
+		require.NoError(t, err)
+	}
+
+	// Only A holds entry 1. C misses Fence, then rejoins B to finalize at
+	// target 1. Both report their actual local tail, which is still 0.
+	partial := func(context.Context, int64) (int64, error) { return 0, nil }
+	clients := []*quorumFastClient{
+		{fence: covering.Fence, complete: func(ctx context.Context, lac int64) (int64, error) {
+			select {
+			case <-ctx.Done():
+				return -1, ctx.Err()
+			case <-time.After(time.Second):
+				return covering.Finalize(ctx, lac)
+			}
+		}},
+		{fence: func(context.Context) (int64, error) { return 0, nil }, complete: partial},
+		{fence: func(context.Context) (int64, error) { return -1, errors.New("fence unavailable") }, complete: partial},
+	}
+	h, q := newQuorumFastHandle(clients, "service")
+	lac, err := h.fenceSegmentQuorum(ctx, q)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, lac)
+
+	// Virtual time advances to A's reply only once both fast replies have
+	// been processed and the collector is waiting for A.
+	synctest.Test(t, func(t *testing.T) {
+		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, lac))
+	})
+	size, err := covering.Compact(ctx, lac)
+	require.NoError(t, err)
+	require.Positive(t, size)
+}
+
+func TestCompleteQuorumWithoutCoverageWaitsForLastOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		replyAfter time.Duration
+		wantErr    error
+	}{
+		{"last replica returns an error", time.Second, nil},
+		{"caller deadline expires first", time.Minute, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				partial := func(context.Context, int64) (int64, error) { return 90, nil }
+				h, q := newQuorumFastHandle([]*quorumFastClient{
+					{complete: partial},
+					{complete: partial},
+					{complete: func(ctx context.Context, _ int64) (int64, error) {
+						select {
+						case <-time.After(tc.replyAfter):
+							return -1, errors.New("replica unavailable")
+						case <-ctx.Done():
+							return -1, ctx.Err()
+						}
+					}},
+				}, "service")
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+				defer cancel()
+				require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, 100), tc.wantErr)
+			})
 		})
 	}
 }

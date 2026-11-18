@@ -1044,7 +1044,7 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 
 // doCloseWritingWithoutMetaUnsafe stops the local writable handle after completion
 // fails, but deliberately leaves coordinator metadata Active. Publishing Completed is
-// only valid after Aq replicas have finalized and locally cover the fixed target LAC.
+// only valid after Aq replicas have finalized at the fixed target LAC.
 func (s *segmentHandleImpl) doCloseWritingWithoutMetaUnsafe(ctx context.Context, lastFlushedEntryId int64) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "CloseWithoutMeta")
 	defer sp.End()
@@ -1230,7 +1230,7 @@ func (s *segmentHandleImpl) completePrepared(ctx context.Context, quorumInfo *pr
 // ackQuorum of them to finalize at lac before Completed metadata may be published. A
 // replica whose local tail stops below lac still counts: it has durably recorded the
 // boundary, which is what stops a competing writer from closing the segment elsewhere.
-// How many replicas locally cover lac is tracked separately and reported, not enforced.
+// Early return also requires a finalized replica with enough local data to compact.
 func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, lac int64) error {
 	nodeCount := len(quorumInfo.Nodes)
 	ackQuorum := int(quorumInfo.Aq)
@@ -1240,7 +1240,7 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	// even after the collector returns.
 	rpcCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	earlyQuorum := s.cfg != nil && s.cfg.Woodpecker.Storage.Type == "service" && ackQuorum > 0
+	earlyQuorum := s.cfg != nil && s.cfg.Woodpecker.Storage.IsStorageService() && ackQuorum > 0
 
 	// Channel to collect results from all nodes
 	resultChan := make(chan nodeCompleteResult, nodeCount)
@@ -1291,9 +1291,8 @@ collect:
 						zap.Int64("targetLAC", lac))
 				}
 			}
-			// The target is already fixed. A successful Finalize records that
-			// boundary even when the replica's local data stops below it.
-			if earlyQuorum && len(finalizedResults) >= ackQuorum {
+			// A pending RPC may still be finalizing the only replica that can compact at lac.
+			if earlyQuorum && len(finalizedResults) >= ackQuorum && len(qualifiedResults) > 0 {
 				break collect
 			}
 		case <-ctx.Done():
@@ -1312,12 +1311,7 @@ collect:
 	// acknowledged, so nothing is owed on them; they become durable when compaction moves the
 	// segment to object storage.
 	//
-	// What completion does have to establish is that enough replicas durably recorded this
-	// boundary, so a competing writer cannot close the segment at a different one. That is
-	// finalizedResults. qualifiedResults is kept for the operator-facing count below: a
-	// completion covered by fewer than ackQuorum replicas is worth seeing, but it is not a
-	// failure -- failing here would leave the log unable to open a writer at all, since
-	// OpenLogWriter fences and completes every active segment first.
+	// Once all replies are in, a finalized quorum is sufficient to open the next writer.
 	if len(finalizedResults) < ackQuorum {
 		logger.Ctx(ctx).Warn("Insufficient finalized responses for quorum complete",
 			zap.String("logName", s.logName),
@@ -1333,8 +1327,7 @@ collect:
 	}
 
 	if len(qualifiedResults) < ackQuorum {
-		logger.Ctx(ctx).Warn("Collected completion replies contain fewer covering replicas than the ack quorum; "+
-			"the tail is durable on those replicas until compaction uploads the segment",
+		logger.Ctx(ctx).Warn("Collected completion replies contain fewer covering replicas than the ack quorum",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -1610,7 +1603,7 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 	defer cancel()
 	// Scope the proof to the service quorum we are optimizing. Other quorum
 	// shapes keep collecting all replies before using resolveFenceLAC.
-	earlyQuorum := s.cfg != nil && s.cfg.Woodpecker.Storage.Type == "service" &&
+	canStopOnEqualTails := s.cfg != nil && s.cfg.Woodpecker.Storage.IsStorageService() &&
 		nodeCount == 3 && quorumInfo.Es == 3 && quorumInfo.Wq == 3 && ackQuorum == 2
 
 	// Channel to collect results from all nodes
@@ -1653,7 +1646,7 @@ collect:
 			// Two equal successful tails fix that value regardless of the third
 			// tail or an error. They also fence every possible write ACK quorum.
 			// Unequal tails MUST wait: a third reply can still change the target.
-			if earlyQuorum && len(successResults) == 2 && successResults[0] == successResults[1] {
+			if canStopOnEqualTails && len(successResults) == 2 && successResults[0] == successResults[1] {
 				break collect
 			}
 		case <-ctx.Done():
