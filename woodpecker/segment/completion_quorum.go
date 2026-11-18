@@ -27,7 +27,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 )
 
-const backgroundRecoveryTimeout = 30 * time.Second
+const openWriterReplicaGracePeriod = 30 * time.Second
 
 type quorumWaitPolicy uint8
 
@@ -36,37 +36,37 @@ const (
 	returnOnSafeQuorum
 )
 
-type nodeRecoveryResult struct {
+type completionRPCResult struct {
 	node        string
 	lastEntryId int64
 	err         error
 }
 
-// enqueueRecovery keeps a replica's Complete behind its Fence without occupying another pool worker.
-func (s *segmentHandleImpl) enqueueRecovery(nodes []string, task func(string)) {
+// enqueueCompletionTasks keeps a replica's Complete behind its Fence without occupying another pool worker.
+func (s *segmentHandleImpl) enqueueCompletionTasks(nodes []string, task func(string)) {
 	if len(nodes) == 0 {
 		return
 	}
-	s.recoveryMu.Lock()
-	if s.recoveryPool == nil {
-		s.recoveryPool = conc.NewPool[struct{}](len(nodes), conc.WithDisablePurge(true))
-		s.pendingRecovery = make(map[string][]func(string), len(nodes))
+	s.completionRPCMu.Lock()
+	if s.completionRPCPool == nil {
+		s.completionRPCPool = conc.NewPool[struct{}](len(nodes), conc.WithDisablePurge(true))
+		s.pendingCompletionTasks = make(map[string][]func(string), len(nodes))
 	}
-	pool := s.recoveryPool
+	pool := s.completionRPCPool
 	var ready []string
 	for _, node := range nodes {
-		if pending, busy := s.pendingRecovery[node]; busy {
-			s.pendingRecovery[node] = append(pending, task)
+		if pending, busy := s.pendingCompletionTasks[node]; busy {
+			s.pendingCompletionTasks[node] = append(pending, task)
 		} else {
-			s.pendingRecovery[node] = nil
+			s.pendingCompletionTasks[node] = nil
 			ready = append(ready, node)
 		}
 	}
-	s.recoveryMu.Unlock()
+	s.completionRPCMu.Unlock()
 
 	for _, node := range ready {
 		pool.Submit(func() (struct{}, error) {
-			for next := task; next != nil; next = s.nextRecovery(node) {
+			for next := task; next != nil; next = s.nextCompletionTask(node) {
 				next(node)
 			}
 			return struct{}{}, nil
@@ -74,28 +74,28 @@ func (s *segmentHandleImpl) enqueueRecovery(nodes []string, task func(string)) {
 	}
 }
 
-func (s *segmentHandleImpl) nextRecovery(node string) func(string) {
-	s.recoveryMu.Lock()
-	defer s.recoveryMu.Unlock()
-	if pending := s.pendingRecovery[node]; len(pending) > 0 {
+func (s *segmentHandleImpl) nextCompletionTask(node string) func(string) {
+	s.completionRPCMu.Lock()
+	defer s.completionRPCMu.Unlock()
+	if pending := s.pendingCompletionTasks[node]; len(pending) > 0 {
 		next := pending[0]
 		pending[0] = nil
-		s.pendingRecovery[node] = pending[1:]
+		s.pendingCompletionTasks[node] = pending[1:]
 		return next
 	}
-	delete(s.pendingRecovery, node)
-	if len(s.pendingRecovery) == 0 {
-		s.recoveryPool.Release()
-		s.recoveryPool = nil
+	delete(s.pendingCompletionTasks, node)
+	if len(s.pendingCompletionTasks) == 0 {
+		s.completionRPCPool.Release()
+		s.completionRPCPool = nil
 	}
 	return nil
 }
 
-// submitRecovery returns one buffered reply per replica. Releasing the foreground
+// submitCompletionRPCs returns one buffered reply per replica. Releasing the foreground
 // wait after quorum gives unfinished tasks a bounded grace period.
-func (s *segmentHandleImpl) submitRecovery(parent context.Context, nodes []string, allowEarly bool, operation string,
+func (s *segmentHandleImpl) submitCompletionRPCs(parent context.Context, nodes []string, allowEarly bool, operation string,
 	rpc func(context.Context, string) (int64, error),
-) (<-chan nodeRecoveryResult, func()) {
+) (<-chan completionRPCResult, func()) {
 	ctx := parent
 	taskDone, release := func() {}, func() {}
 	if allowEarly {
@@ -113,13 +113,13 @@ func (s *segmentHandleImpl) submitRecovery(parent context.Context, nodes []strin
 				cancel()
 				return
 			}
-			timer := time.AfterFunc(backgroundRecoveryTimeout, cancel)
+			timer := time.AfterFunc(openWriterReplicaGracePeriod, cancel)
 			context.AfterFunc(ctx, func() { timer.Stop() })
 		}
 	}
 
-	results := make(chan nodeRecoveryResult, len(nodes))
-	s.enqueueRecovery(nodes, func(node string) {
+	results := make(chan completionRPCResult, len(nodes))
+	s.enqueueCompletionTasks(nodes, func(node string) {
 		defer taskDone()
 		tail := int64(-1)
 		err := ctx.Err()
@@ -127,10 +127,10 @@ func (s *segmentHandleImpl) submitRecovery(parent context.Context, nodes []strin
 			tail, err = rpc(ctx, node)
 		}
 		if err != nil {
-			logger.Ctx(ctx).Warn("Segment recovery RPC failed", zap.String("operation", operation),
+			logger.Ctx(ctx).Warn("Segment completion RPC failed", zap.String("operation", operation),
 				zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.String("node", node), zap.Error(err))
 		}
-		results <- nodeRecoveryResult{node: node, lastEntryId: tail, err: err}
+		results <- completionRPCResult{node: node, lastEntryId: tail, err: err}
 	})
 	return results, release
 }

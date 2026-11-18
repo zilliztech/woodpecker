@@ -448,7 +448,7 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		require.NoError(t, err)
 
 		synctest.Wait()
-		pool := h.recoveryPool
+		pool := h.completionRPCPool
 		require.NotNil(t, pool)
 		require.Equal(t, len(q.Nodes), pool.Cap())
 
@@ -456,12 +456,12 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, target, returnOnSafeQuorum), context.DeadlineExceeded)
-		require.Same(t, pool, h.recoveryPool)
+		require.Same(t, pool, h.completionRPCPool)
 		close(releaseFence)
 		synctest.Wait()
 		require.Zero(t, slowCompletes)
-		require.Empty(t, h.pendingRecovery)
-		require.Nil(t, h.recoveryPool)
+		require.Empty(t, h.pendingCompletionTasks)
+		require.Nil(t, h.completionRPCPool)
 		require.True(t, pool.IsClosed())
 
 		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, target, returnOnSafeQuorum))
@@ -482,7 +482,7 @@ func TestRecoveryBackgroundTimeoutStartsAfterQuorum(t *testing.T) {
 				}
 				// Quorum itself takes longer than the background grace period.
 				reply := func(context.Context) (int64, error) {
-					time.Sleep(2 * backgroundRecoveryTimeout)
+					time.Sleep(2 * openWriterReplicaGracePeriod)
 					return 100, nil
 				}
 				slow := &quorumFastClient{fence: hang, complete: func(ctx context.Context, _ int64) (int64, error) {
@@ -501,7 +501,7 @@ func TestRecoveryBackgroundTimeoutStartsAfterQuorum(t *testing.T) {
 					require.NoError(t, h.completeSegmentQuorum(ctx, q, 100, returnOnSafeQuorum))
 				}
 				cancel()
-				time.Sleep(backgroundRecoveryTimeout - time.Millisecond)
+				time.Sleep(openWriterReplicaGracePeriod - time.Millisecond)
 				synctest.Wait()
 				require.Empty(t, stopped)
 				time.Sleep(time.Millisecond)
