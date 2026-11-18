@@ -170,7 +170,7 @@ func TestFenceQuorumFallbackHonorsCallerDeadline(t *testing.T) {
 		tails      []int64
 	}{
 		{"unequal service tails", "service", []int64{90, 100}},
-		{"embedded unchanged", "embed", []int64{100, 100}},
+		{"single embedded replica is silent", "local", nil},
 		{"five replica quorum unchanged", "service", []int64{100, 100, 100, 100}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -296,31 +296,24 @@ func TestCompleteQuorumWithoutCoverageWaitsForLastOutcome(t *testing.T) {
 }
 
 func TestCompleteQuorumStillRequiresEnoughSuccessfulBoundaries(t *testing.T) {
-	for _, mode := range []string{"service", "embed"} {
-		t.Run(mode, func(t *testing.T) {
-			exited := make(chan struct{})
-			clients := []*quorumFastClient{
-				{complete: func(ctx context.Context, _ int64) (int64, error) {
-					defer close(exited)
-					<-ctx.Done()
-					return -1, ctx.Err()
-				}},
-				{complete: func(context.Context, int64) (int64, error) { return 100, nil }},
-				{complete: func(context.Context, int64) (int64, error) {
-					if mode == "embed" {
-						return 100, nil
-					}
-					return -1, errors.New("failed")
-				}},
-			}
-			h, q := newQuorumFastHandle(clients, mode)
-			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
-			defer cancel()
-			require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, 100), context.DeadlineExceeded)
-			require.EqualValues(t, -1, h.confirmedLAC())
-			waitQuorumWorker(t, exited)
-		})
-	}
+	t.Run("one finalized replica and one failure", func(t *testing.T) {
+		exited := make(chan struct{})
+		clients := []*quorumFastClient{
+			{complete: func(ctx context.Context, _ int64) (int64, error) {
+				defer close(exited)
+				<-ctx.Done()
+				return -1, ctx.Err()
+			}},
+			{complete: func(context.Context, int64) (int64, error) { return 100, nil }},
+			{complete: func(context.Context, int64) (int64, error) { return -1, errors.New("failed") }},
+		}
+		h, q := newQuorumFastHandle(clients, "service")
+		ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+		defer cancel()
+		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, 100), context.DeadlineExceeded)
+		require.EqualValues(t, -1, h.confirmedLAC())
+		waitQuorumWorker(t, exited)
+	})
 	// Exhausting all responses without Aq successes also remains a quorum error.
 	clients := []*quorumFastClient{}
 	for i := 0; i < 3; i++ {
@@ -328,4 +321,34 @@ func TestCompleteQuorumStillRequiresEnoughSuccessfulBoundaries(t *testing.T) {
 	}
 	h, q := newQuorumFastHandle(clients, "service")
 	require.True(t, werr.ErrAppendOpQuorumFailed.Is(h.completeSegmentQuorum(context.Background(), q, 100)))
+}
+
+func TestCompleteQuorumSingleEmbeddedReplica(t *testing.T) {
+	const target = int64(100)
+	for _, storage := range []string{"local", "minio"} {
+		for _, tc := range []struct {
+			name string
+			tail int64
+			err  error
+		}{
+			{"covers target", target, nil},
+			{"finalized below target", target - 1, nil},
+			{"finalize failed", -1, errors.New("finalize failed")},
+		} {
+			t.Run(storage+"/"+tc.name, func(t *testing.T) {
+				replica := &quorumFastClient{complete: func(context.Context, int64) (int64, error) {
+					return tc.tail, tc.err
+				}}
+				h, q := newQuorumFastHandle([]*quorumFastClient{replica}, storage)
+				err := h.completeSegmentQuorum(t.Context(), q, target)
+				if tc.err != nil {
+					require.True(t, werr.ErrAppendOpQuorumFailed.Is(err))
+					require.EqualValues(t, -1, h.confirmedLAC())
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, target, h.confirmedLAC())
+			})
+		}
+	}
 }

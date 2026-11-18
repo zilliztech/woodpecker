@@ -4832,8 +4832,8 @@ func TestCompleteSegmentQuorum_TargetHeldByOneReplica(t *testing.T) {
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
-	err := impl.completeSegmentQuorum(context.Background(), quorum, 1)
-	assert.NoError(t, err, "all three replicas recorded the boundary, so the segment must close")
+	err := completeQuorumAndWaitForRPCs(t, impl, quorum, 1)
+	assert.NoError(t, err, "a finalized quorum with one covering replica must close the segment")
 }
 
 // TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas walks the whole
@@ -4909,7 +4909,7 @@ func TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas(t *testing.T
 	lac, err := impl.fenceSegmentQuorum(ctx, quorum)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), lac, "a silent replica is unknown, not empty, so the target stays at 1")
-	require.NoError(t, impl.completeSegmentQuorum(ctx, quorum, lac),
+	require.NoError(t, completeQuorumAndWaitForRPCs(t, impl, quorum, lac),
 		"two replicas recorded the boundary, which is what completion needs")
 	assert.Equal(t, int64(1), replicas["node1"].footer)
 	assert.Equal(t, int64(1), replicas["node3"].footer)

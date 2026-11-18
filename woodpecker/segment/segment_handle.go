@@ -1240,7 +1240,6 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	// even after the collector returns.
 	rpcCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	earlyQuorum := s.cfg != nil && s.cfg.Woodpecker.Storage.IsStorageService() && ackQuorum > 0
 
 	// Channel to collect results from all nodes
 	resultChan := make(chan nodeCompleteResult, nodeCount)
@@ -1292,7 +1291,7 @@ collect:
 				}
 			}
 			// A pending RPC may still be finalizing the only replica that can compact at lac.
-			if earlyQuorum && len(finalizedResults) >= ackQuorum && len(qualifiedResults) > 0 {
+			if ackQuorum > 0 && len(finalizedResults) >= ackQuorum && len(qualifiedResults) > 0 {
 				break collect
 			}
 		case <-ctx.Done():
