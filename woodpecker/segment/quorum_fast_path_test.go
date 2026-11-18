@@ -59,7 +59,7 @@ func (p *quorumFastPool) GetLogStoreClient(_ context.Context, node string) (clie
 	return p.nodes[node], nil
 }
 
-func newQuorumFastHandle(clients []*quorumFastClient, mode string) (*segmentHandleImpl, *proto.QuorumInfo) {
+func newQuorumFastHandle(clients []*quorumFastClient, mode string) (*segmentHandleImpl, *recoveryQuorum) {
 	pool := &quorumFastPool{nodes: map[string]*quorumFastClient{}}
 	q := &proto.QuorumInfo{Es: int32(len(clients)), Wq: int32(len(clients)), Aq: int32(len(clients)/2 + 1)}
 	for i, c := range clients {
@@ -71,7 +71,7 @@ func newQuorumFastHandle(clients []*quorumFastClient, mode string) (*segmentHand
 	cfg.Woodpecker.Storage.Type = mode
 	h := &segmentHandleImpl{ClientPool: pool, cfg: cfg}
 	h.finalLAC.Store(-1)
-	return h, q
+	return h, &recoveryQuorum{QuorumInfo: q}
 }
 
 func waitQuorumWorker(t *testing.T, done <-chan struct{}) {
@@ -79,23 +79,29 @@ func waitQuorumWorker(t *testing.T, done <-chan struct{}) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("surplus RPC did not exit on cancellation")
+		t.Fatal("recovery RPC did not finish")
 	}
 }
 
-func TestFenceQuorumEqualTailsCancelStraggler(t *testing.T) {
+func TestFenceQuorumEqualTailsLetSlowReplicaFinish(t *testing.T) {
 	for _, tail := range []int64{-1, 0, 100} {
 		for slow := 0; slow < 3; slow++ {
 			t.Run(fmt.Sprintf("tail_%d/slow_%d", tail, slow), func(t *testing.T) {
 				entered, exited := make(chan struct{}), make(chan struct{})
+				release := make(chan struct{})
+				finished := make(chan error, 1)
 				clients := make([]*quorumFastClient, 3)
 				for i := range clients {
 					if i == slow {
 						clients[i] = &quorumFastClient{fence: func(ctx context.Context) (int64, error) {
 							close(entered)
 							defer close(exited)
-							<-ctx.Done()
-							return -1, ctx.Err()
+							select {
+							case <-release:
+							case <-ctx.Done():
+							}
+							finished <- ctx.Err()
+							return tail + 1, ctx.Err()
 						}}
 					} else {
 						clients[i] = &quorumFastClient{fence: func(context.Context) (int64, error) { <-entered; return tail, nil }}
@@ -108,7 +114,10 @@ func TestFenceQuorumEqualTailsCancelStraggler(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, tail, lac)
 				require.NoError(t, ctx.Err(), "must not consume or cancel the caller budget")
+				cancel()
+				close(release)
 				waitQuorumWorker(t, exited)
+				require.NoError(t, <-finished)
 			})
 		}
 	}
@@ -189,15 +198,21 @@ func TestFenceQuorumFallbackHonorsCallerDeadline(t *testing.T) {
 	}
 }
 
-func TestCompleteQuorumWithCoveringReplicaCancelsStraggler(t *testing.T) {
+func TestCompleteQuorumWithCoveringReplicaLetsSlowReplicaFinish(t *testing.T) {
 	for _, tails := range [][]int64{{100, 100}, {100, 90}, {90, 101}} {
 		t.Run(fmt.Sprint(tails), func(t *testing.T) {
 			entered, exited := make(chan struct{}), make(chan struct{})
+			release := make(chan struct{})
+			finished := make(chan error, 1)
 			clients := []*quorumFastClient{{complete: func(ctx context.Context, _ int64) (int64, error) {
 				close(entered)
 				defer close(exited)
-				<-ctx.Done()
-				return -1, ctx.Err()
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				finished <- ctx.Err()
+				return 100, ctx.Err()
 			}}}
 			targets := make(chan int64, 2)
 			for _, tail := range tails {
@@ -211,7 +226,10 @@ func TestCompleteQuorumWithCoveringReplicaCancelsStraggler(t *testing.T) {
 			require.EqualValues(t, 100, h.confirmedLAC())
 			require.EqualValues(t, 100, <-targets)
 			require.EqualValues(t, 100, <-targets)
+			cancel()
+			close(release)
 			waitQuorumWorker(t, exited)
+			require.NoError(t, <-finished)
 		})
 	}
 }
@@ -350,5 +368,91 @@ func TestCompleteQuorumSingleEmbeddedReplica(t *testing.T) {
 				require.Equal(t, target, h.confirmedLAC())
 			})
 		}
+	}
+}
+
+func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const tail int64 = 100
+		releaseFence := make(chan struct{})
+		completed := make(chan error, 1)
+		healthy := &quorumFastClient{
+			fence:    func(context.Context) (int64, error) { return tail, nil },
+			complete: func(context.Context, int64) (int64, error) { return tail, nil },
+		}
+		slow := &quorumFastClient{
+			fence: func(ctx context.Context) (int64, error) {
+				select {
+				case <-releaseFence:
+					return tail, nil
+				case <-ctx.Done():
+					return -1, ctx.Err()
+				}
+			},
+			complete: func(ctx context.Context, lac int64) (int64, error) {
+				if lac != tail {
+					t.Errorf("slow replica received target %d, want %d", lac, tail)
+				}
+				completed <- ctx.Err()
+				return lac, ctx.Err()
+			},
+		}
+		h, q := newQuorumFastHandle([]*quorumFastClient{slow, healthy, healthy}, "service")
+		h.quorumInfo = q.QuorumInfo
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		lac, err := h.doComplete(ctx)
+		require.NoError(t, err)
+		require.Equal(t, tail, lac)
+		cancel() // OpenWriter's caller is done.
+		synctest.Wait()
+		require.Empty(t, completed, "the slow replica still has an unfinished Fence")
+		close(releaseFence)
+		synctest.Wait()
+		require.Len(t, completed, 1, "the same replica must now complete at the chosen target")
+		require.NoError(t, <-completed)
+	})
+}
+
+func TestRecoveryBackgroundTimeoutStartsAfterQuorum(t *testing.T) {
+	for _, phase := range []string{"fence", "complete"} {
+		t.Run(phase, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				stopped := make(chan error, 1)
+				hang := func(ctx context.Context) (int64, error) {
+					<-ctx.Done()
+					stopped <- ctx.Err()
+					return -1, ctx.Err()
+				}
+				// Quorum itself takes longer than the background grace period.
+				reply := func(context.Context) (int64, error) {
+					time.Sleep(2 * backgroundRecoveryTimeout)
+					return 100, nil
+				}
+				slow := &quorumFastClient{fence: hang, complete: func(ctx context.Context, _ int64) (int64, error) {
+					return hang(ctx)
+				}}
+				healthy := &quorumFastClient{fence: reply, complete: func(ctx context.Context, _ int64) (int64, error) {
+					return reply(ctx)
+				}}
+				h, q := newQuorumFastHandle([]*quorumFastClient{healthy, slow, healthy}, "service")
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if phase == "fence" {
+					_, err := h.fenceSegmentQuorum(ctx, q)
+					require.NoError(t, err)
+				} else {
+					require.NoError(t, h.completeSegmentQuorum(ctx, q, 100))
+				}
+				cancel()
+				time.Sleep(backgroundRecoveryTimeout - time.Millisecond)
+				synctest.Wait()
+				require.Empty(t, stopped)
+				time.Sleep(time.Millisecond)
+				synctest.Wait()
+				require.Len(t, stopped, 1)
+				require.ErrorIs(t, <-stopped, context.Canceled)
+			})
+		})
 	}
 }

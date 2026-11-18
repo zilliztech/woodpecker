@@ -118,8 +118,8 @@ silent connection); these limits do not add production RPC deadlines.
 
 `OPEN_WRITER_RESULT` JSON reports foreground OpenWriter and its existing
 `fenceAllActiveSegments` trace duration separately from per-node Fence/Complete
-RPC durations. RPC wall envelopes describe the recorded replies and can include
-cancelled surplus calls; they are not foreground phase durations. Setup,
+RPC durations. RPC wall envelopes include replies recorded by the time of the
+snapshot. Slower replicas may still be finishing Fence and Complete in order. Setup,
 compaction, and read-back are outside the measured interval. Every case checks
 the recovered boundary, writes a new entry, compacts the old segments, and reads
 all entries with a fresh handle using direct object-storage reads for sealed

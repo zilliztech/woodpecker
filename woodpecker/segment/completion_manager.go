@@ -26,7 +26,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/retry"
-	"github.com/zilliztech/woodpecker/proto"
 )
 
 // completionManager owns the segment completion lifecycle.
@@ -104,7 +103,7 @@ func (cm *completionManager) run(ctx context.Context) {
 
 func (cm *completionManager) executeWithRetry(ctx context.Context) error {
 	s := cm.segment
-	var quorumInfo *proto.QuorumInfo
+	var quorumInfo *recoveryQuorum
 	var targetLAC int64 = -1
 
 	// Phase 1 (no lock): establish one authoritative target LAC. Fence may be

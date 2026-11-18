@@ -287,6 +287,23 @@ func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active int, r
 	writer, openErr := measureOpenWriter(t, handle, pool, active, "initial", budget)
 	require.NoError(t, openErr)
 	require.NotNil(t, writer)
+	if fault == "HealthyFresh" || fault == "HealthyWarm" {
+		// The caller has released its context. Every healthy replica should still
+		// finish both RPCs, including the ones outside the measured OpenWriter call.
+		type replicaRPC struct {
+			segmentID       int64
+			node, operation string
+		}
+		require.Eventually(t, func() bool {
+			successful := make(map[replicaRPC]struct{})
+			for _, rpc := range pool.snapshot() {
+				if rpc.Error == "" {
+					successful[replicaRPC{rpc.SegmentID, rpc.Node, rpc.Operation}] = struct{}{}
+				}
+			}
+			return len(successful) == 2*active*len(oldQuorum.Nodes)
+		}, 5*time.Second, 10*time.Millisecond, "each healthy replica must finish Fence and Complete")
+	}
 	// Recovery read/write checks are separate from the measured fault window.
 	if fault == "NewConnectionSilent" || fault == "EstablishedConnectionSilent" || fault == "MissingDataBearingReply" {
 		proxy.ResetAll()
@@ -381,16 +398,13 @@ func measureOpenWriter(t *testing.T, handle log.LogHandle, pool *openWriterPool,
 	writer, err := result.writer, result.err
 	report := openWriterTiming{Case: t.Name(), ActiveSegments: active, Attempt: attempt, BudgetMS: budget.Milliseconds(), OpenWriterMS: float64(time.Since(started)) / float64(time.Millisecond)}
 	contextErr := ctx.Err()
-	// Retire any straggler RPCs after OpenWriter returns, including if a future
-	// implementation can safely finish without waiting for every replica.
+	// End the foreground observation. Remaining replicas finish independently.
 	cancel()
 	if err != nil {
 		report.Error = err.Error()
 		require.ErrorIs(t, contextErr, context.DeadlineExceeded)
 	}
-	// Wait for the successful Fence bookkeeping. Surplus RPCs are cancelled
-	// independently and may be absent from this snapshot; per-node wall envelopes
-	// below describe recorded calls, not the foreground collector duration.
+	// Slower replicas can still be running when this foreground snapshot is taken.
 	require.Eventually(t, func() bool {
 		n := 0
 		for _, rpc := range pool.snapshot()[before:] {
