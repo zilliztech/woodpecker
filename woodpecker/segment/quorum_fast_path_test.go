@@ -59,7 +59,7 @@ func (p *quorumFastPool) GetLogStoreClient(_ context.Context, node string) (clie
 	return p.nodes[node], nil
 }
 
-func newQuorumFastHandle(clients []*quorumFastClient, mode string) (*segmentHandleImpl, *recoveryQuorum) {
+func newQuorumFastHandle(clients []*quorumFastClient, mode string) (*segmentHandleImpl, *proto.QuorumInfo) {
 	pool := &quorumFastPool{nodes: map[string]*quorumFastClient{}}
 	q := &proto.QuorumInfo{Es: int32(len(clients)), Wq: int32(len(clients)), Aq: int32(len(clients)/2 + 1)}
 	for i, c := range clients {
@@ -71,7 +71,7 @@ func newQuorumFastHandle(clients []*quorumFastClient, mode string) (*segmentHand
 	cfg.Woodpecker.Storage.Type = mode
 	h := &segmentHandleImpl{ClientPool: pool, cfg: cfg}
 	h.finalLAC.Store(-1)
-	return h, &recoveryQuorum{QuorumInfo: q}
+	return h, q
 }
 
 func waitQuorumWorker(t *testing.T, done <-chan struct{}) {
@@ -253,9 +253,12 @@ func TestCompleteQuorumWaitsForOnlyReplicaThatCanCompact(t *testing.T) {
 
 	// Only A holds entry 1. C misses Fence, then rejoins B to finalize at
 	// target 1. Both report their actual local tail, which is still 0.
+	// Flush real staged I/O before the virtual-time quorum scenario.
+	coveringTail, err := covering.Fence(ctx)
+	require.NoError(t, err)
 	partial := func(context.Context, int64) (int64, error) { return 0, nil }
 	clients := []*quorumFastClient{
-		{fence: covering.Fence, complete: func(ctx context.Context, lac int64) (int64, error) {
+		{fence: func(context.Context) (int64, error) { return coveringTail, nil }, complete: func(ctx context.Context, lac int64) (int64, error) {
 			select {
 			case <-ctx.Done():
 				return -1, ctx.Err()
@@ -267,13 +270,12 @@ func TestCompleteQuorumWaitsForOnlyReplicaThatCanCompact(t *testing.T) {
 		{fence: func(context.Context) (int64, error) { return -1, errors.New("fence unavailable") }, complete: partial},
 	}
 	h, q := newQuorumFastHandle(clients, "service")
-	lac, err := h.fenceSegmentQuorum(ctx, q)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, lac)
-
-	// Virtual time advances to A's reply only once both fast replies have
-	// been processed and the collector is waiting for A.
+	var lac int64
 	synctest.Test(t, func(t *testing.T) {
+		lac, err = h.fenceSegmentQuorum(t.Context(), q)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, lac)
+		// Virtual time advances to A's reply after the fast replies have arrived.
 		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, lac))
 	})
 	size, err := covering.Compact(ctx, lac)
@@ -398,7 +400,7 @@ func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
 			},
 		}
 		h, q := newQuorumFastHandle([]*quorumFastClient{slow, healthy, healthy}, "service")
-		h.quorumInfo = q.QuorumInfo
+		h.quorumInfo = q
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		lac, err := h.doComplete(ctx)
@@ -411,6 +413,44 @@ func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
 		synctest.Wait()
 		require.Len(t, completed, 1, "the same replica must now complete at the chosen target")
 		require.NoError(t, <-completed)
+	})
+}
+
+func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const target = int64(100)
+		releaseFence := make(chan struct{})
+		slowCompletes := 0
+		slow := &quorumFastClient{
+			fence: func(context.Context) (int64, error) {
+				<-releaseFence
+				return target, nil
+			},
+			complete: func(context.Context, int64) (int64, error) {
+				slowCompletes++
+				return target, nil
+			},
+		}
+		healthy := &quorumFastClient{
+			fence:    func(context.Context) (int64, error) { return target, nil },
+			complete: func(context.Context, int64) (int64, error) { return target - 1, nil },
+		}
+		h, q := newQuorumFastHandle([]*quorumFastClient{slow, healthy, healthy}, "service")
+		_, err := h.fenceSegmentQuorum(t.Context(), q)
+		require.NoError(t, err)
+
+		// Only the slow replica covers the target. Its Complete is still queued when the caller times out.
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, target), context.DeadlineExceeded)
+		close(releaseFence)
+		synctest.Wait()
+		require.Zero(t, slowCompletes)
+		require.Empty(t, h.recovery.queues)
+
+		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, target))
+		synctest.Wait()
+		require.Equal(t, 1, slowCompletes)
 	})
 }
 

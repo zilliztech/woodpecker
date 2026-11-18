@@ -18,19 +18,16 @@ package segment
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
-	"github.com/zilliztech/woodpecker/proto"
 )
 
-// recoveryQuorum belongs to one recovery. Complete retries share the original Fence attempts.
-type recoveryQuorum struct {
-	*proto.QuorumInfo
-	fenceDone []chan struct{} // per node, only for quorums that can finish Fence early
-}
+const backgroundRecoveryTimeout = 30 * time.Second
 
 type nodeRecoveryResult struct {
 	node        string
@@ -38,49 +35,84 @@ type nodeRecoveryResult struct {
 	err         error
 }
 
-const backgroundRecoveryTimeout = 30 * time.Second
-
-type recoveryFanout struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	results chan nodeRecoveryResult
-	pending int // unread replies handed off after a successful early return
+// One worker per busy replica keeps Fence and Complete in submission order.
+// Workers exit when their queue is empty, including on read-only recovery handles.
+type recoveryPool struct {
+	mu     sync.Mutex
+	queues map[string][]func()
 }
 
-func newRecoveryFanout(ctx context.Context, nodes int, canReturnEarly bool) *recoveryFanout {
-	f := &recoveryFanout{ctx: ctx, results: make(chan nodeRecoveryResult, nodes)}
-	if canReturnEarly {
-		// The foreground collector observes the caller's cancellation until quorum.
-		// Once it succeeds, its caller may cancel while the remaining RPCs finish.
-		f.ctx, f.cancel = context.WithCancel(context.WithoutCancel(ctx))
+func (p *recoveryPool) submit(node string, task func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.queues == nil {
+		p.queues = make(map[string][]func())
 	}
-	return f
+	p.queues[node] = append(p.queues[node], task)
+	if len(p.queues[node]) == 1 {
+		go p.run(node, task)
+	}
 }
 
-func (f *recoveryFanout) finish(operation string, logID, segmentID int64) {
-	if f.cancel == nil {
-		return
+func (p *recoveryPool) run(node string, task func()) {
+	for {
+		task()
+		p.mu.Lock()
+		queue := p.queues[node]
+		queue[0] = nil
+		if len(queue) == 1 {
+			delete(p.queues, node)
+			p.mu.Unlock()
+			return
+		}
+		p.queues[node] = queue[1:]
+		task = queue[1]
+		p.mu.Unlock()
 	}
-	if f.pending == 0 {
-		f.cancel()
-		return
-	}
-	timer := time.NewTimer(backgroundRecoveryTimeout)
-	go func() {
-		defer f.cancel()
-		defer timer.Stop()
-		for remaining := f.pending; remaining > 0; remaining-- {
-			select {
-			case result := <-f.results:
-				if result.err != nil {
-					logger.Ctx(f.ctx).Warn("Background segment recovery RPC failed", zap.String("operation", operation),
-						zap.Int64("logId", logID), zap.Int64("segmentId", segmentID), zap.String("node", result.node), zap.Error(result.err))
-				}
-			case <-timer.C:
-				logger.Ctx(f.ctx).Warn("Background segment recovery timed out", zap.String("operation", operation),
-					zap.Int64("logId", logID), zap.Int64("segmentId", segmentID), zap.Int("pending", remaining))
-				return
+}
+
+// submitRecovery returns one buffered reply per replica. Releasing the foreground
+// wait after quorum gives unfinished tasks a bounded grace period.
+func (s *segmentHandleImpl) submitRecovery(parent context.Context, nodes []string, allowEarly bool, operation string,
+	rpc func(context.Context, string) (int64, error),
+) (<-chan nodeRecoveryResult, func()) {
+	ctx := parent
+	taskDone, release := func() {}, func() {}
+	if allowEarly {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(context.WithoutCancel(parent))
+		var remaining atomic.Int32
+		remaining.Store(int32(len(nodes)))
+		taskDone = func() {
+			if remaining.Add(-1) == 0 {
+				cancel()
 			}
 		}
-	}()
+		release = func() {
+			if parent.Err() != nil || ctx.Err() != nil {
+				cancel()
+				return
+			}
+			timer := time.AfterFunc(backgroundRecoveryTimeout, cancel)
+			context.AfterFunc(ctx, func() { timer.Stop() })
+		}
+	}
+
+	results := make(chan nodeRecoveryResult, len(nodes))
+	for _, node := range nodes {
+		s.recovery.submit(node, func() {
+			defer taskDone()
+			tail := int64(-1)
+			err := ctx.Err()
+			if err == nil {
+				tail, err = rpc(ctx, node)
+			}
+			if err != nil {
+				logger.Ctx(ctx).Warn("Segment recovery RPC failed", zap.String("operation", operation),
+					zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.String("node", node), zap.Error(err))
+			}
+			results <- nodeRecoveryResult{node: node, lastEntryId: tail, err: err}
+		})
+	}
+	return results, release
 }

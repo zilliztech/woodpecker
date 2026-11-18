@@ -42,7 +42,7 @@ type completeNodeResponse struct {
 
 // These tests inspect replica state or mock expectations after Complete returns.
 // Let outstanding RPC goroutines finish before inspecting or reusing the fixture.
-func completeQuorumAndWaitForRPCs(t *testing.T, h *segmentHandleImpl, q *recoveryQuorum, target int64) error {
+func completeQuorumAndWaitForRPCs(t *testing.T, h *segmentHandleImpl, q *proto.QuorumInfo, target int64) error {
 	t.Helper()
 	var err error
 	synctest.Test(t, func(t *testing.T) {
@@ -157,7 +157,7 @@ func TestCompleteSegmentQuorum_ResponseMatrix(t *testing.T) {
 			impl := sh.(*segmentHandleImpl)
 			quorum := &proto.QuorumInfo{Id: 1, Aq: tt.aq, Es: int32(len(nodes)), Wq: int32(len(nodes)), Nodes: nodes}
 
-			err := completeQuorumAndWaitForRPCs(t, impl, &recoveryQuorum{QuorumInfo: quorum}, tt.targetLAC)
+			err := completeQuorumAndWaitForRPCs(t, impl, quorum, tt.targetLAC)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.True(t, werr.ErrAppendOpQuorumFailed.Is(err), "expected quorum failure, got %v", err)

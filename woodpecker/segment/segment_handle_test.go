@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -3224,12 +3225,8 @@ func TestCompleteSegmentOnNode_GetClientError(t *testing.T) {
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
-	resultChan := make(chan nodeRecoveryResult, 1)
-	impl.completeSegmentOnNode(context.Background(), "node1", 5, resultChan)
-
-	result := <-resultChan
-	assert.Error(t, result.err)
-	assert.Equal(t, "node1", result.node)
+	_, err := impl.completeSegmentOnNode(context.Background(), "node1", 5)
+	assert.EqualError(t, err, "conn error")
 }
 
 func TestFenceSegmentOnNode_GetClientError(t *testing.T) {
@@ -3252,12 +3249,8 @@ func TestFenceSegmentOnNode_GetClientError(t *testing.T) {
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
-	resultChan := make(chan nodeRecoveryResult, 1)
-	impl.fenceSegmentOnNode(context.Background(), "node1", resultChan)
-
-	result := <-resultChan
-	assert.Error(t, result.err)
-	assert.Equal(t, "node1", result.node)
+	_, err := impl.fenceSegmentOnNode(context.Background(), "node1")
+	assert.EqualError(t, err, "conn error")
 }
 
 // === completeSegmentQuorum tests ===
@@ -3287,7 +3280,7 @@ func TestCompleteSegmentQuorum_InsufficientResponses(t *testing.T) {
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Aq: 2, Es: 2, Wq: 2, Nodes: []string{"node1", "node2"}}
-	err := impl.completeSegmentQuorum(context.Background(), &recoveryQuorum{QuorumInfo: quorum}, 5)
+	err := impl.completeSegmentQuorum(context.Background(), quorum, 5)
 	assert.Error(t, err)
 }
 
@@ -3316,7 +3309,7 @@ func TestCompleteSegmentQuorum_ContextCancel(t *testing.T) {
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}}
-	err := impl.completeSegmentQuorum(ctx, &recoveryQuorum{QuorumInfo: quorum}, 5)
+	err := impl.completeSegmentQuorum(ctx, quorum, 5)
 	assert.Error(t, err)
 }
 
@@ -3848,7 +3841,7 @@ func TestFenceSegmentQuorum_InsufficientResponses(t *testing.T) {
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Es: 2, Aq: 2, Wq: 2, Nodes: []string{"node1", "node2"}}
-	_, err := impl.fenceSegmentQuorum(context.Background(), &recoveryQuorum{QuorumInfo: quorum})
+	_, err := impl.fenceSegmentQuorum(context.Background(), quorum)
 	assert.Error(t, err)
 }
 
@@ -3890,7 +3883,7 @@ func TestFenceSegmentQuorum_PartialRepliesBelowTolerance(t *testing.T) {
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
-	lastEntryId, err := impl.fenceSegmentQuorum(context.Background(), &recoveryQuorum{QuorumInfo: quorum})
+	lastEntryId, err := impl.fenceSegmentQuorum(context.Background(), quorum)
 	assert.Error(t, err)
 	assert.Equal(t, int64(-1), lastEntryId)
 	assert.Contains(t, err.Error(), "conn error", "the node failure should surface as the root cause")
@@ -4706,7 +4699,7 @@ func TestFenceSegmentQuorum_CtxTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	lastEntryId, err := impl.fenceSegmentQuorum(ctx, &recoveryQuorum{QuorumInfo: quorum})
+	lastEntryId, err := impl.fenceSegmentQuorum(ctx, quorum)
 	assert.Error(t, err)
 	assert.Equal(t, int64(-1), lastEntryId)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -4832,7 +4825,7 @@ func TestCompleteSegmentQuorum_TargetHeldByOneReplica(t *testing.T) {
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
-	err := completeQuorumAndWaitForRPCs(t, impl, &recoveryQuorum{QuorumInfo: quorum}, 1)
+	err := completeQuorumAndWaitForRPCs(t, impl, quorum, 1)
 	assert.NoError(t, err, "a finalized quorum with one covering replica must close the segment")
 }
 
@@ -4903,27 +4896,28 @@ func TestFenceAndComplete_PartialFenceDoesNotWedgeFinalizedReplicas(t *testing.T
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
-	ctx := context.Background()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
 
-	// Pass 1: one replica silent at fence.
-	first := &recoveryQuorum{QuorumInfo: quorum}
-	lac, err := impl.fenceSegmentQuorum(ctx, first)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), lac, "a silent replica is unknown, not empty, so the target stays at 1")
-	require.NoError(t, completeQuorumAndWaitForRPCs(t, impl, first, lac),
-		"two replicas recorded the boundary, which is what completion needs")
-	assert.Equal(t, int64(1), replicas["node1"].footer)
-	assert.Equal(t, int64(1), replicas["node3"].footer)
+		// Pass 1: one replica silent at fence.
+		lac, err := impl.fenceSegmentQuorum(ctx, quorum)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), lac, "a silent replica is unknown, not empty, so the target stays at 1")
+		require.NoError(t, impl.completeSegmentQuorum(ctx, quorum, lac),
+			"two replicas recorded the boundary, which is what completion needs")
+		synctest.Wait()
+		assert.Equal(t, int64(1), replicas["node1"].footer)
+		assert.Equal(t, int64(1), replicas["node3"].footer)
 
-	// Pass 2, the counterfactual: the missing replica is back and every reply is in,
-	// so the target drops to 0 -- and the footers already burned at 1 refuse it.
-	replicas["node2"].reachable = true
-	second := &recoveryQuorum{QuorumInfo: quorum}
-	lac, err = impl.fenceSegmentQuorum(ctx, second)
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), lac)
-	assert.Error(t, impl.completeSegmentQuorum(ctx, second, lac),
-		"only the replica that never finalized can accept 0, which is below the ack quorum")
+		// Pass 2, the counterfactual: the missing replica is back and every reply is in,
+		// so the target drops to 0 -- and the footers already burned at 1 refuse it.
+		replicas["node2"].reachable = true
+		lac, err = impl.fenceSegmentQuorum(ctx, quorum)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), lac)
+		assert.Error(t, impl.completeSegmentQuorum(ctx, quorum, lac),
+			"only the replica that never finalized can accept 0, which is below the ack quorum")
+	})
 }
 
 // TestCompactSegmentQuorum_AttemptDeadlineFailsOverToNextNode verifies a node that hangs rather
