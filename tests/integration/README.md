@@ -96,6 +96,41 @@ networks:
 
 ## Test Categories
 
+### Service OpenWriter recovery under a single-node failure
+
+With etcd and MinIO configured in `config/woodpecker.yaml`, run:
+
+```bash
+go test ./tests/integration \
+  -run '^TestServiceStabilityProcess_OpenWriter' -count=3 -v -timeout=10m
+```
+
+These tests also run under the existing process stability CI selector. They
+start four service nodes with real gRPC connections and fault proxies, and seed
+durable entries plus Active metadata to represent a crashed writer. The old
+segments use a three-node quorum; the first
+new segment uses the three healthy nodes. The matrix covers an empty log and
+one or three Active segments under healthy fresh/warm connections, an immediate
+connection refusal, a refusal delayed by 200 ms, a silent fresh connection, and
+a silent established connection. Each scenario must successfully open a writer
+within its observation context (10 seconds, or 5 seconds for an established
+silent connection); these limits do not add production RPC deadlines.
+
+`OPEN_WRITER_RESULT` JSON reports foreground OpenWriter and its existing
+`fenceAllActiveSegments` trace duration separately from per-node Fence/Complete
+RPC durations. RPC wall envelopes include replies recorded by the time of the
+snapshot. Slower replicas may still be finishing Fence and Complete in order. Setup,
+compaction, and read-back are outside the measured interval. Every case checks
+the recovered boundary, writes a new entry, compacts the old segments, and reads
+all entries with a fresh handle using direct object-storage reads for sealed
+segments.
+
+`OpenWriterMissingFenceReply` keeps the old quorum order fixed and makes each
+index (0, 1, 2) unavailable in turn. Each time, the unavailable replica holds
+entry 4 and the two healthy replicas report tails 4 and -1. Recovery must
+preserve all acknowledged entries through compaction and read-back (#320).
+Run without `t.Parallel`: timing uses a temporary process-wide trace recorder.
+
 ### Embedded MinIO without conditional writes: rollover regression
 
 `integration-test-embed-minio-without-conditionwrite.yaml` runs this suite on

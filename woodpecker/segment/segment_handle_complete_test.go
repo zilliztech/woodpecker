@@ -145,7 +145,7 @@ func TestCompleteSegmentQuorum_ResponseMatrix(t *testing.T) {
 			impl := sh.(*segmentHandleImpl)
 			quorum := &proto.QuorumInfo{Id: 1, Aq: tt.aq, Es: int32(len(nodes)), Wq: int32(len(nodes)), Nodes: nodes}
 
-			err := impl.completeSegmentQuorum(context.Background(), quorum, tt.targetLAC)
+			err := impl.completeSegmentQuorum(t.Context(), quorum, tt.targetLAC, waitForAllReplicas)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.True(t, werr.ErrAppendOpQuorumFailed.Is(err), "expected quorum failure, got %v", err)
