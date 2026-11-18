@@ -338,7 +338,10 @@ minio:
   # Set an easy-to-identify root key prefix for Woodpecker if etcd service already exists.
   # Changing this for an already running Woodpecker instance may result in failures to read legacy data.
   rootPath: files
-  # Whether to useIAM role to access S3/GCS instead of access/secret keys
+  # Whether to use IAM credentials to access S3/GCS instead of configured access/secret keys.
+  # AWS IAM selects configured IRSA (environment or AWS config profile), then Container, then EC2.
+  # AWS_EC2_METADATA_DISABLED=true disables EC2 only; workload identity failures never fall back to EC2.
+  # Ambient/static-profile AWS access keys are ignored in IAM mode.
   # For more information, refer to
   # aws: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use.html
   # gcp: https://cloud.google.com/storage/docs/access-control/iam
