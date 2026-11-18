@@ -30,6 +30,8 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
@@ -110,7 +112,7 @@ func TestFenceQuorumEqualTailsLetSlowReplicaFinish(t *testing.T) {
 				h, q := newQuorumFastHandle(clients, "service")
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
-				lac, err := h.fenceSegmentQuorum(ctx, q)
+				lac, err := h.fenceSegmentQuorum(ctx, q, returnOnSafeQuorum)
 				require.NoError(t, err)
 				require.Equal(t, tail, lac)
 				require.NoError(t, ctx.Err(), "must not consume or cancel the caller budget")
@@ -158,7 +160,7 @@ func TestFenceQuorumUnequalTailsWaitForThirdResult(t *testing.T) {
 				err error
 			}
 			done := make(chan result, 1)
-			go func() { lac, err := h.fenceSegmentQuorum(ctx, q); done <- result{lac, err} }()
+			go func() { lac, err := h.fenceSegmentQuorum(ctx, q, returnOnSafeQuorum); done <- result{lac, err} }()
 			fast.Wait()
 			select {
 			case got := <-done:
@@ -191,7 +193,7 @@ func TestFenceQuorumFallbackHonorsCallerDeadline(t *testing.T) {
 			h, q := newQuorumFastHandle(clients, tc.mode)
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 			defer cancel()
-			_, err := h.fenceSegmentQuorum(ctx, q)
+			_, err := h.fenceSegmentQuorum(ctx, q, returnOnSafeQuorum)
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 			waitQuorumWorker(t, exited)
 		})
@@ -221,7 +223,7 @@ func TestCompleteQuorumWithCoveringReplicaLetsSlowReplicaFinish(t *testing.T) {
 			h, q := newQuorumFastHandle(clients, "service")
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			require.NoError(t, h.completeSegmentQuorum(ctx, q, 100))
+			require.NoError(t, h.completeSegmentQuorum(ctx, q, 100, returnOnSafeQuorum))
 			require.NoError(t, ctx.Err())
 			require.EqualValues(t, 100, h.confirmedLAC())
 			require.EqualValues(t, 100, <-targets)
@@ -272,11 +274,11 @@ func TestCompleteQuorumWaitsForOnlyReplicaThatCanCompact(t *testing.T) {
 	h, q := newQuorumFastHandle(clients, "service")
 	var lac int64
 	synctest.Test(t, func(t *testing.T) {
-		lac, err = h.fenceSegmentQuorum(t.Context(), q)
+		lac, err = h.fenceSegmentQuorum(t.Context(), q, returnOnSafeQuorum)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, lac)
 		// Virtual time advances to A's reply after the fast replies have arrived.
-		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, lac))
+		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, lac, returnOnSafeQuorum))
 	})
 	size, err := covering.Compact(ctx, lac)
 	require.NoError(t, err)
@@ -309,7 +311,7 @@ func TestCompleteQuorumWithoutCoverageWaitsForLastOutcome(t *testing.T) {
 				}, "service")
 				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer cancel()
-				require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, 100), tc.wantErr)
+				require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, 100, returnOnSafeQuorum), tc.wantErr)
 			})
 		})
 	}
@@ -330,7 +332,7 @@ func TestCompleteQuorumStillRequiresEnoughSuccessfulBoundaries(t *testing.T) {
 		h, q := newQuorumFastHandle(clients, "service")
 		ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
 		defer cancel()
-		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, 100), context.DeadlineExceeded)
+		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, 100, returnOnSafeQuorum), context.DeadlineExceeded)
 		require.EqualValues(t, -1, h.confirmedLAC())
 		waitQuorumWorker(t, exited)
 	})
@@ -340,7 +342,7 @@ func TestCompleteQuorumStillRequiresEnoughSuccessfulBoundaries(t *testing.T) {
 		clients = append(clients, &quorumFastClient{complete: func(context.Context, int64) (int64, error) { return -1, errors.New("failed") }})
 	}
 	h, q := newQuorumFastHandle(clients, "service")
-	require.True(t, werr.ErrAppendOpQuorumFailed.Is(h.completeSegmentQuorum(context.Background(), q, 100)))
+	require.True(t, werr.ErrAppendOpQuorumFailed.Is(h.completeSegmentQuorum(context.Background(), q, 100, returnOnSafeQuorum)))
 }
 
 func TestCompleteQuorumSingleEmbeddedReplica(t *testing.T) {
@@ -360,7 +362,7 @@ func TestCompleteQuorumSingleEmbeddedReplica(t *testing.T) {
 					return tc.tail, tc.err
 				}}
 				h, q := newQuorumFastHandle([]*quorumFastClient{replica}, storage)
-				err := h.completeSegmentQuorum(t.Context(), q, target)
+				err := h.completeSegmentQuorum(t.Context(), q, target, returnOnSafeQuorum)
 				if tc.err != nil {
 					require.True(t, werr.ErrAppendOpQuorumFailed.Is(err))
 					require.EqualValues(t, -1, h.confirmedLAC())
@@ -401,9 +403,15 @@ func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
 		}
 		h, q := newQuorumFastHandle([]*quorumFastClient{slow, healthy, healthy}, "service")
 		h.quorumInfo = q
+		md := mocks_meta.NewMetadataProvider(t)
+		h.metadata = md
+		h.segmentMetaCache.Store(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{State: proto.SegmentState_Active, Quorum: q}})
+		md.EXPECT().UpdateSegmentMetadata(mock.Anything, h.logName, h.logId, mock.Anything, proto.SegmentState_Active).Return(nil).Once()
+		md.EXPECT().GetSegmentMetadata(mock.Anything, h.logName, h.segmentId).Return(
+			&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{State: proto.SegmentState_Completed, LastEntryId: tail, Quorum: q}}, nil).Once()
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		lac, err := h.doComplete(ctx)
+		lac, err := h.FenceAndComplete(ctx)
 		require.NoError(t, err)
 		require.Equal(t, tail, lac)
 		cancel() // OpenWriter's caller is done.
@@ -436,7 +444,7 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 			complete: func(context.Context, int64) (int64, error) { return target - 1, nil },
 		}
 		h, q := newQuorumFastHandle([]*quorumFastClient{slow, healthy, healthy}, "service")
-		_, err := h.fenceSegmentQuorum(t.Context(), q)
+		_, err := h.fenceSegmentQuorum(t.Context(), q, returnOnSafeQuorum)
 		require.NoError(t, err)
 
 		synctest.Wait()
@@ -447,7 +455,7 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		// Only the slow replica covers the target. Its Complete is still queued when the caller times out.
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
-		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, target), context.DeadlineExceeded)
+		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, target, returnOnSafeQuorum), context.DeadlineExceeded)
 		require.Same(t, pool, h.recoveryPool)
 		close(releaseFence)
 		synctest.Wait()
@@ -456,7 +464,7 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		require.Nil(t, h.recoveryPool)
 		require.True(t, pool.IsClosed())
 
-		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, target))
+		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, target, returnOnSafeQuorum))
 		synctest.Wait()
 		require.Equal(t, 1, slowCompletes)
 	})
@@ -487,10 +495,10 @@ func TestRecoveryBackgroundTimeoutStartsAfterQuorum(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				if phase == "fence" {
-					_, err := h.fenceSegmentQuorum(ctx, q)
+					_, err := h.fenceSegmentQuorum(ctx, q, returnOnSafeQuorum)
 					require.NoError(t, err)
 				} else {
-					require.NoError(t, h.completeSegmentQuorum(ctx, q, 100))
+					require.NoError(t, h.completeSegmentQuorum(ctx, q, 100, returnOnSafeQuorum))
 				}
 				cancel()
 				time.Sleep(backgroundRecoveryTimeout - time.Millisecond)

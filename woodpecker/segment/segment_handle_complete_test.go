@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"testing/synctest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -38,17 +37,6 @@ type completeNodeResponse struct {
 	lastEntryID int64
 	completeErr error
 	clientErr   error
-}
-
-// These tests inspect replica state or mock expectations after Complete returns.
-// Let outstanding RPC goroutines finish before inspecting or reusing the fixture.
-func completeQuorumAndWaitForRPCs(t *testing.T, h *segmentHandleImpl, q *proto.QuorumInfo, target int64) error {
-	t.Helper()
-	var err error
-	synctest.Test(t, func(t *testing.T) {
-		err = h.completeSegmentQuorum(t.Context(), q, target)
-	})
-	return err
 }
 
 // TestCompleteSegmentQuorum_ResponseMatrix documents and covers the completion
@@ -157,7 +145,7 @@ func TestCompleteSegmentQuorum_ResponseMatrix(t *testing.T) {
 			impl := sh.(*segmentHandleImpl)
 			quorum := &proto.QuorumInfo{Id: 1, Aq: tt.aq, Es: int32(len(nodes)), Wq: int32(len(nodes)), Nodes: nodes}
 
-			err := completeQuorumAndWaitForRPCs(t, impl, quorum, tt.targetLAC)
+			err := impl.completeSegmentQuorum(t.Context(), quorum, tt.targetLAC, waitForAllReplicas)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.True(t, werr.ErrAppendOpQuorumFailed.Is(err), "expected quorum failure, got %v", err)

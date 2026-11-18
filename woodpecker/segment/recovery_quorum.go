@@ -29,6 +29,13 @@ import (
 
 const backgroundRecoveryTimeout = 30 * time.Second
 
+type quorumWaitPolicy uint8
+
+const (
+	waitForAllReplicas quorumWaitPolicy = iota
+	returnOnSafeQuorum
+)
+
 type nodeRecoveryResult struct {
 	node        string
 	lastEntryId int64
