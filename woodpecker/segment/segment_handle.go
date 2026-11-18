@@ -1557,25 +1557,19 @@ func (s *segmentHandleImpl) resolveFenceLAC(results []int64, writeQuorum, ackQuo
 // fenceSegmentQuorum sends FenceSegment requests to all quorum nodes
 // and calculates the Log All Committed (LAC) based on majority consensus
 func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, wait quorumWaitPolicy) (int64, error) {
-	nodeCount := len(quorumInfo.Nodes) // always es=len(nodes)
-	// Requiring aq responses subsumes the ensemble-coverage bound ec=es-aq+1: aq >= ec
-	// always holds, so the fence still intersects every possible ack quorum. For the
-	// reachable ensemble sizes (3 and 5) the two are equal, so the threshold is unchanged.
+	nodeCount := len(quorumInfo.Nodes)
 	ackQuorum := int(quorumInfo.Aq)
 
 	if err := ctx.Err(); err != nil {
 		return -1, err
 	}
-	// Scope the proof to the service quorum we are optimizing. Other quorum
-	// shapes keep collecting all replies before using resolveFenceLAC.
-	canStopOnEqualTails := wait == returnOnSafeQuorum && s.cfg != nil && s.cfg.Woodpecker.Storage.IsStorageService() &&
-		nodeCount == 3 && quorumInfo.Es == 3 && quorumInfo.Wq == 3 && ackQuorum == 2
-
-	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canStopOnEqualTails, "fence", nil, s.fenceSegmentOnNode)
+	canReturnEarly := wait == returnOnSafeQuorum && ackQuorum > 0 && ackQuorum < nodeCount
+	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canReturnEarly, "fence", nil, s.fenceSegmentOnNode)
 	defer release()
 
 	// Collect results from nodes
 	var successResults []int64
+	tailCounts := make(map[int64]int)
 	var lastError error
 	received := 0
 
@@ -1589,15 +1583,15 @@ collect:
 			}
 			if result.err != nil {
 				lastError = result.err
-			} else {
-				successResults = append(successResults, result.lastEntryId)
+				continue
 			}
-			// With Wq=3/Aq=2, resolveFenceLAC chooses sorted index 1.
-			// Two equal successful tails fix that value regardless of the third
-			// tail or an error. They also fence every possible write ACK quorum.
-			// Unequal tails MUST wait: a third reply can still change the target.
-			if canStopOnEqualTails && len(successResults) == 2 && successResults[0] == successResults[1] {
-				break collect
+			successResults = append(successResults, result.lastEntryId)
+			if canReturnEarly {
+				// An ACK quorum of identical tails fixes the LAC regardless of the remaining replies.
+				tailCounts[result.lastEntryId]++
+				if tailCounts[result.lastEntryId] == ackQuorum {
+					break collect
+				}
 			}
 		case <-ctx.Done():
 			return -1, ctx.Err()

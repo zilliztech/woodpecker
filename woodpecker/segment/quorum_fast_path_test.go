@@ -185,6 +185,56 @@ func TestFenceQuorumUnequalTailsWaitForThirdResult(t *testing.T) {
 	}
 }
 
+func TestFenceQuorumFiveReplicas(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		tails       [5]int64
+		firstErr    error
+		wait        quorumWaitPolicy
+		wantReplies int
+		wantLAC     int64
+	}{
+		{"three matching replies", [5]int64{100, 100, 100, 90, 110}, nil, returnOnSafeQuorum, 3, 100},
+		{"fourth reply forms a majority", [5]int64{90, 100, 100, 100, 110}, nil, returnOnSafeQuorum, 4, 100},
+		{"split replies need the final tail", [5]int64{90, 100, 110, 90, 80}, nil, returnOnSafeQuorum, 5, 90},
+		{"failed reply cannot vote for empty tail", [5]int64{-1, -1, -1, 10, 20}, errors.New("unreachable"), returnOnSafeQuorum, 5, 10},
+		{"rolling waits for every reply", [5]int64{100, 100, 100, 90, 110}, nil, waitForAllReplicas, 5, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				finished := make(chan error, len(tc.tails))
+				clients := make([]*quorumFastClient, len(tc.tails))
+				for i, tail := range tc.tails {
+					clients[i] = &quorumFastClient{fence: func(ctx context.Context) (int64, error) {
+						// Deliver one reply per second of virtual time, in node order.
+						select {
+						case <-time.After(time.Duration(i+1) * time.Second):
+						case <-ctx.Done():
+						}
+						finished <- ctx.Err()
+						if i == 0 && tc.firstErr != nil {
+							return -1, tc.firstErr
+						}
+						return tail, ctx.Err()
+					}}
+				}
+				h, q := newQuorumFastHandle(clients, "service")
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				start := time.Now()
+				lac, err := h.fenceSegmentQuorum(ctx, q, tc.wait)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantLAC, lac)
+				require.Equal(t, time.Duration(tc.wantReplies)*time.Second, time.Since(start))
+				cancel()
+				for range clients {
+					require.NoError(t, <-finished, "remaining replicas must finish after foreground return")
+				}
+			})
+		})
+	}
+}
+
 func TestFenceQuorumFallbackHonorsCallerDeadline(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode string
@@ -192,7 +242,7 @@ func TestFenceQuorumFallbackHonorsCallerDeadline(t *testing.T) {
 	}{
 		{"unequal service tails", "service", []int64{90, 100}},
 		{"single embedded replica is silent", "local", nil},
-		{"five replica quorum unchanged", "service", []int64{100, 100, 100, 100}},
+		{"five replicas split two against two", "service", []int64{90, 90, 100, 100}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			exited := make(chan struct{})
