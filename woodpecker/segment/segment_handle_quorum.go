@@ -18,6 +18,7 @@ package segment
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 )
 
 const openWriterReplicaGracePeriod = 30 * time.Second
+
+var errReplicaGracePeriodExpired = errors.New("replica grace period expired after OpenWriter quorum")
 
 type quorumWaitPolicy uint8
 
@@ -93,44 +96,57 @@ func (s *segmentHandleImpl) nextReplicaTask(node string) func(string) {
 
 // submitQuorumRPCs sends the operation to every quorum member and buffers each reply.
 // Releasing the foreground wait after quorum gives unfinished tasks a bounded grace period.
-func (s *segmentHandleImpl) submitQuorumRPCs(parent context.Context, nodes []string, allowEarly bool, operation string,
+func (s *segmentHandleImpl) submitQuorumRPCs(parent context.Context, nodes []string, allowEarly bool, operation string, targetLAC *int64,
 	rpc func(context.Context, string) (int64, error),
 ) (<-chan replicaRPCResult, func()) {
 	ctx := parent
 	taskDone, release := func() {}, func() {}
 	if allowEarly {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithCancel(context.WithoutCancel(parent))
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(context.WithoutCancel(parent))
 		var remaining atomic.Int32
 		remaining.Store(int32(len(nodes)))
 		taskDone = func() {
 			if remaining.Add(-1) == 0 {
-				cancel()
+				cancel(nil)
 			}
 		}
 		release = func() {
 			if parent.Err() != nil || ctx.Err() != nil {
-				cancel()
+				cancel(context.Cause(parent))
 				return
 			}
-			timer := time.AfterFunc(openWriterReplicaGracePeriod, cancel)
+			timer := time.AfterFunc(openWriterReplicaGracePeriod, func() { cancel(errReplicaGracePeriodExpired) })
 			context.AfterFunc(ctx, func() { timer.Stop() })
 		}
 	}
 
 	results := make(chan replicaRPCResult, len(nodes))
+	log := logger.Ctx(ctx).With(zap.String("operation", operation), zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
+	if targetLAC != nil {
+		log = log.With(zap.Int64("targetLAC", *targetLAC))
+	}
+	submittedAt := time.Now()
 	s.enqueueReplicaTasks(nodes, func(node string) {
 		defer taskDone()
-		tail := int64(-1)
-		err := ctx.Err()
-		if err == nil {
-			tail, err = rpc(ctx, node)
+		result := replicaRPCResult{node: node, lastEntryId: -1, err: ctx.Err()}
+		skipped := result.err != nil
+		if !skipped {
+			result.lastEntryId, result.err = rpc(ctx, node)
 		}
-		if err != nil {
-			logger.Ctx(ctx).Warn("Segment replica RPC failed", zap.String("operation", operation),
-				zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.String("node", node), zap.Error(err))
+		replicaLog := log.With(zap.String("node", result.node),
+			zap.Int64("lastEntryId", result.lastEntryId), zap.Duration("duration", time.Since(submittedAt)))
+		switch {
+		case result.err != nil:
+			replicaLog.Warn("Segment replica RPC failed", zap.Error(result.err),
+				zap.Bool("skippedInQueue", skipped), zap.NamedError("cancelCause", context.Cause(ctx)))
+		case targetLAC != nil && result.lastEntryId < *targetLAC:
+			replicaLog.Warn("Replica finalized but does not locally cover target LAC", zap.Int64("localLastEntryId", result.lastEntryId))
+		default:
+			replicaLog.Info("Segment replica RPC succeeded")
 		}
-		results <- replicaRPCResult{node: node, lastEntryId: tail, err: err}
+		results <- result
 	})
 	return results, release
 }

@@ -27,8 +27,11 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
@@ -83,6 +86,13 @@ func waitQuorumWorker(t *testing.T, done <-chan struct{}) {
 	case <-time.After(time.Second):
 		t.Fatal("recovery RPC did not finish")
 	}
+}
+
+func captureQuorumLogs(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, logs := observer.New(zap.InfoLevel)
+	t.Cleanup(logger.ReplaceGlobals(zap.New(core)))
+	return logs
 }
 
 func TestFenceQuorumEqualTailsLetSlowReplicaFinish(t *testing.T) {
@@ -376,6 +386,7 @@ func TestCompleteQuorumSingleEmbeddedReplica(t *testing.T) {
 }
 
 func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
+	logs := captureQuorumLogs(t)
 	synctest.Test(t, func(t *testing.T) {
 		const tail int64 = 100
 		releaseFence := make(chan struct{})
@@ -417,14 +428,35 @@ func TestRecoverySlowReplicaFencesBeforeCompleting(t *testing.T) {
 		cancel() // OpenWriter's caller is done.
 		synctest.Wait()
 		require.Empty(t, completed, "the slow replica still has an unfinished Fence")
+		require.Equal(t, 4, logs.FilterMessage("Segment replica RPC succeeded").Len())
+		for _, message := range []string{"Calculated LAC from quorum fence responses", "Quorum complete responses collected"} {
+			decision := logs.FilterMessage(message).All()
+			require.Len(t, decision, 1)
+			require.EqualValues(t, 2, decision[0].ContextMap()["receivedCount"])
+			require.EqualValues(t, 3, decision[0].ContextMap()["nodeCount"])
+		}
+		time.Sleep(50 * time.Millisecond)
 		close(releaseFence)
 		synctest.Wait()
 		require.Len(t, completed, 1, "the same replica must now complete at the chosen target")
 		require.NoError(t, <-completed)
+		results := logs.FilterMessage("Segment replica RPC succeeded")
+		require.Equal(t, 6, results.Len())
+		late := results.FilterField(zap.String("node", q.Nodes[0])).All()
+		require.Len(t, late, 2)
+		require.Equal(t, "fence", late[0].ContextMap()["operation"])
+		require.Equal(t, "complete", late[1].ContextMap()["operation"])
+		require.Equal(t, tail, late[1].ContextMap()["targetLAC"])
+		for _, entry := range late {
+			require.Equal(t, zap.InfoLevel, entry.Level)
+			require.Equal(t, tail, entry.ContextMap()["lastEntryId"])
+			require.Equal(t, 50*time.Millisecond, entry.ContextMap()["duration"])
+		}
 	})
 }
 
 func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
+	logs := captureQuorumLogs(t)
 	synctest.Test(t, func(t *testing.T) {
 		const target = int64(100)
 		releaseFence := make(chan struct{})
@@ -463,6 +495,14 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		require.Empty(t, h.pendingReplicaTasks)
 		require.Nil(t, h.quorumRPCPool)
 		require.True(t, pool.IsClosed())
+		failed := logs.FilterMessage("Segment replica RPC failed").All()
+		require.Len(t, failed, 1)
+		require.Equal(t, zap.WarnLevel, failed[0].Level)
+		require.Equal(t, q.Nodes[0], failed[0].ContextMap()["node"])
+		require.Equal(t, true, failed[0].ContextMap()["skippedInQueue"])
+		require.Equal(t, context.DeadlineExceeded.Error(), failed[0].ContextMap()["cancelCause"])
+		require.Equal(t, time.Second, failed[0].ContextMap()["duration"])
+		require.Equal(t, 2, logs.FilterMessage("Replica finalized but does not locally cover target LAC").Len())
 
 		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, target, returnOnSafeQuorum))
 		synctest.Wait()
@@ -473,6 +513,7 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 func TestRecoveryBackgroundTimeoutStartsAfterQuorum(t *testing.T) {
 	for _, phase := range []string{"fence", "complete"} {
 		t.Run(phase, func(t *testing.T) {
+			logs := captureQuorumLogs(t)
 			synctest.Test(t, func(t *testing.T) {
 				stopped := make(chan error, 1)
 				hang := func(ctx context.Context) (int64, error) {
@@ -508,6 +549,15 @@ func TestRecoveryBackgroundTimeoutStartsAfterQuorum(t *testing.T) {
 				synctest.Wait()
 				require.Len(t, stopped, 1)
 				require.ErrorIs(t, <-stopped, context.Canceled)
+				failed := logs.FilterMessage("Segment replica RPC failed").All()
+				require.Len(t, failed, 1)
+				require.Equal(t, zap.WarnLevel, failed[0].Level)
+				fields := failed[0].ContextMap()
+				require.Equal(t, phase, fields["operation"])
+				require.Equal(t, q.Nodes[1], fields["node"])
+				require.Equal(t, false, fields["skippedInQueue"])
+				require.Equal(t, errReplicaGracePeriodExpired.Error(), fields["cancelCause"])
+				require.Equal(t, 3*openWriterReplicaGracePeriod, fields["duration"])
 			})
 		})
 	}

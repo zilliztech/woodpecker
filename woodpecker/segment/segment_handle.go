@@ -1244,7 +1244,7 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 		return err
 	}
 	canReturnEarly := wait == returnOnSafeQuorum && ackQuorum > 0 && ackQuorum < nodeCount
-	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canReturnEarly, "complete",
+	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canReturnEarly, "complete", &lac,
 		func(ctx context.Context, node string) (int64, error) { return s.completeSegmentOnNode(ctx, node, lac) })
 	defer release()
 
@@ -1252,11 +1252,13 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	var finalizedResults []int64
 	var qualifiedResults []int64
 	var lastError error
+	received := 0
 
 collect:
 	for range nodeCount {
 		select {
 		case result := <-results:
+			received++
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -1264,23 +1266,8 @@ collect:
 				lastError = result.err
 			} else {
 				finalizedResults = append(finalizedResults, result.lastEntryId)
-				logger.Ctx(ctx).Info("Successfully completed segment on node",
-					zap.String("logName", s.logName),
-					zap.Int64("logId", s.logId),
-					zap.Int64("segmentId", s.segmentId),
-					zap.String("node", result.node),
-					zap.Int64("lastEntryId", result.lastEntryId),
-					zap.Int64("targetLAC", lac))
 				if result.lastEntryId >= lac {
 					qualifiedResults = append(qualifiedResults, result.lastEntryId)
-				} else {
-					logger.Ctx(ctx).Warn("Replica finalized but does not locally cover target LAC",
-						zap.String("logName", s.logName),
-						zap.Int64("logId", s.logId),
-						zap.Int64("segmentId", s.segmentId),
-						zap.String("node", result.node),
-						zap.Int64("localLastEntryId", result.lastEntryId),
-						zap.Int64("targetLAC", lac))
 				}
 			}
 			// A pending RPC may still be finalizing the only replica that can compact at lac.
@@ -1334,6 +1321,8 @@ collect:
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("lac", lac),
+		zap.Int("receivedCount", received),
+		zap.Int("nodeCount", nodeCount),
 		zap.Int("finalizedCount", len(finalizedResults)),
 		zap.Int("qualifiedCount", len(qualifiedResults)),
 		zap.Int("ackQuorum", ackQuorum),
@@ -1582,17 +1571,19 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 	canStopOnEqualTails := wait == returnOnSafeQuorum && s.cfg != nil && s.cfg.Woodpecker.Storage.IsStorageService() &&
 		nodeCount == 3 && quorumInfo.Es == 3 && quorumInfo.Wq == 3 && ackQuorum == 2
 
-	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canStopOnEqualTails, "fence", s.fenceSegmentOnNode)
+	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canStopOnEqualTails, "fence", nil, s.fenceSegmentOnNode)
 	defer release()
 
 	// Collect results from nodes
 	var successResults []int64
 	var lastError error
+	received := 0
 
 collect:
 	for range nodeCount {
 		select {
 		case result := <-results:
+			received++
 			if err := ctx.Err(); err != nil {
 				return -1, err
 			}
@@ -1600,12 +1591,6 @@ collect:
 				lastError = result.err
 			} else {
 				successResults = append(successResults, result.lastEntryId)
-				logger.Ctx(ctx).Info("Successfully fenced segment on node",
-					zap.String("logName", s.logName),
-					zap.Int64("logId", s.logId),
-					zap.Int64("segmentId", s.segmentId),
-					zap.String("node", result.node),
-					zap.Int64("lastEntryId", result.lastEntryId))
 			}
 			// With Wq=3/Aq=2, resolveFenceLAC chooses sorted index 1.
 			// Two equal successful tails fix that value regardless of the third
@@ -1640,6 +1625,8 @@ collect:
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("lac", lac),
+		zap.Int("receivedCount", received),
+		zap.Int("nodeCount", nodeCount),
 		zap.Int("successCount", len(successResults)),
 		zap.Int("ackQuorum", ackQuorum),
 		zap.Int64s("receivedResults", successResults))
