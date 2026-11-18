@@ -125,10 +125,10 @@ the recovered boundary, writes a new entry, compacts the old segments, and reads
 all entries with a fresh handle using direct object-storage reads for sealed
 segments.
 
-`OpenWriterMissingFenceReply` additionally rotates the unavailable node through
-all three positions with replica tails `[4, 4, -1]`, withholding a data-bearing
-reply. The unequal surviving tails must use the existing resolution rule,
-preserve all acknowledged entries, and remain readable after compaction (#320).
+`OpenWriterMissingFenceReply` keeps the old quorum order fixed and makes each
+index (0, 1, 2) unavailable in turn. Each time, the unavailable replica holds
+entry 4 and the two healthy replicas report tails 4 and -1. Recovery must
+preserve all acknowledged entries through compaction and read-back (#320).
 Run without `t.Parallel`: timing uses a temporary process-wide trace recorder.
 
 ### Embedded MinIO without conditional writes: rollover regression

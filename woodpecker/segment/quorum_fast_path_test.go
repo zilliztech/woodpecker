@@ -296,6 +296,66 @@ func TestCompleteQuorumWithCoveringReplicaLetsSlowReplicaFinish(t *testing.T) {
 	}
 }
 
+func TestCompleteQuorumMixedTailsCanCompactEmptyTarget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	store := mocks_objectstorage.NewObjectStorage(t)
+	const footer = "root/1/0/footer.blk"
+	missing := errors.New("remote footer missing")
+	store.EXPECT().StatObject(mock.Anything, "bucket", footer, mock.Anything, mock.Anything).Return(0, false, missing)
+	store.EXPECT().IsObjectNotExistsError(missing).Return(true)
+	store.EXPECT().PutObject(mock.Anything, "bucket", footer, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	empty, err := stagedstorage.NewStagedFileWriter(ctx, "bucket", "root", t.TempDir(), 1, 0, store, cfg)
+	require.NoError(t, err)
+	defer empty.Close(t.Context())
+	nonEmpty, err := stagedstorage.NewStagedFileWriter(ctx, "bucket", "root", t.TempDir(), 1, 0, store, cfg)
+	require.NoError(t, err)
+	defer nonEmpty.Close(t.Context())
+	_, err = nonEmpty.WriteDataAsync(ctx, 0, []byte("entry 0"), nil)
+	require.NoError(t, err)
+
+	// A and B fence with empty tails. Hold B's Complete so only A and C can finalize.
+	allowFenceC := make(chan struct{})
+	allowCompleteB := make(chan struct{})
+	defer close(allowCompleteB)
+	h, q := newQuorumFastHandle([]*quorumFastClient{
+		{fence: empty.Fence, complete: empty.Finalize},
+		{
+			fence: func(context.Context) (int64, error) { return -1, nil },
+			complete: func(context.Context, int64) (int64, error) {
+				<-allowCompleteB
+				return -1, nil
+			},
+		},
+		{
+			fence: func(ctx context.Context) (int64, error) {
+				select {
+				case <-allowFenceC:
+					return nonEmpty.Fence(ctx)
+				case <-ctx.Done():
+					return -1, ctx.Err()
+				}
+			},
+			complete: nonEmpty.Finalize,
+		},
+	}, "service")
+	lac, err := h.fenceSegmentQuorum(ctx, q, returnOnSafeQuorum)
+	require.NoError(t, err)
+	require.EqualValues(t, -1, lac)
+	close(allowFenceC)
+	require.NoError(t, h.completeSegmentQuorum(ctx, q, lac, returnOnSafeQuorum))
+
+	// Check C before A publishes the shared empty footer.
+	_, err = nonEmpty.Compact(ctx, lac)
+	require.True(t, werr.ErrInvalidLACAlignment.Is(err), "non-empty replica compact returned %v", err)
+	size, err := empty.Compact(ctx, lac)
+	require.NoError(t, err)
+	require.Positive(t, size)
+}
+
 func TestCompleteQuorumWaitsForOnlyReplicaThatCanCompact(t *testing.T) {
 	ctx := t.Context()
 	cfg, err := config.NewConfiguration()

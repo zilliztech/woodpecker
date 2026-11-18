@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -151,27 +152,26 @@ func TestServiceStabilityProcess_OpenWriterFenceAll(t *testing.T) {
 		{"NewConnectionSilent", false},
 		{"EstablishedConnectionSilent", true},
 	}
-	t.Run("EmptyLog", func(t *testing.T) { runOpenWriterFenceCase(t, "HealthyFresh", false, 0) })
+	t.Run("EmptyLog", func(t *testing.T) { runOpenWriterFenceCase(t, "HealthyFresh", false, 0, 0) })
 	for _, tc := range cases {
 		for _, segments := range []int{1, 3} {
 			t.Run(fmt.Sprintf("%s/segments_%d", tc.name, segments), func(t *testing.T) {
-				runOpenWriterFenceCase(t, tc.name, tc.warm, segments)
+				runOpenWriterFenceCase(t, tc.name, tc.warm, segments, 0)
 			})
 		}
 	}
 }
 
-// The three rotations preserve the #320 history: data on two replicas, an
-// empty third replica, and one data-bearing replica missing from Fence replies.
+// Each old quorum index takes a turn as the missing data-bearing replica from #320.
 func TestServiceStabilityProcess_OpenWriterMissingFenceReply(t *testing.T) {
-	for rotation := 0; rotation < 3; rotation++ {
-		t.Run(fmt.Sprintf("rotation_%d", rotation), func(t *testing.T) {
-			runOpenWriterFenceCase(t, "MissingDataBearingReply", false, 1, rotation)
+	for faultIndex := range 3 {
+		t.Run(fmt.Sprintf("rotation_%d", faultIndex), func(t *testing.T) {
+			runOpenWriterFenceCase(t, "MissingDataBearingReply", false, 1, faultIndex)
 		})
 	}
 }
 
-func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active int, rotation ...int) {
+func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active, faultIndex int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -181,13 +181,10 @@ func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active int, r
 	cluster, cfg := utils.StartPodClusterWithCfg(t, 4, filepath.Join(t.TempDir(), "service"), cfg)
 	t.Cleanup(func() { stability.Bounded(t, "cluster stop", time.Minute, func() { cluster.Stop(t) }) })
 	nodes := cluster.ServiceSeeds()
-	if len(rotation) > 0 {
-		old := append([]string(nil), nodes[:3]...)
-		for i := 0; i < 3; i++ {
-			nodes[i] = old[(i+rotation[0])%3]
-		}
-	}
-	faultNode, ok := cluster.NodeIndexByServiceAddr(nodes[0])
+	oldQuorum := &proto.QuorumInfo{Id: 1, Es: 3, Wq: 3, Aq: 2, Nodes: nodes[:3]}
+	faultAddr := oldQuorum.Nodes[faultIndex]
+	emptyIndex := (faultIndex + 2) % len(oldQuorum.Nodes)
+	faultNode, ok := cluster.NodeIndexByServiceAddr(faultAddr)
 	require.True(t, ok)
 	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
 	require.NoError(t, err)
@@ -200,8 +197,8 @@ func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active int, r
 	lm, _, err := md.OpenLog(ctx, name)
 	require.NoError(t, err)
 	logID := lm.Metadata.GetLogId()
-	oldQuorum := &proto.QuorumInfo{Id: 1, Es: 3, Wq: 3, Aq: 2, Nodes: append([]string(nil), nodes[:3]...)}
-	newQuorum := &proto.QuorumInfo{Id: 2, Es: 3, Wq: 3, Aq: 2, Nodes: append([]string(nil), nodes[1:]...)}
+	healthyNodes := slices.Delete(slices.Clone(nodes), faultIndex, faultIndex+1)
+	newQuorum := &proto.QuorumInfo{Id: 2, Es: 3, Wq: 3, Aq: 2, Nodes: healthyNodes}
 	require.NoError(t, md.StoreQuorumInfo(ctx, oldQuorum))
 	require.NoError(t, md.StoreQuorumInfo(ctx, newQuorum))
 	newPool := func() client.LogStoreClientPool {
@@ -220,8 +217,8 @@ func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active int, r
 		for entry := 0; entry < openWriterSeedEntries; entry++ {
 			payload, marshalErr := log.MarshalMessage(&log.WriteMessage{Payload: openWriterPayload(seg, entry)})
 			require.NoError(t, marshalErr)
-			for _, node := range oldQuorum.Nodes {
-				if fault == "MissingDataBearingReply" && node == nodes[2] {
+			for i, node := range oldQuorum.Nodes {
+				if fault == "MissingDataBearingReply" && i == emptyIndex {
 					continue
 				}
 				c, getErr := seedPool.GetLogStoreClient(ctx, node)
@@ -287,6 +284,18 @@ func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active int, r
 	writer, openErr := measureOpenWriter(t, handle, pool, active, "initial", budget)
 	require.NoError(t, openErr)
 	require.NotNil(t, writer)
+	if fault == "MissingDataBearingReply" {
+		fenceTails := make(map[string]int64)
+		for _, rpc := range pool.snapshot() {
+			if rpc.Operation == "fence" && rpc.Error == "" {
+				fenceTails[rpc.Node] = rpc.LastEntryID
+			}
+		}
+		require.Equal(t, map[string]int64{
+			oldQuorum.Nodes[emptyIndex]:                          -1,
+			oldQuorum.Nodes[(faultIndex+1)%len(oldQuorum.Nodes)]: openWriterSeedEntries - 1,
+		}, fenceTails)
+	}
 	if fault == "HealthyFresh" || fault == "HealthyWarm" {
 		// The caller has released its context. Every healthy replica should still
 		// finish both RPCs, including the ones outside the measured OpenWriter call.
@@ -308,7 +317,7 @@ func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active int, r
 	if fault == "NewConnectionSilent" || fault == "EstablishedConnectionSilent" || fault == "MissingDataBearingReply" {
 		proxy.ResetAll()
 		require.NoError(t, proxy.SetForward(fmt.Sprintf("127.0.0.1:%d", cluster.UsedPorts[faultNode])))
-		pool.Clear(ctx, nodes[0])
+		pool.Clear(ctx, faultAddr)
 	}
 	t.Cleanup(func() {
 		stability.Bounded(t, "writer close", 15*time.Second, func() {

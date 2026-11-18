@@ -1271,6 +1271,8 @@ collect:
 				}
 			}
 			// A pending RPC may still be finalizing the only replica that can compact at lac.
+			// Early return assumes len(Nodes) == Wq == Es and Aq == Wq/2+1.
+			// For lac == -1, any finalized quorum includes a replica that reported an empty tail to Fence.
 			if canReturnEarly && len(finalizedResults) >= ackQuorum && len(qualifiedResults) > 0 {
 				break collect
 			}
@@ -1587,7 +1589,7 @@ collect:
 			}
 			successResults = append(successResults, result.lastEntryId)
 			if canReturnEarly {
-				// An ACK quorum of identical tails fixes the LAC regardless of the remaining replies.
+				// When Aq is a majority of all Wq nodes, Aq identical tails fix the LAC.
 				tailCounts[result.lastEntryId]++
 				if tailCounts[result.lastEntryId] == ackQuorum {
 					break collect
