@@ -439,14 +439,22 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		_, err := h.fenceSegmentQuorum(t.Context(), q)
 		require.NoError(t, err)
 
+		synctest.Wait()
+		pool := h.recoveryPool
+		require.NotNil(t, pool)
+		require.Equal(t, len(q.Nodes), pool.Cap())
+
 		// Only the slow replica covers the target. Its Complete is still queued when the caller times out.
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, target), context.DeadlineExceeded)
+		require.Same(t, pool, h.recoveryPool)
 		close(releaseFence)
 		synctest.Wait()
 		require.Zero(t, slowCompletes)
-		require.Empty(t, h.recovery.queues)
+		require.Empty(t, h.pendingRecovery)
+		require.Nil(t, h.recoveryPool)
+		require.True(t, pool.IsClosed())
 
 		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, target))
 		synctest.Wait()

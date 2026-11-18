@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
@@ -188,7 +189,11 @@ type segmentHandleImpl struct {
 	// The handle coordinates lifecycle; the appender owns per-entry write state.
 	appender      *segmentAppender
 	completionMgr *completionManager // nil for readonly segments
-	recovery      recoveryPool       // runs Fence and Complete tasks for this segment
+
+	// Recovery RPCs share a pool. Each busy replica has one worker and a FIFO of following calls.
+	recoveryMu      sync.Mutex
+	recoveryPool    *conc.Pool[struct{}]
+	pendingRecovery map[string][]func(string)
 
 	// Failed endpoints excluded from the next quorum; protected by unreachableMu.
 	unreachableMu sync.Mutex

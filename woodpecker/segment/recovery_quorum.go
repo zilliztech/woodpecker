@@ -18,12 +18,12 @@ package segment
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/logger"
 )
 
@@ -35,40 +35,53 @@ type nodeRecoveryResult struct {
 	err         error
 }
 
-// One worker per busy replica keeps Fence and Complete in submission order.
-// Workers exit when their queue is empty, including on read-only recovery handles.
-type recoveryPool struct {
-	mu     sync.Mutex
-	queues map[string][]func()
-}
-
-func (p *recoveryPool) submit(node string, task func()) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.queues == nil {
-		p.queues = make(map[string][]func())
+// enqueueRecovery keeps a replica's Complete behind its Fence without occupying another pool worker.
+func (s *segmentHandleImpl) enqueueRecovery(nodes []string, task func(string)) {
+	if len(nodes) == 0 {
+		return
 	}
-	p.queues[node] = append(p.queues[node], task)
-	if len(p.queues[node]) == 1 {
-		go p.run(node, task)
+	s.recoveryMu.Lock()
+	if s.recoveryPool == nil {
+		s.recoveryPool = conc.NewPool[struct{}](len(nodes), conc.WithDisablePurge(true))
+		s.pendingRecovery = make(map[string][]func(string), len(nodes))
 	}
-}
-
-func (p *recoveryPool) run(node string, task func()) {
-	for {
-		task()
-		p.mu.Lock()
-		queue := p.queues[node]
-		queue[0] = nil
-		if len(queue) == 1 {
-			delete(p.queues, node)
-			p.mu.Unlock()
-			return
+	pool := s.recoveryPool
+	var ready []string
+	for _, node := range nodes {
+		if pending, busy := s.pendingRecovery[node]; busy {
+			s.pendingRecovery[node] = append(pending, task)
+		} else {
+			s.pendingRecovery[node] = nil
+			ready = append(ready, node)
 		}
-		p.queues[node] = queue[1:]
-		task = queue[1]
-		p.mu.Unlock()
 	}
+	s.recoveryMu.Unlock()
+
+	for _, node := range ready {
+		pool.Submit(func() (struct{}, error) {
+			for next := task; next != nil; next = s.nextRecovery(node) {
+				next(node)
+			}
+			return struct{}{}, nil
+		})
+	}
+}
+
+func (s *segmentHandleImpl) nextRecovery(node string) func(string) {
+	s.recoveryMu.Lock()
+	defer s.recoveryMu.Unlock()
+	if pending := s.pendingRecovery[node]; len(pending) > 0 {
+		next := pending[0]
+		pending[0] = nil
+		s.pendingRecovery[node] = pending[1:]
+		return next
+	}
+	delete(s.pendingRecovery, node)
+	if len(s.pendingRecovery) == 0 {
+		s.recoveryPool.Release()
+		s.recoveryPool = nil
+	}
+	return nil
 }
 
 // submitRecovery returns one buffered reply per replica. Releasing the foreground
@@ -99,20 +112,18 @@ func (s *segmentHandleImpl) submitRecovery(parent context.Context, nodes []strin
 	}
 
 	results := make(chan nodeRecoveryResult, len(nodes))
-	for _, node := range nodes {
-		s.recovery.submit(node, func() {
-			defer taskDone()
-			tail := int64(-1)
-			err := ctx.Err()
-			if err == nil {
-				tail, err = rpc(ctx, node)
-			}
-			if err != nil {
-				logger.Ctx(ctx).Warn("Segment recovery RPC failed", zap.String("operation", operation),
-					zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.String("node", node), zap.Error(err))
-			}
-			results <- nodeRecoveryResult{node: node, lastEntryId: tail, err: err}
-		})
-	}
+	s.enqueueRecovery(nodes, func(node string) {
+		defer taskDone()
+		tail := int64(-1)
+		err := ctx.Err()
+		if err == nil {
+			tail, err = rpc(ctx, node)
+		}
+		if err != nil {
+			logger.Ctx(ctx).Warn("Segment recovery RPC failed", zap.String("operation", operation),
+				zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.String("node", node), zap.Error(err))
+		}
+		results <- nodeRecoveryResult{node: node, lastEntryId: tail, err: err}
+	})
 	return results, release
 }
