@@ -448,7 +448,7 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		require.NoError(t, err)
 
 		synctest.Wait()
-		pool := h.completionRPCPool
+		pool := h.quorumRPCPool
 		require.NotNil(t, pool)
 		require.Equal(t, len(q.Nodes), pool.Cap())
 
@@ -456,12 +456,12 @@ func TestRecoverySkipsExpiredCompleteQueuedBehindFence(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		require.ErrorIs(t, h.completeSegmentQuorum(ctx, q, target, returnOnSafeQuorum), context.DeadlineExceeded)
-		require.Same(t, pool, h.completionRPCPool)
+		require.Same(t, pool, h.quorumRPCPool)
 		close(releaseFence)
 		synctest.Wait()
 		require.Zero(t, slowCompletes)
-		require.Empty(t, h.pendingCompletionTasks)
-		require.Nil(t, h.completionRPCPool)
+		require.Empty(t, h.pendingReplicaTasks)
+		require.Nil(t, h.quorumRPCPool)
 		require.True(t, pool.IsClosed())
 
 		require.NoError(t, h.completeSegmentQuorum(t.Context(), q, target, returnOnSafeQuorum))

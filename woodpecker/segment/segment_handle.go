@@ -191,9 +191,9 @@ type segmentHandleImpl struct {
 	completionMgr *completionManager // nil for readonly segments
 
 	// Fence and Complete share a pool. Each busy replica has one worker and a FIFO of following calls.
-	completionRPCMu        sync.Mutex
-	completionRPCPool      *conc.Pool[struct{}]
-	pendingCompletionTasks map[string][]func(string)
+	quorumRPCMu         sync.Mutex
+	quorumRPCPool       *conc.Pool[struct{}]
+	pendingReplicaTasks map[string][]func(string)
 
 	// Failed endpoints excluded from the next quorum; protected by unreachableMu.
 	unreachableMu sync.Mutex
@@ -1244,7 +1244,7 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 		return err
 	}
 	canReturnEarly := wait == returnOnSafeQuorum && ackQuorum > 0 && ackQuorum < nodeCount
-	results, release := s.submitCompletionRPCs(ctx, quorumInfo.Nodes, canReturnEarly, "complete",
+	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canReturnEarly, "complete",
 		func(ctx context.Context, node string) (int64, error) { return s.completeSegmentOnNode(ctx, node, lac) })
 	defer release()
 
@@ -1582,7 +1582,7 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 	canStopOnEqualTails := wait == returnOnSafeQuorum && s.cfg != nil && s.cfg.Woodpecker.Storage.IsStorageService() &&
 		nodeCount == 3 && quorumInfo.Es == 3 && quorumInfo.Wq == 3 && ackQuorum == 2
 
-	results, release := s.submitCompletionRPCs(ctx, quorumInfo.Nodes, canStopOnEqualTails, "fence", s.fenceSegmentOnNode)
+	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canStopOnEqualTails, "fence", s.fenceSegmentOnNode)
 	defer release()
 
 	// Collect results from nodes

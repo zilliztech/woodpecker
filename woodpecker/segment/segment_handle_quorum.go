@@ -36,37 +36,37 @@ const (
 	returnOnSafeQuorum
 )
 
-type completionRPCResult struct {
+type replicaRPCResult struct {
 	node        string
 	lastEntryId int64
 	err         error
 }
 
-// enqueueCompletionTasks keeps a replica's Complete behind its Fence without occupying another pool worker.
-func (s *segmentHandleImpl) enqueueCompletionTasks(nodes []string, task func(string)) {
+// enqueueReplicaTasks keeps a replica's Complete behind its Fence without occupying another pool worker.
+func (s *segmentHandleImpl) enqueueReplicaTasks(nodes []string, task func(string)) {
 	if len(nodes) == 0 {
 		return
 	}
-	s.completionRPCMu.Lock()
-	if s.completionRPCPool == nil {
-		s.completionRPCPool = conc.NewPool[struct{}](len(nodes), conc.WithDisablePurge(true))
-		s.pendingCompletionTasks = make(map[string][]func(string), len(nodes))
+	s.quorumRPCMu.Lock()
+	if s.quorumRPCPool == nil {
+		s.quorumRPCPool = conc.NewPool[struct{}](len(nodes), conc.WithDisablePurge(true))
+		s.pendingReplicaTasks = make(map[string][]func(string), len(nodes))
 	}
-	pool := s.completionRPCPool
+	pool := s.quorumRPCPool
 	var ready []string
 	for _, node := range nodes {
-		if pending, busy := s.pendingCompletionTasks[node]; busy {
-			s.pendingCompletionTasks[node] = append(pending, task)
+		if pending, busy := s.pendingReplicaTasks[node]; busy {
+			s.pendingReplicaTasks[node] = append(pending, task)
 		} else {
-			s.pendingCompletionTasks[node] = nil
+			s.pendingReplicaTasks[node] = nil
 			ready = append(ready, node)
 		}
 	}
-	s.completionRPCMu.Unlock()
+	s.quorumRPCMu.Unlock()
 
 	for _, node := range ready {
 		pool.Submit(func() (struct{}, error) {
-			for next := task; next != nil; next = s.nextCompletionTask(node) {
+			for next := task; next != nil; next = s.nextReplicaTask(node) {
 				next(node)
 			}
 			return struct{}{}, nil
@@ -74,28 +74,28 @@ func (s *segmentHandleImpl) enqueueCompletionTasks(nodes []string, task func(str
 	}
 }
 
-func (s *segmentHandleImpl) nextCompletionTask(node string) func(string) {
-	s.completionRPCMu.Lock()
-	defer s.completionRPCMu.Unlock()
-	if pending := s.pendingCompletionTasks[node]; len(pending) > 0 {
+func (s *segmentHandleImpl) nextReplicaTask(node string) func(string) {
+	s.quorumRPCMu.Lock()
+	defer s.quorumRPCMu.Unlock()
+	if pending := s.pendingReplicaTasks[node]; len(pending) > 0 {
 		next := pending[0]
 		pending[0] = nil
-		s.pendingCompletionTasks[node] = pending[1:]
+		s.pendingReplicaTasks[node] = pending[1:]
 		return next
 	}
-	delete(s.pendingCompletionTasks, node)
-	if len(s.pendingCompletionTasks) == 0 {
-		s.completionRPCPool.Release()
-		s.completionRPCPool = nil
+	delete(s.pendingReplicaTasks, node)
+	if len(s.pendingReplicaTasks) == 0 {
+		s.quorumRPCPool.Release()
+		s.quorumRPCPool = nil
 	}
 	return nil
 }
 
-// submitCompletionRPCs returns one buffered reply per replica. Releasing the foreground
-// wait after quorum gives unfinished tasks a bounded grace period.
-func (s *segmentHandleImpl) submitCompletionRPCs(parent context.Context, nodes []string, allowEarly bool, operation string,
+// submitQuorumRPCs sends the operation to every quorum member and buffers each reply.
+// Releasing the foreground wait after quorum gives unfinished tasks a bounded grace period.
+func (s *segmentHandleImpl) submitQuorumRPCs(parent context.Context, nodes []string, allowEarly bool, operation string,
 	rpc func(context.Context, string) (int64, error),
-) (<-chan completionRPCResult, func()) {
+) (<-chan replicaRPCResult, func()) {
 	ctx := parent
 	taskDone, release := func() {}, func() {}
 	if allowEarly {
@@ -118,8 +118,8 @@ func (s *segmentHandleImpl) submitCompletionRPCs(parent context.Context, nodes [
 		}
 	}
 
-	results := make(chan completionRPCResult, len(nodes))
-	s.enqueueCompletionTasks(nodes, func(node string) {
+	results := make(chan replicaRPCResult, len(nodes))
+	s.enqueueReplicaTasks(nodes, func(node string) {
 		defer taskDone()
 		tail := int64(-1)
 		err := ctx.Err()
@@ -127,10 +127,10 @@ func (s *segmentHandleImpl) submitCompletionRPCs(parent context.Context, nodes [
 			tail, err = rpc(ctx, node)
 		}
 		if err != nil {
-			logger.Ctx(ctx).Warn("Segment completion RPC failed", zap.String("operation", operation),
+			logger.Ctx(ctx).Warn("Segment replica RPC failed", zap.String("operation", operation),
 				zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.String("node", node), zap.Error(err))
 		}
-		results <- completionRPCResult{node: node, lastEntryId: tail, err: err}
+		results <- replicaRPCResult{node: node, lastEntryId: tail, err: err}
 	})
 	return results, release
 }
