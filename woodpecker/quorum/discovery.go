@@ -156,24 +156,13 @@ func buildSingleFilter(es int32) []*proto.NodeFilter {
 }
 
 func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
-	// Keep the same quorum sizes through placement, retries and metadata construction.
-	ensembleSize, writeQuorumSize, ackQuorumSize := d.cfg.GetQuorumSizes()
 	logger.Ctx(ctx).Info("Active discovery: Starting quorum node selection",
 		zap.String("strategy", d.cfg.SelectStrategy.Strategy.Get()),
-		zap.String("affinityMode", d.cfg.SelectStrategy.AffinityMode.Get()),
-		zap.Int("ensembleSize", ensembleSize))
+		zap.String("affinityMode", d.cfg.SelectStrategy.AffinityMode.Get()))
 
 	pools := d.cfg.BufferPools.Get()
-	custom := d.cfg.SelectStrategy.CustomPlacement.Get()
-
 	if len(pools) == 0 {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg("no buffer pools configured")
-	}
-
-	// Build filters before retrying so invalid placement fails immediately.
-	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy.Get(), int32(ensembleSize), custom, pools)
-	if err != nil {
-		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
 	}
 
 	excluded := excludedEndpointsFrom(ctx)
@@ -181,34 +170,51 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 		logger.Ctx(ctx).Info("Active discovery: selecting without replicas the previous segment could not reach",
 			zap.Strings("excluded", excluded))
 	}
-	setExclusion(filters, excluded)
 
 	var result *proto.QuorumInfo
-	err = retry.Do(ctx, func() error {
+	err := retry.Do(ctx, func() error {
 		var selErr error
-		switch d.cfg.SelectStrategy.Strategy.Get() {
-		case "cross-region":
-			result, selErr = d.selectCrossRegionQuorum(ctx, pools, filters, ensembleSize)
-		case "custom":
-			result, selErr = d.selectCustomPlacementQuorum(ctx, pools, custom, filters, ensembleSize)
-		default:
-			result, selErr = d.selectSingleRegionQuorum(ctx, pools, filters)
-		}
-		if selErr == nil {
-			selErr = validateSelectedNodes(result.GetNodes(), ensembleSize)
-		}
+		result, selErr = d.selectQuorumAttempt(ctx, pools, excluded)
 		if len(excluded) > 0 && errors.Is(selErr, werr.ErrServiceInsufficientQuorum) {
 			// Too few nodes without the excluded ones: select from all of them
 			// rather than hold the log up.
 			logger.Ctx(ctx).Warn("Active discovery: not enough nodes without the excluded replicas, selecting with them",
 				zap.Strings("excluded", excluded), zap.Error(selErr))
 			excluded = nil
-			setExclusion(filters, nil)
 		}
 		return selErr
 	}, retry.AttemptAlways(), retry.Sleep(200*time.Millisecond), retry.MaxSleepTime(2*time.Second))
 	if err != nil {
 		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
+	}
+	return result, nil
+}
+
+func (d *quorumDiscovery) selectQuorumAttempt(ctx context.Context, pools []config.QuorumBufferPool, excluded []string) (*proto.QuorumInfo, error) {
+	// Placement and metadata use the same sizes. A retry picks up any replica count change.
+	ensembleSize, writeQuorumSize, ackQuorumSize := d.cfg.GetQuorumSizes()
+	strategy := d.cfg.SelectStrategy.Strategy.Get()
+	custom := d.cfg.SelectStrategy.CustomPlacement.Get()
+	filters, err := buildFilters(ctx, strategy, int32(ensembleSize), custom, pools)
+	if err != nil {
+		return nil, retry.Unrecoverable(err)
+	}
+	setExclusion(filters, excluded)
+
+	var result *proto.QuorumInfo
+	switch strategy {
+	case "cross-region":
+		result, err = d.selectCrossRegionQuorum(ctx, pools, filters, ensembleSize)
+	case "custom":
+		result, err = d.selectCustomPlacementQuorum(ctx, pools, custom, filters, ensembleSize)
+	default:
+		result, err = d.selectSingleRegionQuorum(ctx, pools, filters)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := validateSelectedNodes(result.GetNodes(), ensembleSize); err != nil {
+		return nil, err
 	}
 	result.Id = 1
 	result.Es = int32(ensembleSize)
@@ -582,21 +588,24 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 	// to make up for the ones dropped.
 	var dropped int
 	selectedNodes, dropped = withoutExcluded(selectedNodes, filter.GetExcludeEndpoints())
-	if dropped > 0 && len(selectedNodes) < expectedAtLeast {
+	eligible := distinctSeedNodes(selectedNodes)
+	if dropped > 0 && len(eligible) < expectedAtLeast {
 		widened := filter.CloneVT()
 		widened.Limit = filter.Limit + int32(len(filter.GetExcludeEndpoints()))
 		more, err := grpcClient.SelectNodes(ctx, d.strategyType(), d.affinityMode(), []*proto.NodeFilter{widened})
 		if err != nil {
 			return nil, fmt.Errorf("gRPC SelectNodes call failed for seed %s: %w", seed, err)
 		}
-		selectedNodes, _ = withoutExcluded(more, filter.GetExcludeEndpoints())
-		if filter.Limit > 0 && len(selectedNodes) > int(filter.Limit) {
-			selectedNodes = selectedNodes[:filter.Limit]
+		more, _ = withoutExcluded(more, filter.GetExcludeEndpoints())
+		eligible = distinctSeedNodes(more)
+		if filter.Limit > 0 && len(eligible) > int(filter.Limit) {
+			eligible = eligible[:filter.Limit]
 		}
+		selectedNodes = eligible
 	}
 
-	if len(selectedNodes) < expectedAtLeast {
-		return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes (%d/%d) satisfy the current selection strategy, returned by seed: %s", len(selectedNodes), expectedAtLeast, seed))
+	if len(eligible) < expectedAtLeast {
+		return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes (%d/%d) satisfy the current selection strategy, returned by seed: %s", len(eligible), expectedAtLeast, seed))
 	}
 
 	// Convert to endpoint addresses and keep topology metadata for read locality.
@@ -618,6 +627,19 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 		zap.Strings("endpoints", nodeEndpoints))
 
 	return result, nil
+}
+
+func distinctSeedNodes(nodes []*proto.NodeMeta) []*proto.NodeMeta {
+	seen := make(map[string]bool, len(nodes))
+	distinct := make([]*proto.NodeMeta, 0, len(nodes))
+	for _, node := range nodes {
+		endpoint := node.GetEndpoint()
+		if endpoint != "" && !seen[endpoint] {
+			seen[endpoint] = true
+			distinct = append(distinct, node)
+		}
+	}
+	return distinct
 }
 
 func (d *quorumDiscovery) Close(ctx context.Context) error {

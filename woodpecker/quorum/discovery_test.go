@@ -1616,8 +1616,8 @@ func TestQuorumDiscovery_CustomPlacement_FinalValidation_NodeCountMismatch(t *te
 	assert.Contains(t, err.Error(), "expected 3 nodes, got 2 nodes")
 }
 
-// Flip the dynamic source during the first seed RPC. All replies in one selection,
-// including retries and regional top-ups, must use its original replica count.
+// A configuration change during an RPC applies to the next attempt, including
+// when the current attempt still has regional top-ups or placement rules to visit.
 func TestSelectQuorum_ReplicaCountSnapshot(t *testing.T) {
 	five := metas("a", "b", "c", "d", "e")
 	type reply struct {
@@ -1628,14 +1628,15 @@ func TestSelectQuorum_ReplicaCountSnapshot(t *testing.T) {
 		name     string
 		strategy string
 		replies  []reply
+		attempts int
 	}{
-		{"valid first reply", "random", []reply{{5, five}}},
-		{"retry too few", "random", []reply{{5, five[:3]}, {5, five}}},
-		{"retry duplicate", "random", []reply{{5, metas("a", "b", "c", "d", "d")}, {5, five}}},
-		{"retry missing endpoint", "random", []reply{{5, []*proto.NodeMeta{five[0], five[1], five[2], five[3], nil}}, {5, five}}},
-		{"retry too many", "random", []reply{{5, metas("a", "b", "c", "d", "e", "f")}, {5, five}}},
-		{"cross-region top-up", "cross-region", []reply{{3, five[:3]}, {2, five[3:4]}, {1, five[4:]}}},
-		{"custom candidates", "custom", []reply{{5, five[:1]}, {5, five[1:2]}, {5, five[2:3]}, {5, five[3:4]}, {5, five[4:]}}},
+		{"valid first reply", "random", []reply{{5, five}}, 1},
+		{"retry too few", "random", []reply{{5, five[:3]}, {3, five[:3]}}, 2},
+		{"retry duplicate", "random", []reply{{5, metas("a", "b", "c", "d", "d")}, {3, five[:3]}}, 2},
+		{"retry missing endpoint", "random", []reply{{5, []*proto.NodeMeta{five[0], five[1], five[2], five[3], nil}}, {3, five[:3]}}, 2},
+		{"retry too many", "random", []reply{{5, metas("a", "b", "c", "d", "e", "f")}, {3, five[:3]}}, 2},
+		{"cross-region top-up", "cross-region", []reply{{3, five[:3]}, {2, five[3:4]}, {1, five[4:]}}, 1},
+		{"custom candidates", "custom", []reply{{5, five[:1]}, {5, five[1:2]}, {5, five[2:3]}, {5, five[3:4]}, {5, five[4:]}}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -1682,17 +1683,21 @@ func TestSelectQuorum_ReplicaCountSnapshot(t *testing.T) {
 			reads = 0 // Only count configuration reads during selection.
 			q, err := d.SelectQuorum(ctx)
 			require.NoError(t, err)
-			require.Equal(t, 1, reads)
-			require.Equal(t, []string{"a", "b", "c", "d", "e"}, q.Nodes)
-			require.EqualValues(t, 5, q.Es)
-			require.EqualValues(t, 5, q.Wq)
-			require.EqualValues(t, 3, q.Aq)
+			require.Equal(t, tc.attempts, reads)
+			wantNodes, wantAq := []string{"a", "b", "c", "d", "e"}, 3
+			if tc.attempts == 2 {
+				wantNodes, wantAq = wantNodes[:3], 2
+			}
+			require.Equal(t, wantNodes, q.Nodes)
+			require.EqualValues(t, len(wantNodes), q.Es)
+			require.EqualValues(t, len(wantNodes), q.Wq)
+			require.EqualValues(t, wantAq, q.Aq)
 
 			if tc.strategy == "random" {
 				expectReply(reply{3, five[:3]})
 				next, err := d.SelectQuorum(ctx)
 				require.NoError(t, err)
-				require.Equal(t, 2, reads)
+				require.Equal(t, tc.attempts+1, reads)
 				require.Equal(t, []string{"a", "b", "c"}, next.Nodes)
 				require.EqualValues(t, 3, next.Es)
 				require.EqualValues(t, 3, next.Wq)

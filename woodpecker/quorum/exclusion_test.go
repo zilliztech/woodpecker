@@ -101,6 +101,50 @@ func TestSelectQuorum_OldSeedIgnoringExclusion(t *testing.T) {
 	assert.Equal(t, []int32{3, 4}, limits, "the second request asks for one extra node per excluded endpoint")
 }
 
+func TestSelectQuorum_WidenedSeedReplyCountsDistinctEndpoints(t *testing.T) {
+	ctx := WithExcludedEndpoints(t.Context(), []string{"x", "y"})
+	pool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cli := mocks_logstore_client.NewLogStoreClient(t)
+	pool.EXPECT().GetLogStoreClient(ctx, "s1").Return(cli, nil).Once()
+	filterWithLimit := func(limit int32) []*proto.NodeFilter {
+		return []*proto.NodeFilter{{Limit: limit, ExcludeEndpoints: []string{"x", "y"}}}
+	}
+	cli.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, filterWithLimit(3)).Return(metas("a", "a", "x"), nil).Once()
+	cli.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, filterWithLimit(5)).Return(metas("a", "a", "b", "d", "x"), nil).Once()
+
+	d, err := NewQuorumDiscovery(ctx, exclusionTestConfig("s1"), pool)
+	require.NoError(t, err)
+	q, err := d.SelectQuorum(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b", "d"}, q.Nodes)
+}
+
+func TestSelectQuorum_TriesNextSeedBeforeDroppingExclusions(t *testing.T) {
+	for name, stale := range map[string][]*proto.NodeMeta{
+		"duplicate endpoint": metas("a", "a", "b"),
+		"empty endpoint":     metas("a", "", "b"),
+		"missing node":       {nil, {Endpoint: "a"}, {Endpoint: "b"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := WithExcludedEndpoints(t.Context(), []string{"c"})
+			pool := mocks_logstore_client.NewLogStoreClientPool(t)
+			cli := mocks_logstore_client.NewLogStoreClient(t)
+			// Whichever seed is shuffled first has the stale view. Each seed is tried once.
+			for _, seed := range []string{"s1", "s2"} {
+				pool.EXPECT().GetLogStoreClient(ctx, seed).Return(cli, nil).Once()
+			}
+			filters := []*proto.NodeFilter{{Limit: 3, ExcludeEndpoints: []string{"c"}}}
+			cli.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, filters).Return(stale, nil).Once()
+			cli.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, filters).Return(metas("a", "b", "d"), nil).Once()
+			d, err := NewQuorumDiscovery(ctx, exclusionTestConfig("s1", "s2"), pool)
+			require.NoError(t, err)
+			q, err := d.SelectQuorum(ctx)
+			require.NoError(t, err)
+			require.Equal(t, []string{"a", "b", "d"}, q.Nodes)
+		})
+	}
+}
+
 // Too few nodes without the excluded ones: the exclusion is dropped rather
 // than allowed to hold the log up.
 func TestSelectQuorum_ExclusionDroppedWhenTooFewNodes(t *testing.T) {
