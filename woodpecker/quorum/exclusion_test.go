@@ -104,23 +104,32 @@ func TestSelectQuorum_OldSeedIgnoringExclusion(t *testing.T) {
 // Too few nodes without the excluded ones: the exclusion is dropped rather
 // than allowed to hold the log up.
 func TestSelectQuorum_ExclusionDroppedWhenTooFewNodes(t *testing.T) {
-	ctx := WithExcludedEndpoints(context.Background(), []string{"c:1"})
-	pool := mocks_logstore_client.NewLogStoreClientPool(t)
-	cli := mocks_logstore_client.NewLogStoreClient(t)
-	pool.EXPECT().GetLogStoreClient(mock.Anything, "s1:1").Return(cli, nil)
-	cli.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, _ proto.StrategyType, _ proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
-			if len(filters[0].ExcludeEndpoints) > 0 {
-				return metas("a:1", "b:1"), nil // a three-node cluster, one excluded
-			}
-			return metas("a:1", "b:1", "c:1"), nil
-		})
+	for name, restricted := range map[string][]*proto.NodeMeta{
+		"short reply":         metas("a:1", "b:1"),
+		"duplicate endpoints": metas("a:1", "b:1", "a:1"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			ctx = WithExcludedEndpoints(ctx, []string{"c:1"})
+			pool := mocks_logstore_client.NewLogStoreClientPool(t)
+			cli := mocks_logstore_client.NewLogStoreClient(t)
+			pool.EXPECT().GetLogStoreClient(mock.Anything, "s1:1").Return(cli, nil)
+			cli.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				RunAndReturn(func(_ context.Context, _ proto.StrategyType, _ proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+					if len(filters[0].ExcludeEndpoints) > 0 {
+						return restricted, nil
+					}
+					return metas("a:1", "b:1", "c:1"), nil
+				}).Twice()
 
-	d, err := NewQuorumDiscovery(ctx, exclusionTestConfig("s1:1"), pool)
-	require.NoError(t, err)
-	result, err := d.SelectQuorum(ctx)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"a:1", "b:1", "c:1"}, result.Nodes)
+			d, err := NewQuorumDiscovery(ctx, exclusionTestConfig("s1:1"), pool)
+			require.NoError(t, err)
+			result, err := d.SelectQuorum(ctx)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []string{"a:1", "b:1", "c:1"}, result.Nodes)
+		})
+	}
 }
 
 // The excluded replica is also a seed and cannot be reached. It is asked last,

@@ -1193,7 +1193,7 @@ func TestQuorumDiscovery_FillRemainingNodes_AlreadyEnough(t *testing.T) {
 	currentNodes := []string{"n1", "n2", "n3"}
 	selectedSet := map[string]bool{"n1": true, "n2": true, "n3": true}
 
-	result, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, selectedSet)
+	result, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, nil, selectedSet, nil, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 3, len(result.Nodes))
@@ -1226,7 +1226,7 @@ func TestQuorumDiscovery_FillRemainingNodes_NilSelectedSet(t *testing.T) {
 	}
 
 	currentNodes := []string{"n1:8080"}
-	result, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, nil) // nil selectedSet
+	result, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, nil, nil, nil, 3) // nil selectedSet
 	// May succeed or fail depending on mock behavior, just exercise the nil path
 	if err == nil {
 		assert.NotNil(t, result)
@@ -1251,7 +1251,7 @@ func TestQuorumDiscovery_FillRemainingNodes_PoolNoSeeds(t *testing.T) {
 	currentNodes := []string{"n1:8080"}
 	selectedSet := map[string]bool{"n1:8080": true}
 
-	_, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, selectedSet)
+	_, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, nil, selectedSet, nil, 3)
 	assert.Error(t, err) // insufficient quorum
 }
 
@@ -1281,7 +1281,7 @@ func TestQuorumDiscovery_FillRemainingNodes_RequestError(t *testing.T) {
 	currentNodes := []string{"n1:8080"}
 	selectedSet := map[string]bool{"n1:8080": true}
 
-	_, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, selectedSet)
+	_, err := d.fillRemainingNodes(ctx, d.cfg.BufferPools.Get(), currentNodes, nil, selectedSet, nil, 3)
 	assert.Error(t, err) // insufficient quorum after pool failure
 }
 
@@ -1321,7 +1321,7 @@ func TestQuorumDiscovery_SelectCrossRegion_FiltersCountError(t *testing.T) {
 	}
 
 	twoFilters := []*proto.NodeFilter{{}, {}} // 2 filters, not 1
-	_, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), twoFilters)
+	_, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), twoFilters, 3)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "expected 1 filter")
 }
@@ -1357,7 +1357,7 @@ func TestQuorumDiscovery_SelectCrossRegion_PoolNoSeeds(t *testing.T) {
 	}
 
 	filters := []*proto.NodeFilter{{}}
-	result, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), filters)
+	result, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), filters, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 }
@@ -1401,7 +1401,7 @@ func TestQuorumDiscovery_SelectCrossRegion_RegionNodesZero(t *testing.T) {
 	}
 
 	filters := []*proto.NodeFilter{{}}
-	result, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), filters)
+	result, err := d.selectCrossRegionQuorum(ctx, d.cfg.BufferPools.Get(), filters, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 3, len(result.Nodes))
@@ -1423,7 +1423,7 @@ func TestQuorumDiscovery_CustomPlacement_FiltersCountMismatch(t *testing.T) {
 	}
 
 	oneFilter := []*proto.NodeFilter{{}} // 1 filter vs 2 placements
-	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), oneFilter)
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), oneFilter, 3)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "filters count")
 }
@@ -1446,7 +1446,7 @@ func TestQuorumDiscovery_CustomPlacement_PoolNotFound(t *testing.T) {
 	}
 
 	filters := []*proto.NodeFilter{{}}
-	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters, 3)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "buffer pool not found")
 }
@@ -1469,7 +1469,7 @@ func TestQuorumDiscovery_CustomPlacement_PoolNoSeeds(t *testing.T) {
 	}
 
 	filters := []*proto.NodeFilter{{}}
-	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters, 3)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no seeds configured")
 }
@@ -1503,7 +1503,7 @@ func TestQuorumDiscovery_CustomPlacement_EmptyResult(t *testing.T) {
 	}
 
 	filters := []*proto.NodeFilter{{}}
-	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters, 3)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient nodes")
 }
@@ -1537,7 +1537,7 @@ func TestQuorumDiscovery_CustomPlacement_RequestError(t *testing.T) {
 	}
 
 	filters := []*proto.NodeFilter{{}}
-	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters, 3)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to select node")
 }
@@ -1610,47 +1610,96 @@ func TestQuorumDiscovery_CustomPlacement_FinalValidation_NodeCountMismatch(t *te
 		{Limit: 1, Az: "az-1", ResourceGroup: "rg-1"},
 		{Limit: 1, Az: "az-2", ResourceGroup: "rg-2"},
 	}
-	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters)
+	_, err := d.selectCustomPlacementQuorum(ctx, d.cfg.BufferPools.Get(), d.cfg.SelectStrategy.CustomPlacement.Get(), filters, 3)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "active custom placement validation failed")
 	assert.Contains(t, err.Error(), "expected 3 nodes, got 2 nodes")
 }
 
-func TestQuorumDiscovery_DynamicReplicas_NextSelectionUsesNewSize(t *testing.T) {
-	ctx := context.Background()
-	cfg := &config.QuorumConfig{
-		BufferPools: config.NewDynamic([]config.QuorumBufferPool{{Name: "region-a", Seeds: []string{"localhost:8080"}}}),
-		SelectStrategy: config.QuorumSelectStrategy{
-			Strategy:     config.NewDynamic("random"),
-			AffinityMode: config.NewDynamic("soft"),
-			Replicas:     config.NewDynamic(3),
-		},
+// Flip the dynamic source during the first seed RPC. All replies in one selection,
+// including retries and regional top-ups, must use its original replica count.
+func TestSelectQuorum_ReplicaCountSnapshot(t *testing.T) {
+	five := metas("a", "b", "c", "d", "e")
+	type reply struct {
+		limit int32
+		nodes []*proto.NodeMeta
 	}
-	replicas := 3
-	cfg.SelectStrategy.Replicas.WithSource(func() (int, bool) { return replicas, true })
+	for _, tc := range []struct {
+		name     string
+		strategy string
+		replies  []reply
+	}{
+		{"valid first reply", "random", []reply{{5, five}}},
+		{"retry too few", "random", []reply{{5, five[:3]}, {5, five}}},
+		{"retry duplicate", "random", []reply{{5, metas("a", "b", "c", "d", "d")}, {5, five}}},
+		{"retry missing endpoint", "random", []reply{{5, []*proto.NodeMeta{five[0], five[1], five[2], five[3], nil}}, {5, five}}},
+		{"retry too many", "random", []reply{{5, metas("a", "b", "c", "d", "e", "f")}, {5, five}}},
+		{"cross-region top-up", "cross-region", []reply{{3, five[:3]}, {2, five[3:4]}, {1, five[4:]}}},
+		{"custom candidates", "custom", []reply{{5, five[:1]}, {5, five[1:2]}, {5, five[2:3]}, {5, five[3:4]}, {5, five[4:]}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			replicaCount := 5
+			reads := 0
+			cfg := exclusionTestConfig("seed")
+			cfg.SelectStrategy.Replicas.WithSource(func() (int, bool) {
+				reads++
+				return replicaCount, true
+			})
+			cfg.SelectStrategy.Strategy.Set(tc.strategy)
+			switch tc.strategy {
+			case "cross-region":
+				cfg.BufferPools.Set([]config.QuorumBufferPool{
+					{Name: "region-a", Seeds: []string{"seed-a"}},
+					{Name: "region-b", Seeds: []string{"seed-b"}},
+				})
+			case "custom":
+				var rules []config.CustomPlacement
+				for _, node := range five {
+					rules = append(rules, config.CustomPlacement{Region: "region-a", Az: node.Endpoint})
+				}
+				cfg.SelectStrategy.CustomPlacement.Set(rules)
+			}
 
-	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
-	mockClientPool.EXPECT().GetLogStoreClient(ctx, "localhost:8080").Return(mockClient, nil)
+			pool := mocks_logstore_client.NewLogStoreClientPool(t)
+			cli := mocks_logstore_client.NewLogStoreClient(t)
+			pool.EXPECT().GetLogStoreClient(ctx, mock.Anything).Return(cli, nil)
+			expectReply := func(r reply) {
+				cli.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+					RunAndReturn(func(_ context.Context, _ proto.StrategyType, _ proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+						require.Len(t, filters, 1)
+						require.Equal(t, r.limit, filters[0].Limit)
+						replicaCount = 3
+						return r.nodes, nil
+					}).Once()
+			}
+			for _, r := range tc.replies {
+				expectReply(r)
+			}
+			d, err := NewQuorumDiscovery(ctx, cfg, pool)
+			require.NoError(t, err)
+			reads = 0 // Only count configuration reads during selection.
+			q, err := d.SelectQuorum(ctx)
+			require.NoError(t, err)
+			require.Equal(t, 1, reads)
+			require.Equal(t, []string{"a", "b", "c", "d", "e"}, q.Nodes)
+			require.EqualValues(t, 5, q.Es)
+			require.EqualValues(t, 5, q.Wq)
+			require.EqualValues(t, 3, q.Aq)
 
-	five := []*proto.NodeMeta{
-		{Endpoint: "n1:8080"},
-		{Endpoint: "n2:8080"},
-		{Endpoint: "n3:8080"},
-		{Endpoint: "n4:8080"},
-		{Endpoint: "n5:8080"},
+			if tc.strategy == "random" {
+				expectReply(reply{3, five[:3]})
+				next, err := d.SelectQuorum(ctx)
+				require.NoError(t, err)
+				require.Equal(t, 2, reads)
+				require.Equal(t, []string{"a", "b", "c"}, next.Nodes)
+				require.EqualValues(t, 3, next.Es)
+				require.EqualValues(t, 3, next.Wq)
+				require.EqualValues(t, 2, next.Aq)
+			}
+		})
 	}
-	mockClient.EXPECT().SelectNodes(ctx, proto.StrategyType_RANDOM, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return(five, nil).Maybe()
-
-	d, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
-	require.NoError(t, err)
-
-	replicas = 5 // flip at runtime, no restart
-	result, err := d.SelectQuorum(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int32(5), result.Es)
-	assert.Equal(t, int32(5), result.Wq)
-	assert.Equal(t, int32(3), result.Aq) // (5/2)+1
 }
 
 func TestQuorumDiscovery_DynamicAffinity_UnknownDegradesToSoft(t *testing.T) {
