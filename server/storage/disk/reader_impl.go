@@ -30,6 +30,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -77,7 +78,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
+	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 

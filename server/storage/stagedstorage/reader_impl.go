@@ -32,6 +32,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
@@ -98,7 +99,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
+	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
