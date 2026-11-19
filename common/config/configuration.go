@@ -201,14 +201,25 @@ func (q *QuorumConfig) GetEnsembleSize() int {
 	}
 }
 
+// GetQuorumSizes reads the replica count once. Writes target every ensemble member
+// (Wq == Es) and require a majority of those replicas to acknowledge.
+func (q *QuorumConfig) GetQuorumSizes() (ensembleSize, writeQuorumSize, ackQuorumSize int) {
+	ensembleSize = q.GetEnsembleSize()
+	writeQuorumSize = ensembleSize
+	ackQuorumSize = writeQuorumSize/2 + 1
+	return ensembleSize, writeQuorumSize, ackQuorumSize
+}
+
 // GetWriteQuorumSize returns the write quorum size.
 func (q *QuorumConfig) GetWriteQuorumSize() int {
-	return q.GetEnsembleSize()
+	_, writeQuorumSize, _ := q.GetQuorumSizes()
+	return writeQuorumSize
 }
 
 // GetAckQuorumSize returns the ack quorum size.
 func (q *QuorumConfig) GetAckQuorumSize() int {
-	return (q.GetWriteQuorumSize() / 2) + 1
+	_, _, ackQuorumSize := q.GetQuorumSizes()
+	return ackQuorumSize
 }
 
 // SetBufferPoolSeeds replaces the seeds of the pool at idx in the static value.
@@ -922,9 +933,7 @@ func (c *Configuration) validateQuorumConfig() error {
 	customPlacement := q.SelectStrategy.CustomPlacement.Get()
 
 	// Basic quorum size validation
-	ensembleSize := q.GetEnsembleSize()
-	writeQuorumSize := q.GetWriteQuorumSize()
-	ackQuorumSize := q.GetAckQuorumSize()
+	ensembleSize, writeQuorumSize, ackQuorumSize := q.GetQuorumSizes()
 
 	if ensembleSize <= 0 {
 		return fmt.Errorf("ensemble size must be positive, got %d", ensembleSize)
