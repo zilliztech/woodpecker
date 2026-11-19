@@ -23,9 +23,14 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 const openWriterReplicaGracePeriod = 30 * time.Second
@@ -43,6 +48,51 @@ type replicaRPCResult struct {
 	node        string
 	lastEntryId int64
 	err         error
+}
+
+func (wait quorumWaitPolicy) canReturnEarly(q *proto.QuorumInfo) bool {
+	return wait == returnOnSafeQuorum && q.Aq > 0 && int(q.Aq) < len(q.Nodes)
+}
+
+func recoveryErrorResult(err error) string {
+	wpCode, rpcCode := werr.Code(err), status.Code(err)
+	switch {
+	case wpCode == werr.ErrTimeoutError.Code() || rpcCode == codes.DeadlineExceeded:
+		return "deadline_exceeded"
+	case wpCode == werr.ErrCancelError.Code() || rpcCode == codes.Canceled:
+		return "canceled"
+	default:
+		return "error"
+	}
+}
+
+func observeOpenWriterQuorum(operation string, started time.Time, received, nodes int, err error) {
+	result := "all_replies_success"
+	if err != nil {
+		result = recoveryErrorResult(err)
+	} else if received < nodes {
+		result = "early_success"
+	}
+	metrics.WpClientOpenWriterQuorumLatency.WithLabelValues(operation, result).
+		Observe(float64(time.Since(started)) / float64(time.Millisecond))
+}
+
+func replicaTaskOutcome(ctx context.Context, err error) string {
+	if err == nil {
+		return "success"
+	}
+	result := recoveryErrorResult(err)
+	if result == "canceled" {
+		// Detached tasks see context.Canceled for both a caller deadline and grace expiry.
+		cause := context.Cause(ctx)
+		switch {
+		case errors.Is(cause, errReplicaGracePeriodExpired):
+			return "grace_expired"
+		case errors.Is(cause, context.DeadlineExceeded):
+			return "deadline_exceeded"
+		}
+	}
+	return result
 }
 
 // enqueueReplicaTasks keeps a replica's Complete behind its Fence without occupying another pool worker.
@@ -96,12 +146,13 @@ func (s *segmentHandleImpl) nextReplicaTask(node string) func(string) {
 
 // submitQuorumRPCs sends the operation to every quorum member and buffers each reply.
 // Releasing the foreground wait after quorum gives unfinished tasks a bounded grace period.
-func (s *segmentHandleImpl) submitQuorumRPCs(parent context.Context, nodes []string, allowEarly bool, operation string, targetLAC *int64,
+func (s *segmentHandleImpl) submitQuorumRPCs(parent context.Context, quorum *proto.QuorumInfo, wait quorumWaitPolicy, operation string, targetLAC *int64,
 	rpc func(context.Context, string) (int64, error),
 ) (<-chan replicaRPCResult, func()) {
+	nodes := quorum.Nodes
 	ctx := parent
 	taskDone, release := func() {}, func() {}
-	if allowEarly {
+	if wait.canReturnEarly(quorum) {
 		var cancel context.CancelCauseFunc
 		ctx, cancel = context.WithCancelCause(context.WithoutCancel(parent))
 		var remaining atomic.Int32
@@ -135,8 +186,13 @@ func (s *segmentHandleImpl) submitQuorumRPCs(parent context.Context, nodes []str
 		if !skipped {
 			result.lastEntryId, result.err = rpc(ctx, node)
 		}
+		elapsed := time.Since(submittedAt)
+		if wait == returnOnSafeQuorum {
+			metrics.WpClientOpenWriterReplicaTaskLatency.WithLabelValues(operation, replicaTaskOutcome(ctx, result.err)).
+				Observe(float64(elapsed) / float64(time.Millisecond))
+		}
 		replicaLog := log.With(zap.String("node", result.node),
-			zap.Int64("lastEntryId", result.lastEntryId), zap.Duration("duration", time.Since(submittedAt)))
+			zap.Int64("lastEntryId", result.lastEntryId), zap.Duration("duration", elapsed))
 		switch {
 		case result.err != nil:
 			replicaLog.Warn("Segment replica RPC failed", zap.Error(result.err),

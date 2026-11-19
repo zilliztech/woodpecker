@@ -1346,12 +1346,198 @@
       "type": "timeseries"
     },
     {
-      "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 84
+      },
+      "id": 125,
+      "title": "OpenWriter Recovery",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "description": "Time until each recovery phase returns to OpenWriter. Aggregated across logs. Sparse recovery traffic can leave gaps.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 85
+      },
+      "id": 126,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(woodpecker_client_open_writer_quorum_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__rate_interval])))",
+          "legendFormat": "{{operation}} P95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, operation) (rate(woodpecker_client_open_writer_quorum_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__rate_interval])))",
+          "legendFormat": "{{operation}} P99",
+          "refId": "B"
+        }
+      ],
+      "title": "Foreground Fence and Complete latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "description": "Time from submission through queue wait and RPC completion, including replies after OpenWriter returns. Aggregated across logs. Sparse recovery traffic can leave gaps.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 85
+      },
+      "id": 127,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(woodpecker_client_open_writer_replica_task_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__rate_interval])))",
+          "legendFormat": "{{operation}} P95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, operation) (rate(woodpecker_client_open_writer_replica_task_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__rate_interval])))",
+          "legendFormat": "{{operation}} P99",
+          "refId": "B"
+        }
+      ],
+      "title": "Replica task latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "description": "Estimated occurrences over the selected time range. A phase above 2 s also counts toward the 1 s threshold.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 93
+      },
+      "id": 128,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "graphMode": "none",
+        "colorMode": "none",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "sum by (operation) (increase(woodpecker_client_open_writer_quorum_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__range])) - sum by (operation) (increase(woodpecker_client_open_writer_quorum_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\", le=~\"1000([.]0)?\"}[$__range]))",
+          "legendFormat": "{{operation}} > 1 s",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        },
+        {
+          "expr": "sum by (operation) (increase(woodpecker_client_open_writer_quorum_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__range])) - sum by (operation) (increase(woodpecker_client_open_writer_quorum_latency_bucket{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\", le=~\"2000([.]0)?\"}[$__range]))",
+          "legendFormat": "{{operation}} > 2 s",
+          "refId": "B",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Foreground phases above 1 s and 2 s",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "description": "Estimated terminal outcomes over the selected time range. Grace expiry counts tasks canceled when the post-quorum grace period elapsed.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 93
+      },
+      "id": 129,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "graphMode": "none",
+        "colorMode": "none",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "sum by (operation, result) (increase(woodpecker_client_open_writer_replica_task_latency_count{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__range]))",
+          "legendFormat": "{{operation}} {{result}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Replica task outcomes",
+      "type": "stat"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 101
       },
       "id": 8,
       "panels": [
@@ -1378,7 +1564,7 @@
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 59
+            "y": 76
           },
           "id": 9,
           "options": {
@@ -1429,7 +1615,7 @@
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 59
+            "y": 76
           },
           "id": 10,
           "options": {
@@ -1480,7 +1666,7 @@
             "h": 8,
             "w": 8,
             "x": 16,
-            "y": 59
+            "y": 76
           },
           "id": 11,
           "options": {
@@ -1523,7 +1709,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 85
+        "y": 102
       },
       "id": 124,
       "panels": [
@@ -1566,7 +1752,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 86
+            "y": 103
           },
           "id": 116,
           "options": {
@@ -1639,7 +1825,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 86
+            "y": 103
           },
           "id": 117,
           "options": {
@@ -1691,7 +1877,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 94
+            "y": 111
           },
           "id": 118,
           "options": {
@@ -1764,7 +1950,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 94
+            "y": 111
           },
           "id": 119,
           "options": {
@@ -1816,7 +2002,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 102
+            "y": 119
           },
           "id": 120,
           "options": {
@@ -1889,7 +2075,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 102
+            "y": 119
           },
           "id": 121,
           "options": {
@@ -1957,7 +2143,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 110
+            "y": 127
           },
           "id": 122,
           "options": {
@@ -2025,7 +2211,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 110
+            "y": 127
           },
           "id": 123,
           "options": {

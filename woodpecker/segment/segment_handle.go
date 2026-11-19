@@ -1236,15 +1236,20 @@ func (s *segmentHandleImpl) completePrepared(ctx context.Context, quorumInfo *pr
 // replica whose local tail stops below lac still counts: it has durably recorded the
 // boundary, which is what stops a competing writer from closing the segment elsewhere.
 // Early return also requires a finalized replica with enough local data to compact.
-func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, lac int64, wait quorumWaitPolicy) error {
+func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, lac int64, wait quorumWaitPolicy) (retErr error) {
 	nodeCount := len(quorumInfo.Nodes)
 	ackQuorum := int(quorumInfo.Aq)
+	received := 0
+	if wait == returnOnSafeQuorum {
+		started := time.Now()
+		defer func() { observeOpenWriterQuorum("complete", started, received, nodeCount, retErr) }()
+	}
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	canReturnEarly := wait == returnOnSafeQuorum && ackQuorum > 0 && ackQuorum < nodeCount
-	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canReturnEarly, "complete", &lac,
+	canReturnEarly := wait.canReturnEarly(quorumInfo)
+	results, release := s.submitQuorumRPCs(ctx, quorumInfo, wait, "complete", &lac,
 		func(ctx context.Context, node string) (int64, error) { return s.completeSegmentOnNode(ctx, node, lac) })
 	defer release()
 
@@ -1252,7 +1257,6 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	var finalizedResults []int64
 	var qualifiedResults []int64
 	var lastError error
-	received := 0
 
 collect:
 	for range nodeCount {
@@ -1558,22 +1562,26 @@ func (s *segmentHandleImpl) resolveFenceLAC(results []int64, writeQuorum, ackQuo
 
 // fenceSegmentQuorum sends FenceSegment requests to all quorum nodes
 // and calculates the Log All Committed (LAC) based on majority consensus
-func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, wait quorumWaitPolicy) (int64, error) {
+func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, wait quorumWaitPolicy) (lac int64, retErr error) {
 	nodeCount := len(quorumInfo.Nodes)
 	ackQuorum := int(quorumInfo.Aq)
+	received := 0
+	if wait == returnOnSafeQuorum {
+		started := time.Now()
+		defer func() { observeOpenWriterQuorum("fence", started, received, nodeCount, retErr) }()
+	}
 
 	if err := ctx.Err(); err != nil {
 		return -1, err
 	}
-	canReturnEarly := wait == returnOnSafeQuorum && ackQuorum > 0 && ackQuorum < nodeCount
-	results, release := s.submitQuorumRPCs(ctx, quorumInfo.Nodes, canReturnEarly, "fence", nil, s.fenceSegmentOnNode)
+	canReturnEarly := wait.canReturnEarly(quorumInfo)
+	results, release := s.submitQuorumRPCs(ctx, quorumInfo, wait, "fence", nil, s.fenceSegmentOnNode)
 	defer release()
 
 	// Collect results from nodes
 	var successResults []int64
 	tailCounts := make(map[int64]int)
 	var lastError error
-	received := 0
 
 collect:
 	for range nodeCount {

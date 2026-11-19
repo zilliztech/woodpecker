@@ -1650,7 +1650,7 @@
       "title": "How to use this step",
       "options": {
         "mode": "markdown",
-        "content": "The WP client runs inside SN; it is not a separate Pod. Compare pending appends and writer outcomes with per-log append latency. Replica counters are attempts, not acknowledged Milvus rows. For failing/slow replicas continue to stage 5; use wp meta log list and wp node list to resolve identities."
+        "content": "The WP client runs inside SN; it is not a separate Pod. Compare pending appends and writer outcomes with per-log append latency. Replica counters are attempts, not acknowledged Milvus rows. For failing/slow replicas continue to stage 5; use wp meta log list and wp node list to resolve identities. During OpenWriter recovery, compare the foreground Fence and Complete phases across logs. Open the WP client reference dashboard for slow replica tasks and grace expiry."
       },
       "id": 31,
       "gridPos": {
@@ -1885,14 +1885,136 @@
       }
     },
     {
-      "type": "row",
-      "title": "5. WP services — append, buffer wait and local disk flush",
-      "collapsed": false,
-      "panels": [],
+      "type": "timeseries",
+      "title": "OpenWriter foreground recovery latency",
+      "description": "P50/P95/P99 of observed operations; no observations produce no data/NaN. Check the stage's observation rate. Quantiles from different stages cannot be added or subtracted. Values above the largest finite histogram bucket cannot be resolved accurately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.5, sum by (le,pod,operation) (rate(woodpecker_client_open_writer_quorum_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}[$__rate_interval])))",
+          "legendFormat": "P50 · {{pod}} · {{operation}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.95, sum by (le,pod,operation) (rate(woodpecker_client_open_writer_quorum_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}[$__rate_interval])))",
+          "legendFormat": "P95 · {{pod}} · {{operation}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "histogram_quantile(0.99, sum by (le,pod,operation) (rate(woodpecker_client_open_writer_quorum_latency_bucket{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}[$__rate_interval])))",
+          "legendFormat": "P99 · {{pod}} · {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "id": 36,
       "gridPos": {
         "x": 0,
         "y": 131,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "OpenWriter foreground outcomes / second",
+      "description": "One outcome per segment and recovery phase across all logs.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "range": true,
+          "expr": "sum by (pod,operation,result) (rate(woodpecker_client_open_writer_quorum_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}[$__rate_interval]))",
+          "legendFormat": "{{pod}} {{operation}} {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 37,
+      "gridPos": {
+        "x": 12,
+        "y": 131,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "5. WP services — append, buffer wait and local disk flush",
+      "collapsed": false,
+      "panels": [],
+      "id": 38,
+      "gridPos": {
+        "x": 0,
+        "y": 139,
         "w": 24,
         "h": 1
       }
@@ -1904,10 +2026,10 @@
         "mode": "markdown",
         "content": "Compare individual nodes rather than only a cluster-wide quantile. High buffer wait plus flush time suggests local disk/sync pressure. Check scheduler queues and node resources before changing concurrency. wp ops, wp node log-health and component logs provide the next evidence."
       },
-      "id": 37,
+      "id": 39,
       "gridPos": {
         "x": 0,
-        "y": 132,
+        "y": 140,
         "w": 24,
         "h": 4
       }
@@ -1975,10 +2097,10 @@
           "mode": "multi"
         }
       },
-      "id": 38,
+      "id": 40,
       "gridPos": {
         "x": 0,
-        "y": 136,
+        "y": 144,
         "w": 12,
         "h": 8
       }
@@ -2046,10 +2168,10 @@
           "mode": "multi"
         }
       },
-      "id": 39,
+      "id": 41,
       "gridPos": {
         "x": 12,
-        "y": 136,
+        "y": 144,
         "w": 12,
         "h": 8
       }
@@ -2117,10 +2239,10 @@
           "mode": "multi"
         }
       },
-      "id": 40,
+      "id": 42,
       "gridPos": {
         "x": 0,
-        "y": 144,
+        "y": 152,
         "w": 12,
         "h": 8
       }
@@ -2168,10 +2290,10 @@
           "mode": "multi"
         }
       },
-      "id": 41,
+      "id": 43,
       "gridPos": {
         "x": 12,
-        "y": 144,
+        "y": 152,
         "w": 12,
         "h": 8
       }
@@ -2181,10 +2303,10 @@
       "title": "6. Admission and resource pressure — explain sustained slowdown",
       "collapsed": false,
       "panels": [],
-      "id": 42,
+      "id": 44,
       "gridPos": {
         "x": 0,
-        "y": 152,
+        "y": 160,
         "w": 24,
         "h": 1
       }
@@ -2196,10 +2318,10 @@
         "mode": "markdown",
         "content": "Disk admission state is 0=normal, 1=warn, 2=blocked. Compare actual disk use with exported watermarks in the WP reference dashboard. Check the Flush/Checkpoint dashboard for Milvus buffer pressure; WP object-store compaction is a separate background path, not every append's synchronous storage step."
       },
-      "id": 43,
+      "id": 45,
       "gridPos": {
         "x": 0,
-        "y": 153,
+        "y": 161,
         "w": 24,
         "h": 4
       }
@@ -2247,10 +2369,10 @@
           "mode": "multi"
         }
       },
-      "id": 44,
+      "id": 46,
       "gridPos": {
         "x": 0,
-        "y": 157,
+        "y": 165,
         "w": 12,
         "h": 8
       }
@@ -2298,10 +2420,10 @@
           "mode": "multi"
         }
       },
-      "id": 45,
+      "id": 47,
       "gridPos": {
         "x": 12,
-        "y": 157,
+        "y": 165,
         "w": 12,
         "h": 8
       }
@@ -2349,10 +2471,10 @@
           "mode": "multi"
         }
       },
-      "id": 46,
+      "id": 48,
       "gridPos": {
         "x": 0,
-        "y": 165,
+        "y": 173,
         "w": 12,
         "h": 8
       }
@@ -2400,10 +2522,10 @@
           "mode": "multi"
         }
       },
-      "id": 47,
+      "id": 49,
       "gridPos": {
         "x": 12,
-        "y": 165,
+        "y": 173,
         "w": 12,
         "h": 8
       }
