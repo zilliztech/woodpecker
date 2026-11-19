@@ -43,13 +43,14 @@ func NewQuorumDiscovery(ctx context.Context, cfg *config.QuorumConfig, clientPoo
 		logger.Ctx(ctx).Warn("Invalid affinity mode", zap.Error(err))
 		return nil, err
 	}
-	if _, err := buildFilters(ctx, cfg.SelectStrategy.Strategy.Get(), int32(cfg.GetEnsembleSize()), cfg.SelectStrategy.CustomPlacement.Get(), cfg.BufferPools.Get()); err != nil {
+	ensembleSize := cfg.GetEnsembleSize()
+	if _, err := buildFilters(ctx, cfg.SelectStrategy.Strategy.Get(), int32(ensembleSize), cfg.SelectStrategy.CustomPlacement.Get(), cfg.BufferPools.Get()); err != nil {
 		logger.Ctx(ctx).Warn("Failed to build filters", zap.Error(err))
 		return nil, err
 	}
 
 	logger.Ctx(ctx).Info("Successfully initialized quorum discovery",
-		zap.Int32("ensembleSize", int32(cfg.GetEnsembleSize())),
+		zap.Int("ensembleSize", ensembleSize),
 		zap.String("strategy", cfg.SelectStrategy.Strategy.Get()),
 		zap.String("affinityMode", cfg.SelectStrategy.AffinityMode.Get()))
 	return d, nil
@@ -155,12 +156,12 @@ func buildSingleFilter(es int32) []*proto.NodeFilter {
 }
 
 func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
-	// Use one replica count for placement, retries and the segment's quorum metadata.
-	replicaCount := d.cfg.GetEnsembleSize()
+	// Keep the same quorum sizes through placement, retries and metadata construction.
+	ensembleSize, writeQuorumSize, ackQuorumSize := d.cfg.GetQuorumSizes()
 	logger.Ctx(ctx).Info("Active discovery: Starting quorum node selection",
 		zap.String("strategy", d.cfg.SelectStrategy.Strategy.Get()),
 		zap.String("affinityMode", d.cfg.SelectStrategy.AffinityMode.Get()),
-		zap.Int("ensembleSize", replicaCount))
+		zap.Int("ensembleSize", ensembleSize))
 
 	pools := d.cfg.BufferPools.Get()
 	custom := d.cfg.SelectStrategy.CustomPlacement.Get()
@@ -170,7 +171,7 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 	}
 
 	// Build filters before retrying so invalid placement fails immediately.
-	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy.Get(), int32(replicaCount), custom, pools)
+	filters, err := buildFilters(ctx, d.cfg.SelectStrategy.Strategy.Get(), int32(ensembleSize), custom, pools)
 	if err != nil {
 		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
 	}
@@ -187,14 +188,14 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 		var selErr error
 		switch d.cfg.SelectStrategy.Strategy.Get() {
 		case "cross-region":
-			result, selErr = d.selectCrossRegionQuorum(ctx, pools, filters, replicaCount)
+			result, selErr = d.selectCrossRegionQuorum(ctx, pools, filters, ensembleSize)
 		case "custom":
-			result, selErr = d.selectCustomPlacementQuorum(ctx, pools, custom, filters, replicaCount)
+			result, selErr = d.selectCustomPlacementQuorum(ctx, pools, custom, filters, ensembleSize)
 		default:
 			result, selErr = d.selectSingleRegionQuorum(ctx, pools, filters)
 		}
 		if selErr == nil {
-			selErr = validateSelectedNodes(result.GetNodes(), replicaCount)
+			selErr = validateSelectedNodes(result.GetNodes(), ensembleSize)
 		}
 		if len(excluded) > 0 && errors.Is(selErr, werr.ErrServiceInsufficientQuorum) {
 			// Too few nodes without the excluded ones: select from all of them
@@ -210,9 +211,9 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 		return nil, werr.ErrServiceSelectQuorumFailed.WithCauseErr(err)
 	}
 	result.Id = 1
-	result.Es = int32(replicaCount)
-	result.Wq = result.Es
-	result.Aq = result.Wq/2 + 1
+	result.Es = int32(ensembleSize)
+	result.Wq = int32(writeQuorumSize)
+	result.Aq = int32(ackQuorumSize)
 	return result, nil
 }
 

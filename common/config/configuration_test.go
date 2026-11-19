@@ -1463,6 +1463,26 @@ func TestNodeSelectionPolicyValidation(t *testing.T) {
 	assert.Error(t, cfg.validateLogstoreConfig(), "memSoftThreshold > 1 should fail validation")
 }
 
+func TestValidateQuorumConfig_ReadsReplicaCountOnce(t *testing.T) {
+	cfg := &Configuration{}
+	q := &cfg.Woodpecker.Client.Quorum
+	q.BufferPools.Set([]QuorumBufferPool{{Name: "pool", Seeds: []string{"seed"}}})
+	reads := 0
+	q.SelectStrategy.Replicas.WithSource(func() (int, bool) {
+		reads++
+		if reads == 1 {
+			return 3, true
+		}
+		return 5, true
+	})
+
+	require.NoError(t, cfg.validateQuorumConfig())
+	require.Equal(t, 1, reads)
+	es, wq, aq := q.GetQuorumSizes()
+	require.Equal(t, [3]int{5, 5, 3}, [3]int{es, wq, aq})
+	require.Equal(t, 2, reads)
+}
+
 func TestQuorumConfig_DynamicReplicasAffectsEnsembleSize(t *testing.T) {
 	q := QuorumConfig{
 		SelectStrategy: QuorumSelectStrategy{Replicas: NewDynamic(3)},
