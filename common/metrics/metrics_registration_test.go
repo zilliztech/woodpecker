@@ -399,3 +399,25 @@ func TestRegisterReplicaPlacementMetrics(t *testing.T) {
 	assert.True(t, names["woodpecker_client_quorum_read_bytes_total"])
 	assert.True(t, names["woodpecker_client_read_failover_total"])
 }
+
+func TestSharedLoggingMetricsRegistration(t *testing.T) {
+	for _, order := range [][]func(prometheus.Registerer){
+		{RegisterClientMetricsWithRegisterer, RegisterServerMetricsWithRegisterer},
+		{RegisterServerMetricsWithRegisterer, RegisterClientMetricsWithRegisterer},
+	} {
+		WpClientRegisterOnce, WpServerRegisterOnce = sync.Once{}, sync.Once{}
+		registry := prometheus.NewRegistry()
+		for _, register := range order {
+			register(registry)
+			families, err := registry.Gather()
+			require.NoError(t, err)
+			names := make(map[string]bool)
+			for _, family := range families {
+				names[family.GetName()] = true
+			}
+			for _, name := range []string{"woodpecker_logging_queue_depth", "woodpecker_logging_dropped_records_total", "woodpecker_logging_write_errors_total"} {
+				require.True(t, names[name], "%s missing", name)
+			}
+		}
+	}
+}

@@ -431,6 +431,7 @@ var (
 // Without calling this, metrics still work but are not scraped by any registry.
 func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 	WpServerRegisterOnce.Do(func() {
+		registerLoggingMetrics(registerer)
 		// LogStore resource gauges
 		registerer.MustRegister(WpLogStoreActiveLogs)
 		registerer.MustRegister(WpLogStoreActiveSegments)

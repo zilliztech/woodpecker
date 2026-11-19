@@ -6,6 +6,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/cmd/wpcli/cmd"
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 func main() {
@@ -14,5 +15,6 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "wp:", err)
 	}
+	logger.Shutdown()
 	os.Exit(wperrors.ExitCodeFor(err))
 }

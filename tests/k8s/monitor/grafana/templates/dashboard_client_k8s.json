@@ -2248,6 +2248,125 @@
       ],
       "title": "Alerts — what the rules actually threshold",
       "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 103
+      },
+      "id": 130,
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "description": "Records waiting for output in each process at scrape time. A short burst can fill and drain the queue between scrapes.",
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 104
+          },
+          "id": 131,
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "expr": "woodpecker_logging_queue_depth{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}",
+              "legendFormat": "{{pod}} {{instance}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Diagnostic log queue depth",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "description": "Records discarded by each process when queue admission times out or the logger is shutting down.",
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 104
+          },
+          "id": 132,
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(woodpecker_logging_dropped_records_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__rate_interval])",
+              "legendFormat": "{{pod}} {{instance}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Dropped diagnostic logs / s",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "description": "Failed or partial writes to the diagnostic output sink after a record was accepted.",
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 104
+          },
+          "id": 133,
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(woodpecker_logging_write_errors_total{namespace=~\"$namespace\", woodpecker_id=~\"$woodpecker_id\", job!~\".*/woodpecker-server\", component!=\"woodpecker\"}[$__rate_interval])",
+              "legendFormat": "{{pod}} {{instance}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Diagnostic log write errors / s",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Diagnostic Logging",
+      "type": "row"
     }
   ],
   "refresh": "5s",

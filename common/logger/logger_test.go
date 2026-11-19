@@ -182,14 +182,12 @@ func TestPropagate(t *testing.T) {
 }
 
 func TestNewLogger_JsonFormat(t *testing.T) {
-	l, err := newLogger("json")
-	assert.NoError(t, err)
+	l := newLogger("json", stdoutOutput)
 	assert.NotNil(t, l)
 }
 
 func TestNewLogger_FallbackConsoleFormat(t *testing.T) {
-	l, err := newLogger("unknown_format")
-	assert.NoError(t, err)
+	l := newLogger("unknown_format", stdoutOutput)
 	assert.NotNil(t, l)
 }
 

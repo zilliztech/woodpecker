@@ -212,8 +212,14 @@ woodpecker:
       capacity: 1024 # Maximum number of in-flight operations tracked, default is 1024
       warnAge: 30 # Seconds after which a still-running operation is reported as stalled, default is 30s
 
-# Configures the system log output.
+# Monitor woodpecker_logging_queue_depth and woodpecker_logging_dropped_records_total.
 log:
+  # Shared by all clients in this process. The first logger initialization applies these settings.
+  asyncWrite:
+    pendingLength: 1024        # Maximum queued diagnostic records.
+    droppedTimeout: 100ms      # Wait for queue space below nonDroppableLevel. Use 0s to drop immediately.
+    nonDroppableLevel: error   # At or above this level, wait up to max(droppedTimeout, stopTimeout).
+    stopTimeout: 1s            # Shutdown drain budget. Records can still be dropped on enqueue timeout.
   # Woodpecker log level. Option: debug, info, warn, error, panic, and fatal.
   # It is recommended to use debug level under test and development environments, and info level in production environment.
   level: info

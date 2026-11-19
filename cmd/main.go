@@ -65,6 +65,17 @@ func parseAdvertiseAddr(addrPort string) (string, int, error) {
 }
 
 func main() {
+	code := run()
+	logger.Shutdown()
+	os.Exit(code)
+}
+
+func serverErrorf(format string, args ...any) int {
+	log.Printf(format, args...)
+	return 1
+}
+
+func run() int {
 	var (
 		servicePort               = flag.Int("service-port", 18080, "service port")
 		gossipPort                = flag.Int("gossip-port", 17946, "Gossip communication port")
@@ -84,12 +95,12 @@ func main() {
 
 	// First argument should be command
 	if len(os.Args) < 2 {
-		log.Fatalf("Usage: %s <command> [flags]", os.Args[0])
+		return serverErrorf("Usage: %s <command> [flags]", os.Args[0])
 	}
 
 	command := os.Args[1]
 	if command != "server" {
-		log.Fatalf("Unknown command: %s. Only 'server' is supported.", command)
+		return serverErrorf("Unknown command: %s. Only 'server' is supported.", command)
 	}
 
 	// Parse flags starting from the second argument
@@ -104,16 +115,16 @@ func main() {
 	// Load configuration
 	cfg, err := config.NewConfiguration(*configFile)
 	if err != nil {
-		log.Fatalf("Failed to load configuration from %s: %v", *configFile, err)
+		return serverErrorf("Failed to load configuration from %s: %v", *configFile, err)
 	}
 
 	externalCfg, err := external.LoadUserConfig(*externalDefaultConfigFile, *externalUserConfigFile)
 	if err != nil {
-		log.Fatalf("Failed to load external user configuration from default[%s],user[%s}: %v ", *externalDefaultConfigFile, *externalUserConfigFile, err)
+		return serverErrorf("Failed to load external user configuration from default[%s],user[%s}: %v ", *externalDefaultConfigFile, *externalUserConfigFile, err)
 	}
 
 	if err := externalCfg.ApplyToConfig(cfg); err != nil {
-		log.Fatalf("Failed to apply external user configuration: %v", err)
+		return serverErrorf("Failed to apply external user configuration: %v", err)
 	}
 
 	// init logger
@@ -148,7 +159,7 @@ func main() {
 	if *advertiseGossipAddr != "" {
 		addr, port, err := parseAdvertiseAddr(*advertiseGossipAddr)
 		if err != nil {
-			log.Fatalf("Failed to parse advertise-gossip-addr: %v", err)
+			return serverErrorf("Failed to parse advertise-gossip-addr: %v", err)
 		}
 		advertiseAddrStr = addr
 		advertisePort = port
@@ -159,7 +170,7 @@ func main() {
 	if *advertiseServiceAddr != "" {
 		addr, port, err := parseAdvertiseAddr(*advertiseServiceAddr)
 		if err != nil {
-			log.Fatalf("Failed to parse advertise-service-addr: %v", err)
+			return serverErrorf("Failed to parse advertise-service-addr: %v", err)
 		}
 		advertiseServiceAddrStr = addr
 		advertiseServicePort = port
@@ -190,12 +201,12 @@ func main() {
 	ctx := context.Background()
 	srv, err := server.NewServerWithConfig(ctx, cfg, serverConfig, seedNodes)
 	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
+		return serverErrorf("Failed to create server: %v", err)
 	}
 
 	// Prepare server (sets up listener and gossip)
 	if err := srv.Prepare(); err != nil {
-		log.Fatalf("Failed to prepare server: %v", err)
+		return serverErrorf("Failed to prepare server: %v", err)
 	}
 
 	// Instantiate op registry for in-flight operation tracking.
@@ -317,7 +328,7 @@ func main() {
 			return srv.LocalInstanceData(bucketName, rootPath)
 		},
 	}); err != nil {
-		log.Fatalf("Failed to start HTTP server: %v", err)
+		return serverErrorf("Failed to start HTTP server: %v", err)
 	}
 	log.Printf("HTTP server started on port %s (metrics, health, pprof, admin)", commonhttp.DefaultListenPort)
 
@@ -367,11 +378,9 @@ func main() {
 	// Wait for either an error or shutdown signal
 	select {
 	case err := <-errChan:
-		log.Printf("Server error: %v", err)
-		os.Exit(1)
+		return serverErrorf("Server error: %v", err)
 	case err := <-srv.GetStartupErrCh():
-		log.Printf("Server startup error (gossip/membership): %v", err)
-		os.Exit(1)
+		return serverErrorf("Server startup error (gossip/membership): %v", err)
 	case sig := <-sigChan:
 		log.Printf("Received signal %s, shutting down...", sig)
 	}
@@ -395,7 +404,7 @@ func main() {
 	case <-shutdownDone:
 		log.Println("Server stopped successfully")
 	case <-time.After(shutdownTimeout):
-		log.Println("Shutdown timed out, forcing exit")
-		os.Exit(1)
+		return serverErrorf("Shutdown timed out, forcing exit")
 	}
+	return 0
 }

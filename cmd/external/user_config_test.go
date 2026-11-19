@@ -20,12 +20,29 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 )
+
+func TestAsyncLogConfigOverlay(t *testing.T) {
+	dir := t.TempDir()
+	base, override := filepath.Join(dir, "base.yaml"), filepath.Join(dir, "override.yaml")
+	require.NoError(t, os.WriteFile(base, []byte("log:\n  asyncWrite:\n    pendingLength: 16\n    droppedTimeout: 80ms\n    nonDroppableLevel: warn\n    stopTimeout: 2s\n"), 0o600))
+	require.NoError(t, os.WriteFile(override, []byte("log:\n  asyncWrite:\n    droppedTimeout: 0s\n"), 0o600))
+	userCfg, err := LoadUserConfig(base, override)
+	require.NoError(t, err)
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	require.NoError(t, userCfg.ApplyToConfig(cfg))
+	require.Equal(t, 16, cfg.Log.AsyncWrite.PendingLength)
+	require.Equal(t, time.Duration(0), *cfg.Log.AsyncWrite.DroppedTimeout)
+	require.Equal(t, "warn", cfg.Log.AsyncWrite.NonDroppableLevel)
+	require.Equal(t, 2*time.Second, cfg.Log.AsyncWrite.StopTimeout)
+}
 
 func TestLoadUserConfig_Basic(t *testing.T) {
 	// Create a temporary YAML file for testing
