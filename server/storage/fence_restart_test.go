@@ -197,3 +197,42 @@ func TestConcurrentFencesPersistOneMarker(t *testing.T) {
 		})
 	}
 }
+
+// An open data.log can still be fsynced after its directory was renamed. The
+// original directory name can no longer be synced, so neither first-append ACK
+// nor empty Finalize may report durable success.
+func TestFirstFileSyncRequiresDirectoryPublication(t *testing.T) {
+	for backend, newWriter := range fenceBackends {
+		for _, operation := range []string{"append", "finalize"} {
+			t.Run(backend+"/"+operation, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				cfg, err := config.NewConfiguration()
+				require.NoError(t, err)
+				cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(60000)
+				cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = config.NewDurationMillisecondsFromInt(60000)
+				dir := t.TempDir()
+				w, err := newWriter(ctx, dir, cfg, backend == "local")
+				require.NoError(t, err)
+				defer w.Close(context.Background())
+				segmentDir := filepath.Join(dir, "1", "0")
+				moved := segmentDir + ".moved"
+				require.NoError(t, os.Rename(segmentDir, moved))
+				defer func() { require.NoError(t, os.Rename(moved, segmentDir)) }()
+				if operation == "finalize" {
+					_, err = w.Finalize(ctx, -1)
+					require.ErrorIs(t, err, os.ErrNotExist)
+					return
+				}
+				ch := channel.NewLocalResultChannel("directory-sync-failure")
+				_, err = w.WriteDataAsync(ctx, 0, []byte("must not be acknowledged"), ch)
+				require.NoError(t, err)
+				require.NoError(t, w.Sync(ctx))
+				result, err := ch.ReadResult(ctx)
+				require.NoError(t, err)
+				require.ErrorIs(t, result.Err, werr.ErrStorageNotWritable)
+				require.EqualValues(t, -1, w.GetLastEntryId(ctx))
+			})
+		}
+	}
+}

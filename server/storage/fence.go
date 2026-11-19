@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/zilliztech/woodpecker/common/fileutil"
 )
 
 // FenceMarkerName is a permanent, per-segment prohibition on ordinary appends.
@@ -46,13 +48,14 @@ func FenceMarkerExists(segmentDir string) (bool, error) {
 }
 
 // PersistFenceMarker makes a fence survive both process restart and host crash.
-// The segment directory must already exist. Existing markers are never truncated,
-// and are synced again: a previous attempt may have created one but failed to sync.
+// The segment directory must have been published by fileutil.MkdirAllSync.
+// Existing markers are never truncated, and are synced again: a previous attempt
+// may have created one but failed to sync.
 func PersistFenceMarker(ctx context.Context, segmentDir string) error {
-	return persistFenceMarker(ctx, segmentDir, (*os.File).Sync)
+	return persistFenceMarker(ctx, segmentDir, (*os.File).Sync, fileutil.SyncDir)
 }
 
-func persistFenceMarker(ctx context.Context, segmentDir string, syncFile func(*os.File) error) error {
+func persistFenceMarker(ctx context.Context, segmentDir string, syncFile func(*os.File) error, syncDir func(string) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -96,28 +99,13 @@ func persistFenceMarker(ctx context.Context, segmentDir string, syncFile func(*o
 		return fmt.Errorf("close fence marker: %w", closeErr)
 	}
 
-	// Writers create their paths with MkdirAll. Sync every ancestor, bottom up,
-	// so a new log/instance directory cannot disappear along with a synced marker.
-	// This also repairs retries after an earlier directory sync failed; existence
-	// alone cannot tell us which directory entries were durably created.
-	for dir := segmentDir; ; dir = filepath.Dir(dir) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		d, err := os.Open(dir)
-		if err != nil {
-			return fmt.Errorf("open fence directory %s: %w", dir, err)
-		}
-		syncErr := syncFile(d)
-		closeErr := d.Close()
-		if syncErr != nil {
-			return fmt.Errorf("sync fence directory %s: %w", dir, syncErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close fence directory %s: %w", dir, closeErr)
-		}
-		if filepath.Dir(dir) == dir {
-			return ctx.Err()
-		}
+	// Constructor setup already published every directory component. Only the
+	// marker's own name is new here, including on a retry after failed sync.
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	if err := syncDir(segmentDir); err != nil {
+		return fmt.Errorf("sync fence directory %s: %w", segmentDir, err)
+	}
+	return ctx.Err()
 }

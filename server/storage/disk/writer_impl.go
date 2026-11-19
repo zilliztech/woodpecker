@@ -35,6 +35,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -83,16 +84,17 @@ type LocalFileWriter struct {
 	lastModifiedTime   time.Time
 
 	// written state
-	firstEntryID  atomic.Int64 // The first entryId written to disk
-	lastEntryID   atomic.Int64 // The last entryId written to disk
-	headerWritten atomic.Bool  // Ensures header is written before data
-	finalizeMu    sync.Mutex   // Ensures that the finalize operation is done in a single thread
-	finalized     atomic.Bool
-	finalizing    atomic.Bool
-	fenced        atomic.Bool
-	recovered     atomic.Bool
-	lockFile      *flock.Flock // Lock file handle
-	lockFilePath  string       // Path to the lock file
+	firstEntryID    atomic.Int64 // The first entryId written to disk
+	lastEntryID     atomic.Int64 // The last entryId written to disk
+	headerWritten   atomic.Bool  // Ensures header is written before data
+	fileEntrySynced atomic.Bool  // The data.log name has been synced after its first file fsync.
+	finalizeMu      sync.Mutex   // Ensures that the finalize operation is done in a single thread
+	finalized       atomic.Bool
+	finalizing      atomic.Bool
+	fenced          atomic.Bool
+	recovered       atomic.Bool
+	lockFile        *flock.Flock // Lock file handle
+	lockFilePath    string       // Path to the lock file
 
 	// Async flush management
 	flushTaskChan                chan *blockFlushTask
@@ -138,7 +140,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 
 	segmentDir := getSegmentDir(baseDir, logId, segmentId)
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
+	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
 			zap.String("segmentDir", segmentDir),
 			zap.Error(err))
@@ -603,7 +605,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		zap.Int64("totalWrittenBytes", w.writtenBytes))
 
 	// Sync to disk
-	if err := w.file.Sync(); err != nil {
+	if err := w.syncFile(); err != nil {
 		logger.Ctx(ctx).Warn("sync file error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
 		w.storageWritable.Store(false)
 		w.notifyFlushError(ctx, task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
@@ -976,7 +978,7 @@ func (w *LocalFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 	w.writtenBytes += int64(n)
 
 	// Final sync
-	if err := w.file.Sync(); err != nil {
+	if err := w.syncFile(); err != nil {
 		return w.lastEntryID.Load(), fmt.Errorf("final sync: %w", err)
 	}
 
@@ -984,6 +986,21 @@ func (w *LocalFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 	w.finalized.Store(true)
 	w.finalizing.Store(false)
 	return w.lastEntryID.Load(), nil
+}
+
+// syncFile publishes a newly created data.log before any durable ACK or Finalize
+// success. Directory ancestry is already durable from constructor setup.
+func (w *LocalFileWriter) syncFile() error {
+	if err := w.file.Sync(); err != nil {
+		return err
+	}
+	if !w.fileEntrySynced.Load() {
+		if err := fileutil.SyncDir(filepath.Dir(w.segmentFilePath)); err != nil {
+			return err
+		}
+		w.fileEntrySynced.Store(true)
+	}
+	return nil
 }
 
 // GetLastEntryId returns the last entry ID written

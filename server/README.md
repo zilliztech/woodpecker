@@ -20,9 +20,16 @@ Local and service storage keep a `write.fence` file beside each fenced segment's
 missing data file is reopened after a server restart. Reopening a fenced local
 segment uses recovery mode so a stale append cannot truncate its existing data.
 
+Persistent directory setup uses `fileutil.MkdirAllSync`: it creates the path and
+syncs its directory ancestry, including on retries after an earlier sync failure.
+The first data-file flush also syncs the containing directory before acknowledging
+entries; later appends only need the file sync.
+
 Fence returns success only after pending flushes finish and the marker and its
-directory ancestry have been synced. Repeated fences preserve existing marker
-contents and retry the sync, including after a failed persistence attempt. Marker
+containing directory have been synced. Ancestor synchronization is done during
+directory setup, so repeated fences do not walk back to the filesystem root.
+Repeated fences preserve existing marker contents and retry the sync, including
+after a failed persistence attempt. Marker
 inspection errors prevent writer creation. Finalize, reads and compaction remain
 available; the marker is kept when local data is reclaimed after compaction.
 

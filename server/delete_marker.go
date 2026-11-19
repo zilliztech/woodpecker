@@ -27,6 +27,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 )
 
@@ -60,14 +61,14 @@ func markerPath(storageRoot string, m deleteMarker) string {
 // left untouched (the grace clock / DeletedAt is stable across re-marks). fsync'd for durability.
 func writeDeleteMarker(ctx context.Context, storageRoot string, m deleteMarker) error {
 	p := markerPath(storageRoot, m)
+	if err := fileutil.MkdirAllSync(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
 	if _, err := os.Stat(p); err == nil {
 		logger.Ctx(ctx).Info("delete marker already exists, keeping original",
 			zap.String("path", p))
 		return nil // already marked — keep the original
 	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
 	data, err := json.Marshal(m)
@@ -96,15 +97,7 @@ func writeDeleteMarker(ctx context.Context, storageRoot string, m deleteMarker) 
 	}
 	// fsync the parent directory so the rename (the new directory entry) is durable;
 	// without this, a crash right after rename can lose the marker.
-	dir, err := os.Open(filepath.Dir(p))
-	if err != nil {
-		return err
-	}
-	if err := dir.Sync(); err != nil {
-		dir.Close()
-		return err
-	}
-	if err := dir.Close(); err != nil {
+	if err := fileutil.SyncDir(filepath.Dir(p)); err != nil {
 		return err
 	}
 	logger.Ctx(ctx).Info("delete marker created",

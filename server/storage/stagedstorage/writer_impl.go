@@ -36,6 +36,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/objectstorage"
@@ -97,13 +98,14 @@ type StagedFileWriter struct {
 	recoveredFooter    *codec.FooterRecord // Footer recovered during initialization (only for finalized segments)
 
 	// written state
-	firstEntryID   atomic.Int64 // The first entryId written to disk
-	lastEntryID    atomic.Int64 // The last entryId written to disk
-	headerWritten  atomic.Bool  // Ensures header is written before data
-	finalized      atomic.Bool
-	finalizing     atomic.Bool
-	fenced         atomic.Bool
-	inRecoveryMode atomic.Bool
+	firstEntryID    atomic.Int64 // The first entryId written to disk
+	lastEntryID     atomic.Int64 // The last entryId written to disk
+	headerWritten   atomic.Bool  // Ensures header is written before data
+	fileEntrySynced atomic.Bool  // The data.log name has been synced after its first file fsync.
+	finalized       atomic.Bool
+	finalizing      atomic.Bool
+	fenced          atomic.Bool
+	inRecoveryMode  atomic.Bool
 	// compacted marks a writer opened on a segment whose directory carries the
 	// data.compacted tombstone: the segment is durably compacted in object storage and its
 	// local data.log has been (or is being) reclaimed. Such a writer holds NO local file and
@@ -177,7 +179,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		return newCompactedStagedFileWriter(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg)
 	}
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
+	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
 			zap.String("segmentDir", segmentDir),
 			zap.Error(err))
@@ -789,7 +791,7 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int64("totalWrittenBytes", w.writtenBytes))
 
 	// Sync to disk
-	if err := w.file.Sync(); err != nil {
+	if err := w.syncFile(); err != nil {
 		logger.Ctx(ctx).Warn("sync file error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
 		w.storageWritable.Store(false)
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
@@ -1265,7 +1267,7 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 	w.writtenBytes += int64(n)
 
 	// Final sync
-	if err := w.file.Sync(); err != nil {
+	if err := w.syncFile(); err != nil {
 		return w.lastEntryID.Load(), fmt.Errorf("final sync: %w", err)
 	}
 
@@ -1274,6 +1276,21 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 	w.finalized.Store(true)
 	w.finalizing.Store(false)
 	return w.lastEntryID.Load(), nil
+}
+
+// syncFile publishes a newly created data.log before any durable ACK or Finalize
+// success. Directory ancestry is already durable from constructor setup.
+func (w *StagedFileWriter) syncFile() error {
+	if err := w.file.Sync(); err != nil {
+		return err
+	}
+	if !w.fileEntrySynced.Load() {
+		if err := fileutil.SyncDir(filepath.Dir(w.segmentFilePath)); err != nil {
+			return err
+		}
+		w.fileEntrySynced.Store(true)
+	}
+	return nil
 }
 
 // GetLastEntryId returns the last entry ID written

@@ -26,24 +26,29 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/zilliztech/woodpecker/common/fileutil"
 )
 
 func TestPersistFenceMarkerSyncFailureAndRetry(t *testing.T) {
-	for _, stage := range []string{"file", "segment directory", "parent directory"} {
+	for _, stage := range []string{"file", "segment directory"} {
 		t.Run(stage, func(t *testing.T) {
 			ctx := context.Background()
 			dir := filepath.Join(t.TempDir(), "log", "segment")
-			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, fileutil.MkdirAllSync(dir, 0o755))
 			injected := errors.New("injected fsync failure")
 			var synced []string
 			err := persistFenceMarker(ctx, dir, func(f *os.File) error {
 				synced = append(synced, f.Name())
-				if (stage == "file" && f.Name() == filepath.Join(dir, FenceMarkerName)) ||
-					(stage == "segment directory" && f.Name() == dir) ||
-					(stage == "parent directory" && f.Name() == filepath.Dir(dir)) {
+				if stage == "file" {
 					return injected
 				}
 				return f.Sync()
+			}, func(dir string) error {
+				if stage == "segment directory" {
+					return injected
+				}
+				return fileutil.SyncDir(dir)
 			})
 			require.ErrorIs(t, err, injected)
 			require.FileExists(t, filepath.Join(dir, FenceMarkerName))
@@ -58,9 +63,9 @@ func TestPersistFenceMarkerSyncFailureAndRetry(t *testing.T) {
 	}
 }
 
-func TestPersistFenceMarkerPreservesLegacyContentsAndSyncsAncestors(t *testing.T) {
+func TestPersistFenceMarkerPreservesLegacyContentsAndSyncsContainingDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "instance", "log", "segment")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, fileutil.MkdirAllSync(dir, 0o755))
 	p := filepath.Join(dir, FenceMarkerName)
 	legacy := []byte("logId=1\nreason=manual_fence\n")
 	require.NoError(t, os.WriteFile(p, legacy, 0o644))
@@ -68,14 +73,14 @@ func TestPersistFenceMarkerPreservesLegacyContentsAndSyncsAncestors(t *testing.T
 	require.NoError(t, persistFenceMarker(context.Background(), dir, func(f *os.File) error {
 		synced = append(synced, f.Name())
 		return f.Sync()
+	}, func(dir string) error {
+		synced = append(synced, dir)
+		return fileutil.SyncDir(dir)
 	}))
 	contents, err := os.ReadFile(p)
 	require.NoError(t, err)
 	require.Equal(t, legacy, contents)
-	require.Equal(t, p, synced[0], "sync the marker before publishing its directory entry")
-	require.Contains(t, synced, dir)
-	require.Contains(t, synced, filepath.Dir(dir))
-	require.Contains(t, synced, filepath.Dir(filepath.Dir(dir)))
+	require.Equal(t, []string{p, dir}, synced, "Fence only publishes the marker after directory setup")
 }
 
 func TestFenceMarkerInspectionFailsClosed(t *testing.T) {
@@ -130,7 +135,7 @@ func TestPersistFenceMarkerCancellation(t *testing.T) {
 	err := persistFenceMarker(ctx, dir, func(f *os.File) error {
 		cancel()
 		return f.Sync()
-	})
+	}, fileutil.SyncDir)
 	require.ErrorIs(t, err, context.Canceled)
 	require.NoError(t, PersistFenceMarker(context.Background(), dir))
 }
