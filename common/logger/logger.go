@@ -19,6 +19,7 @@ package logger
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,8 @@ import (
 type contextKey string
 
 var (
+	stdoutOutput = newAsyncOutput(os.Stdout, 1024)
+
 	// _globalAtomicLevel is the shared level controller. All loggers — including
 	// those cloned into contexts via WithFields — reference this atomic level,
 	// so SetLevel takes effect immediately for every outstanding logger.
@@ -59,11 +62,7 @@ func init() {
 	if registerErr != nil {
 		panic(registerErr)
 	}
-	l, err := newLogger(encodeFormat)
-	if err != nil {
-		panic(err)
-	}
-	_globalLogger.Store(l)
+	_globalLogger.Store(newLogger(encodeFormat, stdoutOutput))
 	_currentLevel.Store("info")
 }
 
@@ -136,34 +135,23 @@ func Ctx(ctx context.Context) *zap.Logger {
 // newLogger builds the single global logger whose level is driven by
 // _globalAtomicLevel. Runtime level changes go through that atomic, not
 // through constructing a new logger.
-func newLogger(format string) (*zap.Logger, error) {
-	// Use development config for all levels to get console-friendly output
-	config := zap.NewDevelopmentConfig()
-	config.Level = _globalAtomicLevel
-
-	if format == "json" {
-		config.Encoding = "json"
-	} else if format == "text" {
-		// use custom text encoder
-		config.Encoding = customEncoder
-	} else {
-		// fallback to default console text encoder
-		config.Encoding = "console"
+func newLogger(format string, output *asyncOutput) *zap.Logger {
+	cfg := zap.NewDevelopmentEncoderConfig()
+	cfg.EncodeTime = customTimeEncoder
+	cfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	cfg.EncodeCaller = zapcore.ShortCallerEncoder
+	cfg.EncodeDuration = zapcore.StringDurationEncoder
+	var enc zapcore.Encoder
+	switch format {
+	case "text":
+		enc = NewTextEncoderByConfig(format)
+	case "json":
+		enc = zapcore.NewJSONEncoder(cfg)
+	default:
+		enc = zapcore.NewConsoleEncoder(cfg)
 	}
-
-	// Configure encoder for better readability
-	config.EncoderConfig.EncodeTime = customTimeEncoder
-	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-	config.EncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
-	config.EncoderConfig.EncodeDuration = zapcore.StringDurationEncoder
-	config.OutputPaths = []string{"stdout"}
-
-	logger, err := config.Build()
-	if err != nil {
-		return nil, err
-	}
-
-	return logger, nil
+	core := &asyncCore{LevelEnabler: _globalAtomicLevel, encoder: enc, output: output}
+	return zap.New(core, zap.Development(), zap.AddCaller(), zap.AddStacktrace(zap.WarnLevel))
 }
 
 func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {

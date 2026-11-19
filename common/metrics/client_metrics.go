@@ -357,6 +357,7 @@ var (
 // Without calling this, metrics still work but are not scraped by any registry.
 func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 	WpClientRegisterOnce.Do(func() {
+		registerLoggingMetrics(registerer)
 		// log name-id mapping
 		registerer.MustRegister(WpLogNameIdMapping)
 		// segment state tracking
