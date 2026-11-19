@@ -170,3 +170,27 @@ func TestAsyncOutputWriteFailure(t *testing.T) {
 		q.stop()
 	}
 }
+
+func TestAsyncOutputSyncOnFullAndClosedQueue(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, sink, release := gatedCore(t, 1)
+		l := zap.New(c)
+		l.Info("in flight")
+		<-sink.entered
+		l.Info("queued")
+		require.ErrorIs(t, l.Sync(), context.DeadlineExceeded)
+		c.output.stop()
+		require.ErrorIs(t, l.Sync(), context.DeadlineExceeded)
+		release()
+		<-c.output.done
+		require.NoError(t, l.Sync())
+	})
+}
+
+func TestAsyncOutputFlushesBeforePanic(t *testing.T) {
+	c, sink, release := gatedCore(t, 2)
+	release()
+	l := zap.New(c)
+	require.Panics(t, func() { l.Panic("terminal diagnostic") })
+	require.Contains(t, sink.String(), "terminal diagnostic")
+}
