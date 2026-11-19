@@ -433,10 +433,31 @@ type LogFileConfig struct {
 
 // LogConfig stores the log configuration.
 type LogConfig struct {
-	Level  string        `yaml:"level"`
-	File   LogFileConfig `yaml:"file"`
-	Format string        `yaml:"format"`
-	Stdout bool          `yaml:"stdout"`
+	AsyncWrite AsyncWriteConfig `yaml:"asyncWrite"`
+	Level      string           `yaml:"level"`
+	File       LogFileConfig    `yaml:"file"`
+	Format     string           `yaml:"format"`
+	Stdout     bool             `yaml:"stdout"`
+}
+
+// AsyncWriteConfig controls admission to the process-wide diagnostic log queue.
+// A nil DroppedTimeout uses the default; an explicit 0s drops immediately.
+type AsyncWriteConfig struct {
+	PendingLength     int            `yaml:"pendingLength"`
+	DroppedTimeout    *time.Duration `yaml:"droppedTimeout"`
+	NonDroppableLevel string         `yaml:"nonDroppableLevel"`
+	StopTimeout       time.Duration  `yaml:"stopTimeout"`
+}
+
+// DefaultAsyncWriteConfig returns the process logger's startup policy.
+func DefaultAsyncWriteConfig() AsyncWriteConfig {
+	timeout := 100 * time.Millisecond
+	return AsyncWriteConfig{
+		PendingLength:     1024,
+		DroppedTimeout:    &timeout,
+		NonDroppableLevel: "error",
+		StopTimeout:       time.Second,
+	}
 }
 
 // JaegerConfig stores the Jaeger configuration.
@@ -1280,9 +1301,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 
 func getDefaultLoggerConfig() LogConfig {
 	return LogConfig{
-		Level:  "info",
-		Format: "text",
-		Stdout: true,
+		AsyncWrite: DefaultAsyncWriteConfig(),
+		Level:      "info",
+		Format:     "text",
+		Stdout:     true,
 		File: LogFileConfig{
 			RootPath:   "./logs",
 			MaxSize:    100,

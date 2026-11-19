@@ -8,12 +8,46 @@ import (
 
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/zilliztech/woodpecker/common/config"
 )
 
-const (
-	priorityWait = 100 * time.Millisecond
-	drainTimeout = time.Second
-)
+type outputPolicy struct {
+	capacity          int
+	droppedTimeout    time.Duration
+	nonDroppableLevel zapcore.Level
+	stopTimeout       time.Duration
+}
+
+func resolveOutputPolicy(cfg config.AsyncWriteConfig) outputPolicy {
+	defaults := config.DefaultAsyncWriteConfig()
+	if cfg.PendingLength <= 0 {
+		cfg.PendingLength = defaults.PendingLength
+	}
+	if cfg.DroppedTimeout == nil || *cfg.DroppedTimeout < 0 {
+		cfg.DroppedTimeout = defaults.DroppedTimeout
+	}
+	if cfg.StopTimeout <= 0 {
+		cfg.StopTimeout = defaults.StopTimeout
+	}
+	level, err := zapcore.ParseLevel(cfg.NonDroppableLevel)
+	if cfg.NonDroppableLevel == "" || err != nil {
+		level = zapcore.ErrorLevel
+	}
+	return outputPolicy{
+		capacity:          cfg.PendingLength,
+		droppedTimeout:    *cfg.DroppedTimeout,
+		nonDroppableLevel: level,
+		stopTimeout:       cfg.StopTimeout,
+	}
+}
+
+func (p outputPolicy) enqueueWait(level zapcore.Level) time.Duration {
+	if level >= p.nonDroppableLevel {
+		return max(p.droppedTimeout, p.stopTimeout)
+	}
+	return p.droppedTimeout
+}
 
 // The encoder runs on the caller so mutable fields are captured at log time.
 // All child loggers share the same bounded output and worker.
@@ -41,9 +75,10 @@ func (c *asyncCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.
 
 func (c *asyncCore) Write(ent zapcore.Entry, fields []zapcore.Field) error {
 	q := c.output
-	// Skip encoding on a saturated DEBUG/INFO path. Admission below also
-	// handles another producer filling the last slot while we encode.
-	if ent.Level < zapcore.WarnLevel && len(q.pending) == cap(q.pending) {
+	policy := q.policy.Load()
+	wait := policy.enqueueWait(ent.Level)
+	// With immediate drop configured, skip encoding when the queue is full.
+	if wait == 0 && q.depth() >= policy.capacity {
 		q.dropped.Add(1)
 		return nil
 	}
@@ -53,8 +88,8 @@ func (c *asyncCore) Write(ent zapcore.Entry, fields []zapcore.Field) error {
 	}
 	item := outputItem{buf: buf}
 	queued := q.offer(item, nil)
-	if !queued && ent.Level >= zapcore.WarnLevel {
-		ctx, cancel := context.WithTimeout(context.Background(), priorityWait)
+	if !queued && wait > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
 		queued = q.offer(item, ctx.Done())
 		cancel()
 	}
@@ -69,7 +104,7 @@ func (c *asyncCore) Write(ent zapcore.Entry, fields []zapcore.Field) error {
 }
 
 func (c *asyncCore) Sync() error {
-	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), c.output.policy.Load().stopTimeout)
 	defer cancel()
 	result := make(chan error, 1)
 	if !c.output.offer(outputItem{flush: result}, ctx.Done()) {
@@ -95,54 +130,118 @@ type outputItem struct {
 }
 
 type asyncOutput struct {
-	sink        zapcore.WriteSyncer
-	pending     chan outputItem
-	closing     chan struct{}
-	done        chan struct{}
-	stopOnce    sync.Once
-	admission   sync.RWMutex // protects sends against close(pending); never held across sink I/O
+	sink   zapcore.WriteSyncer
+	policy atomic.Pointer[outputPolicy]
+	done   chan struct{}
+
+	mu          sync.Mutex
+	ready       *sync.Cond    // wakes the worker when a record arrives or output closes
+	space       chan struct{} // allocated only while producers wait for space
+	closed      bool
+	slots       []outputItem // FIFO ring, shared by startup and configured loggers
+	head, count int
+
 	dropped     atomic.Uint64
 	writeErrors atomic.Uint64
 	syncErr     error // published by closing done
 }
 
-func newAsyncOutput(sink zapcore.WriteSyncer, capacity int) *asyncOutput {
-	q := &asyncOutput{
-		sink: sink, pending: make(chan outputItem, capacity),
-		closing: make(chan struct{}), done: make(chan struct{}),
-	}
+func newAsyncOutput(sink zapcore.WriteSyncer, policy outputPolicy) *asyncOutput {
+	q := &asyncOutput{sink: sink, done: make(chan struct{}), slots: make([]outputItem, policy.capacity)}
+	q.ready = sync.NewCond(&q.mu)
+	q.policy.Store(&policy)
 	go q.run()
 	return q
 }
 
-func (q *asyncOutput) offer(item outputItem, deadline <-chan struct{}) bool {
-	q.admission.RLock()
-	defer q.admission.RUnlock()
-	select {
-	case <-q.closing:
-		return false
-	default:
+// InitLogger may run after child loggers and queued records already exist.
+// Keep their FIFO order on resize. When shrinking below the current depth,
+// resume admission only after the backlog falls below the configured limit.
+func (q *asyncOutput) configure(policy outputPolicy) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed || *q.policy.Load() == policy {
+		return
 	}
-	if deadline == nil {
-		select {
-		case q.pending <- item:
-			return true
-		default:
+	if policy.capacity != len(q.slots) {
+		slots := make([]outputItem, max(policy.capacity, q.count))
+		for i := range q.count {
+			slots[i] = q.slots[(q.head+i)%len(q.slots)]
+		}
+		q.slots, q.head = slots, 0
+	}
+	q.policy.Store(&policy)
+	if q.count < policy.capacity {
+		q.notifySpaceLocked()
+	}
+}
+
+func (q *asyncOutput) depth() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.count
+}
+
+func (q *asyncOutput) notifySpaceLocked() {
+	if q.space != nil {
+		close(q.space)
+		q.space = nil
+	}
+}
+
+func (q *asyncOutput) offer(item outputItem, deadline <-chan struct{}) bool {
+	q.mu.Lock()
+	for !q.closed && q.count >= q.policy.Load().capacity {
+		if deadline == nil {
+			q.mu.Unlock()
 			return false
 		}
+		if q.space == nil {
+			q.space = make(chan struct{})
+		}
+		space := q.space
+		q.mu.Unlock()
+		select {
+		case <-space:
+		case <-deadline:
+			return false
+		}
+		q.mu.Lock()
 	}
-	select {
-	case q.pending <- item:
-		return true
-	case <-q.closing:
-	case <-deadline:
+	defer q.mu.Unlock()
+	if q.closed {
+		return false
 	}
-	return false
+	q.slots[(q.head+q.count)%len(q.slots)] = item
+	q.count++
+	if q.count == 1 {
+		q.ready.Signal()
+	}
+	return true
+}
+
+func (q *asyncOutput) take() (outputItem, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for q.count == 0 && !q.closed {
+		q.ready.Wait()
+	}
+	if q.count == 0 {
+		return outputItem{}, false
+	}
+	item := q.slots[q.head]
+	q.slots[q.head] = outputItem{}
+	q.head = (q.head + 1) % len(q.slots)
+	q.count--
+	if q.count < q.policy.Load().capacity {
+		q.notifySpaceLocked()
+	}
+	return item, true
 }
 
 func (q *asyncOutput) run() {
 	defer close(q.done)
-	for item := range q.pending {
+	for item, ok := q.take(); ok; item, ok = q.take() {
 		if item.flush != nil {
 			item.flush <- q.sink.Sync()
 			continue
@@ -157,20 +256,19 @@ func (q *asyncOutput) run() {
 }
 
 func (q *asyncOutput) stop() {
-	deadline := time.After(drainTimeout)
-	q.stopOnce.Do(func() {
-		close(q.closing) // wake producers waiting for space
-		q.admission.Lock()
-		close(q.pending)
-		q.admission.Unlock()
-	})
+	deadline := time.After(q.policy.Load().stopTimeout)
+	q.mu.Lock()
+	q.closed = true
+	q.notifySpaceLocked()
+	q.ready.Signal()
+	q.mu.Unlock()
 	select {
 	case <-q.done:
 	case <-deadline:
 	}
 }
 
-// Shutdown drains previously accepted diagnostic logs for up to one second.
+// Shutdown drains previously accepted diagnostic logs up to the configured stopTimeout.
 // The logger belongs to the process. An individual embedded client must not
 // shut it down while other clients still use it. A blocked write can finish
 // draining on the existing worker if the sink later recovers.
@@ -185,7 +283,7 @@ type OutputStats struct {
 
 func GetOutputStats() OutputStats {
 	return OutputStats{
-		QueueDepth:  len(stdoutOutput.pending),
+		QueueDepth:  stdoutOutput.depth(),
 		Dropped:     stdoutOutput.dropped.Load(),
 		WriteErrors: stdoutOutput.writeErrors.Load(),
 	}

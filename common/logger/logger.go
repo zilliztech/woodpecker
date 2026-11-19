@@ -35,7 +35,7 @@ import (
 type contextKey string
 
 var (
-	stdoutOutput = newAsyncOutput(os.Stdout, 1024)
+	stdoutOutput = newAsyncOutput(os.Stdout, resolveOutputPolicy(config.AsyncWriteConfig{}))
 
 	// _globalAtomicLevel is the shared level controller. All loggers — including
 	// those cloned into contexts via WithFields — reference this atomic level,
@@ -68,6 +68,7 @@ func init() {
 
 func InitLogger(cfg *config.Configuration) {
 	initLogOnce.Do(func() {
+		stdoutOutput.configure(resolveOutputPolicy(cfg.Log.AsyncWrite))
 		logLevel := cfg.Log.Level
 		if len(logLevel) == 0 {
 			logLevel = "info"
