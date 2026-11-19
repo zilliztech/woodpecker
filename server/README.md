@@ -13,6 +13,23 @@ layout: `root`/`<instance_id>`/`<log_id>`/`<segment_id>`/`<fregement_id>`
 - `segment_id`: identifier for the segment of the log.
 - `<fregement_id>`: identifier for the object of the logfile, which represents a fragment of the logfile.
 
+## Durable segment fences
+
+Local and service storage keep a `write.fence` file beside each fenced segment's
+`data.log`. Its existence rejects ordinary appends, including when an empty or
+missing data file is reopened after a server restart. Reopening a fenced local
+segment uses recovery mode so a stale append cannot truncate its existing data.
+
+Fence returns success only after pending flushes finish and the marker and its
+directory ancestry have been synced. Repeated fences preserve existing marker
+contents and retry the sync, including after a failed persistence attempt. Marker
+inspection errors prevent writer creation. Finalize, reads and compaction remain
+available; the marker is kept when local data is reclaimed after compaction.
+
+This closes the restart window between Fence and Finalize: a successful Fence
+reply must remain a prohibition on new appends when the node comes back, before
+the coordinator sends its already-selected completion boundary.
+
 ## Node Lifecycle State Machine
 
 Each Woodpecker server node has a lifecycle managed by `NodeLifecycleManager` (`lifecycle.go`). The state machine governs how a node participates in the cluster during normal operation, rolling upgrades, and scale-down events.

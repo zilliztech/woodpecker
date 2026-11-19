@@ -183,6 +183,10 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 			zap.Error(err))
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
+	fenced, markerErr := storage.FenceMarkerExists(segmentDir)
+	if markerErr != nil {
+		return nil, markerErr
+	}
 
 	filePath := getSegmentFilePath(localBaseDir, logId, segmentId)
 	logger.Ctx(ctx).Debug("segment directory and file path prepared",
@@ -221,7 +225,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	writer.headerWritten.Store(false)
 	writer.finalized.Store(false)
 	writer.finalizing.Store(false)
-	writer.fenced.Store(false)
+	writer.fenced.Store(fenced)
 	writer.closed.Store(false)
 	writer.recovered.Store(false)
 	writer.storageWritable.Store(true)
@@ -250,7 +254,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	var file *os.File
 	var err error
 
-	shouldInRecoveryMode := writer.determineIfNeedRecoveryMode(recoveryMode)
+	shouldInRecoveryMode := writer.determineIfNeedRecoveryMode(recoveryMode || fenced)
 	writer.inRecoveryMode.Store(shouldInRecoveryMode)
 
 	if shouldInRecoveryMode {
@@ -1069,7 +1073,8 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 			zap.Int64("timeSinceLastSync", timeSinceLastSync))
 		triggerSyncErr := w.Sync(ctx)
 		if triggerSyncErr != nil {
-			logger.Ctx(ctx).Warn("reach max buffer size, but trigger sync failed",
+			logger.Ctx(ctx).Warn(
+				"reach max buffer size, but trigger sync failed",
 				zap.Int64("bufferSize", bufferSize),
 				zap.Int64("entryCount", entryCount),
 				zap.Int64("timeSinceLastSync", timeSinceLastSync),
@@ -1098,13 +1103,13 @@ func (w *StagedFileWriter) checkWritableForWriteDataAsync(ctx context.Context, e
 		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
 		return entryId, werr.ErrStorageNotWritable
 	}
-	if w.inRecoveryMode.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer in recovery mode")
-		return entryId, werr.ErrFileWriterInRecoveryMode
-	}
 	if w.fenced.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: attempting to write rejected, segment is fenced", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("inst", fmt.Sprintf("%p", w)))
 		return -1, werr.ErrSegmentFenced
+	}
+	if w.inRecoveryMode.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer in recovery mode")
+		return entryId, werr.ErrFileWriterInRecoveryMode
 	}
 	return entryId, nil
 }
@@ -1160,7 +1165,8 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 	}()
 	if lac < -1 {
 		return w.lastEntryID.Load(), werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("invalid finalize LAC %d: must be >= -1", lac))
+			fmt.Sprintf("invalid finalize LAC %d: must be >= -1", lac),
+		)
 	}
 
 	w.finalizeMu.Lock()
@@ -1175,7 +1181,8 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 				existingLAC = w.recoveredFooter.LAC
 			}
 			return w.lastEntryID.Load(), werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-				fmt.Sprintf("finalized footer LAC %d != requested LAC %d", existingLAC, lac))
+				fmt.Sprintf("finalized footer LAC %d != requested LAC %d", existingLAC, lac),
+			)
 		}
 		logger.Ctx(ctx).Info("run: received idempotent finalize signal for existing target, skip",
 			zap.String("SegmentImplInst", fmt.Sprintf("%p", w)),
@@ -1348,23 +1355,34 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "fence", status).Observe(float64(time.Since(startTime).Milliseconds()))
 	}()
 
-	// Mark as fenced first to reject new AppendAsync calls (idempotent)
+	// Serialize with Finalize and other fences. The writer lock also makes the
+	// boundary exclude every append that has not already passed its second check.
+	w.finalizeMu.Lock()
+	defer w.finalizeMu.Unlock()
+	w.mu.Lock()
 	w.fenced.Store(true)
+	w.mu.Unlock()
 
-	// If flush goroutine already terminated, all data is persisted, fast return
-	if w.allUploadingTaskDone.Load() {
+	if w.compacted.Load() {
+		// The compacted tombstone and remote footer already reject appends across restart.
 		return w.GetLastEntryId(ctx), nil
 	}
 
-	// Sync remaining buffer data to flush channel.
-	// processFlushTask does not check fenced, so the task will be processed correctly.
-	if err := w.Sync(ctx); err != nil {
-		return w.GetLastEntryId(ctx), err
-	}
+	if !w.allUploadingTaskDone.Load() {
+		// Sync remaining buffer data to flush channel.
+		// processFlushTask does not check fenced, so the task will be processed correctly.
+		if err := w.Sync(ctx); err != nil {
+			return w.GetLastEntryId(ctx), err
+		}
 
-	// Wait for all pending flush tasks (including the one just submitted by Sync) to complete.
-	// This also terminates the flush goroutine since no more writes are expected after fence.
-	if err := w.awaitAllFlushTasks(ctx); err != nil {
+		// Wait for all pending flush tasks (including the one just submitted by Sync) to complete.
+		// This also terminates the flush goroutine since no more writes are expected after fence.
+		if err := w.awaitAllFlushTasks(ctx); err != nil {
+			return w.GetLastEntryId(ctx), err
+		}
+	}
+	// An empty or already-drained writer still needs the durable prohibition.
+	if err := storage.PersistFenceMarker(ctx, getSegmentDir(w.localBaseDir, w.logId, w.segmentId)); err != nil {
 		return w.GetLastEntryId(ctx), err
 	}
 
@@ -1404,7 +1422,8 @@ func (w *StagedFileWriter) Compact(ctx context.Context, expectedLastEntryId int6
 
 	if expectedLastEntryId < -1 {
 		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("invalid expected last entry id for compaction: %d", expectedLastEntryId))
+			fmt.Sprintf("invalid expected last entry id for compaction: %d", expectedLastEntryId),
+		)
 	}
 
 	if totalSize, handled, err := w.compactRemoteFooterIfPresent(ctx, expectedLastEntryId); handled {
@@ -1481,7 +1500,8 @@ func (w *StagedFileWriter) compactRemoteFooterIfPresent(ctx context.Context, exp
 			zap.Int64("remoteFooterLac", existingFooter.LAC),
 			zap.Int64("expectedLastEntryId", expectedLastEntryId))
 		return -1, true, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("remote compacted footer LAC %d != expected %d", existingFooter.LAC, expectedLastEntryId))
+			fmt.Sprintf("remote compacted footer LAC %d != expected %d", existingFooter.LAC, expectedLastEntryId),
+		)
 	}
 	totalSize := int64(existingFooter.TotalSize) + footerObjSize
 	logger.Ctx(ctx).Info("segment is already compacted with expected LAC, skipping",
@@ -1508,7 +1528,8 @@ func (w *StagedFileWriter) compactEmptyFinalizedSegment(ctx context.Context, exp
 			zap.String("segmentFilePath", w.segmentFilePath),
 			zap.Int64("expectedLastEntryId", expectedLastEntryId))
 		return -1, werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
-			fmt.Sprintf("empty local segment cannot satisfy expected %d", expectedLastEntryId))
+			fmt.Sprintf("empty local segment cannot satisfy expected %d", expectedLastEntryId),
+		)
 	}
 	if w.storageCli == nil {
 		return -1, fmt.Errorf("cannot compact empty segment without an object storage client")
@@ -1522,7 +1543,8 @@ func (w *StagedFileWriter) compactEmptyFinalizedSegment(ctx context.Context, exp
 			zap.String("segmentFilePath", w.segmentFilePath),
 			zap.Int64("footerLac", lac))
 		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("empty local segment footer LAC %d != expected -1", lac))
+			fmt.Sprintf("empty local segment footer LAC %d != expected -1", lac),
+		)
 	}
 	logger.Ctx(ctx).Info("no blocks to compact; uploading an empty compacted footer",
 		zap.String("segmentFilePath", w.segmentFilePath))
@@ -1538,19 +1560,22 @@ func (w *StagedFileWriter) compactEmptyFinalizedSegment(ctx context.Context, exp
 func (w *StagedFileWriter) validateLocalDataCoversExpected(ctx context.Context, expectedLastEntryId int64) error {
 	if expectedLastEntryId < 0 {
 		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("non-empty compaction requires non-negative expected last entry id, got %d", expectedLastEntryId))
+			fmt.Sprintf("non-empty compaction requires non-negative expected last entry id, got %d", expectedLastEntryId),
+		)
 	}
 	if w.recoveredFooter == nil {
 		return werr.ErrInvalidLACAlignment.WithCauseErrMsg("segment finalized but footer is not recovered")
 	}
 	if w.recoveredFooter.LAC > expectedLastEntryId {
 		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("local footer LAC %d > expected %d", w.recoveredFooter.LAC, expectedLastEntryId))
+			fmt.Sprintf("local footer LAC %d > expected %d", w.recoveredFooter.LAC, expectedLastEntryId),
+		)
 	}
 	firstEntryID := w.firstEntryID.Load()
 	if firstEntryID != 0 {
 		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("non-empty segment does not start from entry 0: firstEntryID=%d", firstEntryID))
+			fmt.Sprintf("non-empty segment does not start from entry 0: firstEntryID=%d", firstEntryID),
+		)
 	}
 	localLast := w.lastEntryID.Load()
 	if localLast < expectedLastEntryId {
@@ -1559,11 +1584,13 @@ func (w *StagedFileWriter) validateLocalDataCoversExpected(ctx context.Context, 
 			zap.Int64("localLastEntryId", localLast),
 			zap.Int64("expectedLastEntryId", expectedLastEntryId))
 		return werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
-			fmt.Sprintf("local lastEntryId %d < expected %d", localLast, expectedLastEntryId))
+			fmt.Sprintf("local lastEntryId %d < expected %d", localLast, expectedLastEntryId),
+		)
 	}
 	if maxBlockLastEntryID(w.blockIndexes) < expectedLastEntryId {
 		return werr.ErrSegmentCompactionDataBehind.WithCauseErrMsg(
-			fmt.Sprintf("local block indexes do not cover expected %d", expectedLastEntryId))
+			fmt.Sprintf("local block indexes do not cover expected %d", expectedLastEntryId),
+		)
 	}
 	return nil
 }
@@ -1571,12 +1598,14 @@ func (w *StagedFileWriter) validateLocalDataCoversExpected(ctx context.Context, 
 func (w *StagedFileWriter) validateCompactedIndexesMatchExpected(blockIndexes []*codec.IndexRecord, expectedLastEntryId int64) error {
 	if len(blockIndexes) == 0 {
 		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("compaction produced no data blocks for expected %d", expectedLastEntryId))
+			fmt.Sprintf("compaction produced no data blocks for expected %d", expectedLastEntryId),
+		)
 	}
 	maxLastEntryID := maxBlockLastEntryID(blockIndexes)
 	if maxLastEntryID != expectedLastEntryId {
 		return werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("compacted data max last entry id %d != expected %d", maxLastEntryID, expectedLastEntryId))
+			fmt.Sprintf("compacted data max last entry id %d != expected %d", maxLastEntryID, expectedLastEntryId),
+		)
 	}
 	return nil
 }
@@ -1929,7 +1958,8 @@ func (w *StagedFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, 
 	recoveryLog := logger.Ctx(ctx).With(
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.Int64("logId", w.logId),
-		zap.Int64("segId", w.segmentId))
+		zap.Int64("segId", w.segmentId),
+	)
 
 	for offset < len(data) {
 		// Check if we have enough data for a record header
@@ -2120,21 +2150,24 @@ func (w *StagedFileWriter) validateLACAlignment(ctx context.Context) (int64, err
 	// 2. If LAC >= 0, validate that segment contains complete 0-LAC sequence
 	if !footer.HasLAC() || lac < 0 {
 		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("footer has no valid LAC: LAC=%d", lac))
+			fmt.Sprintf("footer has no valid LAC: LAC=%d", lac),
+		)
 	}
 
 	// Check that segment starts from entry 0 or close to 0
 	// This ensures we have the complete sequence from the beginning
 	if firstEntryID > 0 {
 		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("segment does not start from entry 0: firstEntryID=%d", firstEntryID))
+			fmt.Sprintf("segment does not start from entry 0: firstEntryID=%d", firstEntryID),
+		)
 	}
 
 	// Check that segment contains all entries up to LAC
 	// The segment must contain the complete range [0, LAC]
 	if lastEntryID < lac {
 		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
-			fmt.Sprintf("segment incomplete: lastEntryID=%d < LAC=%d", lastEntryID, lac))
+			fmt.Sprintf("segment incomplete: lastEntryID=%d < LAC=%d", lastEntryID, lac),
+		)
 	}
 
 	// Validate against the maximum lastEntryID from all block indexes
@@ -2149,7 +2182,8 @@ func (w *StagedFileWriter) validateLACAlignment(ctx context.Context) (int64, err
 	if lac > maxBlockLastEntryID {
 		return -1, werr.ErrInvalidLACAlignment.WithCauseErrMsg(
 			fmt.Sprintf("LAC exceeds maximum block entry ID: LAC=%d > maxBlockLastEntryID=%d",
-				lac, maxBlockLastEntryID))
+				lac, maxBlockLastEntryID),
+		)
 	}
 
 	logger.Ctx(ctx).Info("LAC alignment validation successful",

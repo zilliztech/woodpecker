@@ -144,6 +144,13 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 			zap.Error(err))
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
+	fenced, markerErr := storage.FenceMarkerExists(segmentDir)
+	if markerErr != nil {
+		return nil, markerErr
+	}
+	// A fenced segment must be recovered even when an ordinary append opens it.
+	// In particular, never truncate its existing data before rejecting that append.
+	recoveryMode = recoveryMode || fenced
 
 	filePath := getSegmentFilePath(baseDir, logId, segmentId)
 	logger.Ctx(ctx).Debug("segment directory and file path prepared",
@@ -177,7 +184,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	writer.headerWritten.Store(false)
 	writer.finalized.Store(false)
 	writer.finalizing.Store(false)
-	writer.fenced.Store(false)
+	writer.fenced.Store(fenced)
 	writer.closed.Store(false)
 	writer.recovered.Store(false)
 	writer.storageWritable.Store(true)
@@ -323,7 +330,11 @@ func (w *LocalFileWriter) run() {
 			w.processFlushTask(w.runCtx, flushTask)
 		case <-ticker.C:
 			// Periodic check fenced flag make by other process
-			foundFencedFlag, _ := checkFenceFlagFileExists(w.runCtx, w.baseDir, w.logId, w.segmentId)
+			foundFencedFlag, err := checkFenceFlagFileExists(w.runCtx, w.baseDir, w.logId, w.segmentId)
+			if err != nil {
+				w.storageWritable.Store(false)
+				logger.Ctx(w.runCtx).Warn("cannot inspect fence marker; refusing writes", zap.Error(err))
+			}
 			if foundFencedFlag {
 				w.fenced.Store(true)
 			}
@@ -795,7 +806,8 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 			zap.Int64("timeSinceLastSync", timeSinceLastSync))
 		triggerSyncErr := w.Sync(ctx)
 		if triggerSyncErr != nil {
-			logger.Ctx(ctx).Warn("reach max buffer size, but trigger sync failed",
+			logger.Ctx(ctx).Warn(
+				"reach max buffer size, but trigger sync failed",
 				zap.Int64("bufferSize", bufferSize),
 				zap.Int64("entryCount", entryCount),
 				zap.Int64("timeSinceLastSync", timeSinceLastSync),
@@ -1052,8 +1064,12 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "fence", status).Observe(float64(time.Since(startTime).Milliseconds()))
 	}()
 
-	// Mark as fenced first to reject new AppendAsync calls (idempotent)
+	// Serialize with Finalize and other fences, including their flush-drain barriers.
+	w.finalizeMu.Lock()
+	defer w.finalizeMu.Unlock()
+	w.mu.Lock()
 	w.fenced.Store(true)
+	w.mu.Unlock()
 
 	// If flush goroutine already terminated, all data is persisted, skip sync/await
 	if !w.allUploadingTaskDone.Load() {
@@ -1073,32 +1089,14 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	// Get fence flag file path
 	fenceFlagPath := getFenceFlagPath(w.baseDir, w.logId, w.segmentId)
 
-	// Create fence flag file
-	fenceFile, err := os.Create(fenceFlagPath)
-	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to create fence flag file",
-			zap.String("fenceFlagPath", fenceFlagPath),
-			zap.Int64("logId", w.logId),
-			zap.Int64("segmentId", w.segmentId),
-			zap.Error(err))
-		return w.GetLastEntryId(ctx), fmt.Errorf("failed to create fence flag file %s: %w", fenceFlagPath, err)
-	}
-
-	// Write fence information to the file
-	fenceInfo := fmt.Sprintf("logId=%d\nsegmentId=%d\npid=%d\ntimestamp=%d\nreason=manual_fence\ntype=async_writer\n",
-		w.logId, w.segmentId, os.Getpid(), time.Now().Unix())
-
-	_, writeErr := fenceFile.WriteString(fenceInfo)
-	fenceFile.Close()
-
-	if writeErr != nil {
-		logger.Ctx(ctx).Warn("Failed to write fence info to file, but file created successfully",
-			zap.String("fenceFlagPath", fenceFlagPath),
-			zap.Error(writeErr))
+	if err := storage.PersistFenceMarker(ctx, getSegmentDir(w.baseDir, w.logId, w.segmentId)); err != nil {
+		return w.GetLastEntryId(ctx), err
 	}
 
 	// wait if necessary
-	_ = waitForFenceCheckIntervalIfLockExists(ctx, w.baseDir, w.logId, w.segmentId, fenceFlagPath)
+	if err := waitForFenceCheckIntervalIfLockExists(ctx, w.baseDir, w.logId, w.segmentId, fenceFlagPath); err != nil {
+		return w.GetLastEntryId(ctx), err
+	}
 
 	lastEntryId := w.GetLastEntryId(ctx)
 	logger.Ctx(ctx).Info("Successfully created fence flag file and marked LocalFileWriter as fenced",
@@ -1127,6 +1125,11 @@ func (w *LocalFileWriter) Compact(ctx context.Context, _ int64) (int64, error) {
 func (w *LocalFileWriter) recoverFromExistingFileUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverFromExistingFile")
 	defer sp.End()
+	fenced, err := checkFenceFlagFileExists(ctx, w.baseDir, w.logId, w.segmentId)
+	if err != nil {
+		return err
+	}
+	w.fenced.Store(fenced)
 	// Check if file exists
 	stat, err := os.Stat(w.segmentFilePath)
 	if err != nil {
@@ -1141,10 +1144,6 @@ func (w *LocalFileWriter) recoverFromExistingFileUnsafe(ctx context.Context) err
 		// Empty file, start fresh
 		return nil
 	}
-
-	// recover fence state
-	isFenceFlagExists, _ := checkFenceFlagFileExists(w.runCtx, w.baseDir, w.logId, w.segmentId)
-	w.fenced.Store(isFenceFlagExists)
 
 	// Open file for reading to analyze its content
 	file, err := os.Open(w.segmentFilePath)
@@ -1472,7 +1471,7 @@ func getSegmentFilePath(baseDir string, logId int64, segmentId int64) string {
 
 // getFenceFlagPath returns the path to the fence flag file for a segment
 func getFenceFlagPath(baseDir string, logId int64, segmentId int64) string {
-	return filepath.Join(baseDir, fmt.Sprintf("%d/%d/write.fence", logId, segmentId))
+	return filepath.Join(getSegmentDir(baseDir, logId, segmentId), storage.FenceMarkerName)
 }
 
 // checkFenceFlagFileExists checks for the existence of a fence flag file and returns (exists, error)
@@ -1483,24 +1482,20 @@ func checkFenceFlagFileExists(ctx context.Context, baseDir string, logId int64, 
 	// Get fence flag file path
 	fenceFlagPath := getFenceFlagPath(baseDir, logId, segmentId)
 
-	// Check if fence flag file exists
-	if _, err := os.Stat(fenceFlagPath); err == nil {
-		// Fence flag file exists
-		logger.Ctx(ctx).Debug("Fence flag file detected",
-			zap.String("fenceFlagPath", fenceFlagPath),
-			zap.Int64("logId", logId),
-			zap.Int64("segmentId", segmentId))
-		return true, nil
-	} else if os.IsNotExist(err) {
-		// File doesn't exist, that's normal - no fence flag
-		return false, nil
-	} else {
-		// Other error occurred while checking fence flag file
+	exists, err := storage.FenceMarkerExists(getSegmentDir(baseDir, logId, segmentId))
+	if err != nil {
 		logger.Ctx(ctx).Warn("Error checking fence flag file",
 			zap.String("fenceFlagPath", fenceFlagPath),
 			zap.Error(err))
 		return false, err
 	}
+	if exists {
+		logger.Ctx(ctx).Debug("Fence flag file detected",
+			zap.String("fenceFlagPath", fenceFlagPath),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId))
+	}
+	return exists, nil
 }
 
 // waitForFenceCheckIntervalIfLockExists checks if lock file exists and waits for fence check interval
