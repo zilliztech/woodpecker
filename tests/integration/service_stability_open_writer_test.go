@@ -223,7 +223,7 @@ func runOpenWriterFenceCase(t *testing.T, fault string, warm bool, active, fault
 				}
 				c, getErr := seedPool.GetLogStoreClient(ctx, node)
 				require.NoError(t, getErr)
-				ch := channel.NewRemoteResultChannel(fmt.Sprintf("seed/%d/%d", seg, entry))
+				ch := channel.NewLocalResultChannel(fmt.Sprintf("seed/%d/%d", seg, entry))
 				_, sendErr := c.AppendEntry(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, logID, &proto.LogEntry{
 					SegId: int64(seg), EntryId: int64(entry), Values: payload,
 				}, ch)

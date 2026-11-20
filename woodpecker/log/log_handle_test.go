@@ -451,7 +451,6 @@ func TestWriterRollingAndCloseWaitForAllReplicaReplies(t *testing.T) {
 		for _, node := range q.Nodes {
 			replica := mocks_logstore_client.NewLogStoreClient(t)
 			pool.EXPECT().GetLogStoreClient(mock.Anything, node).Return(replica, nil)
-			replica.EXPECT().IsRemoteClient().Return(false)
 			replica.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, h.Id, mock.Anything, mock.Anything).
 				RunAndReturn(func(ctx context.Context, _, _ string, _ int64, e *proto.LogEntry, ack channel.ResultChannel) (int64, error) {
 					return e.EntryId, ack.SendResult(ctx, &channel.AppendResult{SyncedId: e.EntryId})
