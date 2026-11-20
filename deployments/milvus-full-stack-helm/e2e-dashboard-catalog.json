@@ -76,7 +76,7 @@
         {
           "key": "wp-client",
           "title": "4. WP Client inside Milvus — pending appends and replica results",
-          "guidance": "The WP client runs inside SN; it is not a separate Pod. Compare pending appends and writer outcomes with per-log append latency. Replica counters are attempts, not acknowledged Milvus rows. For failing/slow replicas continue to stage 5; use wp meta log list and wp node list to resolve identities.",
+          "guidance": "The WP client runs inside SN; it is not a separate Pod. Compare pending appends and writer outcomes with per-log append latency. Replica counters are attempts, not acknowledged Milvus rows. For failing/slow replicas continue to stage 5; use wp meta log list and wp node list to resolve identities. During OpenWriter recovery, compare the foreground Fence and Complete phases across logs. Open the WP client reference dashboard for slow replica tasks and grace expiry.",
           "probes": [
             {
               "metric": "woodpecker_client_append_requests_total",
@@ -87,6 +87,16 @@
               "metric": "woodpecker_client_segment_handle_pending_append_ops",
               "expression": "woodpecker_client_segment_handle_pending_append_ops{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component!=\"woodpecker\",log_ns=~\"${log_ns:regex}\",log_id=~\"${log_id:regex}\"}",
               "required": true
+            },
+            {
+              "metric": "woodpecker_client_open_writer_quorum_latency_count",
+              "expression": "woodpecker_client_open_writer_quorum_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}",
+              "required": false
+            },
+            {
+              "metric": "woodpecker_client_open_writer_replica_task_latency_count",
+              "expression": "woodpecker_client_open_writer_replica_task_latency_count{cluster=\"$cluster\",namespace=\"$namespace\",woodpecker_id=\"$woodpecker_id\",component=\"streamingnode\"}",
+              "required": false
             }
           ]
         },

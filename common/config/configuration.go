@@ -39,25 +39,19 @@ type SegmentRollingPolicyConfig struct {
 	MaxBlocks   int64           `yaml:"maxBlocks"`
 }
 
+// SegmentAppendConfig controls per-segment append admission, batching and replica attempts.
 type SegmentAppendConfig struct {
-	QueueSize  int `yaml:"queueSize"`
+	// MaxPendingBytes budgets retained payload per segment in both modes; 0 uses 64 MiB, with one oversized entry allowed when empty.
+	MaxPendingBytes ByteSize `yaml:"maxPendingBytes"`
+	// QueueSize limits admitted entries per segment until all replica outcomes and callbacks finish, in both modes.
+	QueueSize int `yaml:"queueSize"`
+	// MaxRetries limits total attempts per entry and replica, including the first send; 0 or 1 disables retries.
 	MaxRetries int `yaml:"maxRetries"`
-	// MaxBatchEntries is the maximum number of consecutive append ops coalesced
-	// into a single AddEntries request (client-side group commit). The batch is
-	// opportunistic: it only coalesces ops already waiting in the queue, so it
-	// adds no latency at low load. Enabled by default (see the default config);
-	// set to <= 1 to disable batching and send one AddEntry per append.
+	// MaxBatchEntries limits queued entries per batch without waiting for more; values <= 1 disable batching.
 	MaxBatchEntries int `yaml:"maxBatchEntries"`
-	// MaxBatchBytes caps the total payload of a coalesced batch (whichever of
-	// MaxBatchEntries / MaxBatchBytes is reached first bounds the batch).
-	// 0 = no byte limit. Ignored when MaxBatchEntries <= 1.
+	// MaxBatchBytes is the batch payload threshold in bytes; the last entry may exceed it, and <= 0 disables it.
 	MaxBatchBytes ByteSize `yaml:"maxBatchBytes"`
-	// SendTimeout bounds sending an append to one replica: opening the stream
-	// and receiving the replica's first (buffered) response. The send runs on
-	// the segment's executor, so every later append of the log waits while it
-	// does. Buffering an entry takes milliseconds; a replica that has not
-	// answered by then is taken as unreachable, so the segment can roll away
-	// from it. Zero means the default, 2s.
+	// SendTimeout bounds remote stream opening through the first response in milliseconds, excluding final ACKs; 0 uses 2000ms.
 	SendTimeout DurationMilliseconds `yaml:"sendTimeout"`
 }
 
@@ -207,14 +201,25 @@ func (q *QuorumConfig) GetEnsembleSize() int {
 	}
 }
 
+// GetQuorumSizes reads the replica count once. Writes target every ensemble member
+// (Wq == Es) and require a majority of those replicas to acknowledge.
+func (q *QuorumConfig) GetQuorumSizes() (ensembleSize, writeQuorumSize, ackQuorumSize int) {
+	ensembleSize = q.GetEnsembleSize()
+	writeQuorumSize = ensembleSize
+	ackQuorumSize = writeQuorumSize/2 + 1
+	return ensembleSize, writeQuorumSize, ackQuorumSize
+}
+
 // GetWriteQuorumSize returns the write quorum size.
 func (q *QuorumConfig) GetWriteQuorumSize() int {
-	return q.GetEnsembleSize()
+	_, writeQuorumSize, _ := q.GetQuorumSizes()
+	return writeQuorumSize
 }
 
 // GetAckQuorumSize returns the ack quorum size.
 func (q *QuorumConfig) GetAckQuorumSize() int {
-	return (q.GetWriteQuorumSize() / 2) + 1
+	_, _, ackQuorumSize := q.GetQuorumSizes()
+	return ackQuorumSize
 }
 
 // SetBufferPoolSeeds replaces the seeds of the pool at idx in the static value.
@@ -439,10 +444,31 @@ type LogFileConfig struct {
 
 // LogConfig stores the log configuration.
 type LogConfig struct {
-	Level  string        `yaml:"level"`
-	File   LogFileConfig `yaml:"file"`
-	Format string        `yaml:"format"`
-	Stdout bool          `yaml:"stdout"`
+	AsyncWrite AsyncWriteConfig `yaml:"asyncWrite"`
+	Level      string           `yaml:"level"`
+	File       LogFileConfig    `yaml:"file"`
+	Format     string           `yaml:"format"`
+	Stdout     bool             `yaml:"stdout"`
+}
+
+// AsyncWriteConfig controls admission to the process-wide diagnostic log queue.
+// A nil DroppedTimeout uses the default; an explicit 0s drops immediately.
+type AsyncWriteConfig struct {
+	PendingLength     int            `yaml:"pendingLength"`
+	DroppedTimeout    *time.Duration `yaml:"droppedTimeout"`
+	NonDroppableLevel string         `yaml:"nonDroppableLevel"`
+	StopTimeout       time.Duration  `yaml:"stopTimeout"`
+}
+
+// DefaultAsyncWriteConfig returns the process logger's startup policy.
+func DefaultAsyncWriteConfig() AsyncWriteConfig {
+	timeout := 100 * time.Millisecond
+	return AsyncWriteConfig{
+		PendingLength:     1024,
+		DroppedTimeout:    &timeout,
+		NonDroppableLevel: "error",
+		StopTimeout:       time.Second,
+	}
 }
 
 // JaegerConfig stores the Jaeger configuration.
@@ -844,6 +870,9 @@ func (c *Configuration) validateClientConfig() error {
 	client := &c.Woodpecker.Client
 
 	// Validate SegmentAppend configuration
+	if client.SegmentAppend.MaxPendingBytes.Int64() < 0 {
+		return fmt.Errorf("segment append max pending bytes cannot be negative")
+	}
 	if client.SegmentAppend.QueueSize <= 0 {
 		return fmt.Errorf("segment append queue size must be positive, got %d", client.SegmentAppend.QueueSize)
 	}
@@ -925,9 +954,7 @@ func (c *Configuration) validateQuorumConfig() error {
 	customPlacement := q.SelectStrategy.CustomPlacement.Get()
 
 	// Basic quorum size validation
-	ensembleSize := q.GetEnsembleSize()
-	writeQuorumSize := q.GetWriteQuorumSize()
-	ackQuorumSize := q.GetAckQuorumSize()
+	ensembleSize, writeQuorumSize, ackQuorumSize := q.GetQuorumSizes()
 
 	if ensembleSize <= 0 {
 		return fmt.Errorf("ensemble size must be positive, got %d", ensembleSize)
@@ -1157,13 +1184,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentAppend: SegmentAppendConfig{
 				QueueSize:  100,
 				MaxRetries: 2,
-				// Client-side group commit is ON by default: consecutive appends
-				// already queued are coalesced into one AddEntries request, bounded
-				// by MaxBatchEntries entries or MaxBatchBytes bytes (whichever first).
-				// Batching is opportunistic (drains only what is already queued), so
-				// it adds no latency at low load. Set MaxBatchEntries to 1 to disable.
+				// Batch queued entries without waiting for more to arrive. The byte
+				// threshold may be exceeded by the last entry; see SegmentAppendConfig.
 				MaxBatchEntries: 1000,
-				MaxBatchBytes:   ByteSize(2000000), // 2MB
+				MaxBatchBytes:   ByteSize(2000000), // 2000000 bytes; YAML "2MB" means 2 MiB.
 				SendTimeout:     NewDurationMillisecondsFromInt(2000),
 			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
@@ -1286,9 +1310,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 
 func getDefaultLoggerConfig() LogConfig {
 	return LogConfig{
-		Level:  "info",
-		Format: "text",
-		Stdout: true,
+		AsyncWrite: DefaultAsyncWriteConfig(),
+		Level:      "info",
+		Format:     "text",
+		Stdout:     true,
 		File: LogFileConfig{
 			RootPath:   "./logs",
 			MaxSize:    100,

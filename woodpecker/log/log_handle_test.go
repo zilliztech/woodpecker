@@ -21,6 +21,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -29,11 +30,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/client/v3/concurrency"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
+	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
@@ -422,6 +425,98 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_SizeTriggeredRolling(t *test
 	// Verify all expectations
 	mockOldSegment.AssertExpectations(t)
 	mockMeta.AssertExpectations(t)
+}
+
+func TestWriterRollingAndCloseWaitForAllReplicaReplies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		h, md := createMockLogHandle(t)
+		h.cfg.Woodpecker.Storage.Type = "service"
+		h.cfg.Woodpecker.Client.Auditor.MaxInterval = config.NewDurationSecondsFromInt(3600)
+		h.rollingPolicy = segment.NewDefaultRollingPolicy(3600000, 1, 1000) // the second write rolls by size
+		q := &proto.QuorumInfo{Es: 3, Wq: 3, Aq: 2, Nodes: []string{"A", "B", "C"}}
+		h.selectQuorumFunc = func(context.Context) (*proto.QuorumInfo, error) { return q, nil }
+		pool := mocks_logstore_client.NewLogStoreClientPool(t)
+		h.ClientPool = pool
+		md.EXPECT().StoreSegmentMetadata(mock.Anything, h.Name, h.Id, mock.Anything).Return(nil).Twice()
+		md.EXPECT().UpdateSegmentMetadata(mock.Anything, h.Name, h.Id, mock.Anything, proto.SegmentState_Active).Return(nil).Twice()
+
+		fenceA, completeA := make(chan struct{}), make(chan struct{})
+		releaseFence := sync.OnceFunc(func() { close(fenceA) })
+		releaseComplete := sync.OnceFunc(func() { close(completeA) })
+		closeA := make(chan struct{})
+		releaseClose := sync.OnceFunc(func() { close(closeA) })
+		healthyFences := make(chan struct{}, 2)
+		healthyCompletes := [2]chan struct{}{make(chan struct{}, 2), make(chan struct{}, 2)}
+		for _, node := range q.Nodes {
+			replica := mocks_logstore_client.NewLogStoreClient(t)
+			pool.EXPECT().GetLogStoreClient(mock.Anything, node).Return(replica, nil)
+			replica.EXPECT().IsRemoteClient().Return(false)
+			replica.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, h.Id, mock.Anything, mock.Anything).
+				RunAndReturn(func(ctx context.Context, _, _ string, _ int64, e *proto.LogEntry, ack channel.ResultChannel) (int64, error) {
+					return e.EntryId, ack.SendResult(ctx, &channel.AppendResult{SyncedId: e.EntryId})
+				})
+			replica.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, h.Id, mock.Anything, mock.Anything).Return(nil).Maybe()
+			replica.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, h.Id, int64(0)).
+				RunAndReturn(func(context.Context, string, string, int64, int64) (int64, error) {
+					if node == "A" {
+						<-fenceA
+					} else {
+						healthyFences <- struct{}{}
+					}
+					return 0, nil
+				}).Once()
+			replica.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, h.Id, int64(1)).Return(int64(0), nil).Once()
+			replica.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, h.Id, mock.Anything, int64(0)).
+				RunAndReturn(func(_ context.Context, _, _ string, _, segID, _ int64) (int64, error) {
+					if node != "A" {
+						healthyCompletes[segID] <- struct{}{}
+						return 0, nil
+					}
+					if segID == 0 {
+						<-completeA
+						return -1, errors.New("replica unavailable")
+					}
+					<-closeA
+					return 0, nil
+				}).Twice()
+		}
+		writer := NewInternalLogWriter(ctx, h, h.cfg)
+		defer func() {
+			releaseFence()
+			releaseComplete()
+			releaseClose()
+			_ = writer.Close(ctx)
+		}()
+
+		first := writer.Write(ctx, &WriteMessage{Payload: []byte("old")})
+		require.NoError(t, first.Err)
+		old := h.SegmentHandles[first.LogMessageId.SegmentId]
+		second := writer.Write(ctx, &WriteMessage{Payload: []byte("new")})
+		require.NoError(t, second.Err)
+		require.EqualValues(t, 1, second.LogMessageId.SegmentId)
+
+		closed := make(chan error, 1)
+		go func() { closed <- writer.Close(ctx) }()
+		synctest.Wait()
+		require.Len(t, healthyFences, 2)
+		require.Empty(t, healthyCompletes[0], "two matching Fence replies must not start Complete during rolling")
+		require.Empty(t, closed)
+
+		releaseFence()
+		synctest.Wait()
+		require.Len(t, healthyCompletes[0], 2)
+		require.Equal(t, proto.SegmentState_Active, old.GetMetadata(ctx).Metadata.State)
+		require.Empty(t, closed, "Close must wait for A even though B and C finalized the target")
+
+		releaseComplete()
+		synctest.Wait()
+		require.Equal(t, proto.SegmentState_Completed, old.GetMetadata(ctx).Metadata.State, "A's failure is a reply and B and C form a quorum")
+		require.Len(t, healthyCompletes[1], 2)
+		require.Empty(t, closed, "Close also waits for all replies on the current writable segment")
+		releaseClose()
+		require.NoError(t, <-closed)
+	})
 }
 
 // TestLogHandle_GetOrCreateWritableSegmentHandle_TimeTriggeredRolling tests that when segment age

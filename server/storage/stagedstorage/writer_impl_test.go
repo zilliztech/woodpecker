@@ -1735,22 +1735,21 @@ func TestStagedFileWriter_UploadCompactedFooter_PutError(t *testing.T) {
 
 // === NewStagedFileWriter - open file error ===
 
-func TestNewStagedFileWriter_OpenFilePermissionError(t *testing.T) {
+func TestNewStagedFileWriter_DirectoryPermissionError(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
 
 	logId := int64(300)
 	segId := int64(300)
 
-	// Create the segment directory, then make it read-only so file creation fails
+	// An unsearchable directory now fails at fence inspection, before file open.
 	segmentDir := getSegmentDir(dir, logId, segId)
 	require.NoError(t, os.MkdirAll(segmentDir, 0o755))
 	require.NoError(t, os.Chmod(segmentDir, 0o444))
 	t.Cleanup(func() { os.Chmod(segmentDir, 0o755) })
 
 	_, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "open file")
+	assert.ErrorIs(t, err, os.ErrPermission)
 }
 
 // === processFlushTask error branches ===

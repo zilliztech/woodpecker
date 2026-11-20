@@ -92,6 +92,53 @@ func TestRegisterServerMetricsWithRegisterer(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestRegisterOpenWriterRecoveryHistograms(t *testing.T) {
+	WpClientRegisterOnce = sync.Once{}
+	reg := prometheus.NewRegistry()
+	RegisterClientMetricsWithRegisterer(reg)
+
+	want := map[string]string{
+		"woodpecker_client_open_writer_quorum_latency":       "early_success",
+		"woodpecker_client_open_writer_replica_task_latency": "success",
+	}
+	WpClientOpenWriterQuorumLatency.WithLabelValues("fence", "early_success").Observe(0.25)
+	WpClientOpenWriterReplicaTaskLatency.WithLabelValues("fence", "success").Observe(0.25)
+	t.Cleanup(func() {
+		WpClientOpenWriterQuorumLatency.DeleteLabelValues("fence", "early_success")
+		WpClientOpenWriterReplicaTaskLatency.DeleteLabelValues("fence", "success")
+	})
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		result, ok := want[family.GetName()]
+		if !ok {
+			continue
+		}
+		require.Equal(t, dto.MetricType_HISTOGRAM, family.GetType())
+		require.Contains(t, family.GetHelp(), "milliseconds")
+		require.Len(t, family.Metric, 10, "each bounded series starts with a baseline")
+		for _, sample := range family.Metric {
+			labels := make(map[string]string)
+			for _, label := range sample.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			require.Len(t, labels, 2)
+			if labels["operation"] == "fence" && labels["result"] == result {
+				h := sample.GetHistogram()
+				require.EqualValues(t, 1, h.GetSampleCount())
+				require.Equal(t, 0.25, h.GetSampleSum())
+				var bounds []float64
+				for _, bucket := range h.Bucket {
+					bounds = append(bounds, bucket.GetUpperBound())
+				}
+				require.Subset(t, bounds, []float64{1000, 2000, 30000})
+				delete(want, family.GetName())
+			}
+		}
+	}
+	require.Empty(t, want, "missing histogram samples")
+}
+
 func TestRegisterFlushQueueWaitMetric(t *testing.T) {
 	WpServerRegisterOnce = sync.Once{}
 	registry := prometheus.NewRegistry()
@@ -351,4 +398,26 @@ func TestRegisterReplicaPlacementMetrics(t *testing.T) {
 	assert.True(t, names["woodpecker_client_quorum_read_total"])
 	assert.True(t, names["woodpecker_client_quorum_read_bytes_total"])
 	assert.True(t, names["woodpecker_client_read_failover_total"])
+}
+
+func TestSharedLoggingMetricsRegistration(t *testing.T) {
+	for _, order := range [][]func(prometheus.Registerer){
+		{RegisterClientMetricsWithRegisterer, RegisterServerMetricsWithRegisterer},
+		{RegisterServerMetricsWithRegisterer, RegisterClientMetricsWithRegisterer},
+	} {
+		WpClientRegisterOnce, WpServerRegisterOnce = sync.Once{}, sync.Once{}
+		registry := prometheus.NewRegistry()
+		for _, register := range order {
+			register(registry)
+			families, err := registry.Gather()
+			require.NoError(t, err)
+			names := make(map[string]bool)
+			for _, family := range families {
+				names[family.GetName()] = true
+			}
+			for _, name := range []string{"woodpecker_logging_queue_depth", "woodpecker_logging_dropped_records_total", "woodpecker_logging_write_errors_total"} {
+				require.True(t, names[name], "%s missing", name)
+			}
+		}
+	}
 }

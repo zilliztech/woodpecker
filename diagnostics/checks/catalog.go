@@ -104,7 +104,7 @@ func Definitions(p evidence.Policy) []Definition {
 	}
 	phases := []phase{
 		{"TW", "writer-operation", "writer", "write", "wp_client", []string{"Write", "WriteAsync"}, []string{"LogWriter"}, []string{"woodpecker/log/log_writer.go"}},
-		{"TA", "client-append", "client-append", "write", "wp_client", []string{"Execute"}, []string{"AppendOp", "BatchAppendOp"}, []string{"woodpecker/segment/append_op.go"}},
+		{"TA", "client-append", "client-append", "write", "wp_client", []string{"Execute", "send"}, []string{"AppendOp", "BatchAppendOp", "ReplicaAppender"}, []string{"woodpecker/segment/append_op.go", "woodpecker/segment/replica_appender.go"}},
 		{"TS", "server-append", "server-append", "write", "wp_server", []string{"AddEntry", "woodpecker.proto.logstore.LogStore/AddEntry", "woodpecker.proto.logstore.LogStore/AddEntries"}, nil, []string{"server/logstore.go", "server/processor/segment_processor.go"}},
 		{"TF", "server-flush", "server-flush", "write", "wp_server", []string{"processFlushTask"}, []string{"LocalFileWriter", "StagedFileWriter"}, []string{"server/storage/disk/writer_impl.go", "server/storage/stagedstorage/writer_impl.go"}},
 		{"TR", "reader-operation", "reader", "read", "wp_client", []string{"ReadNext"}, []string{"LogReader"}, []string{"woodpecker/log/log_reader.go"}},

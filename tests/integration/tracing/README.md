@@ -54,20 +54,21 @@ No caller context, deadline, cancellation, arbitrary context value or baggage is
 retained. Execution keeps its existing independent lifetime. Existing send/ack
 timeouts, retries, batch sizes, quorum rules and ordering are unchanged.
 
-- **Single entry:** scope `AppendOp`, operation `Execute` is a child of the
-  captured span. Its send and received-ack spans, remote client propagation and
-  remote server span retain that trace ID. The Execute span ends after initial
-  replica sends; it is not a durability/quorum latency measurement. A child may
-  finish after its ended async submission parent.
-- **Coalesced batch:** scope `BatchAppendOp`, operation `Execute` starts a new
-  trace with links to distinct valid input `(trace_id, span_id)` identities.
+- **Single entry:** each replica attempt uses scope `ReplicaAppender`, operation
+  `send`, as a child of the captured span. Remote client propagation and the
+  remote server span retain that trace ID. The send span ends after the send
+  call returns (Buffered on success); it does not wait for the final ACK and is
+  not a durability/quorum latency measurement. A child may finish after its
+  ended async submission parent.
+- **Coalesced batch:** each replica attempt uses `ReplicaAppender/send` to start
+  a new trace with links to distinct valid input `(trace_id, span_id)` identities.
   Duplicate inputs are linked once; different spans in the same trace remain
   distinct. A batch is not assigned an arbitrary request parent. Its remote
   server spans use the batch execution trace. Coalescing remains independent of
   tracing, and a batch size of one still uses the single-op path.
-- Single Execute spans carry decimal-string `log_id`, `segment_id`, `entry_id`;
-  batch Execute spans carry `log_id`, `segment_id` and `append.entries`. IDs do
-  not establish the client's metadata namespace or Milvus channel association.
+- Send spans carry `log_id`, `segment_id`, `node`, `first_entry`, `last_entry`,
+  `append.entries`, `attempt` and `retained_ms`. IDs do not establish the client's
+  metadata namespace or Milvus channel association.
 - No valid input context preserves the existing root-span behavior. Parent
   sampling decisions are retained for single entries. Batch root sampling and
   SDK link limits still apply; links omitted by limits and unsampled spans
@@ -76,10 +77,12 @@ timeouts, retries, batch sizes, quorum rules and ordering are unchanged.
 
 The backend probe uses actual OTLP export into **Jaeger 1.53.0**. Links appear as
 `FOLLOWS_FROM`; gRPC server propagation appears as `CHILD_OF`. The independent
-`wpdiag trace diagnose` recognizes the exact AppendOp/BatchAppendOp Execute
-scopes and qualified AddEntry/AddEntries RPC names from these real spans.
+trace diagnostics recognize `ReplicaAppender/send`, the legacy
+`AppendOp/Execute` and `BatchAppendOp/Execute` spans, and qualified
+AddEntry/AddEntries RPC names. The `client-append-duration` and
+`client-append-errors` checks include both current and legacy append scopes.
 Embedded client scopes do not count as Milvus StreamingNode work merely because
-the service is named StreamingNode; a generic Execute name remains unsupported.
+the service is named StreamingNode; a generic send or Execute name is insufficient.
 For writes only, Proxy/SN spans with the exact `milvus.streaming.wal` scope and
 operations `wal.autocommit`, `wal.txn`, `wal.dist_append`, `wal.append`, or
 `wal.appendimpl` supply their respective logical/distributed/adaptor/backend WAL

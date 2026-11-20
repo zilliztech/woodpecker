@@ -268,7 +268,7 @@ func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
 		dst.Meta.Prefix = src.Meta.Prefix
 	}
 
-	// Client
+	// Only positive QueueSize/MaxRetries overrides are supported here; other SegmentAppend fields retain their base values.
 	if src.Client.SegmentAppend.QueueSize > 0 {
 		dst.Client.SegmentAppend.QueueSize = src.Client.SegmentAppend.QueueSize
 	}
@@ -402,6 +402,18 @@ func mergeTraceConfig(dst, src *config.TraceConfig) {
 
 // mergeLogConfig merges src into dst, only overriding non-zero values
 func mergeLogConfig(dst, src *config.LogConfig) {
+	if src.AsyncWrite.PendingLength != 0 {
+		dst.AsyncWrite.PendingLength = src.AsyncWrite.PendingLength
+	}
+	if src.AsyncWrite.DroppedTimeout != nil {
+		dst.AsyncWrite.DroppedTimeout = src.AsyncWrite.DroppedTimeout
+	}
+	if src.AsyncWrite.NonDroppableLevel != "" {
+		dst.AsyncWrite.NonDroppableLevel = src.AsyncWrite.NonDroppableLevel
+	}
+	if src.AsyncWrite.StopTimeout != 0 {
+		dst.AsyncWrite.StopTimeout = src.AsyncWrite.StopTimeout
+	}
 	if src.Level != "" {
 		dst.Level = src.Level
 	}

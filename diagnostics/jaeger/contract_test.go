@@ -243,11 +243,15 @@ func TestTraceSelectorsAreSourceOwnedAndCanonical(t *testing.T) {
 }
 
 func TestQueuedAppendScopeDoesNotSupplyMilvusStage(t *testing.T) {
-	for _, scope := range []string{"AppendOp", "BatchAppendOp"} {
-		t.Run(scope, func(t *testing.T) {
+	for _, tc := range []struct{ scope, operation, phase string }{
+		{"AppendOp", "Execute", "append_send"},
+		{"BatchAppendOp", "Execute", "async"},
+		{"ReplicaAppender", "send", "append_send"},
+	} {
+		t.Run(tc.scope, func(t *testing.T) {
 			tr := fixture("write")
-			tr.Spans[1].Operation = "Execute"
-			tr.Spans[1].Tags = []tag{testTag("otel.scope.name", scope)}
+			tr.Spans[1].Operation = tc.operation
+			tr.Processes["p2"] = wireProcess{Service: "streamingnode", Tags: []tag{testTag("otel.library.name", tc.scope)}}
 			server := serve(t, []wireTrace{tr})
 			report := run(t, request("e2e", "write"), connection(t, server.URL, nil))
 			require.Equal(t, "completed", report.Status)
@@ -259,7 +263,9 @@ func TestQueuedAppendScopeDoesNotSupplyMilvusStage(t *testing.T) {
 			}
 			var normalized Trace
 			require.NoError(t, json.Unmarshal(report.Results[0].Observations[1].Data, &normalized))
-			require.Equal(t, scope, normalized.Spans[1].Scope)
+			require.Equal(t, tc.scope, normalized.Spans[1].Scope)
+			require.Equal(t, tc.operation, normalized.Spans[1].Operation)
+			require.Equal(t, tc.phase, normalized.Spans[1].Phase)
 			require.True(t, selectedSpan(normalized.Spans[1], "wp"))
 			require.False(t, selectedSpan(normalized.Spans[1], "milvus"))
 		})
@@ -268,6 +274,15 @@ func TestQueuedAppendScopeDoesNotSupplyMilvusStage(t *testing.T) {
 	require.False(t, known, "a generic Execute name is not enough to identify a WP append")
 	known, _ = knownOperation("wp_client", "AppendOp", "Execute", "read")
 	require.False(t, known, "write execution is not a read path")
+	for _, tc := range []struct{ scope, operation, flow string }{
+		{"", "send", "write"},
+		{"AppendOp", "send", "write"},
+		{"ReplicaAppender", "Execute", "write"},
+		{"ReplicaAppender", "send", "read"},
+	} {
+		known, _ := knownOperation("wp_client", tc.scope, tc.operation, tc.flow)
+		require.False(t, known, "scope/operation/flow must identify an append: %+v", tc)
+	}
 }
 
 func TestMilvusWALScopeRecognizesUpstreamAppendBoundaries(t *testing.T) {

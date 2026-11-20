@@ -36,6 +36,15 @@ def connected():
 
 
 class GraphTests(unittest.TestCase):
+    def test_current_and_legacy_append_parent_paths(self):
+        for scope, operation in (("AppendOp", "Execute"), ("BatchAppendOp", "Execute"), ("ReplicaAppender", "send")):
+            with self.subTest(scope=scope, operation=operation):
+                raw = connected()
+                raw["spans"][2].update(operationName=operation, tags=[{"key": "otel.scope.name", "value": scope}])
+                self.assertIsNotNone(f.child_proof(raw, SERVICES))
+                raw["spans"][2]["operationName"] = "unrelated"
+                self.assertIsNone(f.child_proof(raw, SERVICES))
+
     def test_jaeger_process_scope_is_retained_without_guessing_from_service(self):
         raw = connected()
         raw["spans"][1].update(processID="wal-process", tags=[])
@@ -65,20 +74,24 @@ class GraphTests(unittest.TestCase):
     def test_exact_batch_link_to_a_retained_input_is_required(self):
         raw = connected()
         raw["spans"].pop()
-        batch = fixture("b")
-        root = append(batch, "batch", "sn", "Execute", scope="BatchAppendOp")
-        root["references"] = [{"refType": "FOLLOWS_FROM", "traceID": "a", "spanID": "c"}]
-        append(batch, "w", "wp", "AddEntries", "batch", "LogStore")
-        proof = f.linked_proof(raw, batch, SERVICES)
-        self.assertEqual(proof["kind"], "async_link")
-        self.assertEqual(proof["input_span_id"], "c")
-        self.assertIsNone(f.child_proof(batch, SERVICES))
-        for key, value in (("traceID", "unrelated"), ("spanID", "unretained"), ("refType", "CHILD_OF")):
-            bad = copy.deepcopy(batch)
-            bad["spans"][0]["references"][0][key] = value
-            self.assertIsNone(f.linked_proof(raw, bad, SERVICES))
-        batch["spans"][0]["processID"] = "wp"
-        self.assertIsNone(f.linked_proof(raw, batch, SERVICES))
+        for scope, operation in (("BatchAppendOp", "Execute"), ("ReplicaAppender", "send")):
+            with self.subTest(scope=scope, operation=operation):
+                batch = fixture("b")
+                root = append(batch, "batch", "sn", operation, scope=scope)
+                root["references"] = [{"refType": "FOLLOWS_FROM", "traceID": "a", "spanID": "c"}]
+                append(batch, "w", "wp", "AddEntries", "batch", "LogStore")
+                proof = f.linked_proof(raw, batch, SERVICES)
+                self.assertEqual(proof["kind"], "async_link")
+                self.assertEqual(proof["input_span_id"], "c")
+                self.assertIsNone(f.child_proof(batch, SERVICES))
+                for key, value in (("traceID", "unrelated"), ("spanID", "unretained"), ("refType", "CHILD_OF")):
+                    bad = copy.deepcopy(batch)
+                    bad["spans"][0]["references"][0][key] = value
+                    self.assertIsNone(f.linked_proof(raw, bad, SERVICES))
+                for key, value in (("processID", "wp"), ("operationName", "unrelated"), ("tags", [])):
+                    bad = copy.deepcopy(batch)
+                    bad["spans"][0][key] = value
+                    self.assertIsNone(f.linked_proof(raw, bad, SERVICES))
 
     def test_batch_link_to_proxy_alone_cannot_invent_wal_or_client(self):
         raw = connected()

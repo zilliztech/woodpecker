@@ -36,10 +36,14 @@ import (
 type completionManager struct {
 	segment   *segmentHandleImpl
 	triggerCh chan struct{} // buffered(1), coalesces multiple signals
-	doneCh    chan struct{} // closed when completion finishes
-	result    error         // written before doneCh is closed; read after <-doneCh (happens-before guaranteed)
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+
+	// Publish the final result by closing doneCh; readers wait before accessing it.
+	doneCh chan struct{}
+	result error
+
+	// Background completion worker lifetime.
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func newCompletionManager(s *segmentHandleImpl) *completionManager {
@@ -88,6 +92,9 @@ func (cm *completionManager) run(ctx context.Context) {
 	select {
 	case <-cm.triggerCh:
 		cm.result = cm.executeWithRetry(ctx)
+		if cm.segment.appender != nil {
+			cm.segment.appender.wait() // outside the segment lock
+		}
 		close(cm.doneCh)
 	case <-ctx.Done():
 		cm.result = ctx.Err()
@@ -119,7 +126,7 @@ func (cm *completionManager) executeWithRetry(ctx context.Context) error {
 		return cm.failAndCloseWithoutMeta(ctx, targetLAC, completeErr)
 	}
 
-	// Phase 3 (with lock): CAS, fast-fail ops, stop executor, update metadata.
+	// Phase 3 (with lock): close writing, schedule callbacks, stop I/O and update metadata.
 	// Reaching this point proves Aq replicas finalized at targetLAC.
 	s.Lock()
 	defer s.Unlock()

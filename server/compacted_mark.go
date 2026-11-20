@@ -24,6 +24,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 )
@@ -48,21 +49,21 @@ func hasCompactedMark(segmentDir string) bool {
 // fsyncs the parent segment dir so the marker is durable. Durability matters because
 // findDataLogSegmentDirs keys off data.log: once data.log is dropped, a lost mark could never
 // be re-created by the reconcile pass, leaving the segment unreadable. Only the marker's
-// existence is meaningful, so there is no content to write — the create + a single parent-dir
-// fsync replaces the old temp-write + rename + double-fsync.
+// existence is meaningful, so after durable directory setup there is no content
+// to write: creating the marker and syncing its containing directory is sufficient.
 func writeCompactedMark(ctx context.Context, segmentDir string) error {
 	_, err := writeCompactedMarkCreated(ctx, segmentDir)
 	return err
 }
 
 func writeCompactedMarkCreated(ctx context.Context, segmentDir string) (bool, error) {
+	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
+		return false, err
+	}
 	p := compactedMarkPath(segmentDir)
 	if _, err := os.Stat(p); err == nil {
 		return false, nil // already marked
 	} else if !os.IsNotExist(err) {
-		return false, err
-	}
-	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		return false, err
 	}
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
@@ -76,15 +77,7 @@ func writeCompactedMarkCreated(ctx context.Context, segmentDir string) (bool, er
 		return false, err
 	}
 	// Fsync the parent dir so the new directory entry survives a crash.
-	dir, err := os.Open(segmentDir)
-	if err != nil {
-		return false, err
-	}
-	if err := dir.Sync(); err != nil {
-		dir.Close()
-		return false, err
-	}
-	if err := dir.Close(); err != nil {
+	if err := fileutil.SyncDir(segmentDir); err != nil {
 		return false, err
 	}
 	logger.Ctx(ctx).Info("compacted mark created", zap.String("path", p))

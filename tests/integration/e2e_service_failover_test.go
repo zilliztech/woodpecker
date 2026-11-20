@@ -33,6 +33,8 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
@@ -4351,23 +4353,32 @@ func TestStagedStorageService_Chaos_DiskFailureNodeAlive(t *testing.T) {
 	t.Logf("=== Chaos_DiskFailureNodeAlive PASSED: %d entries read ===", totalRead)
 }
 
-// TestStagedStorageService_Chaos_DiskFullSimulation tests behavior when a node's data
-// directory runs out of space (simulated by making it read-only after initial writes).
-// The server stays alive but cannot write new data. Writes should route to other nodes.
-//
-// Invariants verified:
-//   - Graceful degradation: node handles disk full without crash
-//   - Quorum correctness: writes succeed if enough healthy nodes remain
+// Two unwritable replicas prevent the old segment from durably fencing, even with
+// three healthy nodes elsewhere in the cluster. Restoring one replica restores
+// the old segment's fence quorum and allows OpenLogWriter to recover without a
+// server restart. Read-only permissions simulate inability to persist a fence,
+// rather than actual ENOSPC or a slow disk.
 func TestStagedStorageService_Chaos_DiskFullSimulation(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestChaos_DiskFullSimulation")
+	testServiceDiskFullFenceQuorum(t, 2)
+}
+
+// One unwritable replica leaves enough replicas of the old segment to durably
+// fence and complete it, so a new writer can continue writing during the fault.
+func TestStagedStorageService_Chaos_DiskFullWithFenceQuorum(t *testing.T) {
+	testServiceDiskFullFenceQuorum(t, 1)
+}
+
+func testServiceDiskFullFenceQuorum(t *testing.T, failedReplicas int) {
+	t.Helper()
+	rootPath := filepath.Join(t.TempDir(), t.Name())
 
 	const nodeCount = 5
 	cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
 	cfg.Woodpecker.Client.Quorum.SetBufferPoolSeeds(0, seeds)
 	defer cluster.StopMultiNodeCluster(t)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 
 	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
 	require.NoError(t, err)
@@ -4386,76 +4397,128 @@ func TestStagedStorageService_Chaos_DiskFullSimulation(t *testing.T) {
 
 	writer, err := logHandle.OpenLogWriter(ctx)
 	require.NoError(t, err)
+	defer func() { _ = writer.Close(ctx) }()
 
-	// Write some entries
+	var acknowledged []log.LogMessage
 	for i := 0; i < 5; i++ {
-		result := writer.Write(ctx, &log.WriteMessage{
-			Payload: []byte(fmt.Sprintf("entry-%d", i)),
-		})
+		payload := []byte(fmt.Sprintf("entry-%d", i))
+		result := writer.Write(ctx, &log.WriteMessage{Payload: payload})
 		require.NoError(t, result.Err)
+		require.NotNil(t, result.LogMessageId)
+		id := *result.LogMessageId
+		acknowledged = append(acknowledged, log.LogMessage{Id: &id, Payload: payload})
 	}
-	t.Log("5 entries written before disk full")
 
-	// Simulate disk full on TWO nodes (leaving 3 healthy, enough for es=3)
-	node0Dir := filepath.Join(rootPath, "node0")
-	node1Dir := filepath.Join(rootPath, "node1")
+	// Fault actual replicas of the old segment, independent of placement order.
+	oldSegment := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, oldSegment)
+	oldSegmentID := acknowledged[0].Id.SegmentId
+	quorumInfo, err := oldSegment.GetQuorumInfo(ctx)
+	require.NoError(t, err)
+	require.Len(t, quorumInfo.Nodes, 3)
+	require.EqualValues(t, 2, quorumInfo.Aq)
+	var failedDirs []string
+	for _, address := range quorumInfo.Nodes[:failedReplicas] {
+		var nodeDir string
+		for index, srv := range cluster.Servers {
+			if srv.GetServiceAdvertiseAddrPort(ctx) == address {
+				nodeDir = filepath.Join(rootPath, fmt.Sprintf("node%d", index))
+				break
+			}
+		}
+		require.NotEmpty(t, nodeDir, "cannot locate old segment replica %s", address)
+		failedDirs = append(failedDirs, nodeDir)
+		// Restore permissions on every exit, including partial fault injection.
+		defer func() { require.NoError(t, makeTreeWritable(nodeDir)) }()
+		require.NoError(t, makeTreeReadOnly(nodeDir))
+		t.Logf("Old segment %d replica %s is read-only: %s", oldSegmentID, address, nodeDir)
+	}
 
-	_ = makeTreeReadOnly(node0Dir)
-	_ = makeTreeReadOnly(node1Dir)
-	t.Log("Made node0 and node1 data dirs read-only (disk full simulation)")
+	oldSegmentDir := func(nodeDir string) string {
+		return filepath.Join(nodeDir, cfg.Minio.BucketName, cfg.Minio.RootPath,
+			strconv.FormatInt(logHandle.GetId(), 10), strconv.FormatInt(oldSegmentID, 10))
+	}
 
-	defer func() {
-		_ = makeTreeWritable(node0Dir)
-		_ = makeTreeWritable(node1Dir)
-	}()
-
-	// Close and reopen writer to get fresh segment on healthy nodes
 	err = writer.Close(ctx)
-	t.Logf("Writer close: %v", err)
+	if failedReplicas == 2 {
+		require.ErrorContains(t, err, "permission denied")
+	} else {
+		require.NoError(t, err, "two healthy old replicas must suffice to fence and complete")
+	}
 
 	logHandle2, err := client.OpenLog(ctx, logName)
 	require.NoError(t, err)
 
-	writer2, err := logHandle2.OpenLogWriter(ctx)
-	require.NoError(t, err)
-
-	// Write more — should succeed via nodes 2,3,4 (3 healthy >= es=3)
-	diskFullSuccesses := 0
-	for i := 5; i < 10; i++ {
-		result := writer2.Write(ctx, &log.WriteMessage{
-			Payload: []byte(fmt.Sprintf("entry-%d", i)),
-		})
-		if result.Err == nil {
-			diskFullSuccesses++
-		} else {
-			t.Logf("Write %d during disk full: %v", i, result.Err)
+	openCtx, openCancel := context.WithTimeout(ctx, 10*time.Second)
+	writer2, err := logHandle2.OpenLogWriter(openCtx)
+	openCancel()
+	if failedReplicas == 2 {
+		require.ErrorContains(t, err, "failed to fence segment")
+		require.ErrorContains(t, err, "permission denied")
+		require.Nil(t, writer2)
+		segments, metaErr := logHandle2.GetSegments(ctx)
+		require.NoError(t, metaErr)
+		require.Len(t, segments, 1, "a failed open must not create a new segment")
+		require.Contains(t, segments, oldSegmentID)
+		require.Equal(t, proto.SegmentState_Active, segments[oldSegmentID].Metadata.State,
+			"failed fencing must not publish Completed metadata")
+		for _, nodeDir := range failedDirs {
+			require.NoFileExists(t, filepath.Join(oldSegmentDir(nodeDir), storage.FenceMarkerName))
 		}
+
+		// Restore only one replica: two old replicas can now persist the fence,
+		// while the other disk remains read-only throughout recovery and writes.
+		require.NoError(t, makeTreeWritable(failedDirs[0]))
+		openCtx, openCancel = context.WithTimeout(ctx, 10*time.Second)
+		writer2, err = logHandle2.OpenLogWriter(openCtx)
+		openCancel()
+		require.NoError(t, err, "restoring the old fence quorum must unblock writer open")
+		require.FileExists(t, filepath.Join(oldSegmentDir(failedDirs[0]), storage.FenceMarkerName))
 	}
-	t.Logf("Writes during disk full: %d/5 succeeded", diskFullSuccesses)
+	require.NoError(t, err)
+	require.NotNil(t, writer2)
+	defer func() { _ = writer2.Close(ctx) }()
+
+	segments, err := logHandle2.GetSegments(ctx)
+	require.NoError(t, err)
+	require.Contains(t, segments, oldSegmentID)
+	require.Equal(t, proto.SegmentState_Completed, segments[oldSegmentID].Metadata.State)
+	require.Equal(t, acknowledged[4].Id.EntryId, segments[oldSegmentID].Metadata.LastEntryId)
+	info, err := os.Stat(failedDirs[len(failedDirs)-1])
+	require.NoError(t, err)
+	require.Zero(t, info.Mode().Perm()&0o222, "one replica must remain unwritable")
+
+	// Every write must ACK successfully; compare IDs and payloads after reading.
+	for i := 5; i < 10; i++ {
+		payload := []byte(fmt.Sprintf("entry-%d", i))
+		result := writer2.Write(ctx, &log.WriteMessage{Payload: payload})
+		require.NoError(t, result.Err)
+		require.NotNil(t, result.LogMessageId)
+		require.Greater(t, result.LogMessageId.SegmentId, oldSegmentID)
+		id := *result.LogMessageId
+		acknowledged = append(acknowledged, log.LogMessage{Id: &id, Payload: payload})
+	}
 
 	closeCtx, closeCancel := context.WithTimeout(ctx, 20*time.Second)
-	_ = writer2.Close(closeCtx)
+	err = writer2.Close(closeCtx)
 	closeCancel()
+	require.NoError(t, err)
 
-	// Read all entries
 	earliest := log.EarliestLogMessageID()
 	reader, err := logHandle2.OpenLogReader(ctx, &earliest, "disk-full-reader")
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
-	totalRead := 0
-	for {
+	for i, expected := range acknowledged {
 		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Second)
 		msg, readErr := reader.ReadNext(readCtx)
 		readCancel()
-		if readErr != nil || msg == nil {
-			break
-		}
-		totalRead++
+		require.NoError(t, readErr, "read acknowledged message %d", i)
+		require.NotNil(t, msg)
+		require.Equal(t, expected.Id, msg.Id, "ACK/read message ID at position %d", i)
+		require.Equal(t, expected.Payload, msg.Payload, "ACK/read payload at position %d", i)
 	}
-
-	assert.GreaterOrEqual(t, totalRead, 5, "should read at least the 5 pre-failure entries")
-	t.Logf("=== Chaos_DiskFullSimulation PASSED: %d entries read ===", totalRead)
+	t.Logf("Verified all %d acknowledged messages with one old replica still read-only", len(acknowledged))
 }
 
 // TestStagedStorageService_Chaos_RecoveryMultiSegmentAfterCrash tests recovery across

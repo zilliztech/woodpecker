@@ -187,13 +187,15 @@ and [bounded query parameters](https://github.com/jaegertracing/jaeger/blob/v1.5
 
 The [actual queue/gRPC exporter probe](../../tests/integration/tracing/README.md)
 verifies parent propagation for single entries and independent batch traces
-linked to contributing input spans. The catalog recognizes exact scopes
-`AppendOp`/`BatchAppendOp` with operation `Execute` and qualified WP
-`LogStore/AddEntry`/`LogStore/AddEntries` RPC names. A generic Execute is not a
+linked to contributing input spans. The catalog recognizes `ReplicaAppender/send`,
+legacy `AppendOp`/`BatchAppendOp` with operation `Execute`, and qualified WP
+`LogStore/AddEntry`/`LogStore/AddEntries` RPC names. A generic send or Execute is not a
 recognized stage. Embedded client scopes count as WP work, not evidence of the
 Milvus WAL stage merely because their process is named StreamingNode. Batch
-Execute is asynchronous; it is not a serial timer or proof of all linked
-requests' progress. External traces are not automatically fetched/merged.
+Execute is asynchronous. ReplicaAppender send measures one replica attempt
+through the send call, excluding the final ACK wait; it does not measure quorum
+completion. Batch links are not serial timers or proof of all linked requests'
+progress. External traces are not automatically fetched/merged.
 Older Milvus builds can remain partial even with the WP propagation fix.
 
 A qualified WP append **client** RPC with an unambiguous gRPC Cancelled status

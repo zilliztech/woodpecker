@@ -12,7 +12,7 @@ import (
 
 // MetadataRequest binds the existing read-only CLI commands to an explicit
 // client metadata namespace, independently of any WP server context.
-type MetadataRequest struct{ ID, LogName, Etcd, Prefix string }
+type MetadataRequest struct{ ID, LogName, Etcd, Prefix, SessionFile string }
 
 func ReadMetadata(ctx context.Context, connection d.Connection, q MetadataRequest, limit int64) (d.Observation, error) {
 	o := d.Observation{ID: "metadata:" + q.ID, SourceID: "wpcli:meta", Kind: "wpcli_metadata", StartedAt: time.Now().UTC(), Status: "unavailable"}
@@ -28,8 +28,11 @@ func ReadMetadata(ctx context.Context, connection d.Connection, q MetadataReques
 		return o, fmt.Errorf("unsupported read-only metadata view")
 	}
 	args := append([]string{"-o", "json"}, command...)
-	args = append(args, "--standalone")
-	args = append(args, "--etcd", q.Etcd, "--meta-prefix", q.Prefix)
+	if q.SessionFile != "" {
+		args = append(args, "--session", q.SessionFile)
+	} else {
+		args = append(args, "--standalone", "--etcd", q.Etcd, "--meta-prefix", q.Prefix)
+	}
 	if q.ID != "M03" {
 		args = append(args, "--", q.LogName)
 	}

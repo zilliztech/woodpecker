@@ -3,12 +3,14 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	diagcommand "github.com/zilliztech/woodpecker/diagnostics/command"
 )
 
 // NewRootCommand creates the root cobra command for wp with all global flags.
 func NewRootCommand() *cobra.Command {
+	Globals.changed = nil
 	root := &cobra.Command{
 		Use:          "wp",
 		Short:        "Woodpecker operational CLI",
@@ -17,8 +19,11 @@ func NewRootCommand() *cobra.Command {
 		// Capture the command's error stream so resolveAndDiscover can name the cluster this
 		// run is pointed at. It goes to stderr rather than stdout so piping a command into a
 		// parser is unaffected.
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			sourceWriter = cmd.ErrOrStderr()
+			Globals.changed = make(map[string]bool)
+			cmd.Flags().Visit(func(flag *pflag.Flag) { Globals.changed[flag.Name] = true })
+			return applySessionCommandDefaults(cmd)
 		},
 		PersistentPostRun: rememberCommandInputs,
 		// RunE prints help when wp is invoked with no sub-command so that
@@ -32,6 +37,7 @@ func NewRootCommand() *cobra.Command {
 	pf := root.PersistentFlags()
 	pf.StringArrayVar(&Globals.NodeAdminURLs, "node-admin-url", nil, "Map a node ID, advertised address, or host to an admin URL (KEY=URL; repeatable; overrides context mappings)")
 	pf.StringVar(&Globals.Context, "context", "", "CLI context name (overrides current-context in cli.yaml)")
+	pf.StringVar(&Globals.Session, "session", "", "Session JSON/YAML file (overrides WOODPECKER_SESSION_CONFIG)")
 	pf.StringVar(&Globals.Endpoint, "endpoint", "", "Admin HTTP seed endpoint (e.g. http://node:9091)")
 	pf.IntVar(&Globals.AdminPort, "admin-port", d.AdminPort, "Admin port for fan-out peer discovery")
 	pf.DurationVar(&Globals.Timeout, "timeout", d.Timeout, "Per-request timeout")
@@ -59,11 +65,11 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newOpsCommand())
 	root.AddCommand(newMetricsCommand())
 	root.AddCommand(newDiagnoseCommand())
-	root.AddCommand(diagcommand.NewCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }}))
+	root.AddCommand(diagcommand.NewCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }, Session: sessionConfigPath}))
 	root.AddCommand(newK8sCommand())
 	root.AddCommand(newShellCommand())
 	root.AddCommand(newWebUICommand())
-	root.AddCommand(diagcommand.NewReportCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }}))
+	root.AddCommand(diagcommand.NewReportCommand(diagcommand.Options{Context: func() string { return Globals.Context }, Output: func() string { return Globals.Output }, Session: sessionConfigPath}))
 
 	return root
 }

@@ -125,7 +125,7 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 	// deadline. The timer is armed before the stream is opened: opening blocks
 	// until the connection is READY, and that wait needs the bound as much as
 	// the first Recv does. Only the synchronous part is bounded here; the async
-	// ack phase keeps its own budget (receivedAckCallback / batch drain).
+	// ack phase keeps its own per-entry read budget in replicaAppender.
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	firstRespTimer := time.AfterFunc(l.timeouts.appendSend(), streamCancel)
 
@@ -212,9 +212,9 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 }
 
 // AppendEntries sends a batch of entries over a single AddEntries stream
-// (client-side group commit). It reads one Buffered response per entry
-// synchronously — that is the single send round-trip the batch amortizes — then
-// reads the per-entry Synced/Failed responses asynchronously and routes each to
+// (client-side group commit). It reads one Buffered frame containing all entry
+// IDs synchronously, within the per-attempt append send timeout. It then reads
+// Synced/Failed frames asynchronously and routes each entry's result to
 // its result sink (resultChs[i], keyed by entry id). On a stream error the
 // remaining un-acked sinks are failed so their callbacks don't block.
 func (l *logStoreClientRemote) AppendEntries(ctx context.Context, bucketName string, rootPath string, logId int64, entries []*proto.LogEntry, resultChs []channel.ResultChannel) (bufferedIds []int64, err error) {

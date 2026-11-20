@@ -10,6 +10,51 @@ service while using different etcd clusters, metadata prefixes, and storage
 locations. Start with a source build that includes `wp shell` (`make wpcli`);
 check `wp shell --help` when using a released binary.
 
+## Start from a session file
+
+When `--session` or `WOODPECKER_SESSION_CONFIG` selects a valid
+[session JSON/YAML file](configuration.md#session-connection-configuration),
+`wp shell` uses its service context, including observability connections, and
+attaches its client metadata and `client_storage.bucket/root_path` defaults
+without prompting for a saved context. This also supports piped input. These
+sections are independent: a metadata-only session does not need an Admin
+endpoint, and service inventory filters can use storage without etcd.
+Startup selects settings without checking network reachability; use
+`status --check` to verify connections.
+
+The initial client display name comes from `client_storage.root_path`, then
+`client_meta.meta_prefix`. If neither is suitable for the shell prompt, the name
+is `session`. This label does not change the connection settings or require any
+additional configuration fields.
+
+```bash
+export WOODPECKER_SESSION_CONFIG=/path/to/session.json
+wp shell
+# Or select a file explicitly, ahead of the environment variable:
+wp shell --session /path/to/session.yaml
+```
+
+An explicit startup `--context` chooses a saved service context independently of
+the session's client metadata. `--endpoint` selects an independent Admin target and
+does not retain session node mappings. `connect <tenant>` can explicitly reattach the
+session metadata, while `connect <tenant> --client-parameters-file /path/to/client.yaml`
+or a complete `--etcd`/`--meta-prefix` pair selects a new target.
+
+`disconnect` clears metadata and storage, and `use` retains its existing
+detach-on-switch behavior. Child commands cannot silently reattach the original
+session client settings.
+Per-command metadata target overrides do not reuse the previous tenant's
+credentials, prefix, or storage settings. When `client_storage` is supplied,
+`segment inspect`, `segment probe` and `log scan` do not need repeated storage
+options; `instance data` and `node log-health` inherit the same filter.
+Explicit storage overrides must supply a complete bucket/root pair.
+Configuration is held in the shell and is not written back to the session file or
+saved contexts. Observability provider objects remain intact in child commands;
+use absolute certificate paths so temporary child configuration files do not
+change path resolution.
+
+The following sections describe startup without `WOODPECKER_SESSION_CONFIG`.
+
 ## Configure service access
 
 Create `~/.woodpecker/cli.yaml`, or use `WOODPECKER_CLI_CONFIG` to choose a file.

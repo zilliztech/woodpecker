@@ -139,6 +139,24 @@ var (
 		Buckets: prometheus.ExponentialBuckets(1, 2, 10),
 	}, []string{"log_ns", "log_id", "operation", "status"})
 
+	openWriterLatencyBuckets = []float64{
+		0.5, 1, 5, 10, 25, 50, 100, 250, 500, 1000, 1250, 1500, 2000, 3000, 5000, 10000, 30000, 60000, 120000,
+	}
+	WpClientOpenWriterQuorumLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "open_writer_quorum_latency",
+		Help:      "Foreground duration of a segment Fence or Complete during OpenWriter recovery, in milliseconds.",
+		Buckets:   openWriterLatencyBuckets,
+	}, []string{"operation", "result"})
+	WpClientOpenWriterReplicaTaskLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "open_writer_replica_task_latency",
+		Help:      "Time from replica task submission to terminal outcome during OpenWriter recovery, in milliseconds, including queue wait.",
+		Buckets:   openWriterLatencyBuckets,
+	}, []string{"operation", "result"})
+
 	// Client read metrics
 	WpClientReadRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
@@ -339,6 +357,7 @@ var (
 // Without calling this, metrics still work but are not scraped by any registry.
 func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 	WpClientRegisterOnce.Do(func() {
+		registerLoggingMetrics(registerer)
 		// log name-id mapping
 		registerer.MustRegister(WpLogNameIdMapping)
 		// segment state tracking
@@ -359,6 +378,16 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		// LogHandle metrics
 		registerer.MustRegister(WpLogHandleOperationsTotal)
 		registerer.MustRegister(WpLogHandleOperationLatency)
+		registerer.MustRegister(WpClientOpenWriterQuorumLatency, WpClientOpenWriterReplicaTaskLatency)
+		// Give increase() a baseline before the first recovery, including rare error outcomes.
+		for _, op := range []string{"fence", "complete"} {
+			for _, result := range []string{"early_success", "all_replies_success", "deadline_exceeded", "canceled", "error"} {
+				WpClientOpenWriterQuorumLatency.WithLabelValues(op, result)
+			}
+			for _, result := range []string{"success", "deadline_exceeded", "canceled", "grace_expired", "error"} {
+				WpClientOpenWriterReplicaTaskLatency.WithLabelValues(op, result)
+			}
+		}
 		// Client read metrics
 		registerer.MustRegister(WpClientReadRequestsTotal)
 		registerer.MustRegister(WpClientReadEntriesTotal)

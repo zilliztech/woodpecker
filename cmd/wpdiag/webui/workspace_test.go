@@ -256,9 +256,6 @@ func TestContextDefaultsExposeConnectionsWithoutInferringMetadataLabels(t *testi
 	f := app.workspace.file
 	ctx := f.Contexts["a"]
 	ctx.DiagnosticTarget = "a"
-	ctx.Etcd.Endpoints = []string{"http://context-etcd:2379"}
-	ctx.Etcd.MetaPrefix = "operations/client/wp"
-	ctx.Etcd.Password = "private-default-password"
 	f.Contexts["a"] = ctx
 	cfg, err := diagcommand.DiagnosticsConfig(f, path)
 	require.NoError(t, err)
@@ -301,9 +298,6 @@ func TestPublicServerAndClientProfilesKeepCredentialsSeparate(t *testing.T) {
 	require.Equal(t, "http://node-x:19091", visible["node_admin_urls"].(map[string]string)["node-x"])
 	profile, err := file.ResolveContext("a")
 	require.NoError(t, err)
-	profile.Etcd.Endpoints = []string{"http://tenant-etcd:2379"}
-	profile.Etcd.MetaPrefix = "tenant/wp"
-	profile.Etcd.Password = "private-tenant-password"
 	file.Contexts["a"] = profile
 	visibleClients := publicClientMetas(file)
 	require.Empty(t, visibleClients)

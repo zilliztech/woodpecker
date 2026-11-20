@@ -7,6 +7,7 @@ import "time"
 type GlobalFlags struct {
 	NodeAdminURLs []string
 	Context       string
+	Session       string
 	Endpoint      string
 	AdminPort     int
 	Timeout       time.Duration
@@ -15,6 +16,7 @@ type GlobalFlags struct {
 	Output        string
 	NoColor       bool
 	Verbose       int
+	changed       map[string]bool
 }
 
 // Globals is the singleton populated per-invocation. Sub-commands read from it.

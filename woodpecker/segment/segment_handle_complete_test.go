@@ -145,15 +145,15 @@ func TestCompleteSegmentQuorum_ResponseMatrix(t *testing.T) {
 			impl := sh.(*segmentHandleImpl)
 			quorum := &proto.QuorumInfo{Id: 1, Aq: tt.aq, Es: int32(len(nodes)), Wq: int32(len(nodes)), Nodes: nodes}
 
-			err := impl.completeSegmentQuorum(context.Background(), quorum, tt.targetLAC)
+			err := impl.completeSegmentQuorum(t.Context(), quorum, tt.targetLAC, waitForAllReplicas)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.True(t, werr.ErrAppendOpQuorumFailed.Is(err), "expected quorum failure, got %v", err)
-				assert.Equal(t, int64(-1), impl.lastAddConfirmed.Load(), "failed completion must not advance LAC")
+				assert.Equal(t, int64(-1), impl.confirmedLAC(), "failed completion must not advance LAC")
 				return
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.targetLAC, impl.lastAddConfirmed.Load())
+			assert.Equal(t, tt.targetLAC, impl.confirmedLAC())
 		})
 	}
 }
@@ -182,7 +182,7 @@ func TestPrepareComplete_DoesNotLowerKnownConfirmedLAC(t *testing.T) {
 	}
 	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
-	impl.lastAddConfirmed.Store(5)
+	impl.observeFinalLAC(5)
 
 	_, targetLAC, err := impl.prepareComplete(context.Background())
 	assert.NoError(t, err)

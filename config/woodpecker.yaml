@@ -24,11 +24,12 @@ woodpecker:
   # Configuration of Woodpecker Client.
   client:
     segmentAppend:
-      queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
-      maxRetries: 3 # Maximum number of retries for segment append operations
-      maxBatchEntries: 1000 # Client-side group commit: max consecutive appends coalesced into one AddEntries request. Opportunistic (only batches already-queued ops, adds no latency at low load). Set to 1 to disable batching.
-      maxBatchBytes: 2000000 # Max total payload (bytes) of a coalesced batch, default 2MB; whichever of maxBatchEntries/maxBatchBytes is hit first bounds the batch. Ignored when maxBatchEntries <= 1.
-      sendTimeout: 2000 # Milliseconds allowed for sending an append to one replica: opening the stream and receiving its first (buffered) response. Every later append of the log waits while a send does, so a replica that has not answered by then is taken as unreachable and the segment rolls away from it. Default 2000.
+      queueSize: 10000 # Per-segment entry limit until all replica outcomes and callbacks finish, in both modes.
+      maxRetries: 3 # Total attempts per entry and replica, including the first send; 0 or 1 disables retries.
+      maxBatchEntries: 1000 # Max queued entries per batch without waiting for more; <= 1 disables batching.
+      maxBatchBytes: 2000000 # Batch payload threshold in bytes; the last entry may exceed it; <= 0 disables it.
+      maxPendingBytes: 64MB # Per-segment retained payload budget in both modes; 0 uses 64 MiB, with one oversized entry allowed when empty.
+      sendTimeout: 2000 # Remote stream opening through the first response in ms, excluding final ACKs; 0 uses 2000ms.
     segmentRollingPolicy:
       maxSize: 256000000 # Maximum segment size in bytes, default is 256MB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
@@ -211,8 +212,14 @@ woodpecker:
       capacity: 1024 # Maximum number of in-flight operations tracked, default is 1024
       warnAge: 30 # Seconds after which a still-running operation is reported as stalled, default is 30s
 
-# Configures the system log output.
+# Monitor woodpecker_logging_queue_depth and woodpecker_logging_dropped_records_total.
 log:
+  # Shared by all clients in this process. The first logger initialization applies these settings.
+  asyncWrite:
+    pendingLength: 1024        # Maximum queued diagnostic records.
+    droppedTimeout: 100ms      # Wait for queue space below nonDroppableLevel. Use 0s to drop immediately.
+    nonDroppableLevel: error   # At or above this level, wait up to max(droppedTimeout, stopTimeout).
+    stopTimeout: 1s            # Shutdown drain budget. Records can still be dropped on enqueue timeout.
   # Woodpecker log level. Option: debug, info, warn, error, panic, and fatal.
   # It is recommended to use debug level under test and development environments, and info level in production environment.
   level: info
@@ -337,7 +344,10 @@ minio:
   # Set an easy-to-identify root key prefix for Woodpecker if etcd service already exists.
   # Changing this for an already running Woodpecker instance may result in failures to read legacy data.
   rootPath: files
-  # Whether to useIAM role to access S3/GCS instead of access/secret keys
+  # Whether to use IAM credentials to access S3/GCS instead of configured access/secret keys.
+  # AWS IAM selects configured IRSA (environment or AWS config profile), then Container, then EC2.
+  # AWS_EC2_METADATA_DISABLED=true disables EC2 only; workload identity failures never fall back to EC2.
+  # Ambient/static-profile AWS access keys are ignored in IAM mode.
   # For more information, refer to
   # aws: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use.html
   # gcp: https://cloud.google.com/storage/docs/access-control/iam

@@ -29,6 +29,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 )
 
@@ -285,16 +286,29 @@ func (m *NodeLifecycleManager) persistStateLocked() error {
 		return err
 	}
 	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(m.stateFilePath), 0o755); err != nil {
+	if err := fileutil.MkdirAllSync(filepath.Dir(m.stateFilePath), 0o755); err != nil {
 		return fmt.Errorf("failed to create state file directory: %w", err)
 	}
 	// Write to temp file then rename for atomicity
 	tmpPath := m.stateFilePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open state file: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("failed to write state file: %w", err)
+	}
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if syncErr != nil {
+		return fmt.Errorf("failed to sync state file: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("failed to close state file: %w", closeErr)
 	}
 	if err := os.Rename(tmpPath, m.stateFilePath); err != nil {
 		return fmt.Errorf("failed to rename state file: %w", err)
 	}
-	return nil
+	return fileutil.SyncDir(filepath.Dir(m.stateFilePath))
 }

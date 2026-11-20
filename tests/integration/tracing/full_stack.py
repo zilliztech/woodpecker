@@ -24,7 +24,9 @@ import uuid
 ROOT = Path(__file__).resolve().parents[3]
 LABEL = "diagnostics.woodpecker.io/trace-acceptance"
 WAL = {"wal.append", "wal.appendimpl"}
-WP = {"LogWriter", "AppendOp", "BatchAppendOp"}
+WP_APPEND = {("LogWriter", "Write"), ("LogWriter", "WriteAsync"),
+             ("AppendOp", "Execute"), ("BatchAppendOp", "Execute"), ("ReplicaAppender", "send")}
+BATCH_APPEND = {("BatchAppendOp", "Execute"), ("ReplicaAppender", "send")}
 SERVER_APPEND = {"AddEntry", "AddEntries", "AddEntryBatch", "AppendAsync",
                  "woodpecker.proto.logstore.LogStore/AddEntry", "woodpecker.proto.logstore.LogStore/AddEntries"}
 
@@ -163,7 +165,7 @@ def prefix(raw, chain, services):
         elif stage == 1 and component == "streamingnode" and scope(span, raw["processes"][span["processID"]]) == "milvus.streaming.wal" and span["operationName"] in WAL:
             stage = 2
             witnesses.append(span["spanID"])
-        elif stage == 2 and component == "streamingnode" and scope(span, raw["processes"][span["processID"]]) in WP and span["operationName"] in ("Write", "WriteAsync", "Execute"):
+        elif stage == 2 and component == "streamingnode" and (scope(span, raw["processes"][span["processID"]]), span["operationName"]) in WP_APPEND:
             stage = 3
             witnesses.append(span["spanID"])
     return witnesses if stage == 3 else []
@@ -184,7 +186,7 @@ def linked_proof(original, batch, services):
     origins, origin_chain = graph(original)
     spans, chain = graph(batch)
     for batch_id, candidate in spans.items():
-        if role(batch, candidate, services) != "streamingnode" or scope(candidate, batch["processes"][candidate["processID"]]) != "BatchAppendOp" or candidate["operationName"] != "Execute":
+        if role(batch, candidate, services) != "streamingnode" or (scope(candidate, batch["processes"][candidate["processID"]]), candidate["operationName"]) not in BATCH_APPEND:
             continue
         for ref in candidate.get("references", []):
             if ref["refType"] != "FOLLOWS_FROM" or ref["traceID"] != original["traceID"] or ref["spanID"] not in origins:

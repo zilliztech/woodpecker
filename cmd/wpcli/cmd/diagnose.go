@@ -58,10 +58,6 @@ and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these error
 			if list {
 				return renderDiagnoseCatalog(cmd)
 			}
-			o.RequestTimeout, o.Concurrency = Globals.Timeout, Globals.Concurrency
-			if err := o.Validate(); err != nil {
-				return wperrors.NewUsageError(err.Error())
-			}
 			if err := readFlags.validate(o.Scenario); err != nil {
 				return err
 			}
@@ -70,6 +66,10 @@ and exhausted wall-clock budget 5. JSON/YAML evidence is retained on these error
 			res, err := resolveConfiguration()
 			if err != nil {
 				return err
+			}
+			o.RequestTimeout, o.Concurrency = Globals.Timeout, Globals.Concurrency
+			if err := o.Validate(); err != nil {
+				return wperrors.NewUsageError(err.Error())
 			}
 			if _, err := client.ValidateNodeAdminURLs(map[string]string{"seed": res.Context.Endpoint}); err != nil {
 				return wperrors.NewUsageError("diagnose requires an HTTP(S) seed origin without credentials, path, query or fragment")

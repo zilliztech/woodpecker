@@ -31,11 +31,12 @@ import (
 type (
 	sessionKey     struct{}
 	browserSession struct {
-		ID        string           `json:"-"`
-		Context   string           `json:"context"`
-		Target    string           `json:"target"`
-		Metadata  *metadataSession `json:"metadata,omitempty"`
-		UpdatedAt time.Time        `json:"-"`
+		Configuration config.SessionConfig `json:"-"`
+		ID            string               `json:"-"`
+		Context       string               `json:"context"`
+		Target        string               `json:"target"`
+		Metadata      *metadataSession     `json:"metadata,omitempty"`
+		UpdatedAt     time.Time            `json:"-"`
 	}
 )
 
@@ -56,6 +57,7 @@ type workspace struct {
 	executable         string
 	path, startContext string
 	file               *config.File
+	initialSession     *config.SessionConfig
 	mu                 sync.Mutex
 	sessions           map[string]browserSession
 }
@@ -108,6 +110,10 @@ func (w *workspace) requestSession(out http.ResponseWriter, r *http.Request) (*h
 		}
 		target := w.initialTargets[name]
 		session = browserSession{ID: id, Context: name, Target: target}
+		if c, err := w.file.ResolveContext(name); err == nil {
+			session.Configuration.ServiceContext = &c
+		}
+		session.attachConfiguration(w.initialSession)
 		w.sessions[id] = session
 		http.SetCookie(out, &http.Cookie{Name: "wp-session", Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	}
@@ -134,10 +140,14 @@ func (s *Server) storeSelection(v browserSession, action string) {
 	switch action {
 	case "use-context":
 		current.Context = v.Context
+		current.Configuration = v.Configuration
+		current.Metadata = v.Metadata
 	case "use-target":
 		current.Target = v.Target
 	case "connect-meta", "disconnect-meta":
 		current.Metadata = v.Metadata
+		current.Configuration.ClientMeta = v.Configuration.ClientMeta
+		current.Configuration.ClientStorage = v.Configuration.ClientStorage
 	}
 	s.workspace.sessions[v.ID] = current
 }
@@ -163,7 +173,11 @@ func (s *Server) workspaceAgentConfig(r *http.Request) d.Config {
 }
 
 func (s *Server) setupWorkspace(path, name string, overrides ...map[string]string) error {
-	file, abs, err := diagcommand.LoadDocument(path)
+	return s.setupWorkspaceWithSession(path, name, os.Getenv(config.SessionConfigEnv), overrides...)
+}
+
+func (s *Server) setupWorkspaceWithSession(path, name, sessionPath string, overrides ...map[string]string) error {
+	file, abs, initial, err := loadWorkspaceSource(path, name, sessionPath)
 	if err != nil {
 		return err
 	}
@@ -176,7 +190,7 @@ func (s *Server) setupWorkspace(path, name string, overrides ...map[string]strin
 	if len(overrides) > 0 {
 		paths = overrides[0]
 	}
-	s.workspace = &workspace{rulePaths: checks.RuleOverrides(filepath.Dir(abs), paths), path: abs, startContext: name, file: file, sessions: map[string]browserSession{}}
+	s.workspace = &workspace{rulePaths: checks.RuleOverrides(filepath.Dir(abs), paths), path: abs, startContext: name, file: file, initialSession: initial, sessions: map[string]browserSession{}}
 
 	// Resolve immutable context defaults once, outside the browser-session lock.
 	s.workspace.initialTargets = map[string]string{}
@@ -224,7 +238,11 @@ func (s *Server) setupWorkspace(path, name string, overrides ...map[string]strin
 }
 
 func ServeWorkspace(ctx context.Context, address, path, name string, out io.Writer, overrides ...map[string]string) error {
-	file, abs, err := diagcommand.LoadDocument(path)
+	return ServeWorkspaceWithSession(ctx, address, path, name, os.Getenv(config.SessionConfigEnv), out, overrides...)
+}
+
+func ServeWorkspaceWithSession(ctx context.Context, address, path, name, sessionPath string, out io.Writer, overrides ...map[string]string) error {
+	file, abs, _, err := loadWorkspaceSource(path, name, sessionPath)
 	if err != nil {
 		return err
 	}
@@ -232,7 +250,7 @@ func ServeWorkspace(ctx context.Context, address, path, name string, out io.Writ
 	if err != nil {
 		cfg = d.Config{}
 	} // Page-specific errors are shown in the workspace.
-	return serve(ctx, address, cfg, out, func(s *Server) error { return s.setupWorkspace(path, name, overrides...) })
+	return serve(ctx, address, cfg, out, func(s *Server) error { return s.setupWorkspaceWithSession(path, name, sessionPath, overrides...) })
 }
 
 func (s *Server) workspaceInfo(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +315,7 @@ func (s *Server) workspaceInfo(w http.ResponseWriter, r *http.Request) {
 			links[key] = value
 		}
 	}
-	send(w, 200, map[string]any{"schema_version": "wp.workspace/v1", "contexts": names, "connection_profiles": profiles, "available_contexts": availableContexts, "session": session, "targets": targets, "client_configs": clients, "client_meta_profiles": publicClientMetas(s.workspace.file), "server_configs": servers, "default_client": defaultClient, "default_server": defaultServer, "context_defaults": contextConnectionDefaults(settings, s.workspace.file, cfg), "metadata_authorities": authorities, "metadata_history": recent, "metadata_history_error": historyError, "metadata_history_path": candidates.Directory(), "candidate_path": candidates.Directory(), "diagnostics_error": diagnosticError, "connections": connections, "links": links, "agent": state, "config_path": s.workspace.path, "metadata_boundary": "Current WP-client metadata; authority is independent of the WP service. Not historical evidence.", "sources_note": "Configured does not mean reachable. Runs record actual query failures."})
+	send(w, 200, map[string]any{"schema_version": "wp.workspace/v1", "contexts": names, "connection_profiles": profiles, "available_contexts": availableContexts, "session": session, "session_configured": s.workspace.initialSession != nil, "client_storage": session.Configuration.ClientStorage, "targets": targets, "client_configs": clients, "client_meta_profiles": publicClientMetas(s.workspace.file), "server_configs": servers, "default_client": defaultClient, "default_server": defaultServer, "context_defaults": contextConnectionDefaults(settings, s.workspace.file, cfg), "metadata_authorities": authorities, "metadata_history": recent, "metadata_history_error": historyError, "metadata_history_path": candidates.Directory(), "candidate_path": candidates.Directory(), "diagnostics_error": diagnosticError, "connections": connections, "links": links, "agent": state, "config_path": s.workspace.path, "metadata_boundary": "Current WP-client metadata; authority is independent of the WP service. Not historical evidence.", "sources_note": "Configured does not mean reachable. Runs record actual query failures."})
 }
 
 func (s *Server) workspaceSelect(w http.ResponseWriter, r *http.Request) {
@@ -324,7 +342,14 @@ func (s *Server) workspaceSelect(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if session.Context != q.Context {
+			session.detachClient()
+		}
 		session.Context = q.Context
+		session.Configuration.ServiceContext = nil
+		if c, err := s.workspace.file.ResolveContext(q.Context); q.Context != "" && err == nil {
+			session.Configuration.ServiceContext = &c
+		}
 	case "use-target":
 		cfg, err := diagcommand.DiagnosticsConfig(s.workspace.file, s.workspace.path, s.workspace.rulePaths)
 		if err != nil {
@@ -343,7 +368,7 @@ func (s *Server) workspaceSelect(w http.ResponseWriter, r *http.Request) {
 		}
 		session.Target = q.Target
 	case "disconnect-meta":
-		session.Metadata = nil
+		session.detachClient()
 	case "connect-meta":
 		meta := metadataSession{Label: "Explicit client metadata", Etcd: q.Etcd, Prefix: q.Prefix, LogName: q.LogName, Bucket: q.Bucket, RootPath: q.RootPath}
 		if q.AuthorityID != "" || q.Target != "" {
@@ -361,6 +386,16 @@ func (s *Server) workspaceSelect(w http.ResponseWriter, r *http.Request) {
 			meta.AuthorityID = metadataHistoryID(meta)
 		}
 		session.Metadata = &meta
+		session.Configuration.ClientMeta = &config.EtcdConfig{Endpoints: strings.Split(meta.Etcd, ","), MetaPrefix: meta.Prefix}
+		session.Configuration.ClientStorage = nil
+		if meta.Bucket != "" || meta.RootPath != "" {
+			storage := &config.StorageConfig{Bucket: meta.Bucket, RootPath: meta.RootPath}
+			if err := storage.Validate(); err != nil {
+				fail(w, 422, "invalid_storage", err.Error())
+				return
+			}
+			session.Configuration.ClientStorage = storage
+		}
 	default:
 		fail(w, 400, "invalid_action", "Unknown session selection")
 		return
@@ -632,6 +667,15 @@ func (s *Server) metadataView(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
 	meta := session.Metadata
+	privateSession := ""
+	if session.Configuration.ClientMeta != nil {
+		privateSession, err = session.Configuration.WriteTemp(filepath.Dir(s.workspace.path))
+		if err != nil {
+			fail(w, 500, "session_configuration", "Cannot prepare private client configuration")
+			return
+		}
+		defer os.Remove(privateSession)
+	}
 	logName := meta.LogName
 	if r.URL.Query().Has("log_name") {
 		logName = r.URL.Query().Get("log_name")
@@ -640,7 +684,7 @@ func (s *Server) metadataView(w http.ResponseWriter, r *http.Request) {
 		fail(w, 422, "log_name_required", "Enter a valid log name for this metadata view")
 		return
 	}
-	observation, err := wpcli.ReadMetadata(ctx, conn, wpcli.MetadataRequest{ID: id, LogName: logName, Etcd: meta.Etcd, Prefix: meta.Prefix}, 2<<20)
+	observation, err := wpcli.ReadMetadata(ctx, conn, wpcli.MetadataRequest{ID: id, LogName: logName, Etcd: meta.Etcd, Prefix: meta.Prefix, SessionFile: privateSession}, 2<<20)
 	if err != nil {
 		fail(w, 502, "metadata_unavailable", err.Error())
 		return

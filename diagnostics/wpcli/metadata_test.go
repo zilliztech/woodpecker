@@ -67,3 +67,21 @@ func TestMetadataExplicitAuthorityIgnoresServerContext(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"records":[]}`, string(o.Data))
 }
+
+func TestMetadataViewPassesPrivateSessionWithoutTargetOverrides(t *testing.T) {
+	t.Setenv("WOODPECKER_SESSION_CONFIG", "/ambient/session.json")
+	path := filepath.Join(t.TempDir(), "wp")
+	script := `#!/bin/sh
+test -z "$WOODPECKER_SESSION_CONFIG" || exit 9
+case "$*" in *--standalone*|*--etcd*|*--meta-prefix*|*--context*) exit 10;; esac
+test "$*" = '-o json meta quorum list --session /private/session.yaml' || exit 11
+printf '%s\n' '{"records":[]}'
+`
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o700))
+	o, err := ReadMetadata(context.Background(), nativeConnection(t, path), MetadataRequest{
+		ID: "M03", Etcd: "http://tenant", Prefix: "tenant/woodpecker", SessionFile: "/private/session.yaml",
+	}, 4096)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"records":[]}`, string(o.Data))
+	require.NotContains(t, o.Query.Expression, "/private/session.yaml")
+}

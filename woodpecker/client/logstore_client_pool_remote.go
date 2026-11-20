@@ -65,8 +65,9 @@ type logStoreClientPool struct {
 // CallTimeouts bounds the calls a remote client makes on the paths that must
 // not stall. A zero field takes its default.
 type CallTimeouts struct {
-	// AppendSend bounds opening an append stream and receiving its first
-	// (buffered) response. See config.SegmentAppendConfig.SendTimeout.
+	// AppendSend bounds each remote AddEntry/AddEntries attempt from stream
+	// opening to its first response (normally Buffered), excluding final ACKs.
+	// See config.SegmentAppendConfig.SendTimeout for scope and defaults.
 	AppendSend time.Duration
 	// SelectNodes bounds one SelectNodes call. See
 	// config.QuorumConfig.SelectNodesTimeout.

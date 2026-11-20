@@ -29,6 +29,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	awscredentials "github.com/zilliztech/woodpecker/common/credentials"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/minio/aliyun"
@@ -111,7 +112,7 @@ func newMinioClient(ctx context.Context, cfg *config.Configuration) (*minio.Clie
 	if matchedDefault {
 		// aws, minio
 		if cfg.Minio.UseIAM {
-			creds = credentials.NewIAM("")
+			creds = awscredentials.NewAWSIAM()
 		} else {
 			creds = credentials.NewStaticV4(cfg.Minio.AccessKeyID, cfg.Minio.SecretAccessKey, "")
 		}
@@ -171,7 +172,7 @@ func newMinioClient(ctx context.Context, cfg *config.Configuration) (*minio.Clie
 func newMinioClientFromConfig(ctx context.Context, cfg *config.Configuration) (*minio.Client, error) {
 	var creds *credentials.Credentials
 	if cfg.Minio.UseIAM {
-		creds = credentials.NewIAM(cfg.Minio.IamEndpoint)
+		creds = awscredentials.NewAWSIAMWithEndpoint(cfg.Minio.IamEndpoint)
 	} else {
 		creds = credentials.NewStaticV4(cfg.Minio.AccessKeyID, cfg.Minio.SecretAccessKey, "")
 	}

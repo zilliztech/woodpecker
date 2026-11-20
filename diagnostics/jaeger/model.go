@@ -86,7 +86,7 @@ type Trace struct {
 }
 
 func wpClientScope(scope string) bool {
-	return d.Has([]string{"LogWriter", "LogReader", "AppendOp", "BatchAppendOp"}, scope)
+	return d.Has([]string{"LogWriter", "LogReader", "AppendOp", "BatchAppendOp", "ReplicaAppender"}, scope)
 }
 
 func knownOperation(role, scope, op, flow string) (bool, string) {
@@ -106,6 +106,9 @@ func knownOperation(role, scope, op, flow string) (bool, string) {
 	}
 	if role == "wp_server" || role == "wp_client" || wpClientScope(scope) {
 		if flow == "write" {
+			if scope == "ReplicaAppender" && op == "send" {
+				return true, "append_send"
+			}
 			if op == "Execute" && d.Has([]string{"AppendOp", "BatchAppendOp"}, scope) {
 				if scope == "BatchAppendOp" {
 					return true, "async"
