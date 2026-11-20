@@ -292,12 +292,7 @@ func (r *replicaAppender) send(tasks []*replicaTask, generations []int) {
 		entries := make([]*proto.LogEntry, len(tasks))
 		for i, task := range tasks {
 			entries[i] = task.op.toLogEntry()
-			// Remote single-entry calls attach a stream; batches fan out into local channels.
-			if len(tasks) == 1 && cli.IsRemoteClient() {
-				channels[i] = channel.NewRemoteResultChannel(task.op.Identifier())
-			} else {
-				channels[i] = channel.NewLocalResultChannel(task.op.Identifier())
-			}
+			channels[i] = channel.NewLocalResultChannel(task.op.Identifier())
 		}
 		if len(tasks) == 1 {
 			_, err = cli.AppendEntry(ctx, first.bucketName, first.rootPath, first.logId, entries[0], channels[0])
