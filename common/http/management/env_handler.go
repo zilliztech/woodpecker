@@ -49,7 +49,8 @@ func NewEnvHandler() http.HandlerFunc {
 			if i < 0 {
 				continue
 			}
-			envMap[kv[:i]] = kv[i+1:]
+			// Any value can hold a credential regardless of its name; keep names only.
+			envMap[kv[:i]] = "<redacted>"
 		}
 
 		var ms runtime.MemStats

@@ -48,6 +48,25 @@ func TestNewEnvHandler_Shape(t *testing.T) {
 	require.True(t, hasPath, "expected PATH in env section")
 }
 
+func TestNewEnvHandler_RedactsEnvValues(t *testing.T) {
+	const secret = "REDACTED-TEST-SECRET-7341"
+	t.Setenv("WP_TEST_SECRET", secret)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", secret)
+
+	rec := httptest.NewRecorder()
+	NewEnvHandler()(rec, httptest.NewRequest(http.MethodGet, "/admin/env", nil))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotContains(t, rec.Body.String(), secret)
+
+	var got struct {
+		Env map[string]string `json:"env"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Contains(t, got.Env, "PATH")
+	require.Equal(t, "<redacted>", got.Env["AWS_SECRET_ACCESS_KEY"])
+}
+
 func TestNewEnvHandler_WrongMethod(t *testing.T) {
 	handler := NewEnvHandler()
 	req := httptest.NewRequest(http.MethodPost, "/admin/env", nil)
