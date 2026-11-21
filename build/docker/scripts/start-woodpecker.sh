@@ -73,8 +73,9 @@ fi
 # MinIO configuration
 MINIO_ADDRESS=${MINIO_ADDRESS:-minio}
 MINIO_PORT=${MINIO_PORT:-9000}
-MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
-MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+# Require credentials explicitly; never fall back to a well-known default.
+MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+MINIO_SECRET_KEY=${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
 MINIO_BUCKET=${MINIO_BUCKET:-${CLUSTER}-data}
 
 # Dependency check configuration
