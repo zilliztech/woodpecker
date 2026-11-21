@@ -26,6 +26,29 @@ func TestNewConfigHandler_Success(t *testing.T) {
 	require.Contains(t, w.Body.String(), "bucketName")
 }
 
+func TestNewConfigHandler_RedactsSecretsOnly(t *testing.T) {
+	handler := NewConfigHandler(func() any {
+		return map[string]any{
+			"minio": map[string]any{
+				"accessKeyID":     "public-id",
+				"secretAccessKey": "hidden-secret",
+				"password":        "hidden-password",
+				"bucketName":      "woodpecker",
+			},
+		}
+	})
+
+	w := httptest.NewRecorder()
+	handler(w, httptest.NewRequest(http.MethodGet, "/admin/config", nil))
+
+	body := w.Body.String()
+	require.NotContains(t, body, "hidden-secret")
+	require.NotContains(t, body, "hidden-password")
+	require.Contains(t, body, "[REDACTED]")
+	require.Contains(t, body, "public-id")
+	require.Contains(t, body, "woodpecker")
+}
+
 func TestNewConfigHandler_WrongMethod(t *testing.T) {
 	handler := NewConfigHandler(func() any { return nil })
 	req := httptest.NewRequest(http.MethodPost, "/admin/config", nil)
