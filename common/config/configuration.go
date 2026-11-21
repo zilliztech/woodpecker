@@ -812,6 +812,12 @@ func ValidateRootPathValue(rp string) error {
 // re-check the object-storage section of a possibly hand-rolled or post-load-mutated config
 // without imposing the full Validate() on partial configurations.
 func (c *Configuration) ValidateMinioConfig() error {
+	// The former built-in value is kept only to warn deployments that still rely
+	// on it; it is never a default, so a deployment must supply credentials.
+	const retiredMinioCredential = "minioadmin"
+	if c.Minio.AccessKeyID == retiredMinioCredential || c.Minio.SecretAccessKey == retiredMinioCredential {
+		fmt.Fprintln(os.Stderr, "[WARN] woodpecker: MinIO credentials still use the retired value minioadmin; set explicit credentials")
+	}
 	err := ValidateRootPathValue(c.Minio.RootPath)
 	if err == nil {
 		return nil
@@ -1356,8 +1362,8 @@ func getDefaultMinioConfig() MinioConfig {
 	return MinioConfig{
 		Address:         "localhost",
 		Port:            9000,
-		AccessKeyID:     "minioadmin",
-		SecretAccessKey: "minioadmin",
+		AccessKeyID:     "",
+		SecretAccessKey: "",
 		UseSSL:          false,
 		BucketName:      "a-bucket",
 		CreateBucket:    true,
