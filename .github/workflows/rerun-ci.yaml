@@ -12,9 +12,14 @@ permissions:
 jobs:
   rerun:
     name: Rerun Failed Checks
+    # Only write-capable commenters may spend the writable token below; an
+    # outside commenter must not be able to trigger actions:write reruns.
     if: >-
       github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/rerun')
+      startsWith(github.event.comment.body, '/rerun') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
