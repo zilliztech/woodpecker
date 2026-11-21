@@ -6,10 +6,8 @@ on:
       - 'v*'
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,6 +17,34 @@ jobs:
           go-version-file: go.mod
       - name: Build release binaries
         run: make wpcli-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wp-release-binaries
+          path: bin/wp-*
+
+  release:
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wp-release-binaries
+          path: bin
+      # The platform signing tool and certificate store only exist on the Windows runner.
+      - name: Sign Windows binary
+        shell: pwsh
+        env:
+          SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT_PFX }}
+          SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          # Secrets arrive through env so they never enter the script text or the log.
+          $pfx = Join-Path $env:RUNNER_TEMP 'wp-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERT))
+          & signtool sign /f $pfx /p $env:SIGNING_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 bin/wp-windows-amd64.exe
+          if ($LASTEXITCODE -ne 0) { throw 'signing failed' }
+          Remove-Item $pfx -Force
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
