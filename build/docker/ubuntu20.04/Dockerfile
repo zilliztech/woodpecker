@@ -15,7 +15,8 @@
 # limitations under the License.
 
 # Use Ubuntu as base image
-FROM ubuntu:focal-20240530
+# Base image pinned to a registry digest so rebuilds cannot pick up a different image.
+FROM ubuntu:focal-20240530@sha256:fa17826afb526a9fc7250e0fbcbfd18d03fe7a54849472f86879d8bf562c629e
 
 # Build arguments for multi-platform support
 ARG TARGETPLATFORM
