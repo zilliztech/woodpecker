@@ -49,6 +49,13 @@ func TestBucketNameCannotEscapeStorageRoot(t *testing.T) {
 	require.Error(t, err, "traversal bucketName must be rejected")
 	_, statErr := os.Stat(victimFile)
 	require.NoError(t, statErr, "bucketName='../victim' deleted data outside the storage root")
+
+	// Windows-style traversal: path.Clean sees a plain name on Linux, but the same bucket
+	// resolves outside the root once the Windows binary ships, so reject it everywhere.
+	_, err = store.EvictLog(context.Background(), `..\victim`, "", 7, true)
+	require.Error(t, err, "backslash traversal bucketName must be rejected")
+	_, statErr = os.Stat(victimFile)
+	require.NoError(t, statErr, "bucketName='..\\victim' deleted data outside the storage root")
 }
 
 func TestEvictLogValidBucketStillRemovesLocalData(t *testing.T) {
