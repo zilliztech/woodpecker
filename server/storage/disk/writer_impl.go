@@ -111,6 +111,21 @@ type LocalFileWriter struct {
 	runCancel context.CancelFunc
 }
 
+// FileStore opens segment readers and writers with the LogStore configuration.
+type FileStore struct {
+	cfg          *config.Configuration
+	mkdirAllSync func(string, os.FileMode) error
+}
+
+func NewFileStore(cfg *config.Configuration) FileStore {
+	return FileStore{
+		cfg: cfg,
+		mkdirAllSync: func(path string, perm os.FileMode) error {
+			return fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, path, perm)
+		},
+	}
+}
+
 // NewLocalFileWriter creates a new local filesystem writer
 func NewLocalFileWriter(ctx context.Context, baseDir string, logId int64, segmentId int64, cfg *config.Configuration) (*LocalFileWriter, error) {
 	return NewLocalFileWriterWithMode(ctx, baseDir, logId, segmentId, cfg, false)
@@ -118,18 +133,13 @@ func NewLocalFileWriter(ctx context.Context, baseDir string, logId int64, segmen
 
 // NewLocalFileWriterWithMode creates a new local filesystem writer with recovery mode option
 func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64, segmentId int64, cfg *config.Configuration, recoveryMode bool) (*LocalFileWriter, error) {
-	return newLocalFileWriter(ctx, fileutil.MkdirAllSync, baseDir, logId, segmentId, cfg, recoveryMode)
+	store := FileStore{cfg: cfg, mkdirAllSync: fileutil.MkdirAllSync}
+	return store.NewLocalFileWriterWithMode(ctx, baseDir, logId, segmentId, recoveryMode)
 }
 
-// NewLocalFileWriterAtRoot syncs new segment directories through the configured storage root.
-func NewLocalFileWriterAtRoot(ctx context.Context, baseDir string, logId int64, segmentId int64, cfg *config.Configuration, recoveryMode bool) (*LocalFileWriter, error) {
-	prepareDir := func(path string, perm os.FileMode) error {
-		return fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, path, perm)
-	}
-	return newLocalFileWriter(ctx, prepareDir, baseDir, logId, segmentId, cfg, recoveryMode)
-}
-
-func newLocalFileWriter(ctx context.Context, mkdirAllSync func(string, os.FileMode) error, baseDir string, logId int64, segmentId int64, cfg *config.Configuration, recoveryMode bool) (*LocalFileWriter, error) {
+// NewLocalFileWriterWithMode opens a local writer for this store.
+func (store FileStore) NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64, segmentId int64, recoveryMode bool) (*LocalFileWriter, error) {
+	cfg := store.cfg
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewLocalFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
@@ -152,7 +162,7 @@ func newLocalFileWriter(ctx context.Context, mkdirAllSync func(string, os.FileMo
 
 	segmentDir := getSegmentDir(baseDir, logId, segmentId)
 	// Ensure directory exists
-	if err := mkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := store.mkdirAllSync(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
 			zap.String("segmentDir", segmentDir),
 			zap.Error(err))

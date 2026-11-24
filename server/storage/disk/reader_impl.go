@@ -67,18 +67,12 @@ type LocalFileReaderAdv struct {
 
 // NewLocalFileReaderAdv creates a new local filesystem reader
 func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {
-	return newLocalFileReader(ctx, fileutil.MkdirAllSync, baseDir, logId, segId, maxBatchSize)
+	store := FileStore{mkdirAllSync: fileutil.MkdirAllSync}
+	return store.NewLocalFileReaderAdv(ctx, baseDir, logId, segId, maxBatchSize)
 }
 
-// NewLocalFileReaderAtRoot syncs new segment directories through dataRoot.
-func NewLocalFileReaderAtRoot(ctx context.Context, dataRoot, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {
-	prepareDir := func(path string, perm os.FileMode) error {
-		return fileutil.MkdirAllSyncUnder(dataRoot, path, perm)
-	}
-	return newLocalFileReader(ctx, prepareDir, baseDir, logId, segId, maxBatchSize)
-}
-
-func newLocalFileReader(ctx context.Context, mkdirAllSync func(string, os.FileMode) error, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {
+// NewLocalFileReaderAdv opens a local reader for this store.
+func (store FileStore) NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewLocalFileReader")
 	defer sp.End()
 
@@ -90,7 +84,7 @@ func newLocalFileReader(ctx context.Context, mkdirAllSync func(string, os.FileMo
 
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists
-	if err := mkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := store.mkdirAllSync(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 

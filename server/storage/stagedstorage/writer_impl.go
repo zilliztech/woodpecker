@@ -134,6 +134,21 @@ type StagedFileWriter struct {
 	runCancel  context.CancelFunc
 }
 
+// FileStore opens segment readers and writers with the LogStore configuration.
+type FileStore struct {
+	cfg          *config.Configuration
+	mkdirAllSync func(string, os.FileMode) error
+}
+
+func NewFileStore(cfg *config.Configuration) FileStore {
+	return FileStore{
+		cfg: cfg,
+		mkdirAllSync: func(path string, perm os.FileMode) error {
+			return fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, path, perm)
+		},
+	}
+}
+
 // NewStagedFileWriter creates a new staged file writer
 func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
 	return NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, false, schedulers...)
@@ -141,18 +156,13 @@ func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, lo
 
 // NewStagedFileWriterWithMode creates a new staged file writer with recovery mode option
 func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
-	return newStagedFileWriter(ctx, bucket, rootPath, fileutil.MkdirAllSync, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, schedulers...)
+	store := FileStore{cfg: cfg, mkdirAllSync: fileutil.MkdirAllSync}
+	return store.NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, recoveryMode, schedulers...)
 }
 
-// NewStagedFileWriterAtRoot syncs new segment directories through the configured storage root.
-func NewStagedFileWriterAtRoot(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
-	prepareDir := func(path string, perm os.FileMode) error {
-		return fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, path, perm)
-	}
-	return newStagedFileWriter(ctx, bucket, rootPath, prepareDir, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, schedulers...)
-}
-
-func newStagedFileWriter(ctx context.Context, bucket string, rootPath string, mkdirAllSync func(string, os.FileMode) error, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
+// NewStagedFileWriterWithMode opens a staged writer for this store.
+func (store FileStore) NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
+	cfg := store.cfg
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewStagedFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
@@ -178,7 +188,7 @@ func newStagedFileWriter(ctx context.Context, bucket string, rootPath string, mk
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
 	// Ensure directory exists
-	if err := mkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := store.mkdirAllSync(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
 			zap.String("segmentDir", segmentDir),
 			zap.Error(err))

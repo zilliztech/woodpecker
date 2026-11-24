@@ -496,15 +496,14 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 
 	// Initialize reader
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		stagedReader, err := stagedstorage.NewStagedFileReaderAtRoot(
+		stagedReader, err := stagedstorage.NewFileStore(s.cfg).NewStagedFileReaderAdv(
 			ctx,
 			s.getInstanceBucket(),
 			s.getLogBaseDir(),
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.storageClient,
-			s.cfg)
+			s.storageClient)
 		if err != nil {
 			return nil, err
 		}
@@ -513,9 +512,8 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 		return stagedReader, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		localReader, err := disk.NewLocalFileReaderAtRoot(
+		localReader, err := disk.NewFileStore(s.cfg).NewLocalFileReaderAdv(
 			ctx,
-			s.cfg.Woodpecker.Storage.RootPath,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
@@ -579,7 +577,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 
 	// Initialize writer
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		writerFile, getWriterErr := stagedstorage.NewStagedFileWriterAtRoot(
+		writerFile, getWriterErr := stagedstorage.NewFileStore(s.cfg).NewStagedFileWriterWithMode(
 			ctx,
 			s.getInstanceBucket(), // user instance bucket
 			s.getLogBaseDir(),     // user instance rootPath
@@ -587,7 +585,6 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			s.logId,
 			s.segId,
 			s.storageClient,
-			s.cfg,
 			recoverMode,
 			s.syncScheduler)
 		if getWriterErr != nil {
@@ -598,12 +595,11 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 		return s.currentSegmentWriter, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		writerFile, getWriterErr := disk.NewLocalFileWriterAtRoot(
+		writerFile, getWriterErr := disk.NewFileStore(s.cfg).NewLocalFileWriterWithMode(
 			ctx,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.cfg,
 			recoverMode)
 		if getWriterErr != nil {
 			return nil, getWriterErr

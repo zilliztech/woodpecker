@@ -84,18 +84,13 @@ type StagedFileReaderAdv struct {
 
 // NewStagedFileReaderAdv creates a new staged file reader
 func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
-	return newStagedFileReader(ctx, bucket, rootPath, fileutil.MkdirAllSync, localBaseDir, logId, segId, storageCli, cfg)
+	store := FileStore{cfg: cfg, mkdirAllSync: fileutil.MkdirAllSync}
+	return store.NewStagedFileReaderAdv(ctx, bucket, rootPath, localBaseDir, logId, segId, storageCli)
 }
 
-// NewStagedFileReaderAtRoot syncs new segment directories through the configured storage root.
-func NewStagedFileReaderAtRoot(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
-	prepareDir := func(path string, perm os.FileMode) error {
-		return fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, path, perm)
-	}
-	return newStagedFileReader(ctx, bucket, rootPath, prepareDir, localBaseDir, logId, segId, storageCli, cfg)
-}
-
-func newStagedFileReader(ctx context.Context, bucket string, rootPath string, mkdirAllSync func(string, os.FileMode) error, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
+// NewStagedFileReaderAdv opens a staged reader for this store.
+func (store FileStore) NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage) (*StagedFileReaderAdv, error) {
+	cfg := store.cfg
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewStagedFileReader")
 	defer sp.End()
 
@@ -111,7 +106,7 @@ func newStagedFileReader(ctx context.Context, bucket string, rootPath string, mk
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	// Ensure directory exists
-	if err := mkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := store.mkdirAllSync(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
