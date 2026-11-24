@@ -1239,7 +1239,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxBytes:                   ByteSize(100000000),
 				MaxFlushRetries:            3,
 				RetryInterval:              DurationMilliseconds{Duration: Duration{duration: 2000 * 1000000}}, // 2000ms
-				MaxFlushSize:               ByteSize(4 * 1024 * 1024),
+				MaxFlushSize:               ByteSize(2000000),
 				MaxFlushThreads:            8,
 				CheckpointThreshold:        10,
 			},

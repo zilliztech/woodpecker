@@ -8996,7 +8996,7 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
       maxBytes: <span class="hl-num">100000000</span>       <span class="hl-cm"># 100MB buffer limit</span>
       maxFlushRetries: <span class="hl-num">3</span>
       retryInterval: <span class="hl-num">2000</span>       <span class="hl-cm"># ms between retries</span>
-      maxFlushSize: <span class="hl-num">4194304</span>     <span class="hl-cm"># 4 MiB flush trigger</span>
+      maxFlushSize: <span class="hl-num">2000000</span>     <span class="hl-cm"># 2 MB flush trigger</span>
       maxFlushThreads: <span class="hl-num">8</span>
     <span class="hl-kw">segmentCompactionPolicy</span>:
       maxBytes: <span class="hl-num">32000000</span>       <span class="hl-cm"># 32MB merged block size</span>
@@ -9057,7 +9057,7 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
                 <tr><td>segmentSyncPolicy.maxBytes</td><td>Max write buffer size</td><td>100MB</td></tr>
                 <tr><td>segmentSyncPolicy.maxFlushRetries</td><td>Max sync retries</td><td>3</td></tr>
                 <tr><td>segmentSyncPolicy.retryInterval</td><td>Retry interval (ms)</td><td>2000</td></tr>
-                <tr><td>segmentSyncPolicy.maxFlushSize</td><td>Block flush size trigger</td><td>4 MiB</td></tr>
+                <tr><td>segmentSyncPolicy.maxFlushSize</td><td>Block flush size trigger</td><td>2 MB</td></tr>
                 <tr><td>segmentSyncPolicy.maxFlushThreads</td><td>Concurrent flush threads</td><td>8</td></tr>
                 <tr><td>segmentCompactionPolicy.maxBytes</td><td>Max merged block size after compaction</td><td>32MB</td></tr>
                 <tr><td>segmentCompactionPolicy.maxParallelUploads</td><td>Parallel compaction upload threads</td><td>4</td></tr>
@@ -9571,7 +9571,7 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
             <h2>Performance Best Practices</h2>
             <h3>Write Optimization</h3>
             <ul>
-                <li>The default <code>maxFlushSize</code> is <strong>4 MiB</strong> &mdash; increase for larger batch uploads to reduce API call overhead</li>
+                <li>The default <code>maxFlushSize</code> is <strong>2 MB</strong> &mdash; increase for larger batch uploads to reduce API call overhead</li>
                 <li>Default <code>maxFlushThreads</code> is <strong>8</strong> &mdash; increase for higher parallelism on fast networks</li>
                 <li>Use <code>WriteAsync</code> with batching for maximum throughput</li>
                 <li>Compaction merges small blocks into <strong>32MB</strong> merged blocks (configurable via <code>segmentCompactionPolicy.maxBytes</code>)</li>
