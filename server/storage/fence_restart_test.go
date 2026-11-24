@@ -236,3 +236,30 @@ func TestFirstFileSyncRequiresDirectoryPublication(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyConstructorsSyncParentOfBaseDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("execute-only parent requires an unprivileged user")
+	}
+	parent := t.TempDir()
+	require.NoError(t, os.Chmod(parent, 0o311))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0o700)) })
+	base := filepath.Join(parent, "new-base")
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	for backend, newWriter := range fenceBackends {
+		t.Run(backend, func(t *testing.T) {
+			_, err := newWriter(t.Context(), base, cfg, false)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.ErrorContains(t, err, parent)
+			if backend == "local" {
+				_, err = disk.NewLocalFileReaderAdv(t.Context(), base, 1, 0, 1)
+			} else {
+				_, err = stagedstorage.NewStagedFileReaderAdv(t.Context(), "bucket", "root", base, 1, 0, nil, cfg)
+			}
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.ErrorContains(t, err, parent)
+			require.DirExists(t, filepath.Join(base, "1", "0"))
+		})
+	}
+}

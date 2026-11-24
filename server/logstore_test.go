@@ -1644,3 +1644,27 @@ func TestNewLogStore_SyncSchedulerUsesConfiguredWorkers(t *testing.T) {
 		ls.syncScheduler.Close()
 	}
 }
+
+func TestLogStoreStartRequiresProvisionedDataRoot(t *testing.T) {
+	for _, mode := range []string{"local", "service"} {
+		t.Run(mode, func(t *testing.T) {
+			store := createTestLogStore()
+			store.cfg.Woodpecker.Storage.Type = mode
+			root := filepath.Join(t.TempDir(), "wal")
+			store.cfg.Woodpecker.Storage.RootPath = root
+			err := store.Start()
+			require.ErrorIs(t, err, os.ErrNotExist)
+			require.ErrorContains(t, err, root)
+			require.True(t, store.stopped.Load())
+			require.NoDirExists(t, root)
+
+			require.NoError(t, os.WriteFile(root, nil, 0o600))
+			require.ErrorContains(t, store.Start(), root)
+			require.True(t, store.stopped.Load())
+
+			store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
+			require.NoError(t, store.Start())
+			require.NoError(t, store.Stop())
+		})
+	}
+}

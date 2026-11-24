@@ -191,12 +191,21 @@ func (l *logStore) Start() error {
 	logger.Ctx(l.ctx).Info("Starting LogStore service",
 		zap.String("address", l.address))
 
-	metrics.WpLogStoreRunningTotal.WithLabelValues(metrics.NodeID).Inc()
-
+	storage := l.cfg.Woodpecker.Storage
+	if storage.IsStorageLocal() || storage.IsStorageService() {
+		root, err := os.OpenRoot(storage.RootPath)
+		if err != nil {
+			return fmt.Errorf("open provisioned woodpecker.storage.rootPath %q: %w", storage.RootPath, err)
+		}
+		if err := root.Close(); err != nil {
+			return err
+		}
+	}
 	if err := l.rebuildDeletingSetsFromMarkers(); err != nil {
 		return err
 	}
 
+	metrics.WpLogStoreRunningTotal.WithLabelValues(metrics.NodeID).Inc()
 	l.maintenance.Start()
 	l.stopped.Store(false)
 	logger.Ctx(l.ctx).Info("LogStore service started successfully",
@@ -211,7 +220,9 @@ func (l *logStore) Stop() error {
 
 	l.cancel()
 
-	if !l.stopped.CompareAndSwap(false, true) {
+	if l.stopped.CompareAndSwap(false, true) {
+		metrics.WpLogStoreRunningTotal.WithLabelValues(metrics.NodeID).Dec()
+	} else {
 		logger.Ctx(l.ctx).Debug("LogStore service is already stopped")
 	}
 
@@ -243,7 +254,6 @@ func (l *logStore) Stop() error {
 
 	metrics.WpLogStoreActiveLogs.Reset()
 	metrics.WpLogStoreActiveSegments.Reset()
-	metrics.WpLogStoreRunningTotal.WithLabelValues(metrics.NodeID).Dec()
 
 	logger.Ctx(l.ctx).Info("LogStore service stopped successfully",
 		zap.String("address", l.address),

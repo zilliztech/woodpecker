@@ -47,7 +47,7 @@ func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -214,7 +214,7 @@ func TestOpenInternalWriterMultiTimesInMultiClient(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -381,7 +381,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -602,7 +602,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -852,7 +852,7 @@ func TestClientRecreation(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -1062,7 +1062,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -1285,7 +1285,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -1559,7 +1559,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -1953,7 +1953,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -2349,7 +2349,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -2826,7 +2826,7 @@ func TestConcurrentReaderWriterWithHangingBehavior(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{

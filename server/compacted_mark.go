@@ -52,7 +52,7 @@ func hasCompactedMark(segmentDir string) bool {
 // existence is meaningful, so after durable directory setup there is no content
 // to write: creating the marker and syncing its containing directory is sufficient.
 func writeCompactedMarkCreated(ctx context.Context, dataRoot, segmentDir string) (bool, error) {
-	if err := fileutil.MkdirAllSyncUnder(dataRoot, segmentDir, 0o755); err != nil {
+	if err := fileutil.DataRoot(dataRoot).MkdirAllSync(segmentDir, 0o755); err != nil {
 		return false, err
 	}
 	p := compactedMarkPath(segmentDir)

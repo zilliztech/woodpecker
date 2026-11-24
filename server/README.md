@@ -21,10 +21,16 @@ missing data file is reopened after a server restart. Reopening a fenced local
 segment uses recovery mode so a stale append cannot truncate its existing data.
 
 Provision `woodpecker.storage.rootPath` (the service's `-data-dir`) as a durable
-local directory before starting a production node. For example, if the volume
-is mounted at `/woodpecker/data`, use that mount point as the root. Development
-runs can create a missing root automatically. Persisting the root's own entry
-in its parent is the responsibility of the provisioner.
+local directory. Local and service storage check the root at startup. If the
+volume is mounted at `/woodpecker/data`, use that mount point as the root.
+For development, create the directory before starting Woodpecker.
+
+When upgrading, check any symlinks on the segment or marker path. A link under
+the root must resolve to an existing directory inside the root. Absolute and
+relative links to such directories work. Provision dangling targets before
+startup. For a link to another volume, mount the volume at the link's location
+before restarting, with the existing data accessible there. Keep the storage
+layout stable while Woodpecker is running.
 
 When a reader, writer or marker creates a directory, Woodpecker syncs the path
 up to and including the configured root, even on retries after a sync failure.

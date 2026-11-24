@@ -56,7 +56,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -274,7 +274,7 @@ func TestReadWriteLoop(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -460,7 +460,7 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -649,7 +649,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -840,7 +840,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -975,7 +975,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			needCluster: false,
 		},
 		{
@@ -1214,8 +1214,6 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 // Test that immediately closing the client interrupts subsequent logWriter writes,
 // and ensures all previously written data is properly handled as expected.
 func TestConcurrentWriteWithClientClose(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithClientClose")
 	testCases := []struct {
 		name         string
 		storageType  string
@@ -1227,7 +1225,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 		{
 			name:        "LocalFsStorage1",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			// sync interval(35s) greater than appendOp timeout(30s), may cause data written but not trigger write callback, simulating client and server network failure scenario
 			syncInterval: 35 * 1000,
 			writtenCnt:   0, // Client timeout, but retry is allowed
@@ -1236,7 +1234,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 		{
 			name:        "LocalFsStorage2",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 			// sync interval(10s) less than appendOp timeout(30s), should trigger write callback before timeout
 			syncInterval: 10 * 1000,
 			writtenCnt:   4,
@@ -1484,8 +1482,6 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 }
 
 func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -1494,7 +1490,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",

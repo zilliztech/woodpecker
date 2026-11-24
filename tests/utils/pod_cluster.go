@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -172,6 +173,9 @@ func (c *PodCluster) startNode(t *testing.T, idx int, gossipPort int, gossipSeed
 
 	nodeCfg := *c.Config
 	nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(c.BaseDir, fmt.Sprintf("node%d", idx))
+	if err := os.MkdirAll(nodeCfg.Woodpecker.Storage.RootPath, 0o755); err != nil {
+		return err
+	}
 	meta := c.NodeConfigs[idx]
 	srv, err := server.NewServerWithConfig(context.Background(), &nodeCfg, &membership.ServerConfig{
 		NodeID:               fmt.Sprintf("node%d", idx),

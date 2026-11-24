@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -189,6 +190,7 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 		// Create server configuration for this node
 		nodeCfg := *cfg // Copy the base config
 		nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(baseDir, fmt.Sprintf("node%d", allocation.nodeIndex))
+		require.NoError(t, os.MkdirAll(nodeCfg.Woodpecker.Storage.RootPath, 0o755))
 
 		// Create server with custom AZ/RG
 		nodeServer, err := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
@@ -314,6 +316,9 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, gossi
 	// Create server configuration for the new node
 	nodeCfg := *cluster.Config // Copy the base config
 	nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", nodeIndex))
+	if err := os.MkdirAll(nodeCfg.Woodpecker.Storage.RootPath, 0o755); err != nil {
+		return -1, "", err
+	}
 
 	// Allocate unique service port
 	servicePort, err := cluster.allocateUniquePort()

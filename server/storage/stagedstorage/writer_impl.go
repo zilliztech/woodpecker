@@ -141,11 +141,15 @@ func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, lo
 
 // NewStagedFileWriterWithMode creates a new staged file writer with recovery mode option
 func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
-	return NewStagedFileWriterAtRoot(ctx, bucket, rootPath, localBaseDir, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, schedulers...)
+	return newStagedFileWriter(ctx, bucket, rootPath, fileutil.MkdirAllSync, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, schedulers...)
 }
 
 // NewStagedFileWriterAtRoot syncs new segment directories through dataRoot.
 func NewStagedFileWriterAtRoot(ctx context.Context, bucket string, rootPath string, dataRoot, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
+	return newStagedFileWriter(ctx, bucket, rootPath, fileutil.DataRoot(dataRoot).MkdirAllSync, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, schedulers...)
+}
+
+func newStagedFileWriter(ctx context.Context, bucket string, rootPath string, mkdirAllSync func(string, os.FileMode) error, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewStagedFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
@@ -170,6 +174,13 @@ func NewStagedFileWriterAtRoot(ctx context.Context, bucket string, rootPath stri
 		zap.Bool("recoveryMode", recoveryMode))
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
+	// Ensure directory exists
+	if err := mkdirAllSync(segmentDir, 0o755); err != nil {
+		logger.Ctx(ctx).Warn("failed to create directory",
+			zap.String("segmentDir", segmentDir),
+			zap.Error(err))
+		return nil, fmt.Errorf("create directory: %w", err)
+	}
 	if HasCompactedMark(segmentDir) {
 		// The tombstone means this segment is durably compacted and its data.log reclaimed
 		// (or pending reclaim). A normal writer here would RESURRECT a local data.log —
@@ -182,13 +193,6 @@ func NewStagedFileWriterAtRoot(ctx context.Context, bucket string, rootPath stri
 		// whose meta update to Sealed was lost. Serve those with a fileless compacted writer
 		// instead: appends are rejected, fence/complete/compact converge idempotently.
 		return newCompactedStagedFileWriter(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg)
-	}
-	// Ensure directory exists
-	if err := fileutil.MkdirAllSyncUnder(dataRoot, segmentDir, 0o755); err != nil {
-		logger.Ctx(ctx).Warn("failed to create directory",
-			zap.String("segmentDir", segmentDir),
-			zap.Error(err))
-		return nil, fmt.Errorf("create directory: %w", err)
 	}
 	fenced, markerErr := storage.FenceMarkerExists(segmentDir)
 	if markerErr != nil {

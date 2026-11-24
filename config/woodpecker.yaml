@@ -205,7 +205,7 @@ woodpecker:
     # Valid values: [default, minio, local, service]
     type: minio
     # Provision a durable local directory or mount the data volume here before startup.
-    # Directory fsync includes this root. Development runs can create a missing root automatically.
+    # Local and service storage require an existing root. Directory fsync includes this root.
     rootPath: /var/lib/woodpecker
   # Configuration of Woodpecker runtime subsystems.
   runtime:

@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -61,8 +60,6 @@ func waitForServerReady(ctx context.Context, target string, timeout time.Duratio
 }
 
 func TestRemoteClient_BasicAppend(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestRemoteClient_BasicAppend")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -71,7 +68,7 @@ func TestRemoteClient_BasicAppend(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath, // Will be set to t.TempDir()
+			rootPath:    t.TempDir(), // Will be set to t.TempDir()
 		},
 		{
 			name:        "ObjectStorage",
@@ -187,8 +184,6 @@ func TestRemoteClient_BasicAppend(t *testing.T) {
 }
 
 func TestRemoteClient_MultipleAppends(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestRemoteClient_MultipleAppends")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -197,7 +192,7 @@ func TestRemoteClient_MultipleAppends(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -319,8 +314,6 @@ func TestRemoteClient_MultipleAppends(t *testing.T) {
 }
 
 func TestRemoteClient_ClientClose(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestRemoteClient_ClientClose")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -329,7 +322,7 @@ func TestRemoteClient_ClientClose(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",

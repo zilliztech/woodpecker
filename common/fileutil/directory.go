@@ -18,9 +18,11 @@
 package fileutil
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // SyncDir persists a directory's entries, including newly created or renamed files.
@@ -73,10 +75,12 @@ func MkdirAllSync(path string, perm os.FileMode) error {
 	return syncAncestors(dir, SyncDir)
 }
 
-// MkdirAllSyncUnder creates path and syncs its directory chain through dataRoot,
-// inclusive. Production callers must pre-provision a durable data root.
-func MkdirAllSyncUnder(dataRoot, path string, perm os.FileMode) error {
-	return mkdirAllSyncUnder(dataRoot, path, perm, syncDirUnder)
+// DataRoot is a pre-provisioned directory that bounds directory creation and sync.
+type DataRoot string
+
+// MkdirAllSync creates path and syncs its directory chain through the root, inclusive.
+func (root DataRoot) MkdirAllSync(path string, perm os.FileMode) error {
+	return mkdirAllSyncUnder(string(root), path, perm, syncDirUnder)
 }
 
 func syncDirUnder(root *os.Root, path string) error {
@@ -99,22 +103,72 @@ func mkdirAllSyncUnder(dataRoot, path string, perm os.FileMode, syncDir func(*os
 	if err != nil || !filepath.IsLocal(rel) {
 		return fmt.Errorf("directory %q is outside data root %q", dir, rootPath)
 	}
-	// Preserve automatic setup for development; crash durability of the root's
-	// own entry in its parent is the provisioner's responsibility.
-	if err := os.MkdirAll(rootPath, perm); err != nil {
-		return err
-	}
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open provisioned data root %q: %w", rootPath, err)
 	}
 	defer root.Close()
-	if err := root.MkdirAll(rel, perm); err != nil {
-		return err
+
+	syncPath := func(path string) error { return syncDir(root, path) }
+	current := "."
+	for component := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		next := filepath.Join(current, component)
+		info, err := root.Lstat(next)
+		if errors.Is(err, os.ErrNotExist) {
+			// Create only the named entry. MkdirAll can create the missing
+			// target of an intermediate dangling link.
+			err = root.Mkdir(next, perm)
+			if err == nil {
+				current = next
+				continue
+			}
+			if errors.Is(err, os.ErrExist) {
+				info, err = root.Lstat(next)
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			next, err = resolveDirectoryLink(root, next)
+			if err != nil {
+				return err
+			}
+			// The link entry and its target can have different parents.
+			if err := syncAncestors(current, syncPath); err != nil {
+				return err
+			}
+		} else if !info.IsDir() {
+			return fmt.Errorf("%s is not a directory", next)
+		}
+		current = next
 	}
-	// Relative parents converge at ".". Root.Open also keeps symlink resolution
-	// inside the configured tree as we reopen the directories for fsync.
-	return syncAncestors(rel, func(path string) error { return syncDir(root, path) })
+	return syncAncestors(current, syncPath)
+}
+
+// Resolve an existing target before creating any children. Convert absolute and
+// relative links to the same rooted path for both mkdir and directory sync.
+func resolveDirectoryLink(root *os.Root, link string) (string, error) {
+	base, err := filepath.EvalSymlinks(root.Name())
+	if err != nil {
+		return "", err
+	}
+	target, err := filepath.EvalSymlinks(filepath.Join(base, link))
+	if err != nil {
+		return "", fmt.Errorf("resolve directory link %q: %w", link, err)
+	}
+	rel, err := filepath.Rel(base, target)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("directory link %q resolves outside data root %q", link, root.Name())
+	}
+	info, err := root.Stat(rel)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("directory link %q targets a non-directory", link)
+	}
+	return rel, nil
 }
 
 func syncAncestors(dir string, syncDir func(string) error) error {
