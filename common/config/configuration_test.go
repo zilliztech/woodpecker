@@ -81,7 +81,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(256000000), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64())
 	assert.Equal(t, 5, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries)
 	assert.Equal(t, 1000, config.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
-	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
+	assert.Equal(t, int64(4*1024*1024), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
 	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold)
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SyncScheduler.MaxWorkers)
@@ -204,7 +204,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(100000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64())
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries)
 	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
-	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
+	assert.Equal(t, int64(4*1024*1024), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
 	assert.Equal(t, 10, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold)
 	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SyncScheduler.MaxWorkers)
@@ -444,6 +444,8 @@ func TestConfigurationOverwrite(t *testing.T) {
             az: "test-az-3"
             resourceGroup: "test-rg-5"
   logstore:
+    segmentSyncPolicy:
+      maxFlushSize: 8388608
     segmentReadPolicy:
       maxBatchSize: 32000000
       maxFetchThreads: 64`
@@ -459,6 +461,7 @@ func TestConfigurationOverwrite(t *testing.T) {
 	// check configuration
 	assert.Equal(t, "etcd", config.Woodpecker.Meta.Type)
 	assert.Equal(t, "woodpecker", config.Woodpecker.Meta.Prefix)
+	assert.Equal(t, int64(8*1024*1024), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 20000, config.Woodpecker.Client.SegmentAppend.QueueSize)
 	assert.Equal(t, 22, config.Woodpecker.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, int64(22220000000), config.Woodpecker.Client.SegmentRollingPolicy.MaxSize.Int64())
