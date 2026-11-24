@@ -204,7 +204,9 @@ woodpecker:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.
     # Valid values: [default, minio, local, service]
     type: minio
-    rootPath: /var/lib/woodpecker # Root path to the log data files.
+    # Provision a durable local directory or mount the data volume here before startup.
+    # Directory fsync includes this root. Development runs can create a missing root automatically.
+    rootPath: /var/lib/woodpecker
   # Configuration of Woodpecker runtime subsystems.
   runtime:
     # In-flight operation registry backing `wp ops stats` and the operation metrics.

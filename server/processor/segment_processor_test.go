@@ -20,6 +20,8 @@ package processor
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,6 +29,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
@@ -1281,4 +1284,53 @@ func TestNewSegmentProcessor_AdmissionOption(t *testing.T) {
 	wired := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil,
 		WithCompactionAdmission(admission)).(*segmentProcessor)
 	assert.Same(t, admission, wired.compactionAdmission)
+}
+
+func TestSegmentProcessorAppendAndReopenBelowExecuteOnlyParent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("execute-only directory permissions require an unprivileged user")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "volume")
+	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(t, os.Chmod(parent, 0o111))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0o700)) })
+	_, err := os.ReadDir(parent)
+	require.ErrorIs(t, err, os.ErrPermission)
+
+	for _, mode := range []string{"local", "service"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg, err := config.NewConfiguration()
+			require.NoError(t, err)
+			cfg.Woodpecker.Storage.Type = mode
+			cfg.Woodpecker.Storage.RootPath = root
+			ctx := t.Context()
+			open := func() SegmentProcessor {
+				return NewSegmentProcessor(ctx, cfg, "bucket", "instance/wp", 7, 2, nil)
+			}
+
+			writer := open()
+			ack := channel.NewLocalResultChannel("append")
+			entry := &proto.LogEntry{EntryId: 0, Values: []byte("durable")}
+			_, err = writer.AddEntry(ctx, entry, ack)
+			require.NoError(t, err)
+			wait, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			result, err := ack.ReadResult(wait)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+			require.Equal(t, entry.EntryId, result.SyncedId)
+			_, err = writer.Complete(ctx, entry.EntryId)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close(ctx))
+
+			reader := open()
+			t.Cleanup(func() { require.NoError(t, reader.Close(context.Background())) })
+			batch, err := reader.ReadBatchEntriesAdv(ctx, 0, 1, nil)
+			require.NoError(t, err)
+			require.Len(t, batch.Entries, 1)
+			require.Equal(t, entry.EntryId, batch.Entries[0].EntryId)
+			require.Equal(t, entry.Values, batch.Entries[0].Values)
+		})
+	}
 }

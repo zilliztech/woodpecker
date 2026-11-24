@@ -61,7 +61,7 @@ func markerPath(storageRoot string, m deleteMarker) string {
 // left untouched (the grace clock / DeletedAt is stable across re-marks). fsync'd for durability.
 func writeDeleteMarker(ctx context.Context, storageRoot string, m deleteMarker) error {
 	p := markerPath(storageRoot, m)
-	if err := fileutil.MkdirAllSync(filepath.Dir(p), 0o755); err != nil {
+	if err := fileutil.MkdirAllSyncUnder(storageRoot, filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
 	if _, err := os.Stat(p); err == nil {

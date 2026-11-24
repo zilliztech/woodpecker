@@ -32,11 +32,11 @@ func TestMkdirAllSyncRepairsExistingPathAfterFailedSync(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "instance", "log", "segment")
 	injected := errors.New("parent fsync failed")
-	err := mkdirAllSync(dir, 0o755, func(path string) error {
-		if path == filepath.Join(root, "instance") {
+	err := mkdirAllSyncUnder(root, dir, 0o755, func(dataRoot *os.Root, path string) error {
+		if path == "instance" {
 			return injected
 		}
-		return SyncDir(path)
+		return syncDirUnder(dataRoot, path)
 	})
 	require.ErrorIs(t, err, injected)
 	require.DirExists(t, dir, "MkdirAll can succeed before directory sync fails")
@@ -44,14 +44,11 @@ func TestMkdirAllSyncRepairsExistingPathAfterFailedSync(t *testing.T) {
 	// Retry must publish ancestors even though all directories now exist. This
 	// also covers a path initially created by a reader or another process.
 	var synced []string
-	require.NoError(t, mkdirAllSync(dir, 0o755, func(path string) error {
+	require.NoError(t, mkdirAllSyncUnder(root, dir, 0o755, func(dataRoot *os.Root, path string) error {
 		synced = append(synced, path)
-		return SyncDir(path)
+		return syncDirUnder(dataRoot, path)
 	}))
-	require.Equal(t, dir, synced[0])
-	require.Contains(t, synced, filepath.Join(root, "instance", "log"))
-	require.Contains(t, synced, filepath.Join(root, "instance"))
-	require.Contains(t, synced, root)
+	require.Equal(t, []string{filepath.Join("instance", "log", "segment"), filepath.Join("instance", "log"), "instance", "."}, synced)
 }
 
 func TestMkdirAllSyncConcurrentSharedParents(t *testing.T) {
@@ -95,4 +92,27 @@ func TestMkdirAllSyncCreatesDirectoryWithRequestedMode(t *testing.T) {
 	info, err = os.Stat(dir)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+}
+
+func TestMkdirAllSyncUnderRejectsSiblingBeforeCreation(t *testing.T) {
+	root := t.TempDir()
+	outside := root + "-sibling"
+	require.Error(t, MkdirAllSyncUnder(root, outside, 0o755))
+	require.NoDirExists(t, outside)
+}
+
+func TestMkdirAllSyncUnderPropagatesRootFailure(t *testing.T) {
+	root := t.TempDir()
+	fail := errors.New("root sync failed")
+	require.ErrorIs(t, mkdirAllSyncUnder(root, root, 0o755, func(_ *os.Root, path string) error {
+		require.Equal(t, ".", path)
+		return fail
+	}), fail)
+}
+
+func TestMkdirAllSyncUnderRejectsEscapingSymlink(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "alias")))
+	require.Error(t, MkdirAllSyncUnder(root, filepath.Join(root, "alias", "segment"), 0o755))
+	require.NoDirExists(t, filepath.Join(outside, "segment"))
 }

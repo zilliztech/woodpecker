@@ -722,7 +722,7 @@ func (l *logStore) NotifySegmentCompacted(ctx context.Context, bucketName, rootP
 			zap.Int64("logId", logId), zap.Int64("segId", segmentId))
 		return werr.ErrSegmentNotFound.WithCauseErrMsg("compacted footer not found in object storage; segment is not durably compacted")
 	}
-	markCreated, err := writeCompactedMarkCreated(ctx, dir)
+	markCreated, err := writeCompactedMarkCreated(ctx, l.cfg.Woodpecker.Storage.RootPath, dir)
 	if err != nil {
 		return err
 	}

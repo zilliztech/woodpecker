@@ -496,10 +496,11 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 
 	// Initialize reader
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		stagedReader, err := stagedstorage.NewStagedFileReaderAdv(
+		stagedReader, err := stagedstorage.NewStagedFileReaderAtRoot(
 			ctx,
 			s.getInstanceBucket(),
 			s.getLogBaseDir(),
+			s.cfg.Woodpecker.Storage.RootPath,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
 			s.logId,
 			s.segId,
@@ -513,8 +514,9 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 		return stagedReader, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		localReader, err := disk.NewLocalFileReaderAdv(
+		localReader, err := disk.NewLocalFileReaderAtRoot(
 			ctx,
+			s.cfg.Woodpecker.Storage.RootPath,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
@@ -578,10 +580,11 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 
 	// Initialize writer
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		writerFile, getWriterErr := stagedstorage.NewStagedFileWriterWithMode(
+		writerFile, getWriterErr := stagedstorage.NewStagedFileWriterAtRoot(
 			ctx,
 			s.getInstanceBucket(), // user instance bucket
 			s.getLogBaseDir(),     // user instance rootPath
+			s.cfg.Woodpecker.Storage.RootPath,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
 			s.logId,
 			s.segId,
@@ -597,8 +600,9 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 		return s.currentSegmentWriter, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		writerFile, getWriterErr := disk.NewLocalFileWriterWithMode(
+		writerFile, getWriterErr := disk.NewLocalFileWriterAtRoot(
 			ctx,
+			s.cfg.Woodpecker.Storage.RootPath,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,

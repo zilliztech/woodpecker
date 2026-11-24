@@ -84,6 +84,11 @@ type StagedFileReaderAdv struct {
 
 // NewStagedFileReaderAdv creates a new staged file reader
 func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
+	return NewStagedFileReaderAtRoot(ctx, bucket, rootPath, localBaseDir, localBaseDir, logId, segId, storageCli, cfg)
+}
+
+// NewStagedFileReaderAtRoot syncs new segment directories through dataRoot.
+func NewStagedFileReaderAtRoot(ctx context.Context, bucket string, rootPath string, dataRoot, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewStagedFileReader")
 	defer sp.End()
 
@@ -99,7 +104,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	// Ensure directory exists
-	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := fileutil.MkdirAllSyncUnder(dataRoot, segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 

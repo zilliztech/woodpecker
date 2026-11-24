@@ -362,7 +362,7 @@ func (t *compactedFileCleanupTask) processSegment(ctx context.Context, s pending
 		// Reconcile: a compacted-but-unmarked segment. Backfill the durable tombstone before the
 		// drop so a reader can always tell "compacted -> serve from object storage" apart from
 		// "no data here".
-		markCreated, markErr := writeCompactedMarkCreated(ctx, s.segDir)
+		markCreated, markErr := writeCompactedMarkCreated(ctx, t.store.cfg.Woodpecker.Storage.RootPath, s.segDir)
 		if markErr != nil {
 			// Backoff like the footer-HEAD failure above (a fresh enqueue would reset the
 			// schedule): a read-only or full staged volume fails this deterministically, and

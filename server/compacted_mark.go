@@ -45,19 +45,14 @@ func hasCompactedMark(segmentDir string) bool {
 	return err == nil
 }
 
-// writeCompactedMark creates the mark (create-if-absent, idempotent) as an EMPTY file, then
+// writeCompactedMarkCreated creates the mark (create-if-absent, idempotent) as an EMPTY file, then
 // fsyncs the parent segment dir so the marker is durable. Durability matters because
 // findDataLogSegmentDirs keys off data.log: once data.log is dropped, a lost mark could never
 // be re-created by the reconcile pass, leaving the segment unreadable. Only the marker's
 // existence is meaningful, so after durable directory setup there is no content
 // to write: creating the marker and syncing its containing directory is sufficient.
-func writeCompactedMark(ctx context.Context, segmentDir string) error {
-	_, err := writeCompactedMarkCreated(ctx, segmentDir)
-	return err
-}
-
-func writeCompactedMarkCreated(ctx context.Context, segmentDir string) (bool, error) {
-	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
+func writeCompactedMarkCreated(ctx context.Context, dataRoot, segmentDir string) (bool, error) {
+	if err := fileutil.MkdirAllSyncUnder(dataRoot, segmentDir, 0o755); err != nil {
 		return false, err
 	}
 	p := compactedMarkPath(segmentDir)
