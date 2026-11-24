@@ -479,6 +479,11 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 	nodeCfg := *cluster.Config // Copy the base config
 	nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", nodeIndex))
 
+	// A wiped replica restarts with an empty, provisioned volume.
+	if err := os.MkdirAll(nodeCfg.Woodpecker.Storage.RootPath, 0o755); err != nil {
+		return "", fmt.Errorf("provision data root for node %d: %w", nodeIndex, err)
+	}
+
 	ctx := context.Background()
 
 	// Retrieve stored node config (AZ, ResourceGroup) for this node
