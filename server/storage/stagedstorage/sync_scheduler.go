@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/zilliztech/woodpecker/common/config"
 )
 
 type syncJob func(context.Context)
@@ -52,37 +54,37 @@ func (h *syncScheduleHeap) Pop() any {
 	return item
 }
 
-// SyncScheduler owns the shared staged-writer timer and bounded worker pool.
+// SyncScheduler owns the shared staged-writer timer and two bounded worker pools.
 // It replaces per-writer run goroutines without changing each writer's flush
 // queue processing semantics.
 type SyncScheduler struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	scheduleCh chan syncScheduleRequest
-	jobCh      chan syncJob
+	scheduleCh   chan syncScheduleRequest
+	jobCh        chan syncJob
+	closingJobCh chan syncJob
 
-	workerCount int
-	wg          sync.WaitGroup
-	closeOnce   sync.Once
+	workerCount        int
+	closingWorkerCount int
+	wg                 sync.WaitGroup
+	closeOnce          sync.Once
 
-	running atomic.Int64
-	delayed atomic.Int64
-	closed  atomic.Bool
+	running        atomic.Int64
+	closingRunning atomic.Int64
+	delayed        atomic.Int64
+	closed         atomic.Bool
 }
 
 // defaultSyncSchedulerWorkers is the pool size used when no configured value is available.
 // It mirrors logstore.syncScheduler.maxWorkers so the two cannot drift.
 const defaultSyncSchedulerWorkers = 32
 
-// syncSchedulerQueueSize is the depth of both scheduler channels.
+// syncSchedulerQueueSize is the depth of each scheduler channel.
 //
 // It is deliberately independent of the worker count: the queues hold pending work, and the
 // amount of pending work is bounded by the number of writers, not by how many of them are being
-// serviced at once. Each writer can have at most one schedule request and one submitted sync job
-// outstanding (the syncScheduled and syncTaskSubmitted CAS gates), so one slot per writer is the
-// real ceiling. Sizing it as workerCount x 4096 tied a multi-megabyte preallocation to a quantity
-// that has nothing to do with it.
+// serviced at once. Writers coalesce their timer requests, sync jobs and queue drains.
 //
 // The depth matters because a full scheduleCh blocks its caller, and the caller is the append
 // path: WriteDataAsync schedules the next sync check before it returns.
@@ -101,22 +103,35 @@ func DefaultSyncScheduler() *SyncScheduler {
 }
 
 func NewSyncScheduler(workerCount int) *SyncScheduler {
+	return NewSyncSchedulerWithClosingWorkers(workerCount, config.DefaultClosingWorkers)
+}
+
+func NewSyncSchedulerWithClosingWorkers(workerCount, closingWorkers int) *SyncScheduler {
+	if closingWorkers <= 0 {
+		closingWorkers = config.DefaultClosingWorkers
+	}
 	if workerCount <= 0 {
 		workerCount = defaultSyncSchedulerWorkers
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &SyncScheduler{
-		ctx:         ctx,
-		cancel:      cancel,
-		scheduleCh:  make(chan syncScheduleRequest, syncSchedulerQueueSize),
-		jobCh:       make(chan syncJob, syncSchedulerQueueSize),
-		workerCount: workerCount,
+		ctx:                ctx,
+		cancel:             cancel,
+		scheduleCh:         make(chan syncScheduleRequest, syncSchedulerQueueSize),
+		jobCh:              make(chan syncJob, syncSchedulerQueueSize),
+		workerCount:        workerCount,
+		closingWorkerCount: closingWorkers,
+		closingJobCh:       make(chan syncJob, syncSchedulerQueueSize),
 	}
 	s.wg.Add(1)
 	go s.runDelayLoop()
 	for i := 0; i < workerCount; i++ {
 		s.wg.Add(1)
-		go s.runWorkerLoop()
+		go s.runWorkerLoop(s.jobCh, &s.running)
+	}
+	for i := 0; i < closingWorkers; i++ {
+		s.wg.Add(1)
+		go s.runWorkerLoop(s.closingJobCh, &s.closingRunning)
 	}
 	return s
 }
@@ -155,11 +170,15 @@ func (s *SyncScheduler) scheduleSyncCheckAfter(target syncSchedulerTarget, delay
 }
 
 func (s *SyncScheduler) tryEnqueueJob(job syncJob) bool {
-	if s == nil || job == nil || s.closed.Load() {
+	return s != nil && s.enqueue(s.jobCh, job)
+}
+
+func (s *SyncScheduler) enqueue(queue chan<- syncJob, job syncJob) bool {
+	if job == nil || s.closed.Load() {
 		return false
 	}
 	select {
-	case s.jobCh <- job:
+	case queue <- job:
 		return true
 	case <-s.ctx.Done():
 		return false
@@ -178,6 +197,14 @@ func (s *SyncScheduler) Waiting() int {
 		return 0
 	}
 	return len(s.jobCh)
+}
+
+// ClosingStats reports the running workers, queued jobs and capacity of the closing pool.
+func (s *SyncScheduler) ClosingStats() (running, waiting, capacity int) {
+	if s == nil {
+		return 0, 0, 0
+	}
+	return int(s.closingRunning.Load()), len(s.closingJobCh), s.closingWorkerCount
 }
 
 func (s *SyncScheduler) Scheduled() int {
@@ -245,19 +272,19 @@ func (s *SyncScheduler) runDelayLoop() {
 	}
 }
 
-func (s *SyncScheduler) runWorkerLoop() {
+func (s *SyncScheduler) runWorkerLoop(queue <-chan syncJob, running *atomic.Int64) {
 	defer s.wg.Done()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
-		case job := <-s.jobCh:
+		case job := <-queue:
 			if job == nil {
 				continue
 			}
-			s.running.Add(1)
+			running.Add(1)
 			func() {
-				defer s.running.Add(-1)
+				defer running.Add(-1)
 				job(s.ctx)
 			}()
 		}

@@ -147,7 +147,7 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 		ctx:           ctx,
 		cancel:        cancel,
 		storageClient: storageClient,
-		syncScheduler: stagedstorage.NewSyncScheduler(cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers),
+		syncScheduler: stagedstorage.NewSyncSchedulerWithClosingWorkers(cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers, cfg.Woodpecker.Logstore.SyncScheduler.MaxClosingWorkers),
 		compactionAdmission: processor.NewMemoryAdmissionFromPolicy(
 			ctx, &cfg.Woodpecker.Logstore.SegmentCompactionPolicy),
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
@@ -1195,6 +1195,10 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 		metrics.WpSyncSchedulerRunning.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Running()))
 		metrics.WpSyncSchedulerWaiting.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Waiting()))
 		metrics.WpSyncSchedulerCapacity.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Capacity()))
+		running, waiting, capacity := l.syncScheduler.ClosingStats()
+		metrics.WpSyncSchedulerClosingRunning.WithLabelValues(metrics.NodeID).Set(float64(running))
+		metrics.WpSyncSchedulerClosingWaiting.WithLabelValues(metrics.NodeID).Set(float64(waiting))
+		metrics.WpSyncSchedulerClosingCapacity.WithLabelValues(metrics.NodeID).Set(float64(capacity))
 	}
 
 	if l.compactionAdmission != nil {

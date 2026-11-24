@@ -1643,10 +1643,13 @@ func TestNewLogStore_SyncSchedulerUsesConfiguredWorkers(t *testing.T) {
 		cfg.Woodpecker.Storage.Type = "service"
 		cfg.Woodpecker.Storage.RootPath = t.TempDir()
 		cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers = workers
+		cfg.Woodpecker.Logstore.SyncScheduler.MaxClosingWorkers = workers + 1
 
 		ls := NewLogStore(context.Background(), cfg, nil).(*logStore)
 		assert.Equal(t, workers, ls.syncScheduler.Capacity(),
 			"the shared flush pool should come from logstore.syncScheduler.maxWorkers")
+		_, _, closingCapacity := ls.syncScheduler.ClosingStats()
+		assert.Equal(t, workers+1, closingCapacity)
 		ls.syncScheduler.Close()
 	}
 }

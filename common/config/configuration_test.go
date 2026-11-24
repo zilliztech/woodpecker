@@ -79,6 +79,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
 	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold)
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SyncScheduler.MaxWorkers)
+	assert.Equal(t, 16, config.Woodpecker.Logstore.SyncScheduler.MaxClosingWorkers)
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
@@ -507,7 +508,8 @@ func TestQuorumConfigValidation(t *testing.T) {
 							CheckpointThreshold:        10,
 						},
 						SyncScheduler: SyncSchedulerConfig{
-							MaxWorkers: 32,
+							MaxWorkers:        32,
+							MaxClosingWorkers: 16,
 						},
 						SegmentCompactionPolicy: SegmentCompactionPolicy{
 							MaxBytes:            NewByteSize(32000000),
@@ -736,6 +738,11 @@ func TestValidateClientConfig_Errors(t *testing.T) {
 		cfg := newValidCfg()
 		cfg.Woodpecker.Logstore.SyncScheduler.MaxWorkers = 0
 		assert.ErrorContains(t, cfg.Validate(), "sync scheduler max workers must be positive")
+	})
+	t.Run("SyncScheduler MaxClosingWorkers<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SyncScheduler.MaxClosingWorkers = 0
+		assert.ErrorContains(t, cfg.Validate(), "sync scheduler max closing workers must be positive")
 	})
 	t.Run("SegmentCompactionPolicy MaxInflightMemory<=0", func(t *testing.T) {
 		for _, bytes := range []int64{0, -1} {
@@ -1194,7 +1201,8 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					CheckpointThreshold:        10,
 				},
 				SyncScheduler: SyncSchedulerConfig{
-					MaxWorkers: 32,
+					MaxWorkers:        32,
+					MaxClosingWorkers: 16,
 				},
 				SegmentCompactionPolicy: SegmentCompactionPolicy{
 					MaxBytes:            NewByteSize(32000000),
