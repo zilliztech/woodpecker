@@ -144,9 +144,12 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	return newStagedFileWriter(ctx, bucket, rootPath, fileutil.MkdirAllSync, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, schedulers...)
 }
 
-// NewStagedFileWriterAtRoot syncs new segment directories through dataRoot.
-func NewStagedFileWriterAtRoot(ctx context.Context, bucket string, rootPath string, dataRoot, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
-	return newStagedFileWriter(ctx, bucket, rootPath, fileutil.DataRoot(dataRoot).MkdirAllSync, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, schedulers...)
+// NewStagedFileWriterAtRoot syncs new segment directories through the configured storage root.
+func NewStagedFileWriterAtRoot(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
+	prepareDir := func(path string, perm os.FileMode) error {
+		return fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, path, perm)
+	}
+	return newStagedFileWriter(ctx, bucket, rootPath, prepareDir, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, schedulers...)
 }
 
 func newStagedFileWriter(ctx context.Context, bucket string, rootPath string, mkdirAllSync func(string, os.FileMode) error, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {

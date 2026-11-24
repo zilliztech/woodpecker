@@ -75,12 +75,10 @@ func MkdirAllSync(path string, perm os.FileMode) error {
 	return syncAncestors(dir, SyncDir)
 }
 
-// DataRoot is a pre-provisioned directory that bounds directory creation and sync.
-type DataRoot string
-
-// MkdirAllSync creates path and syncs its directory chain through the root, inclusive.
-func (root DataRoot) MkdirAllSync(path string, perm os.FileMode) error {
-	return mkdirAllSyncUnder(string(root), path, perm, syncDirUnder)
+// MkdirAllSyncUnder creates path and syncs its directory chain through the
+// pre-provisioned root, inclusive.
+func MkdirAllSyncUnder(root, path string, perm os.FileMode) error {
+	return mkdirAllSyncUnder(root, path, perm, syncDirUnder)
 }
 
 func syncDirUnder(root *os.Root, path string) error {

@@ -121,9 +121,12 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	return newLocalFileWriter(ctx, fileutil.MkdirAllSync, baseDir, logId, segmentId, cfg, recoveryMode)
 }
 
-// NewLocalFileWriterAtRoot syncs new segment directories through dataRoot.
-func NewLocalFileWriterAtRoot(ctx context.Context, dataRoot, baseDir string, logId int64, segmentId int64, cfg *config.Configuration, recoveryMode bool) (*LocalFileWriter, error) {
-	return newLocalFileWriter(ctx, fileutil.DataRoot(dataRoot).MkdirAllSync, baseDir, logId, segmentId, cfg, recoveryMode)
+// NewLocalFileWriterAtRoot syncs new segment directories through the configured storage root.
+func NewLocalFileWriterAtRoot(ctx context.Context, baseDir string, logId int64, segmentId int64, cfg *config.Configuration, recoveryMode bool) (*LocalFileWriter, error) {
+	prepareDir := func(path string, perm os.FileMode) error {
+		return fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, path, perm)
+	}
+	return newLocalFileWriter(ctx, prepareDir, baseDir, logId, segmentId, cfg, recoveryMode)
 }
 
 func newLocalFileWriter(ctx context.Context, mkdirAllSync func(string, os.FileMode) error, baseDir string, logId int64, segmentId int64, cfg *config.Configuration, recoveryMode bool) (*LocalFileWriter, error) {

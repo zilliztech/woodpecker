@@ -287,7 +287,7 @@ func (m *NodeLifecycleManager) persistStateLocked() error {
 	}
 	// Ensure parent directory exists
 	dataRoot := filepath.Dir(m.stateFilePath)
-	if err := fileutil.DataRoot(dataRoot).MkdirAllSync(dataRoot, 0o755); err != nil {
+	if err := fileutil.MkdirAllSyncUnder(dataRoot, dataRoot, 0o755); err != nil {
 		return fmt.Errorf("failed to create state file directory: %w", err)
 	}
 	// Write to temp file then rename for atomicity

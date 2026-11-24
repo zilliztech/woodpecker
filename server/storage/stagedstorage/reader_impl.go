@@ -87,9 +87,12 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	return newStagedFileReader(ctx, bucket, rootPath, fileutil.MkdirAllSync, localBaseDir, logId, segId, storageCli, cfg)
 }
 
-// NewStagedFileReaderAtRoot syncs new segment directories through dataRoot.
-func NewStagedFileReaderAtRoot(ctx context.Context, bucket string, rootPath string, dataRoot, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
-	return newStagedFileReader(ctx, bucket, rootPath, fileutil.DataRoot(dataRoot).MkdirAllSync, localBaseDir, logId, segId, storageCli, cfg)
+// NewStagedFileReaderAtRoot syncs new segment directories through the configured storage root.
+func NewStagedFileReaderAtRoot(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
+	prepareDir := func(path string, perm os.FileMode) error {
+		return fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, path, perm)
+	}
+	return newStagedFileReader(ctx, bucket, rootPath, prepareDir, localBaseDir, logId, segId, storageCli, cfg)
 }
 
 func newStagedFileReader(ctx context.Context, bucket string, rootPath string, mkdirAllSync func(string, os.FileMode) error, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {

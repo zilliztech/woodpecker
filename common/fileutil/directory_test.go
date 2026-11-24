@@ -97,7 +97,7 @@ func TestMkdirAllSyncCreatesDirectoryWithRequestedMode(t *testing.T) {
 func TestMkdirAllSyncUnderRejectsSiblingBeforeCreation(t *testing.T) {
 	root := t.TempDir()
 	outside := root + "-sibling"
-	require.Error(t, DataRoot(root).MkdirAllSync(outside, 0o755))
+	require.Error(t, MkdirAllSyncUnder(root, outside, 0o755))
 	require.NoDirExists(t, outside)
 }
 
@@ -113,7 +113,7 @@ func TestMkdirAllSyncUnderPropagatesRootFailure(t *testing.T) {
 func TestMkdirAllSyncUnderRejectsEscapingSymlink(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	require.NoError(t, os.Symlink(outside, filepath.Join(root, "alias")))
-	require.Error(t, DataRoot(root).MkdirAllSync(filepath.Join(root, "alias", "segment"), 0o755))
+	require.Error(t, MkdirAllSyncUnder(root, filepath.Join(root, "alias", "segment"), 0o755))
 	require.NoDirExists(t, filepath.Join(outside, "segment"))
 }
 
@@ -149,7 +149,7 @@ func TestDataRootRejectsDanglingDirectoryLink(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, "shards"), 0o755))
 	require.NoError(t, os.Symlink(filepath.Join("shards", "current"), filepath.Join(root, "instance")))
-	err := DataRoot(root).MkdirAllSync(filepath.Join(root, "instance", "log", "segment"), 0o755)
+	err := MkdirAllSyncUnder(root, filepath.Join(root, "instance", "log", "segment"), 0o755)
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.ErrorContains(t, err, "instance")
 	require.NoDirExists(t, filepath.Join(root, "shards", "current"))
@@ -157,6 +157,6 @@ func TestDataRootRejectsDanglingDirectoryLink(t *testing.T) {
 
 func TestDataRootRequiresExistingDirectory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "missing")
-	require.ErrorIs(t, DataRoot(root).MkdirAllSync(filepath.Join(root, "segment"), 0o755), os.ErrNotExist)
+	require.ErrorIs(t, MkdirAllSyncUnder(root, filepath.Join(root, "segment"), 0o755), os.ErrNotExist)
 	require.NoDirExists(t, root)
 }

@@ -72,7 +72,10 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 
 // NewLocalFileReaderAtRoot syncs new segment directories through dataRoot.
 func NewLocalFileReaderAtRoot(ctx context.Context, dataRoot, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {
-	return newLocalFileReader(ctx, fileutil.DataRoot(dataRoot).MkdirAllSync, baseDir, logId, segId, maxBatchSize)
+	prepareDir := func(path string, perm os.FileMode) error {
+		return fileutil.MkdirAllSyncUnder(dataRoot, path, perm)
+	}
+	return newLocalFileReader(ctx, prepareDir, baseDir, logId, segId, maxBatchSize)
 }
 
 func newLocalFileReader(ctx context.Context, mkdirAllSync func(string, os.FileMode) error, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {

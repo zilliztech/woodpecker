@@ -500,7 +500,6 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			ctx,
 			s.getInstanceBucket(),
 			s.getLogBaseDir(),
-			s.cfg.Woodpecker.Storage.RootPath,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
 			s.logId,
 			s.segId,
@@ -584,7 +583,6 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			ctx,
 			s.getInstanceBucket(), // user instance bucket
 			s.getLogBaseDir(),     // user instance rootPath
-			s.cfg.Woodpecker.Storage.RootPath,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
 			s.logId,
 			s.segId,
@@ -602,7 +600,6 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 		// use local FileSystem or local FileSystem + minio-compatible
 		writerFile, getWriterErr := disk.NewLocalFileWriterAtRoot(
 			ctx,
-			s.cfg.Woodpecker.Storage.RootPath,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
