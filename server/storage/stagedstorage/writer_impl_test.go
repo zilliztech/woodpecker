@@ -34,6 +34,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
@@ -106,7 +107,7 @@ func TestNewStagedFileWriterWithMode_RecoveryMode_NoExistingFile(t *testing.T) {
 	cfg := newTestConfig(t)
 
 	// Recovery mode with no existing file should succeed (nothing to recover)
-	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, true)
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 	defer writer.Close(context.Background())
@@ -683,7 +684,7 @@ func TestStagedFileWriter_WriteAndRead(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Now read back using StagedFileReaderAdv
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1074,7 +1075,7 @@ func TestStagedFileWriter_RecoverBlocksFromFullScan(t *testing.T) {
 	writer1.Close(context.Background())
 
 	// Now create a recovery writer
-	writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, true)
+	writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer2.Close(context.Background())
 
@@ -1107,7 +1108,7 @@ func TestStagedFileWriter_RecoverBlocksFromFooter(t *testing.T) {
 	writer1.Close(context.Background())
 
 	// Now create a recovery writer — it should find the footer
-	writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, true)
+	writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer2.Close(context.Background())
 
@@ -1898,7 +1899,7 @@ func TestRecoverBlocksFromFooter_EmptyIndexLength(t *testing.T) {
 	writer1.Close(context.Background())
 
 	// Now recover - footer exists but IndexLength is 0
-	writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, true)
+	writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer2.Close(context.Background())
 
@@ -1954,7 +1955,7 @@ func TestRecoverBlocksFromFullScan_BlockNumberMismatch(t *testing.T) {
 	file.Close()
 
 	// Recover from the file - should handle block number mismatch gracefully
-	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, true)
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -2062,7 +2063,7 @@ func TestNewStagedFileWriter_RecoveryCorruptFile(t *testing.T) {
 
 	// Recovery mode should succeed but the full scan will find no valid header
 	// and reset state (L1781-1789)
-	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true)
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true, fileutil.MkdirAllSync)
 	// Recovery scan finds garbage, breaks at decode error, no header found -> resets state
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
@@ -2090,7 +2091,7 @@ func TestNewStagedFileWriter_EmptyFileRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Recovery mode with empty file should succeed (start fresh)
-	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true)
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -2131,7 +2132,7 @@ func TestRecoverBlocksFromFullScan_LegacyDataRecordWithoutBlock(t *testing.T) {
 	file.Close()
 
 	// Recovery mode should handle this legacy format
-	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true)
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -2175,7 +2176,7 @@ func TestRecoverBlocksFromFullScan_MultiBlockFinalization(t *testing.T) {
 	writer1.Close(context.Background())
 
 	// Now recover from the file - should detect multiple blocks
-	writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true)
+	writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer2.Close(context.Background())
 
@@ -2241,7 +2242,7 @@ func TestRecoverBlocksFromFullScan_UnknownRecordType(t *testing.T) {
 	file.Close()
 
 	// Recovery should stop at the unknown record type but recover the valid block
-	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true)
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -2389,7 +2390,7 @@ func TestCompactedWriter_TombstoneOpen_NoResurrection(t *testing.T) {
 			return &readerMockFileReader{data: footerData}, nil
 		}).Maybe()
 
-	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false)
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.True(t, writer.compacted.Load(), "tombstoned segment must open as the compacted writer")
 
@@ -2439,7 +2440,7 @@ func TestCompactedWriter_DropPendingFile_NotTruncated(t *testing.T) {
 			return &readerMockFileReader{data: footerData}, nil
 		}).Maybe()
 
-	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false)
+	writer, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.True(t, writer.compacted.Load())
 	defer writer.Close(context.Background())
@@ -2465,7 +2466,7 @@ func TestCompactedWriter_TombstoneWithoutFooter_Errors(t *testing.T) {
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"}).Once()
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
-	_, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false)
+	_, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, false, fileutil.MkdirAllSync)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no compacted footer")
 }
@@ -2626,7 +2627,7 @@ func TestRecoverBlocksFromFooter_ReadAtIndexError(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try recovery - should fail because index section ReadAt fails
-		writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId2, segId, nil, cfg, true)
+		writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId2, segId, nil, cfg, true, fileutil.MkdirAllSync)
 		if err != nil {
 			// Expected: recovery fails due to bad index section
 			assert.Contains(t, err.Error(), "recover from existing file")
@@ -2736,7 +2737,7 @@ func TestRecoverBlocksFromFooter_DecodeError(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try recovery - should fall back to full scan due to corrupt index
-		writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId2, segId, nil, cfg, true)
+		writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId2, segId, nil, cfg, true, fileutil.MkdirAllSync)
 		if err != nil {
 			// Recovery may fail or fall back to full scan
 			t.Logf("Recovery with corrupt index: %v", err)
@@ -2807,7 +2808,7 @@ func TestRecoverBlocksFromFooter_WrongRecordType(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try recovery - should fail due to wrong record type in index section
-		writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId2, segId, nil, cfg, true)
+		writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId2, segId, nil, cfg, true, fileutil.MkdirAllSync)
 		if err != nil {
 			t.Logf("Recovery with wrong record type in index: %v", err)
 		} else {
@@ -2867,7 +2868,7 @@ func TestRecoverBlocksFromFooter_BlockCountMismatch(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try recovery - should handle block count mismatch
-		writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId2, segId, nil, cfg, true)
+		writer2, err := NewStagedFileWriterWithMode(context.Background(), "test-bucket", "test-root", dir, logId2, segId, nil, cfg, true, fileutil.MkdirAllSync)
 		if err != nil {
 			t.Logf("Recovery with block count mismatch: %v", err)
 		} else {

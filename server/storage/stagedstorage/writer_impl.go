@@ -136,16 +136,11 @@ type StagedFileWriter struct {
 
 // NewStagedFileWriter creates a new staged file writer
 func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
-	return NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, false, schedulers...)
+	return NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, false, fileutil.MkdirAllSync, schedulers...)
 }
 
-// NewStagedFileWriterWithMode creates a new staged file writer with recovery mode option
-func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
-	return OpenStagedFileWriter(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, recoveryMode, fileutil.MkdirAllSync, schedulers...)
-}
-
-// OpenStagedFileWriter opens a segment writer using mkdirAllSync to prepare its directory.
-func OpenStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, mkdirAllSync func(string, os.FileMode) error, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
+// NewStagedFileWriterWithMode creates a segment writer using mkdirAllSync to prepare its directory.
+func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, mkdirAllSync func(string, os.FileMode) error, schedulers ...*SyncScheduler) (*StagedFileWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewStagedFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()

@@ -31,6 +31,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -698,7 +699,7 @@ func BenchmarkLocalFileReader_ReadNextBatchAdv(b *testing.B) {
 	}
 
 	// Benchmark reading
-	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, 16_000_000)
+	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, 16_000_000, fileutil.MkdirAllSync)
 	if err != nil {
 		b.Fatal(err)
 	}

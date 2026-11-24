@@ -42,6 +42,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 )
@@ -273,7 +274,7 @@ func TestStagedFileWriter_FinalizePartialReplicaKeepsGlobalLACForReadFailover(t 
 	assert.Equal(t, int64(2), writer.recoveredFooter.LAC)
 	require.NoError(t, writer.Close(context.Background()))
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 

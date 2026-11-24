@@ -30,7 +30,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -65,13 +64,8 @@ type LocalFileReaderAdv struct {
 	closed           atomic.Bool
 }
 
-// NewLocalFileReaderAdv creates a new local filesystem reader
-func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {
-	return OpenLocalFileReader(ctx, baseDir, logId, segId, maxBatchSize, fileutil.MkdirAllSync)
-}
-
-// OpenLocalFileReader opens a segment reader using mkdirAllSync to prepare its directory.
-func OpenLocalFileReader(ctx context.Context, baseDir string, logId int64, segId int64, maxBatchSize int64, mkdirAllSync func(string, os.FileMode) error) (*LocalFileReaderAdv, error) {
+// NewLocalFileReaderAdv creates a segment reader using mkdirAllSync to prepare its directory.
+func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, maxBatchSize int64, mkdirAllSync func(string, os.FileMode) error) (*LocalFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewLocalFileReader")
 	defer sp.End()
 

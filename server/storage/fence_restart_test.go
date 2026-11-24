@@ -30,6 +30,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
@@ -40,10 +41,10 @@ type fenceWriterConstructor func(context.Context, string, *config.Configuration,
 
 var fenceBackends = map[string]fenceWriterConstructor{
 	"local": func(ctx context.Context, dir string, cfg *config.Configuration, recover bool) (storage.Writer, error) {
-		return disk.NewLocalFileWriterWithMode(ctx, dir, 1, 0, cfg, recover)
+		return disk.NewLocalFileWriterWithMode(ctx, dir, 1, 0, cfg, recover, fileutil.MkdirAllSync)
 	},
 	"service": func(ctx context.Context, dir string, cfg *config.Configuration, recover bool) (storage.Writer, error) {
-		return stagedstorage.NewStagedFileWriterWithMode(ctx, "bucket", "root", dir, 1, 0, nil, cfg, recover)
+		return stagedstorage.NewStagedFileWriterWithMode(ctx, "bucket", "root", dir, 1, 0, nil, cfg, recover, fileutil.MkdirAllSync)
 	},
 }
 
@@ -237,7 +238,7 @@ func TestFirstFileSyncRequiresDirectoryPublication(t *testing.T) {
 	}
 }
 
-func TestLegacyConstructorsSyncParentOfBaseDir(t *testing.T) {
+func TestFileConstructorsSyncParentWithMkdirAllSync(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("execute-only parent requires an unprivileged user")
 	}
@@ -253,9 +254,9 @@ func TestLegacyConstructorsSyncParentOfBaseDir(t *testing.T) {
 			require.ErrorIs(t, err, os.ErrPermission)
 			require.ErrorContains(t, err, parent)
 			if backend == "local" {
-				_, err = disk.NewLocalFileReaderAdv(t.Context(), base, 1, 0, 1)
+				_, err = disk.NewLocalFileReaderAdv(t.Context(), base, 1, 0, 1, fileutil.MkdirAllSync)
 			} else {
-				_, err = stagedstorage.NewStagedFileReaderAdv(t.Context(), "bucket", "root", base, 1, 0, nil, cfg)
+				_, err = stagedstorage.NewStagedFileReaderAdv(t.Context(), "bucket", "root", base, 1, 0, nil, cfg, fileutil.MkdirAllSync)
 			}
 			require.ErrorIs(t, err, os.ErrPermission)
 			require.ErrorContains(t, err, parent)

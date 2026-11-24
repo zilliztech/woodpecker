@@ -30,6 +30,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -133,7 +134,7 @@ func TestAdvStagedFileReader_BasicRead(t *testing.T) {
 
 	// Step 2: Test reading from local files
 	t.Run("ReadFromLocal", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -206,7 +207,7 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 	}
 
 	// add reader with cache before finalize
-	readerBeforeFinalize, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+	readerBeforeFinalize, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer readerBeforeFinalize.Close(ctx)
 
@@ -215,7 +216,7 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 	require.NoError(t, err)
 
 	// add reader with cache before compact
-	readerBeforeCompact, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+	readerBeforeCompact, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer readerBeforeCompact.Close(ctx)
 
@@ -229,7 +230,7 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 
 	// Step 3: Test reading from compacted data
 	t.Run("ReadFromCompacted", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -277,7 +278,7 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 	// NOTE: Scanning a segment can return three types of results: exists, EntryNotFound (currently not found but may exist in the future),
 	// and EOF (meaning no entry is found now or in the future)
 	t.Run("ReadNonExistentEntry", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -339,7 +340,7 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 
 	t.Run("reader using advOpt to continue Read next NonExistentEntry", func(t *testing.T) {
 		// first read all
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -401,7 +402,7 @@ func TestAdvStagedFileReader_MixedLocalAndCompactedAccess(t *testing.T) {
 	// Step 2: Create multiple readers to test priority handling
 	t.Run("SimultaneousReaders", func(t *testing.T) {
 		// Reader 1: Read from local (before compaction)
-		reader1, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader1, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader1.Close(ctx)
 		_ = reader1.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -418,7 +419,7 @@ func TestAdvStagedFileReader_MixedLocalAndCompactedAccess(t *testing.T) {
 		require.NoError(t, err)
 
 		// Reader 2: Read from compacted (after compaction)
-		reader2, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader2, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader2.Close(ctx)
 
@@ -484,7 +485,7 @@ func TestAdvStagedFileReader_SequentialReading(t *testing.T) {
 
 	// Step 2: Test sequential reading with different batch sizes
 	t.Run("SequentialBatchReading", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -562,7 +563,7 @@ func TestAdvStagedFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test reading beyond available data
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -582,7 +583,7 @@ func TestAdvStagedFileReader_ErrorHandling(t *testing.T) {
 	})
 
 	t.Run("InvalidReaderOptions", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -649,7 +650,7 @@ func TestAdvStagedFileReader_LargeDataHandling(t *testing.T) {
 
 	// Step 2: Test reading large data from compacted storage
 	t.Run("ReadLargeDataFromCompacted", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -672,7 +673,7 @@ func TestAdvStagedFileReader_LargeDataHandling(t *testing.T) {
 
 	// Step 3: Test reading large entries individually
 	t.Run("ReadLargeEntriesIndividually", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -747,7 +748,7 @@ func TestAdvStagedFileReader_ConcurrentReads(t *testing.T) {
 					}
 				}()
 
-				reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+				reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg, fileutil.MkdirAllSync)
 				if err != nil {
 					results <- fmt.Errorf("reader %d failed to create: %v", readerId, err)
 					return

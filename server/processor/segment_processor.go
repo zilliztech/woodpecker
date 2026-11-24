@@ -502,7 +502,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 
 	// Initialize reader
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		stagedReader, err := stagedstorage.OpenStagedFileReader(
+		stagedReader, err := stagedstorage.NewStagedFileReaderAdv(
 			ctx,
 			s.getInstanceBucket(),
 			s.getLogBaseDir(),
@@ -520,7 +520,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 		return stagedReader, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		localReader, err := disk.OpenLocalFileReader(
+		localReader, err := disk.NewLocalFileReaderAdv(
 			ctx,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
@@ -586,7 +586,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 
 	// Initialize writer
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		writerFile, getWriterErr := stagedstorage.OpenStagedFileWriter(
+		writerFile, getWriterErr := stagedstorage.NewStagedFileWriterWithMode(
 			ctx,
 			s.getInstanceBucket(), // user instance bucket
 			s.getLogBaseDir(),     // user instance rootPath
@@ -606,7 +606,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 		return s.currentSegmentWriter, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		writerFile, getWriterErr := disk.OpenLocalFileWriter(
+		writerFile, getWriterErr := disk.NewLocalFileWriterWithMode(
 			ctx,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,

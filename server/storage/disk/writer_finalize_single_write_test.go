@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
@@ -84,7 +85,7 @@ func TestLocalFileWriter_FinalizeWritesIndexAndFooterAsBefore(t *testing.T) {
 	assert.Equal(t, codec.EncodeRecord(wantFooter), data[footer.TotalSize:], "footer")
 
 	// The finalized segment reads back in full, and recovers as finalized.
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	var got []string
 	for next := int64(0); next < blocks; {
@@ -102,7 +103,7 @@ func TestLocalFileWriter_FinalizeWritesIndexAndFooterAsBefore(t *testing.T) {
 		assert.Equal(t, fmt.Sprintf("entry-%d", i), v)
 	}
 
-	rw, err := NewLocalFileWriterWithMode(ctx, dir, 1, 0, cfg, true)
+	rw, err := NewLocalFileWriterWithMode(ctx, dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	assert.True(t, rw.finalized.Load())
 	assert.Len(t, rw.blockIndexes, blocks)

@@ -29,6 +29,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
@@ -73,7 +74,7 @@ func TestNewLocalFileWriterWithMode_RecoveryMode(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 
 	// Recovery mode with no existing file should still succeed (nothing to recover)
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 	defer writer.Close(context.Background())
@@ -393,7 +394,7 @@ func TestLocalFileWriter_RecoveryMode_WithExistingData(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Open in recovery mode - should recover existing data
-	writer2, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer2, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, writer2)
 	defer writer2.Close(context.Background())
@@ -418,7 +419,7 @@ func TestLocalFileWriter_RecoveryMode_WithFinalizedFile(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Recover from finalized file
-	writer2, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer2, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, writer2)
 	defer writer2.Close(context.Background())
@@ -446,7 +447,7 @@ func TestLocalFileWriter_WriteAndRead(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Now read back
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -464,7 +465,7 @@ func TestLocalFileWriter_WriteAndRead(t *testing.T) {
 func TestLocalFileReader_NonExistentFile(t *testing.T) {
 	dir := getTempDir(t)
 
-	_, err := NewLocalFileReaderAdv(context.Background(), dir, 99, 99, 100)
+	_, err := NewLocalFileReaderAdv(context.Background(), dir, 99, 99, 100, fileutil.MkdirAllSync)
 	assert.ErrorIs(t, err, werr.ErrEntryNotFound)
 }
 
@@ -482,7 +483,7 @@ func TestLocalFileReader_UpdateLastAddConfirmed(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Open reader
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -504,7 +505,7 @@ func TestLocalFileReader_GetLastEntryID_Closed(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(context.Background())
 
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	reader.Close(context.Background())
@@ -529,7 +530,7 @@ func TestLocalFileReader_GetLastEntryID_WithFooter(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(context.Background())
 
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -550,7 +551,7 @@ func TestLocalFileReader_GetLastEntryID_NoFooterNoBlocks(t *testing.T) {
 	// Don't finalize - close without footer
 	writer.Close(context.Background())
 
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -577,7 +578,7 @@ func TestLocalFileReader_GetBlockIndexes(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(context.Background())
 
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -608,7 +609,7 @@ func TestLocalFileReader_Close_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(context.Background())
 
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	err = reader.Close(context.Background())
@@ -631,7 +632,7 @@ func TestLocalFileReader_ReadBatchAdv_Closed(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(context.Background())
 
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	reader.Close(context.Background())
 
@@ -658,7 +659,7 @@ func TestLocalFileReader_ReadMultipleBatches(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Read in small batches
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -699,7 +700,7 @@ func TestLocalFileReader_GettersAfterWrite(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Open reader and test getters
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -841,7 +842,7 @@ func TestNewLocalFileWriterWithMode_MkdirAllError(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 
 	cfg, _ := config.NewConfiguration()
-	_, err = NewLocalFileWriterWithMode(context.Background(), tmpFile.Name(), 1, 0, cfg, false)
+	_, err = NewLocalFileWriterWithMode(context.Background(), tmpFile.Name(), 1, 0, cfg, false, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "create directory")
 }
@@ -861,7 +862,7 @@ func TestNewLocalFileWriterWithMode_RecoveryMode_EmptyFile(t *testing.T) {
 	f.Close()
 
 	// Recovery mode with empty file should succeed
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -891,7 +892,7 @@ func TestLocalFileWriter_Fence_AfterWrite(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 
 	// Use recovery mode to avoid creating lock file (which triggers 5s wait in Fence)
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -982,7 +983,7 @@ func TestLocalFileWriter_RecoverFromFooter_InvalidFooterRecord(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 
 	// First write & finalize using recovery mode to avoid lock
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	for i := int64(0); i < 3; i++ {
 		_, err = writer.WriteDataAsync(context.Background(), i, []byte("data"), nil)
@@ -1009,7 +1010,7 @@ func TestLocalFileWriter_RecoverFromFooter_InvalidFooterRecord(t *testing.T) {
 	}
 
 	// Recovery mode should fail on corrupted index
-	_, err = NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	_, err = NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	// May succeed or fail depending on exactly what was corrupted
 	if err != nil {
 		assert.Contains(t, err.Error(), "recover")
@@ -1072,7 +1073,7 @@ func TestLocalFileWriter_RecoverFromFullScan_WithBlocks(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Recovery mode should scan and find blocks
-	writer2, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer2, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer2.Close(context.Background())
 
@@ -1115,7 +1116,7 @@ func TestLocalFileWriter_ProcessFlushTask_NilTask(t *testing.T) {
 func TestLocalFileWriter_ReleaseSegmentLock_NilLockFile(t *testing.T) {
 	dir := getTempDir(t)
 	cfg, _ := config.NewConfiguration()
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	// Recovery mode doesn't create a lock file
@@ -1424,7 +1425,7 @@ func TestNewLocalFileWriterWithMode_FileOpenError(t *testing.T) {
 	err = os.MkdirAll(filePath, 0o755)
 	require.NoError(t, err)
 
-	_, err = NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, false)
+	_, err = NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, false, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "open file")
 }
@@ -1515,7 +1516,7 @@ func TestNewLocalFileWriterWithMode_RecoveryMode_RecoverError(t *testing.T) {
 	err = os.MkdirAll(filePath, 0o755)
 	require.NoError(t, err)
 
-	_, err = NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	_, err = NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "recover")
 }
@@ -1540,7 +1541,7 @@ func TestLocalFileWriter_RecoverFromFullScan_NoHeaderRecord(t *testing.T) {
 	require.NoError(t, err)
 
 	// Recovery should succeed but reset state (no header found → reset all)
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -1575,7 +1576,7 @@ func TestLocalFileWriter_RecoverFromFooter_ZeroIndexOffset(t *testing.T) {
 	require.NoError(t, err)
 
 	// Recovery should fail because IndexOffset=0 is invalid
-	_, err = NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	_, err = NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "recover")
 }
@@ -1629,7 +1630,7 @@ func TestLocalFileWriter_RecoverFromFullScan_NonContiguousBlockNumbers(t *testin
 	require.NoError(t, err)
 
 	// Recovery should handle non-contiguous block numbers
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -1660,7 +1661,7 @@ func TestLocalFileWriter_RecoverFromFullScan_DataRecordOutsideBlock(t *testing.T
 	require.NoError(t, err)
 
 	// Recovery should handle DataRecord outside any block
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -1724,7 +1725,7 @@ func TestNewLocalFileWriterWithMode_ZeroBlockSize(t *testing.T) {
 	// Previously this would panic with division-by-zero at flushQueueSize calculation
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.ByteSize(0)
 
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, false)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, false, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
@@ -1738,7 +1739,7 @@ func TestNewLocalFileWriterWithMode_NegativeBlockSize(t *testing.T) {
 	// Set negative MaxFlushSize to trigger the default block size fallback
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.ByteSize(-1)
 
-	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, false)
+	writer, err := NewLocalFileWriterWithMode(context.Background(), dir, 1, 0, cfg, false, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 

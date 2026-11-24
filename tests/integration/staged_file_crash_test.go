@@ -31,6 +31,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -212,7 +213,7 @@ func TestStagedFileWriter_CrashRecovery_Empty(t *testing.T) {
 
 		// test recover the completed empty file
 		recoveryWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
-			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true, fileutil.MkdirAllSync)
 		require.NoError(t, err, "Recovery empty completed file failed for log=%d segment=%d (expected recovery to always succeed)", logId, segmentId)
 		require.NotNil(t, recoveryWriter)
 		firstEntryID := recoveryWriter.GetFirstEntryId(context.TODO())
@@ -692,7 +693,7 @@ func testCrashRecoveryAtPosition(t *testing.T, ctx context.Context, cfg *config.
 	// Step 2: Pre-Recovery Read Verification
 	t.Log("Step 2: Pre-Recovery Read - attempting to read from crashed file")
 	preReader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
-		tempDir, logId, segmentId, storageCli, cfg)
+		tempDir, logId, segmentId, storageCli, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err, "Failed to create pre-recovery reader for log=%d segment=%d at truncate position %d",
 		logId, segmentId, truncatePosition)
 	_ = preReader.UpdateLastAddConfirmed(ctx, preReaderLAC)
@@ -735,7 +736,7 @@ func testCrashRecoveryAtPosition(t *testing.T, ctx context.Context, cfg *config.
 	// Step 3: Recovery and Finalization
 	t.Log("Step 3: Recovery - starting writer in recovery mode")
 	recoveryWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
-		cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err,
 		"Recovery failed at truncate position %d for log=%d segment=%d (expected recovery to always succeed)",
 		truncatePosition, logId, segmentId)
@@ -757,7 +758,7 @@ func testCrashRecoveryAtPosition(t *testing.T, ctx context.Context, cfg *config.
 	// Step 4: Post-Recovery Read Verification
 	t.Log("Step 4: Post-Recovery Read - attempting to read after recovery")
 	postReader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
-		tempDir, logId, segmentId, storageCli, cfg)
+		tempDir, logId, segmentId, storageCli, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err,
 		"Failed to create post-recovery reader for log=%d segment=%d after recovery (truncate was at %d, recovered lastEntryId=%d)",
 		logId, segmentId, truncatePosition, lastEntryId)

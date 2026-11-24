@@ -32,7 +32,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
@@ -82,13 +81,8 @@ type StagedFileReaderAdv struct {
 	lastAddConfirmed atomic.Int64 // only for runtime segment reads; reduces multi-node requests compared to quorum read
 }
 
-// NewStagedFileReaderAdv creates a new staged file reader
-func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
-	return OpenStagedFileReader(ctx, bucket, rootPath, localBaseDir, logId, segId, storageCli, cfg, fileutil.MkdirAllSync)
-}
-
-// OpenStagedFileReader opens a segment reader using mkdirAllSync to prepare its directory.
-func OpenStagedFileReader(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, mkdirAllSync func(string, os.FileMode) error) (*StagedFileReaderAdv, error) {
+// NewStagedFileReaderAdv creates a segment reader using mkdirAllSync to prepare its directory.
+func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, mkdirAllSync func(string, os.FileMode) error) (*StagedFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewStagedFileReader")
 	defer sp.End()
 

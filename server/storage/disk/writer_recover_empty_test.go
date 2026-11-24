@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
@@ -52,7 +53,7 @@ func TestLocalFileWriter_RecoverFinalizedEmptySegment(t *testing.T) {
 	assert.EqualValues(t, codec.RecordHeaderSize+codec.HeaderRecordSize+codec.RecordHeaderSize+codec.FooterRecordSize, st.Size(),
 		"header + footer only")
 
-	rw, err := NewLocalFileWriterWithMode(ctx, dir, 1, 7, cfg, true)
+	rw, err := NewLocalFileWriterWithMode(ctx, dir, 1, 7, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err, "recovery of a finalized empty segment")
 	assert.True(t, rw.finalized.Load(), "recovered as finalized")
 	assert.Empty(t, rw.blockIndexes)
@@ -88,7 +89,7 @@ func TestLocalFileWriter_RecoverFinalizedSegmentWithData(t *testing.T) {
 	assert.EqualValues(t, 2, last)
 	require.NoError(t, w.Close(ctx))
 
-	rw, err := NewLocalFileWriterWithMode(ctx, dir, 1, 8, cfg, true)
+	rw, err := NewLocalFileWriterWithMode(ctx, dir, 1, 8, cfg, true, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	assert.True(t, rw.finalized.Load())
 	assert.NotEmpty(t, rw.blockIndexes)

@@ -57,6 +57,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
@@ -125,7 +126,7 @@ func TestStagedReaderStates_TailingProgressiveRead(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 	require.True(t, reader.isIncompleteFile.Load(), "precondition: tailing state")
@@ -173,7 +174,7 @@ func TestStagedReaderStates_FinalizePickedUpBetweenReads(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 	require.True(t, reader.isIncompleteFile.Load())
@@ -244,7 +245,7 @@ func TestStagedReaderStates_CompactionFlipsLocalReaderToMinio(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 	require.False(t, reader.isCompacted.Load(), "precondition: local reader before compaction")
@@ -292,7 +293,7 @@ func TestStagedReaderStates_MarkWithDataLogStillServesLocally(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 	// nil object-storage client: any attempt to consult minio would fail the read.
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -329,7 +330,7 @@ func TestStagedReaderStates_ReclaimedSegment_BackendNotFoundIsNotFound(t *testin
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err),
 		"a backend-recognized 404 is a definitive absence and must map to ErrEntryNotFound, got %v", err)
@@ -351,7 +352,7 @@ func TestStagedReaderStates_ParseAfterClose_ReturnsAlreadyClosed(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.True(t, reader.isIncompleteFile.Load(), "precondition: incomplete, so the parse path does real work")
 
@@ -402,7 +403,7 @@ func TestStagedReaderStates_ConcurrentCloseAndRead_OnlyAlreadyClosedSurfaces(t *
 	require.NoError(t, err)
 
 	for i := 0; i < 60; i++ {
-		reader, openErr := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+		reader, openErr := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 		require.NoError(t, openErr)
 		require.True(t, reader.isCompacted.Load(), "precondition: compacted (pool-backed) reader")
 
@@ -450,7 +451,7 @@ func TestStagedReaderStates_ReclaimedSegment_TransientMinioErrorSurfaces(t *test
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.Error(t, err)
 	assert.False(t, werr.ErrEntryNotFound.Is(err),
 		"a transient object-storage failure must stay a retriable error, got %v", err)
@@ -476,7 +477,7 @@ func TestStagedReaderStates_ReclaimedSegment_FooterGenuinelyAbsentIsNotFound(t *
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
-	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
+	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err), "confirmed absence still maps to ErrEntryNotFound, got %v", err)
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -64,7 +65,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_FileDeleted_ShouldReturnEntryNotFound
 	defer os.RemoveAll(baseDir)
 
 	// Create reader
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -103,7 +104,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotF
 	}()
 
 	// Create reader first
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -139,7 +140,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_IncompleteFileNoError_ShouldReturnEnt
 	defer os.RemoveAll(baseDir)
 
 	// Create reader
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -176,7 +177,7 @@ func TestLocalFileReaderAdv_ReadAt_FileNotExist_ShouldReturnError(t *testing.T) 
 	defer os.RemoveAll(baseDir)
 
 	// Create reader
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -232,7 +233,7 @@ func TestLocalFileReaderAdv_ReadAtUnsafe_NegativeOffset(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("some data"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -247,7 +248,7 @@ func TestLocalFileReaderAdv_ReadAtUnsafe_NegativeLength(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("some data"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -275,7 +276,7 @@ func TestLocalFileReaderAdv_IsFooterExistsUnsafe_WithFooter(t *testing.T) {
 	writer.Close(ctx)
 
 	// Open reader with maxBatchSize=0 to skip read loop
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 0)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 0, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -302,7 +303,7 @@ func TestLocalFileReaderAdv_IsFooterExistsUnsafe_NoFooter(t *testing.T) {
 	// Don't finalize - incomplete file
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 0)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 0, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -321,7 +322,7 @@ func TestLocalFileReaderAdv_IsFooterExistsUnsafe_FileTooSmall(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("tiny"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 0)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 0, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -349,7 +350,7 @@ func TestLocalFileReaderAdv_TryParseFooter_AlreadyParsed(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -368,7 +369,7 @@ func TestLocalFileReaderAdv_TryParseFooter_FileTooSmall(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("ab"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -387,7 +388,7 @@ func TestLocalFileReaderAdv_TryParseFooter_InvalidFooterData(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -405,7 +406,7 @@ func TestLocalFileReaderAdv_TryParseFooter_ReadAtFails(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	_, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	_, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	// File is exactly minFooterSize (45 bytes) but maxFooterSize is 53 bytes,
 	// so readAt offset = 45-53 = -8, which fails → returns "try parse footer" error
 	require.Error(t, err)
@@ -417,7 +418,7 @@ func TestLocalFileReaderAdv_TryParseFooter_StatError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("some content for stat test"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	// Close the file to cause stat to fail on next tryParseFooter call
@@ -462,7 +463,7 @@ func TestLocalFileReaderAdv_TryParseFooter_IndexRecordsParseFail(t *testing.T) {
 	}
 
 	// Open reader — tryParseFooter should find valid footer but fail to parse indexes
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -478,7 +479,7 @@ func TestLocalFileReaderAdv_ParseIndexRecords_InvalidOffset(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("some data that is longer than a few bytes"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -508,7 +509,7 @@ func TestLocalFileReaderAdv_NewReader_PermissionDenied(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should fail with non-NotExist error (permission denied)
-	_, err = NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	_, err = NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "open file")
 }
@@ -523,7 +524,7 @@ func TestLocalFileReaderAdv_NewReader_MkdirAllError(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 
 	// Using a file as baseDir will cause MkdirAll to fail
-	_, err = NewLocalFileReaderAdv(ctx, tmpFile.Name(), 1, 1, 100)
+	_, err = NewLocalFileReaderAdv(ctx, tmpFile.Name(), 1, 1, 100, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "create directory")
 }
@@ -546,7 +547,7 @@ func TestLocalFileReaderAdv_ReadNextBatchAdv_WithLastReadBatchInfo(t *testing.T)
 	require.NoError(t, err)
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -589,7 +590,7 @@ func TestLocalFileReaderAdv_ReadNextBatchAdv_CompletedFile_EntryBeyondRange(t *t
 	require.NoError(t, err)
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -619,7 +620,7 @@ func TestLocalFileReaderAdv_GetLastEntryID_IncompleteFileWithBlocks(t *testing.T
 	writer.Sync(ctx)
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -640,7 +641,7 @@ func TestLocalFileReaderAdv_GetLastEntryID_NotIncomplete_NoFooterNoBlocks(t *tes
 	baseDir, _ := createTempFileWithContent(t, []byte("data"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -661,7 +662,7 @@ func TestLocalFileReaderAdv_ScanForAllBlockInfo_FileTooSmall(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("x"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -686,7 +687,7 @@ func TestLocalFileReaderAdv_ScanForAllBlockInfo_SuccessfulScan(t *testing.T) {
 	writer.Sync(ctx)
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -709,7 +710,7 @@ func TestLocalFileReaderAdv_ReadNextBatchAdv_ParseFooterError(t *testing.T) {
 		os.RemoveAll(baseDir)
 	}()
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -751,7 +752,7 @@ func TestLocalFileReaderAdv_ReadNextBatchAdv_LastReadBatchInfoSetsState(t *testi
 	require.NoError(t, err)
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -800,7 +801,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_CompletedFile_ZeroBatchSize_ReturnsEO
 	writer.Close(ctx)
 
 	// maxBatchSize=0 makes the read loop skip entirely
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 0)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 0, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -822,7 +823,7 @@ func TestScanForAllBlockInfo_StatError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, make([]byte, 200))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	// Close the file to cause stat error
@@ -852,7 +853,7 @@ func TestScanForAllBlockInfo_HeaderDecodeError_CrcMismatch(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -873,7 +874,7 @@ func TestScanForAllBlockInfo_HeaderDecodeError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -897,7 +898,7 @@ func TestScanForAllBlockInfo_InvalidHeaderRecordType(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -924,7 +925,7 @@ func TestScanForAllBlockInfo_NotEnoughDataForBlockHeader(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -955,7 +956,7 @@ func TestScanForAllBlockInfo_InvalidBlockHeaderRecord(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -986,7 +987,7 @@ func TestScanForAllBlockInfo_NotEnoughDataForCompleteBlock(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1021,7 +1022,7 @@ func TestScanForAllBlockInfo_BlockCrcVerificationFailed(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1051,7 +1052,7 @@ func TestReadDataBlocks_MaxEntriesDefault(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1081,7 +1082,7 @@ func TestReadDataBlocks_BlockHeaderDecodeError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1110,7 +1111,7 @@ func TestReadDataBlocks_HeaderRecordFromBlockZero(t *testing.T) {
 	writer.Sync(ctx)
 	writer.Close(ctx) // No finalize → incomplete file
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1145,7 +1146,7 @@ func TestReadDataBlocks_BlockDataReadError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1181,7 +1182,7 @@ func TestReadDataBlocks_VerifyIntegrityError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1217,7 +1218,7 @@ func TestReadDataBlocks_BlockDataDecodeError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1241,7 +1242,7 @@ func TestReadNextBatchAdv_Closed(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("data"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	reader.Close(ctx)
 
@@ -1254,7 +1255,7 @@ func TestGetLastEntryID_Closed(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, []byte("data"))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	reader.Close(ctx)
 
@@ -1267,7 +1268,7 @@ func TestGetLastEntryID_IncompleteFile_ScanError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, make([]byte, 200))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	reader.isIncompleteFile.Store(true)
@@ -1296,7 +1297,7 @@ func TestGetLastEntryID_IncompleteFile_NoBlocksAfterScan(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1315,7 +1316,7 @@ func TestParseIndexRecords_ReadIndexDataError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1342,7 +1343,7 @@ func TestIsFooterExistsUnsafe_StatError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, make([]byte, 200))
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	// Close file to make stat fail
@@ -1361,7 +1362,7 @@ func TestIsFooterExistsUnsafe_ReadFooterDataError(t *testing.T) {
 	baseDir, filePath := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1399,7 +1400,7 @@ func TestParseIndexRecords_WrongRecordType(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1437,7 +1438,7 @@ func TestParseIndexRecords_MultipleBlocks_SortComparator(t *testing.T) {
 	writer.Close(context.Background())
 
 	// Open reader - should parse 2+ index records and call sort.Slice comparator
-	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(context.Background(), dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1472,7 +1473,7 @@ func TestReadDataBlocks_DecodeBlockHeaderError(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1526,7 +1527,7 @@ func TestReadDataBlocks_CorruptedBlockData(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1561,7 +1562,7 @@ func TestScanForAllBlockInfo_TruncatedBlockHeader(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1605,7 +1606,7 @@ func TestScanForAllBlockInfo_TruncatedBlockData(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1640,7 +1641,7 @@ func TestReadNextBatchAdv_SearchBlockError(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(ctx)
 
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 100)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 100, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 

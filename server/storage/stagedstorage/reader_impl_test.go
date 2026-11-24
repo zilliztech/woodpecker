@@ -37,6 +37,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -120,7 +121,7 @@ func TestReadDataBlocksWithLACButNoData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 	defer reader.Close(ctx)
@@ -220,7 +221,7 @@ func TestReadDataBlocksWithLACAndPartialData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 	defer reader.Close(ctx)
@@ -318,7 +319,7 @@ func TestReadDataBlocksWithLACGreaterThanData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 	defer reader.Close(ctx)
@@ -416,7 +417,7 @@ func TestReadDataBlocksWithLACAtBoundary(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 	defer reader.Close(ctx)
@@ -502,7 +503,7 @@ func TestReadDataBlocksSuccessfulRead(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 	defer reader.Close(ctx)
@@ -538,7 +539,7 @@ func TestNewStagedFileReaderAdv_NonExistentFile(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, 99, 99, nil, cfg)
+	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, 99, 99, nil, cfg, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 }
 
@@ -572,7 +573,7 @@ func TestStagedFileReaderAdv_Close(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 
@@ -614,7 +615,7 @@ func TestStagedFileReaderAdv_UpdateLastAddConfirmed(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -663,7 +664,7 @@ func TestStagedFileReaderAdv_GettersWithFooter(t *testing.T) {
 	writer.Close(ctx)
 
 	// Open reader
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -702,7 +703,7 @@ func TestStagedFileReaderAdv_GettersWithoutFooter(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -758,7 +759,7 @@ func TestStagedFileReaderAdv_ReadAfterClose(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	// Close the reader
@@ -796,7 +797,7 @@ func createTestReaderFromWriter(t *testing.T, dir string, logId, segId int64, en
 	require.NoError(t, err)
 	writer.Close(context.Background())
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	return reader
 }
@@ -873,7 +874,7 @@ func TestStagedFileReaderAdv_GetLastEntryID_IncompleteFile(t *testing.T) {
 	require.NoError(t, err)
 	file.Close()
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -914,7 +915,7 @@ func TestStagedFileReaderAdv_GetLastEntryID_NoBlocks(t *testing.T) {
 	require.NoError(t, err)
 	file.Close()
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1075,7 +1076,7 @@ func TestStagedFileReaderAdv_ScanForAllBlockInfo(t *testing.T) {
 	}
 	file.Close()
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -1160,7 +1161,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_NotFound(t *testing.T) {
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1222,7 +1223,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_ValidFooter(t *testing.T) {
 	require.NoError(t, err)
 	file.Close()
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1366,7 +1367,7 @@ func TestStagedFileReaderAdv_ReadCompactedDataFromMinio(t *testing.T) {
 	require.NoError(t, err)
 	file.Close()
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1472,7 +1473,7 @@ func TestStagedReader_LocalAbsent(t *testing.T) {
 	_, statErr := os.Stat(filePath)
 	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1551,7 +1552,7 @@ func TestStagedReader_Compacted_IgnoresCrossProvenanceLastReadState(t *testing.T
 	require.NoError(t, os.MkdirAll(segDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 	require.True(t, reader.isCompacted.Load())
@@ -1626,7 +1627,7 @@ func TestStagedReader_Compacted_SameProvenanceResumeUsesBlockId(t *testing.T) {
 	require.NoError(t, os.MkdirAll(segDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 	require.True(t, reader.isCompacted.Load())
@@ -1673,7 +1674,7 @@ func stagedCompactedReaderWithOneBlock(t *testing.T, dir string, cfg *config.Con
 	require.NoError(t, os.MkdirAll(segDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	require.True(t, reader.isCompacted.Load())
 	return reader
@@ -1754,7 +1755,7 @@ func TestStagedReader_Compacted_EmptySegment_ReturnsEOF(t *testing.T) {
 	require.NoError(t, os.MkdirAll(segDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1787,7 +1788,7 @@ func TestStagedReader_LocalAbsent_MarkPresentButNoFooter(t *testing.T) {
 	_, statErr := os.Stat(filePath)
 	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	assert.Nil(t, reader)
 	assert.ErrorIs(t, err, werr.ErrEntryNotFound)
 }
@@ -1811,7 +1812,7 @@ func TestStagedReader_LocalAbsent_NoMark_NoMinioCall(t *testing.T) {
 	_, statErr := os.Stat(filePath)
 	require.True(t, os.IsNotExist(statErr), "precondition: local staged file must not exist")
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	assert.Nil(t, reader)
 	assert.ErrorIs(t, err, werr.ErrEntryNotFound)
 }
@@ -1911,7 +1912,7 @@ func TestStagedFileReaderAdv_ReadBlockFromObjectStorageByKey_Success(t *testing.
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1949,7 +1950,7 @@ func TestStagedFileReaderAdv_ReadBlockFromObjectStorageByKey_Error(t *testing.T)
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -1989,7 +1990,7 @@ func TestStagedFileReaderAdv_ReadAndExtractBlockConcurrently_Success(t *testing.
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, minio.ErrorResponse{Code: "NoSuchKey"})
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -2076,7 +2077,7 @@ func TestStagedFileReaderAdv_ReadNextBatchAdv_WithLastReadState(t *testing.T) {
 	}
 	file.Close()
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2143,7 +2144,7 @@ func TestStagedFileReaderAdv_IsFooterExists_False(t *testing.T) {
 	require.NoError(t, err)
 	file.Close()
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2231,7 +2232,7 @@ func TestStagedFileReaderAdv_ReadNextBatchAdv_CompactedWithLastReadState(t *test
 	require.NoError(t, err)
 	file.Close()
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2284,7 +2285,7 @@ func TestNewStagedFileReaderAdv_OpenFileError_NotPermission(t *testing.T) {
 	require.NoError(t, os.Chmod(filePath, 0o000))
 	t.Cleanup(func() { os.Chmod(filePath, 0o644) })
 
-	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "open file")
 }
@@ -2319,7 +2320,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_StatObjectError(t *testing.
 	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
 		Return(int64(0), false, fmt.Errorf("network timeout"))
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2357,7 +2358,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_GetObjectError(t *testing.T
 	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(100), mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("get object failed"))
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2396,7 +2397,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_ReadFullError(t *testing.T)
 	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), claimedSize, mock.Anything, mock.Anything).
 		Return(&readerMockFileReader{data: []byte("short")}, nil) // io.ReadFull will fail: unexpected EOF
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2439,7 +2440,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_InvalidFooterData(t *testin
 	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(garbageData)), mock.Anything, mock.Anything).
 		Return(&readerMockFileReader{data: garbageData}, nil)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2496,7 +2497,7 @@ func TestStagedFileReaderAdv_TryParseLocalFooter_IndexParseError(t *testing.T) {
 	file.Close()
 
 	// Reader should succeed (falls back to incomplete when index parsing fails)
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2520,7 +2521,7 @@ func createMinimalIncompleteReader(t *testing.T, dir string, logId, segId int64,
 	filePath := getSegmentFilePath(localBaseDir, logId, segId)
 	require.NoError(t, os.WriteFile(filePath, fileContent, 0o644))
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	return reader
 }
@@ -2725,7 +2726,7 @@ func TestUpdateLastAddConfirmed_LowerValue(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2756,7 +2757,7 @@ func TestNewStagedFileReaderAdv_MkdirAllError(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	_, err = NewStagedFileReaderAdv(ctx, "bucket", "root", filePath, 1, 1, nil, cfg)
+	_, err = NewStagedFileReaderAdv(ctx, "bucket", "root", filePath, 1, 1, nil, cfg, fileutil.MkdirAllSync)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "create directory")
 }
@@ -2798,7 +2799,7 @@ func TestVerifyBlockDataIntegrity_CRCMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader - it will try to scan the file
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2852,7 +2853,7 @@ func TestReadNextBatchAdv_CompletedFileEOF(t *testing.T) {
 	writer.Close(ctx)
 
 	// Create reader
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2886,7 +2887,7 @@ func TestReadNextBatchAdv_MaxEntriesDefault(t *testing.T) {
 	require.NoError(t, err)
 	writer.Close(ctx)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2927,7 +2928,7 @@ func TestScanForAllBlockInfo_TruncatedBlockHeader(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reader should succeed (file is "incomplete") but no blocks recovered
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2964,7 +2965,7 @@ func TestScanForAllBlockInfo_InvalidHeaderType(t *testing.T) {
 	// File exists but has wrong first record type
 	// NewStagedFileReaderAdv should still succeed (incomplete file), but scan will fail
 	// When called via GetLastEntryID -> scanForAllBlockInfoUnsafe, it will hit the error
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -3003,7 +3004,7 @@ func TestGetLastEntryID_IncompleteNoBlocks(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -3049,7 +3050,7 @@ func TestReadAtUnsafe_NegativeOffset(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -3098,7 +3099,7 @@ func TestReadNextBatchAdv_ClosedReader(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 
 	// Close the reader first
@@ -3149,7 +3150,7 @@ func TestReadDataBlocks_IncompleteNoFooterNoLAC(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -3189,7 +3190,7 @@ func TestReadNextBatchAdv_FooterLACOverride(t *testing.T) {
 
 	// Read with lastAddConfirmed at -1 (lower than footer's LAC=9)
 	// This should make footer.LAC override the currentLAC
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -3252,7 +3253,7 @@ func TestScanForAllBlockInfo_CRCVerifyFailed(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
 
-	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
+	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -3319,7 +3320,7 @@ func TestReadCompactedData_ReadBlockError(t *testing.T) {
 	require.NoError(t, err)
 	f.Close()
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -3368,7 +3369,7 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 	require.NoError(t, err)
 	f.Close()
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 
@@ -3468,7 +3469,7 @@ func TestStagedReader_Compacted_ResumePastFullyConsumedLargeBlock(t *testing.T) 
 	require.NoError(t, os.MkdirAll(segDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(segDir, CompactedMarkFileName), nil, 0o644))
 
-	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg)
+	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", localBaseDir, logId, segId, mockStorage, cfg, fileutil.MkdirAllSync)
 	require.NoError(t, err)
 	defer reader.Close(context.Background())
 	require.True(t, reader.isCompacted.Load())
