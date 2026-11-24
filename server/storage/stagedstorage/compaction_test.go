@@ -35,7 +35,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/fileutil"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -340,7 +339,7 @@ func TestConcurrentCompactionReadsDuringEveryOverwrite(t *testing.T) {
 			cfg := compactionConfig(t, 40)
 			a := newCompactionReplica(t, objects, cfg, records, []int{10}, 8)
 			b := newCompactionReplica(t, objects, cfg, records, []int{1, 2, 1, 3, 3}, 8)
-			localReader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", a.localBaseDir, 1, 0, objects, cfg, fileutil.MkdirAllSync)
+			localReader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", a.localBaseDir, 1, 0, objects, cfg)
 			require.NoError(t, err)
 			defer localReader.Close(context.Background())
 			assertCompactionReads(t, localReader, want, false)

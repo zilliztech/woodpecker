@@ -28,7 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
@@ -84,7 +83,7 @@ func TestStagedFileWriter_FinalizeWritesIndexAndFooterAsBefore(t *testing.T) {
 	assert.Equal(t, codec.EncodeRecord(wantFooter), data[footer.TotalSize:], "footer")
 
 	// The finalized segment reads back in full, and recovers as finalized.
-	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, 1, 0, nil, cfg, fileutil.MkdirAllSync)
+	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, 1, 0, nil, cfg)
 	require.NoError(t, err)
 	var got []string
 	for next := int64(0); next < blocks; {
@@ -102,7 +101,7 @@ func TestStagedFileWriter_FinalizeWritesIndexAndFooterAsBefore(t *testing.T) {
 		assert.Equal(t, fmt.Sprintf("entry-%d", i), v)
 	}
 
-	rw, err := NewStagedFileWriterWithMode(ctx, "test-bucket", "test-root", dir, 1, 0, nil, cfg, true, fileutil.MkdirAllSync)
+	rw, err := NewStagedFileWriterWithMode(ctx, "test-bucket", "test-root", dir, 1, 0, nil, cfg, true)
 	require.NoError(t, err)
 	assert.True(t, rw.finalized.Load())
 	assert.Len(t, rw.blockIndexes, blocks)
@@ -122,7 +121,8 @@ func BenchmarkStagedFileWriter_FinalizeManyBlocks(b *testing.B) {
 			require.NoError(b, err)
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				w, err := NewStagedFileWriter(ctx, "test-bucket", "test-root", b.TempDir(), 1, 0, nil, cfg)
+				cfg.Woodpecker.Storage.RootPath = b.TempDir()
+				w, err := NewStagedFileWriter(ctx, "test-bucket", "test-root", cfg.Woodpecker.Storage.RootPath, 1, 0, nil, cfg)
 				require.NoError(b, err)
 				_, err = w.WriteDataAsync(ctx, 0, []byte("entry"), nil)
 				require.NoError(b, err)

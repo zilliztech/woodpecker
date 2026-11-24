@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -354,6 +355,7 @@ func TestCompleteQuorumMixedTailsCanCompactEmptyTarget(t *testing.T) {
 	defer cancel()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = os.TempDir()
 	store := mocks_objectstorage.NewObjectStorage(t)
 	const footer = "root/1/0/footer.blk"
 	missing := errors.New("remote footer missing")
@@ -413,6 +415,7 @@ func TestCompleteQuorumWaitsForOnlyReplicaThatCanCompact(t *testing.T) {
 	ctx := t.Context()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = os.TempDir()
 	store := mocks_objectstorage.NewObjectStorage(t)
 	missing := errors.New("remote footer missing")
 	store.EXPECT().StatObject(mock.Anything, "bucket", "root/1/0/footer.blk", mock.Anything, mock.Anything).Return(0, false, missing)

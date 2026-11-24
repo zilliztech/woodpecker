@@ -25,7 +25,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
@@ -49,7 +48,7 @@ func TestStagedFileWriter_RecoverFinalizedEmptySegment_ThenFence(t *testing.T) {
 	assert.EqualValues(t, -1, last)
 	require.NoError(t, w.Close(ctx))
 
-	rw, err := NewStagedFileWriterWithMode(ctx, "test-bucket", "test-root", dir, 1, 77, nil, cfg, true, fileutil.MkdirAllSync)
+	rw, err := NewStagedFileWriterWithMode(ctx, "test-bucket", "test-root", dir, 1, 77, nil, cfg, true)
 	require.NoError(t, err, "recovery of a finalized empty segment")
 	defer rw.Close(ctx)
 	assert.True(t, rw.finalized.Load(), "recovered as finalized")
@@ -93,7 +92,7 @@ func TestStagedFileWriter_RecoverFromFooter_RejectsZeroIndexOffset(t *testing.T)
 		LAC:         -1,
 	})
 
-	_, err := NewStagedFileWriterWithMode(ctx, "test-bucket", "test-root", dir, 2, 10, nil, cfg, true, fileutil.MkdirAllSync)
+	_, err := NewStagedFileWriterWithMode(ctx, "test-bucket", "test-root", dir, 2, 10, nil, cfg, true)
 	require.Error(t, err, "an inline-index footer can never start at offset 0")
 	assert.ErrorContains(t, err, "IndexOffset=0")
 }
@@ -113,7 +112,7 @@ func TestStagedFileWriter_RecoverFromFooter_RejectsIndexLengthZeroWithBlocks(t *
 		LAC:         -1,
 	})
 
-	_, err := NewStagedFileWriterWithMode(ctx, "test-bucket", "test-root", dir, 2, 11, nil, cfg, true, fileutil.MkdirAllSync)
+	_, err := NewStagedFileWriterWithMode(ctx, "test-bucket", "test-root", dir, 2, 11, nil, cfg, true)
 	require.Error(t, err, "IndexLength=0 cannot describe 3 blocks")
 	assert.ErrorContains(t, err, "TotalBlocks=3")
 }

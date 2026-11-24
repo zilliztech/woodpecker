@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -51,6 +52,7 @@ func TestLocalFileWriterPerformance(t *testing.T) {
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = filepath.Dir(LOCAL_TEST_BASE_DIR)
 
 	// Create LocalFileWriter
 	logId := time.Now().UnixNano()

@@ -20,7 +20,6 @@ package processor
 import (
 	"context"
 	"fmt"
-	"os"
 	"path"
 	"sync"
 	"sync/atomic"
@@ -30,7 +29,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -477,10 +475,6 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 	return s.currentSegmentImpl, nil
 }
 
-func (s *segmentProcessor) mkdirAllSync(dir string, perm os.FileMode) error {
-	return fileutil.MkdirAllSyncUnder(s.cfg.Woodpecker.Storage.RootPath, dir, perm)
-}
-
 func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storage.Reader, error) {
 	// First check with read lock to avoid data race
 	s.RLock()
@@ -510,8 +504,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			s.logId,
 			s.segId,
 			s.storageClient,
-			s.cfg,
-			s.mkdirAllSync)
+			s.cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -525,8 +518,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64(),
-			s.mkdirAllSync)
+			s.cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -596,7 +588,6 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			s.storageClient,
 			s.cfg,
 			recoverMode,
-			s.mkdirAllSync,
 			s.syncScheduler)
 		if getWriterErr != nil {
 			return nil, getWriterErr
@@ -612,8 +603,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			s.logId,
 			s.segId,
 			s.cfg,
-			recoverMode,
-			s.mkdirAllSync)
+			recoverMode)
 		if getWriterErr != nil {
 			return nil, getWriterErr
 		}

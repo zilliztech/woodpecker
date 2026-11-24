@@ -30,7 +30,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -181,7 +180,7 @@ func verifyRecoveredFinalizedStagedFile(
 	t.Helper()
 
 	recovered, err := stagedstorage.NewStagedFileWriterWithMode(
-		ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logID, segmentID, storageCli, cfg, true, fileutil.MkdirAllSync,
+		ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logID, segmentID, storageCli, cfg, true,
 	)
 	require.NoError(t, err)
 	require.True(t, recovered.Snapshot().Finalized)
@@ -281,7 +280,7 @@ func TestStagedFileWriter_FinalizeFileMatrix(t *testing.T) {
 			)
 
 			reader, err := stagedstorage.NewStagedFileReaderAdv(
-				ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logID, segmentID, storageCli, cfg, fileutil.MkdirAllSync,
+				ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logID, segmentID, storageCli, cfg,
 			)
 			require.NoError(t, err)
 			defer reader.Close(ctx)

@@ -28,7 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/channel"
-	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
@@ -129,7 +128,7 @@ func TestCompactedLocalCleanup_ReadFromRealMinioAfterLocalDataLogRemoved(t *test
 
 	// Step 4: open a NEW reader for the segment now that local data.log is gone, and
 	// verify it reads back ALL entries correctly from real minio (R1 fallback).
-	reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, fileutil.MkdirAllSync)
+	reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -167,7 +166,7 @@ func TestCompactedLocalCleanup_NeverCompactedSegmentReturnsEntryNotFound(t *test
 	logId := int64(237)
 	segmentId := int64(23700)
 
-	reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, fileutil.MkdirAllSync)
+	reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 	require.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err), "expected ErrEntryNotFound, got: %v", err)
 	assert.Nil(t, reader)
