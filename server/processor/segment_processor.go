@@ -20,6 +20,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -475,6 +477,10 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 	return s.currentSegmentImpl, nil
 }
 
+func (s *segmentProcessor) mkdirAllSync(dir string, perm os.FileMode) error {
+	return fileutil.MkdirAllSyncUnder(s.cfg.Woodpecker.Storage.RootPath, dir, perm)
+}
+
 func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storage.Reader, error) {
 	// First check with read lock to avoid data race
 	s.RLock()
@@ -496,14 +502,16 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 
 	// Initialize reader
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		stagedReader, err := stagedstorage.NewFileStore(s.cfg).NewStagedFileReaderAdv(
+		stagedReader, err := stagedstorage.OpenStagedFileReader(
 			ctx,
 			s.getInstanceBucket(),
 			s.getLogBaseDir(),
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.storageClient)
+			s.storageClient,
+			s.cfg,
+			s.mkdirAllSync)
 		if err != nil {
 			return nil, err
 		}
@@ -512,12 +520,13 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 		return stagedReader, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		localReader, err := disk.NewFileStore(s.cfg).NewLocalFileReaderAdv(
+		localReader, err := disk.OpenLocalFileReader(
 			ctx,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
+			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64(),
+			s.mkdirAllSync)
 		if err != nil {
 			return nil, err
 		}
@@ -577,7 +586,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 
 	// Initialize writer
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		writerFile, getWriterErr := stagedstorage.NewFileStore(s.cfg).NewStagedFileWriterWithMode(
+		writerFile, getWriterErr := stagedstorage.OpenStagedFileWriter(
 			ctx,
 			s.getInstanceBucket(), // user instance bucket
 			s.getLogBaseDir(),     // user instance rootPath
@@ -585,7 +594,9 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			s.logId,
 			s.segId,
 			s.storageClient,
+			s.cfg,
 			recoverMode,
+			s.mkdirAllSync,
 			s.syncScheduler)
 		if getWriterErr != nil {
 			return nil, getWriterErr
@@ -595,12 +606,14 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 		return s.currentSegmentWriter, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		writerFile, getWriterErr := disk.NewFileStore(s.cfg).NewLocalFileWriterWithMode(
+		writerFile, getWriterErr := disk.OpenLocalFileWriter(
 			ctx,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			recoverMode)
+			s.cfg,
+			recoverMode,
+			s.mkdirAllSync)
 		if getWriterErr != nil {
 			return nil, getWriterErr
 		}

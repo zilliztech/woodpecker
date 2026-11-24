@@ -84,13 +84,11 @@ type StagedFileReaderAdv struct {
 
 // NewStagedFileReaderAdv creates a new staged file reader
 func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
-	store := FileStore{cfg: cfg, mkdirAllSync: fileutil.MkdirAllSync}
-	return store.NewStagedFileReaderAdv(ctx, bucket, rootPath, localBaseDir, logId, segId, storageCli)
+	return OpenStagedFileReader(ctx, bucket, rootPath, localBaseDir, logId, segId, storageCli, cfg, fileutil.MkdirAllSync)
 }
 
-// NewStagedFileReaderAdv opens a staged reader for this store.
-func (store FileStore) NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage) (*StagedFileReaderAdv, error) {
-	cfg := store.cfg
+// OpenStagedFileReader opens a segment reader using mkdirAllSync to prepare its directory.
+func OpenStagedFileReader(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, mkdirAllSync func(string, os.FileMode) error) (*StagedFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewStagedFileReader")
 	defer sp.End()
 
@@ -106,7 +104,7 @@ func (store FileStore) NewStagedFileReaderAdv(ctx context.Context, bucket string
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	// Ensure directory exists
-	if err := store.mkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := mkdirAllSync(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
