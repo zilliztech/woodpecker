@@ -59,6 +59,7 @@ func setupStagedFileTest(t *testing.T, rootDir string) (storageclient.ObjectStor
 
 	// Create a temporary directory for local files
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", rootDir, currentTime))
+	cfg.Woodpecker.Storage.RootPath = tempDir
 	err = os.MkdirAll(tempDir, 0o755)
 	require.NoError(t, err)
 

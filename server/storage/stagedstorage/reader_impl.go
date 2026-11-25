@@ -99,7 +99,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	// Ensure directory exists
-	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 

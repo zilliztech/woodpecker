@@ -45,6 +45,7 @@ func lifecycleReader(t *testing.T, dir string, logId, segId int64) *StagedFileRe
 	t.Helper()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	reader, err := NewStagedFileReaderAdv(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reader.Close(context.Background()) })

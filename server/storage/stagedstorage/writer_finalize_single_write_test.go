@@ -121,7 +121,8 @@ func BenchmarkStagedFileWriter_FinalizeManyBlocks(b *testing.B) {
 			require.NoError(b, err)
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				w, err := NewStagedFileWriter(ctx, "test-bucket", "test-root", b.TempDir(), 1, 0, nil, cfg)
+				cfg.Woodpecker.Storage.RootPath = b.TempDir()
+				w, err := NewStagedFileWriter(ctx, "test-bucket", "test-root", cfg.Woodpecker.Storage.RootPath, 1, 0, nil, cfg)
 				require.NoError(b, err)
 				_, err = w.WriteDataAsync(ctx, 0, []byte("entry"), nil)
 				require.NoError(b, err)

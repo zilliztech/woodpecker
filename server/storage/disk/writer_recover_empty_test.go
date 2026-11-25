@@ -39,6 +39,7 @@ func TestLocalFileWriter_RecoverFinalizedEmptySegment(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	w, err := NewLocalFileWriter(ctx, dir, 1, 7, cfg)
 	require.NoError(t, err)
@@ -75,6 +76,7 @@ func TestLocalFileWriter_RecoverFinalizedSegmentWithData(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	w, err := NewLocalFileWriter(ctx, dir, 1, 8, cfg)
 	require.NoError(t, err)

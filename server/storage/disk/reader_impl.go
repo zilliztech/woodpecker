@@ -30,6 +30,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/fileutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
@@ -66,10 +67,11 @@ type LocalFileReaderAdv struct {
 }
 
 // NewLocalFileReaderAdv creates a new local filesystem reader
-func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {
+func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, cfg *config.Configuration) (*LocalFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewLocalFileReader")
 	defer sp.End()
 
+	maxBatchSize := cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64()
 	logger.Ctx(ctx).Debug("creating new local file reader",
 		zap.String("baseDir", baseDir),
 		zap.Int64("logId", logId),
@@ -78,7 +80,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists
-	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 

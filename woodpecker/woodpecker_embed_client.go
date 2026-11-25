@@ -56,14 +56,15 @@ func startEmbedLogStore(cfg *config.Configuration, storageClient storageclient.O
 		return false, nil
 	}
 
-	embedLogStore = server.NewLogStore(context.Background(), cfg, storageClient)
-	embedLogStore.SetAddress("127.0.0.1:18888") // TODO only placeholder now
+	store := server.NewLogStore(context.Background(), cfg, storageClient)
+	store.SetAddress("127.0.0.1:18888") // TODO only placeholder now
 
-	initError := embedLogStore.Start()
-	if initError != nil {
-		return false, initError
+	if err := store.Start(); err != nil {
+		_ = store.Stop()
+		return false, err
 	}
 
+	embedLogStore = store
 	isLogStoreRunning = true
 	return true, nil
 }

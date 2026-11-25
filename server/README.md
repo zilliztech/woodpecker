@@ -20,8 +20,20 @@ Local and service storage keep a `write.fence` file beside each fenced segment's
 missing data file is reopened after a server restart. Reopening a fenced local
 segment uses recovery mode so a stale append cannot truncate its existing data.
 
-Persistent directory setup uses `fileutil.MkdirAllSync`: it creates the path and
-syncs its directory ancestry, including on retries after an earlier sync failure.
+Provision `woodpecker.storage.rootPath` (the service's `-data-dir`) as a durable
+local directory. Local and service storage check the root at startup. If the
+volume is mounted at `/woodpecker/data`, use that mount point as the root.
+For development, create the directory before starting Woodpecker.
+
+When upgrading, check any symlinks on the segment or marker path. A link under
+the root must resolve to an existing directory inside the root. Absolute and
+relative links to such directories work. Provision dangling targets before
+startup. For a link to another volume, mount the volume at the link's location
+before restarting, with the existing data accessible there. Keep the storage
+layout stable while Woodpecker is running.
+
+When a reader, writer or marker creates a directory, Woodpecker syncs the path
+up to and including the configured root, even on retries after a sync failure.
 The first data-file flush also syncs the containing directory before acknowledging
 entries; later appends only need the file sync.
 

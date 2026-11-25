@@ -47,6 +47,7 @@ func newTestConfig(t *testing.T) *config.Configuration {
 	t.Helper()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = os.TempDir()
 	return cfg
 }
 

@@ -12,18 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func writeCompactedMark(ctx context.Context, segmentDir string) error {
+	_, err := writeCompactedMarkCreated(ctx, segmentDir, segmentDir)
+	return err
+}
+
 func TestCompactedMark_WriteHas_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	seg := filepath.Join(dir, "1", "2")
 	require.NoError(t, os.MkdirAll(seg, 0o755))
 
 	assert.False(t, hasCompactedMark(seg))
-	created, err := writeCompactedMarkCreated(context.Background(), seg)
+	created, err := writeCompactedMarkCreated(context.Background(), dir, seg)
 	require.NoError(t, err)
 	assert.True(t, created)
 	assert.True(t, hasCompactedMark(seg))
 	// idempotent write
-	created, err = writeCompactedMarkCreated(context.Background(), seg)
+	created, err = writeCompactedMarkCreated(context.Background(), dir, seg)
 	require.NoError(t, err)
 	assert.False(t, created)
 	assert.True(t, hasCompactedMark(seg))
@@ -41,7 +46,7 @@ func TestCompactedMark_WriteCreatedConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			created, err := writeCompactedMarkCreated(context.Background(), seg)
+			created, err := writeCompactedMarkCreated(context.Background(), dir, seg)
 			if created {
 				createdCount.Add(1)
 			}

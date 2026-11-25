@@ -19,6 +19,8 @@ package woodpecker
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -1122,7 +1124,15 @@ func TestStartEmbedLogStore_NewStart(t *testing.T) {
 		},
 	}
 
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = filepath.Join(t.TempDir(), "missing")
 	managed, err := startEmbedLogStore(cfg, nil)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.False(t, managed)
+	require.Nil(t, embedLogStore)
+	cfg.Woodpecker.Storage.RootPath = t.TempDir()
+
+	managed, err = startEmbedLogStore(cfg, nil)
 	assert.NoError(t, err)
 	assert.True(t, managed)
 

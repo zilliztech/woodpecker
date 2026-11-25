@@ -18,7 +18,6 @@ package integration
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,8 +36,6 @@ import (
 
 // TestInternalLogWriter_BasicOpenWriteCloseReopen validates open->write->close->reopen flow
 func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_BasicOpenWriteCloseReopen")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -47,7 +44,7 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -124,8 +121,6 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 
 // TestInternalLogWriter_PreemptionByNewOpen ensures new internal writer fences current active segment and invalidates old writer
 func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_PreemptionByNewOpen")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -134,7 +129,7 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -222,14 +217,12 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 // segment rolling, and commit entries that the reader would see interleaved
 // with the new writer's data.
 func TestInternalLogWriter_PreemptionByNewOpen_Concurrent(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_PreemptionByNewOpen_Concurrent")
 	testCases := []struct {
 		name        string
 		storageType string
 		rootPath    string
 	}{
-		{name: "LocalFsStorage", storageType: "local", rootPath: rootPath},
+		{name: "LocalFsStorage", storageType: "local", rootPath: t.TempDir()},
 		{name: "ObjectStorage", storageType: "", rootPath: ""},
 	}
 	for _, tc := range testCases {
@@ -352,8 +345,6 @@ func TestInternalLogWriter_PreemptionByNewOpen_Concurrent(t *testing.T) {
 
 // TestInternalLogWriter_FinalizeIdempotency validates calling Complete on the active segment multiple times
 func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_FinalizeIdempotency")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -362,7 +353,7 @@ func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -428,8 +419,6 @@ func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
 // TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses
 // finalize with writer1, close it, then open a new writer (simulating another process) and finalize again
 func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -438,7 +427,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -523,8 +512,6 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
 // TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart
 // finalize with writer1, close it, then open a new writer in a different client without stopping embed server
 func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -533,7 +520,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testin
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -612,8 +599,6 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testin
 
 // TestInternalLogWriter_CloseThenFinalize ensures finalizing after close is harmless
 func TestInternalLogWriter_CloseThenFinalize(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_CloseThenFinalize")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -622,7 +607,7 @@ func TestInternalLogWriter_CloseThenFinalize(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -695,8 +680,6 @@ func TestInternalLogWriter_CloseThenFinalize(t *testing.T) {
 
 // TestInternalLogWriter_FinalizeThenClose ensures closing after finalize works
 func TestInternalLogWriter_FinalizeThenClose(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_FinalizeThenClose")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -705,7 +688,7 @@ func TestInternalLogWriter_FinalizeThenClose(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",

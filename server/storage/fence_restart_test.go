@@ -58,6 +58,7 @@ func TestFenceSurvivesWriterReopen(t *testing.T) {
 						cfg, err := config.NewConfiguration()
 						require.NoError(t, err)
 						dir := t.TempDir()
+						cfg.Woodpecker.Storage.RootPath = dir
 						// Explicit recovery avoids local's cross-process lock wait. Service
 						// opens normally to permit the original writes before it is fenced.
 						w, err := newWriter(ctx, dir, cfg, backend == "local")
@@ -130,6 +131,7 @@ func TestFenceMarkerFailureCanBeRetriedAfterDrain(t *testing.T) {
 			cfg, err := config.NewConfiguration()
 			require.NoError(t, err)
 			dir := t.TempDir()
+			cfg.Woodpecker.Storage.RootPath = dir
 			w, err := newWriter(ctx, dir, cfg, true)
 			require.NoError(t, err)
 			defer w.Close(ctx)
@@ -158,6 +160,7 @@ func TestInvalidFenceMarkerPreventsWriterCreation(t *testing.T) {
 			require.NoError(t, os.WriteFile(dataPath, data, 0o644))
 			cfg, err := config.NewConfiguration()
 			require.NoError(t, err)
+			cfg.Woodpecker.Storage.RootPath = dir
 			_, err = newWriter(context.Background(), dir, cfg, false)
 			require.Error(t, err)
 			after, err := os.ReadFile(dataPath)
@@ -175,6 +178,7 @@ func TestConcurrentFencesPersistOneMarker(t *testing.T) {
 			cfg, err := config.NewConfiguration()
 			require.NoError(t, err)
 			dir := t.TempDir()
+			cfg.Woodpecker.Storage.RootPath = dir
 			w, err := newWriter(ctx, dir, cfg, true)
 			require.NoError(t, err)
 			defer w.Close(context.Background())
@@ -212,6 +216,7 @@ func TestFirstFileSyncRequiresDirectoryPublication(t *testing.T) {
 				cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(60000)
 				cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = config.NewDurationMillisecondsFromInt(60000)
 				dir := t.TempDir()
+				cfg.Woodpecker.Storage.RootPath = dir
 				w, err := newWriter(ctx, dir, cfg, backend == "local")
 				require.NoError(t, err)
 				defer w.Close(context.Background())
@@ -234,5 +239,34 @@ func TestFirstFileSyncRequiresDirectoryPublication(t *testing.T) {
 				require.EqualValues(t, -1, w.GetLastEntryId(ctx))
 			})
 		}
+	}
+}
+
+func TestFileConstructorsRejectUnreadableParentBelowDataRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("execute-only parent requires an unprivileged user")
+	}
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	require.NoError(t, os.Mkdir(parent, 0o700))
+	require.NoError(t, os.Chmod(parent, 0o311))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0o700)) })
+	base := filepath.Join(parent, "new-base")
+	cfg, err := config.NewConfiguration()
+	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = root
+	for backend, newWriter := range fenceBackends {
+		t.Run(backend, func(t *testing.T) {
+			_, err := newWriter(t.Context(), base, cfg, false)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.ErrorContains(t, err, "parent")
+			if backend == "local" {
+				_, err = disk.NewLocalFileReaderAdv(t.Context(), base, 1, 0, cfg)
+			} else {
+				_, err = stagedstorage.NewStagedFileReaderAdv(t.Context(), "bucket", "root", base, 1, 0, nil, cfg)
+			}
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.ErrorContains(t, err, "parent")
+		})
 	}
 }

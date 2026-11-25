@@ -41,6 +41,7 @@ func TestLocalFileWriter_FinalizeWritesIndexAndFooterAsBefore(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	const blocks = 64
 	w, err := NewLocalFileWriter(ctx, dir, 1, 0, cfg)
@@ -84,7 +85,7 @@ func TestLocalFileWriter_FinalizeWritesIndexAndFooterAsBefore(t *testing.T) {
 	assert.Equal(t, codec.EncodeRecord(wantFooter), data[footer.TotalSize:], "footer")
 
 	// The finalized segment reads back in full, and recovers as finalized.
-	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, dir, 1, 0, readerTestConfig(dir, 4*1024*1024))
 	require.NoError(t, err)
 	var got []string
 	for next := int64(0); next < blocks; {
@@ -122,7 +123,8 @@ func BenchmarkLocalFileWriter_FinalizeManyBlocks(b *testing.B) {
 			require.NoError(b, err)
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				w, err := NewLocalFileWriter(ctx, b.TempDir(), 1, 0, cfg)
+				cfg.Woodpecker.Storage.RootPath = b.TempDir()
+				w, err := NewLocalFileWriter(ctx, cfg.Woodpecker.Storage.RootPath, 1, 0, cfg)
 				require.NoError(b, err)
 				_, err = w.WriteDataAsync(ctx, 0, []byte("entry"), nil)
 				require.NoError(b, err)

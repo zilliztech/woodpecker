@@ -48,7 +48,7 @@ func FenceMarkerExists(segmentDir string) (bool, error) {
 }
 
 // PersistFenceMarker makes a fence survive both process restart and host crash.
-// The segment directory must have been published by fileutil.MkdirAllSync.
+// The segment directory must have been published by fileutil.MkdirAllSyncUnder.
 // Existing markers are never truncated, and are synced again: a previous attempt
 // may have created one but failed to sync.
 func PersistFenceMarker(ctx context.Context, segmentDir string) error {

@@ -518,7 +518,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
+			s.cfg)
 		if err != nil {
 			return nil, err
 		}

@@ -75,7 +75,7 @@ func TestIdleLogVolume(t *testing.T) {
 		rootPath    string
 		needCluster bool
 	}{
-		{name: "LocalFsStorage", storageType: "local", rootPath: rootPath, needCluster: false},
+		{name: "LocalFsStorage", storageType: "local", rootPath: t.TempDir(), needCluster: false},
 		{name: "ObjectStorage", storageType: "", rootPath: "", needCluster: false},
 		{name: "ServiceStorage", storageType: "service", rootPath: rootPath + "_service", needCluster: true},
 	}
@@ -177,7 +177,7 @@ func TestIdleTailReadLogVolume(t *testing.T) {
 		rootPath    string
 		needCluster bool
 	}{
-		{name: "LocalFsStorage", storageType: "local", rootPath: rootPath, needCluster: false},
+		{name: "LocalFsStorage", storageType: "local", rootPath: t.TempDir(), needCluster: false},
 		{name: "ObjectStorage", storageType: "", rootPath: "", needCluster: false},
 		{name: "ServiceStorage", storageType: "service", rootPath: rootPath + "_service", needCluster: true},
 	}

@@ -67,6 +67,7 @@ func TestLocalFileWriter_BasicWriteAndFinalize(t *testing.T) {
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 	blockSize := int64(256 * 1024) // 256KB per block
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
@@ -134,6 +135,7 @@ func TestLocalFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 	blockSize := int64(128 * 1024) // 128KB per block to test multi-block scenario
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
@@ -181,6 +183,7 @@ func TestLocalFileWriter_ConcurrentWrites(t *testing.T) {
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 	blockSize := int64(256 * 1024)
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
@@ -252,6 +255,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 	blockSize := int64(256 * 1024)
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
@@ -533,6 +537,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	blockSize := int64(256 * 1024)
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(16)
@@ -619,6 +624,7 @@ func BenchmarkLocalFileWriter_WriteDataAsync(b *testing.B) {
 	ctx := context.Background()
 	blockSize := int64(2 * 1024 * 1024) // 2MB
 	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
+	cfg.Woodpecker.Storage.RootPath = tempDir
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(17)
@@ -661,6 +667,8 @@ func BenchmarkLocalFileReader_ReadNextBatchAdv(b *testing.B) {
 	ctx := context.Background()
 	blockSize := int64(2 * 1024 * 1024) // 2MB
 	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
+	cfg.Woodpecker.Storage.RootPath = tempDir
+	cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize = config.NewByteSize(16_000_000)
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	// Prepare test data
@@ -698,7 +706,7 @@ func BenchmarkLocalFileReader_ReadNextBatchAdv(b *testing.B) {
 	}
 
 	// Benchmark reading
-	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, 16_000_000)
+	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, cfg)
 	if err != nil {
 		b.Fatal(err)
 	}

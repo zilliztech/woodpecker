@@ -118,6 +118,7 @@ func TestReadDataBlocksWithLACButNoData(t *testing.T) {
 	// Create configuration
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create reader
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
@@ -218,6 +219,7 @@ func TestReadDataBlocksWithLACAndPartialData(t *testing.T) {
 	// Create configuration
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create reader
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
@@ -316,6 +318,7 @@ func TestReadDataBlocksWithLACGreaterThanData(t *testing.T) {
 	// Create configuration
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create reader
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
@@ -414,6 +417,7 @@ func TestReadDataBlocksWithLACAtBoundary(t *testing.T) {
 	// Create configuration
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create reader
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
@@ -500,6 +504,7 @@ func TestReadDataBlocksSuccessfulRead(t *testing.T) {
 	// Create configuration
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create reader
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
@@ -537,6 +542,7 @@ func TestNewStagedFileReaderAdv_NonExistentFile(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, 99, 99, nil, cfg)
 	assert.Error(t, err)
@@ -571,6 +577,7 @@ func TestStagedFileReaderAdv_Close(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -613,6 +620,7 @@ func TestStagedFileReaderAdv_UpdateLastAddConfirmed(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -635,6 +643,7 @@ func TestStagedFileReaderAdv_GettersWithFooter(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	logId := int64(12)
 	segId := int64(12)
@@ -701,6 +710,7 @@ func TestStagedFileReaderAdv_GettersWithoutFooter(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -757,6 +767,7 @@ func TestStagedFileReaderAdv_ReadAfterClose(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -780,6 +791,7 @@ func createTestReaderFromWriter(t *testing.T, dir string, logId, segId int64, en
 	t.Helper()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -839,6 +851,7 @@ func TestStagedFileReaderAdv_GetLastEntryID_IncompleteFile(t *testing.T) {
 	segId := int64(21)
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	// Create a file without footer (incomplete)
 	localBaseDir := filepath.Join(dir, "local")
@@ -900,6 +913,7 @@ func TestStagedFileReaderAdv_GetLastEntryID_NoBlocks(t *testing.T) {
 	segId := int64(23)
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	// Create a file with only header (no blocks, no footer)
 	localBaseDir := filepath.Join(dir, "local")
@@ -1037,6 +1051,7 @@ func TestStagedFileReaderAdv_ScanForAllBlockInfo(t *testing.T) {
 	segId := int64(40)
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	// Create a file without footer but with blocks
 	localBaseDir := filepath.Join(dir, "local")
@@ -1138,6 +1153,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_NotFound(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1172,6 +1188,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_ValidFooter(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1287,6 +1304,7 @@ func TestStagedFileReaderAdv_ReadCompactedDataFromMinio(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1395,6 +1413,7 @@ func TestStagedReader_LocalAbsent(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1508,6 +1527,7 @@ func TestStagedReader_Compacted_IgnoresCrossProvenanceLastReadState(t *testing.T
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1584,6 +1604,7 @@ func TestStagedReader_Compacted_SameProvenanceResumeUsesBlockId(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1686,6 +1707,7 @@ func TestStagedReader_Compacted_FirstReadPastEnd_ReturnsEOF(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
@@ -1706,6 +1728,7 @@ func TestStagedReader_Compacted_ResumeBeyondBlocks_ReturnsEOF(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
@@ -1731,6 +1754,7 @@ func TestStagedReader_Compacted_EmptySegment_ReturnsEOF(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 
@@ -1769,6 +1793,7 @@ func TestStagedReader_LocalAbsent_MarkPresentButNoFooter(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1800,6 +1825,7 @@ func TestStagedReader_LocalAbsent_NoMark_NoMinioCall(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1889,6 +1915,7 @@ func TestStagedFileReaderAdv_ReadBlockFromObjectStorageByKey_Success(t *testing.
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1928,6 +1955,7 @@ func TestStagedFileReaderAdv_ReadBlockFromObjectStorageByKey_Error(t *testing.T)
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -1967,6 +1995,7 @@ func TestStagedFileReaderAdv_ReadAndExtractBlockConcurrently_Success(t *testing.
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -2036,6 +2065,7 @@ func TestStagedFileReaderAdv_ReadNextBatchAdv_WithLastReadState(t *testing.T) {
 	ctx := context.Background()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	logId := int64(100)
 	segId := int64(100)
@@ -2129,6 +2159,7 @@ func TestStagedFileReaderAdv_IsFooterExists_False(t *testing.T) {
 	segId := int64(111)
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	// Create a file without footer
 	localBaseDir := filepath.Join(dir, "local")
@@ -2179,6 +2210,7 @@ func TestStagedFileReaderAdv_ReadNextBatchAdv_CompactedWithLastReadState(t *test
 	ctx := context.Background()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -2269,6 +2301,7 @@ func TestNewStagedFileReaderAdv_OpenFileError_NotPermission(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	logId := int64(200)
 	segId := int64(200)
@@ -2296,6 +2329,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_StatObjectError(t *testing.
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -2332,6 +2366,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_GetObjectError(t *testing.T
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -2370,6 +2405,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_ReadFullError(t *testing.T)
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -2408,6 +2444,7 @@ func TestStagedFileReaderAdv_TryParseCompactedFooter_InvalidFooterData(t *testin
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -2454,6 +2491,7 @@ func TestStagedFileReaderAdv_TryParseLocalFooter_IndexParseError(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	logId := int64(220)
 	segId := int64(220)
@@ -2512,6 +2550,7 @@ func createMinimalIncompleteReader(t *testing.T, dir string, logId, segId int64,
 	t.Helper()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	localBaseDir := filepath.Join(dir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
@@ -2724,6 +2763,7 @@ func TestUpdateLastAddConfirmed_LowerValue(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -2755,6 +2795,7 @@ func TestNewStagedFileReaderAdv_MkdirAllError(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	_, err = NewStagedFileReaderAdv(ctx, "bucket", "root", filePath, 1, 1, nil, cfg)
 	assert.Error(t, err)
@@ -2796,6 +2837,7 @@ func TestVerifyBlockDataIntegrity_CRCMismatch(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create reader - it will try to scan the file
 	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
@@ -2836,6 +2878,7 @@ func TestReadNextBatchAdv_CompletedFileEOF(t *testing.T) {
 	segId := int64(102)
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create a finalized file using writer
 	writer, err := NewStagedFileWriter(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
@@ -2871,6 +2914,7 @@ func TestReadNextBatchAdv_MaxEntriesDefault(t *testing.T) {
 	segId := int64(103)
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create a finalized file
 	writer, err := NewStagedFileWriter(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
@@ -2925,6 +2969,7 @@ func TestScanForAllBlockInfo_TruncatedBlockHeader(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Reader should succeed (file is "incomplete") but no blocks recovered
 	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
@@ -2960,6 +3005,7 @@ func TestScanForAllBlockInfo_InvalidHeaderType(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// File exists but has wrong first record type
 	// NewStagedFileReaderAdv should still succeed (incomplete file), but scan will fail
@@ -3002,6 +3048,7 @@ func TestGetLastEntryID_IncompleteNoBlocks(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -3048,6 +3095,7 @@ func TestReadAtUnsafe_NegativeOffset(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -3097,6 +3145,7 @@ func TestReadNextBatchAdv_ClosedReader(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -3148,6 +3197,7 @@ func TestReadDataBlocks_IncompleteNoFooterNoLAC(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -3172,6 +3222,7 @@ func TestReadNextBatchAdv_FooterLACOverride(t *testing.T) {
 	segId := int64(110)
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	// Create a finalized file with LAC=9
 	writer, err := NewStagedFileWriter(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
@@ -3251,6 +3302,7 @@ func TestScanForAllBlockInfo_CRCVerifyFailed(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = tempDir
 
 	reader, err := NewStagedFileReaderAdv(ctx, "bucket", "root", localBaseDir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -3267,6 +3319,7 @@ func TestReadCompactedData_ReadBlockError(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -3341,6 +3394,7 @@ func TestReadCompactedData_NoEntriesMatch(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
@@ -3423,6 +3477,7 @@ func TestStagedReader_Compacted_ResumePastFullyConsumedLargeBlock(t *testing.T) 
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	mockStorage := mocks_objectstorage.NewObjectStorage(t)
 	mockStorage.EXPECT().IsObjectNotExistsError(mock.Anything).RunAndReturn(minioHandler.IsObjectNotExists).Maybe()
 	logId, segId := int64(140), int64(140)

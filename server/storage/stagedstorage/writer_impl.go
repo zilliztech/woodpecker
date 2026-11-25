@@ -165,6 +165,13 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.Bool("recoveryMode", recoveryMode))
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
+	// Ensure directory exists
+	if err := fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, segmentDir, 0o755); err != nil {
+		logger.Ctx(ctx).Warn("failed to create directory",
+			zap.String("segmentDir", segmentDir),
+			zap.Error(err))
+		return nil, fmt.Errorf("create directory: %w", err)
+	}
 	if HasCompactedMark(segmentDir) {
 		// The tombstone means this segment is durably compacted and its data.log reclaimed
 		// (or pending reclaim). A normal writer here would RESURRECT a local data.log —
@@ -177,13 +184,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		// whose meta update to Sealed was lost. Serve those with a fileless compacted writer
 		// instead: appends are rejected, fence/complete/compact converge idempotently.
 		return newCompactedStagedFileWriter(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg)
-	}
-	// Ensure directory exists
-	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
-		logger.Ctx(ctx).Warn("failed to create directory",
-			zap.String("segmentDir", segmentDir),
-			zap.Error(err))
-		return nil, fmt.Errorf("create directory: %w", err)
 	}
 	fenced, markerErr := storage.FenceMarkerExists(segmentDir)
 	if markerErr != nil {

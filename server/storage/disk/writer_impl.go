@@ -140,7 +140,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 
 	segmentDir := getSegmentDir(baseDir, logId, segmentId)
 	// Ensure directory exists
-	if err := fileutil.MkdirAllSync(segmentDir, 0o755); err != nil {
+	if err := fileutil.MkdirAllSyncUnder(cfg.Woodpecker.Storage.RootPath, segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
 			zap.String("segmentDir", segmentDir),
 			zap.Error(err))

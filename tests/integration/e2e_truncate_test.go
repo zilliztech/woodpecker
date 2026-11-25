@@ -19,7 +19,6 @@ package integration
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -36,8 +35,6 @@ import (
 )
 
 func TestTruncateBasicOperation(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestTruncateBasicOperation")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -46,7 +43,7 @@ func TestTruncateBasicOperation(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -143,8 +140,6 @@ func TestTruncateBasicOperation(t *testing.T) {
 }
 
 func TestWriteAndTruncateConcurrently(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestWriteAndTruncateConcurrently")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -153,7 +148,7 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -361,8 +356,6 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 }
 
 func TestMultiSegmentTruncation(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestMultiSegmentTruncation")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -371,7 +364,7 @@ func TestMultiSegmentTruncation(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -508,8 +501,6 @@ func TestMultiSegmentTruncation(t *testing.T) {
 }
 
 func TestReadBeforeTruncationPoint(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestReadBeforeTruncationPoint")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -518,7 +509,7 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -672,14 +663,12 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 // GC'd reads from exactly that position, instead of being force-advanced to the truncation
 // point. Regression test for issue #209.
 func TestReopenAtTruncatedButNotGCedPosition(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestReopenAtTruncatedButNotGCedPosition")
 	testCases := []struct {
 		name        string
 		storageType string
 		rootPath    string
 	}{
-		{name: "LocalFsStorage", storageType: "local", rootPath: rootPath},
+		{name: "LocalFsStorage", storageType: "local", rootPath: t.TempDir()},
 		{name: "ObjectStorage", storageType: "", rootPath: ""},
 	}
 
@@ -821,8 +810,6 @@ func TestReopenAtTruncatedButNotGCedPosition(t *testing.T) {
 }
 
 func TestSegmentCleanupAfterTruncation(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestSegmentCleanupAfterTruncation")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -831,7 +818,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -1078,8 +1065,6 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 }
 
 func TestTruncateAndWriteWithNewSegment(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestTruncateAndWriteWithNewSegment")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -1088,7 +1073,7 @@ func TestTruncateAndWriteWithNewSegment(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -1272,8 +1257,6 @@ func TestTruncateAndWriteWithNewSegment(t *testing.T) {
 }
 
 func TestTruncateAndReopenClient(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestTruncateAndReopenClient")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -1282,7 +1265,7 @@ func TestTruncateAndReopenClient(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",
@@ -1504,8 +1487,6 @@ func TestTruncateAndReopenClient(t *testing.T) {
 }
 
 func TestTruncateAndReopenClientWithinTTLProtected(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestTruncateAndReopenClient")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -1514,7 +1495,7 @@ func TestTruncateAndReopenClientWithinTTLProtected(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    rootPath,
+			rootPath:    t.TempDir(),
 		},
 		{
 			name:        "ObjectStorage",

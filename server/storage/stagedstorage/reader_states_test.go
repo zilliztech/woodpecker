@@ -71,6 +71,7 @@ func newTailingWriter(t *testing.T, dir string, logId, segId int64, entryCount i
 	t.Helper()
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, logId, segId, nil, cfg)
 	require.NoError(t, err)
 	for i := int64(0); i < entryCount; i++ {
@@ -125,6 +126,7 @@ func TestStagedReaderStates_TailingProgressiveRead(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
@@ -173,6 +175,7 @@ func TestStagedReaderStates_FinalizePickedUpBetweenReads(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
@@ -244,6 +247,7 @@ func TestStagedReaderStates_CompactionFlipsLocalReaderToMinio(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
@@ -291,6 +295,7 @@ func TestStagedReaderStates_MarkWithDataLogStillServesLocally(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	// nil object-storage client: any attempt to consult minio would fail the read.
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
 	require.NoError(t, err)
@@ -329,6 +334,7 @@ func TestStagedReaderStates_ReclaimedSegment_BackendNotFoundIsNotFound(t *testin
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
 	require.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err),
@@ -351,6 +357,7 @@ func TestStagedReaderStates_ParseAfterClose_ReturnsAlreadyClosed(t *testing.T) {
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	reader, err := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, nil, cfg)
 	require.NoError(t, err)
 	require.True(t, reader.isIncompleteFile.Load(), "precondition: incomplete, so the parse path does real work")
@@ -400,6 +407,7 @@ func TestStagedReaderStates_ConcurrentCloseAndRead_OnlyAlreadyClosedSurfaces(t *
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 
 	for i := 0; i < 60; i++ {
 		reader, openErr := NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
@@ -450,6 +458,7 @@ func TestStagedReaderStates_ReclaimedSegment_TransientMinioErrorSurfaces(t *test
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
 	require.Error(t, err)
 	assert.False(t, werr.ErrEntryNotFound.Is(err),
@@ -476,6 +485,7 @@ func TestStagedReaderStates_ReclaimedSegment_FooterGenuinelyAbsentIsNotFound(t *
 
 	cfg, err := config.NewConfiguration()
 	require.NoError(t, err)
+	cfg.Woodpecker.Storage.RootPath = dir
 	_, err = NewStagedFileReaderAdv(ctx, "test-bucket", "test-root", dir, logId, segId, mockStorage, cfg)
 	require.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err), "confirmed absence still maps to ErrEntryNotFound, got %v", err)
