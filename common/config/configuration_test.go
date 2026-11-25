@@ -253,7 +253,7 @@ func TestResolveClientGRPCMessageSizesFromLayeredLegacyYAML(t *testing.T) {
 `)
 	require.NoError(t, os.WriteFile(legacyConfigFile, legacyConfig, 0o600))
 
-	cfg, err := NewConfiguration("testdata/overrides.yaml", legacyConfigFile)
+	cfg, err := NewConfiguration(writeTestOverrides(t), legacyConfigFile)
 	require.NoError(t, err)
 
 	send, recv, legacySend, legacyRecv := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
@@ -263,8 +263,68 @@ func TestResolveClientGRPCMessageSizesFromLayeredLegacyYAML(t *testing.T) {
 	assert.True(t, legacyRecv)
 }
 
+func writeTestOverrides(t *testing.T) string {
+	t.Helper()
+	const overrides = `woodpecker:
+  meta:
+    type: etcd
+    prefix: woodpecker
+  client:
+    segmentAppend:
+      queueSize: 20000
+      maxRetries: 22
+    segmentRollingPolicy:
+      maxSize: 22220000000
+      maxInterval: 2200
+      maxBlocks: 2000
+    auditor:
+      maxInterval: 10
+    quorum:
+      quorumBufferPools:
+        - name: region-a-pool
+          seeds: ["test-node1", "test-node2"]
+        - name: region-b-pool
+          seeds: ["test-node3", "test-node4", "test-node5"]
+      quorumSelectStrategy:
+        affinityMode: hard
+        replicas: 5
+        strategy: custom
+        customPlacement:
+          - name: replica-1
+            region: "region-a-pool"
+            az: "test-az-1"
+            resourceGroup: "test-rg-1"
+          - name: replica-2
+            region: "region-a-pool"
+            az: "test-az-2"
+            resourceGroup: "test-rg-2"
+          - name: replica-3
+            region: "region-b-pool"
+            az: "test-az-1"
+            resourceGroup: "test-rg-3"
+          - name: replica-4
+            region: "region-b-pool"
+            az: "test-az-2"
+            resourceGroup: "test-rg-4"
+          - name: replica-5
+            region: "region-a-pool"
+            az: "test-az-3"
+            resourceGroup: "test-rg-5"
+  logstore:
+    segmentSyncPolicy:
+      maxFlushSize: 8388608
+    segmentReadPolicy:
+      maxBatchSize: 32000000
+      maxFetchThreads: 64
+`
+	path := filepath.Join(t.TempDir(), "overrides.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(overrides), 0o600))
+	return path
+}
+
 func TestConfigurationOverwrite(t *testing.T) {
-	config, err := NewConfiguration("testdata/overrides.yaml")
+	first := writeTestOverrides(t)
+	config, err := NewConfiguration(first)
 	require.NoError(t, err)
 
 	// check configuration
@@ -309,7 +369,7 @@ func TestConfigurationOverwrite(t *testing.T) {
 
 	override := filepath.Join(t.TempDir(), "second.yaml")
 	require.NoError(t, os.WriteFile(override, []byte("woodpecker:\n  client:\n    segmentAppend:\n      queueSize: 7\n"), 0o600))
-	layered, err := NewConfiguration("testdata/overrides.yaml", override)
+	layered, err := NewConfiguration(first, override)
 	require.NoError(t, err)
 	assert.Equal(t, 7, layered.Woodpecker.Client.SegmentAppend.QueueSize)
 	assert.Equal(t, 22, layered.Woodpecker.Client.SegmentAppend.MaxRetries)
