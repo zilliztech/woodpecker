@@ -1252,6 +1252,7 @@ func TestLogStore_HasLocalSegmentData_MixedMarkedAndUnmarked(t *testing.T) {
 
 func TestLogStore_EvictLog_RejectsServing(t *testing.T) {
 	store := createTestLogStore()
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
 	store.stopped.Store(false)
 	ctx := context.Background()
 
@@ -1269,6 +1270,7 @@ func TestLogStore_EvictLog_RejectsServing(t *testing.T) {
 
 func TestLogStore_EvictLog_ClosesProcessors(t *testing.T) {
 	store := createTestLogStore()
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
 	store.stopped.Store(false)
 	ctx := context.Background()
 
@@ -1293,6 +1295,7 @@ func TestLogStore_EvictLog_ClosesProcessors(t *testing.T) {
 
 func TestLogStore_EvictInstance_RejectsAllLogsUnderInstance(t *testing.T) {
 	store := createTestLogStore()
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
 	store.stopped.Store(false)
 	ctx := context.Background()
 
@@ -1307,6 +1310,7 @@ func TestLogStore_EvictInstance_RejectsAllLogsUnderInstance(t *testing.T) {
 
 func TestLogStore_EvictLog_Idempotent(t *testing.T) {
 	store := createTestLogStore()
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
 	store.stopped.Store(false)
 
 	mockProc := mocks_segment.NewSegmentProcessor(t)
@@ -1322,6 +1326,7 @@ func TestLogStore_EvictLog_Idempotent(t *testing.T) {
 
 func TestLogStore_EvictInstance_ClosesProcessors(t *testing.T) {
 	store := createTestLogStore()
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
 	store.stopped.Store(false)
 
 	mock1 := mocks_segment.NewSegmentProcessor(t)
@@ -1346,6 +1351,7 @@ func TestLogStore_EvictInstance_ClosesProcessors(t *testing.T) {
 
 func TestLogStore_EvictInstance_DoesNotEvictSiblingInstance(t *testing.T) {
 	store := createTestLogStore()
+	store.cfg.Woodpecker.Storage.RootPath = t.TempDir()
 	store.stopped.Store(false)
 
 	siblingRoot := testRootPath + "2" // "test-root2" shares "test-root" as a string prefix
