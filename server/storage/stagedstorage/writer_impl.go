@@ -533,8 +533,11 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 		w.buffer.Store(newBuffer)
 	case <-ctx.Done():
 		logger.Ctx(ctx).Warn("Context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
-		// Notify entries of cancellation
-		w.notifyFlushError(flushTask.entries, ctx.Err())
+		// A cancelled Finalize leaves this block buffered for retry. Its
+		// entries still need their original ACK when that retry flushes them.
+		if !w.finalizing.Load() || w.closed.Load() {
+			w.notifyFlushError(flushTask.entries, ctx.Err())
+		}
 		return false
 	case <-w.runCtx.Done():
 		logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
@@ -548,10 +551,6 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 	return true
 }
 
-func (w *StagedFileWriter) needsClosingFlush() bool {
-	return w.fenced.Load() || w.finalizing.Load() || w.closed.Load()
-}
-
 func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
 	// Only the job that claims the queued state can consume this writer's FIFO.
 	// Promotion leaves a harmless job in the normal queue. An in-flight flush
@@ -560,7 +559,7 @@ func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
 	for {
 		state := w.flushDrainState.Load()
 		queued = flushDrainNormalQueued
-		if w.needsClosingFlush() {
+		if w.fenced.Load() || w.finalizing.Load() || w.closed.Load() {
 			queued = flushDrainClosingQueued
 		}
 		if state != flushDrainIdle && !(state == flushDrainNormalQueued && queued == flushDrainClosingQueued) {
@@ -572,7 +571,7 @@ func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
 	}
 	job := func(context.Context) {
 		if w.flushDrainState.CompareAndSwap(queued, flushDrainRunning) {
-			w.processFlushTasksQueue(queued == flushDrainClosingQueued)
+			w.processFlushTasksQueue()
 		}
 	}
 	if scheduler := w.syncScheduler; scheduler != nil {
@@ -588,7 +587,7 @@ func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
 	job(ctx)
 }
 
-func (w *StagedFileWriter) processFlushTasksQueue(closingWorker bool) {
+func (w *StagedFileWriter) processFlushTasksQueue() {
 	defer func() {
 		w.flushDrainState.Store(flushDrainIdle)
 		if w.runCtx.Err() == nil && len(w.flushTaskChan) > 0 {
@@ -596,9 +595,7 @@ func (w *StagedFileWriter) processFlushTasksQueue(closingWorker bool) {
 		}
 	}()
 
-	// A cancelled Finalize can reopen this writer while a closing job is queued
-	// or flushing a block. Yield before taking more work from a writable segment.
-	for !closingWorker || w.needsClosingFlush() {
+	for {
 		select {
 		case <-w.runCtx.Done():
 			return
@@ -904,8 +901,8 @@ func (w *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 		return nil
 	}
 
-	// Each attempt has its own barrier. A cancelled Finalize can allow more
-	// appends before a retry, so its acknowledgement cannot satisfy the retry.
+	// A cancelled attempt can leave its barrier in the FIFO. Each caller waits
+	// for the barrier it enqueues after syncing its buffered entries.
 	drained := make(chan struct{})
 	select {
 	case w.flushTaskChan <- &blockFlushTask{drained: drained}:
@@ -1220,17 +1217,9 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 		return w.lastEntryID.Load(), nil
 	}
 
+	// Once Finalize starts, this writer only drains previously accepted entries.
+	// Keep finalizing set across retries, even if this caller times out in the drain.
 	w.finalizing.Store(true)
-	flushDrained := false
-	defer func() {
-		if retErr != nil {
-			if flushDrained {
-				w.storageWritable.Store(false)
-			} else {
-				w.finalizing.Store(false)
-			}
-		}
-	}()
 
 	waitErr := w.syncAndDrain(ctx, false)
 	if waitErr != nil {
@@ -1239,7 +1228,11 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 			zap.Error(waitErr))
 		return -1, waitErr
 	}
-	flushDrained = true
+	defer func() {
+		if retErr != nil {
+			w.storageWritable.Store(false)
+		}
+	}()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()

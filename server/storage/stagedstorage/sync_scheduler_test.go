@@ -11,6 +11,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 type testSyncSchedulerTarget struct {
@@ -313,55 +317,13 @@ func TestClosingFlushWithNormalPoolSaturated(t *testing.T) {
 	}
 }
 
-func TestClosingFlushCancelledFinalizeCanRetryAfterAnotherAppend(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	s := NewSyncSchedulerWithClosingWorkers(1, 1)
-	t.Cleanup(s.Close)
-	releaseNormal := blockWorker(t, s, s.jobCh)
-	releaseClosing := blockWorker(t, s, s.closingJobCh)
-	w, err := NewStagedFileWriter(ctx, "bucket", "root", t.TempDir(), 1, 0, nil, newTestConfig(t), s)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		releaseClosing()
-		releaseNormal()
-		_ = w.Close(context.Background())
-	})
-	_, err = w.WriteDataAsync(ctx, 0, []byte("first"), nil)
-	require.NoError(t, err)
-	require.NoError(t, w.Sync(ctx))
-
-	attempt, stop := context.WithCancel(ctx)
-	defer stop()
-	done := make(chan error, 1)
-	go func() { _, err := w.Finalize(attempt, 0); done <- err }()
-	require.Eventually(t, func() bool {
-		running, waiting, capacity := s.ClosingStats()
-		return running == 1 && waiting == 1 && capacity == 1 && len(w.flushTaskChan) == 2
-	}, time.Second, time.Millisecond)
-	stop()
-	require.ErrorIs(t, <-done, context.Canceled)
-	// Let the cancelled barrier complete before appending. Its acknowledgement
-	// must not allow a retry to skip the new data waiting in the normal pool.
-	releaseClosing()
-	releaseNormal()
-	require.Eventually(t, func() bool { return w.flushDrainState.Load() == flushDrainIdle }, time.Second, time.Millisecond)
-	blockWorker(t, s, s.jobCh)
-	_, err = w.WriteDataAsync(ctx, 1, []byte("second"), nil)
-	require.NoError(t, err)
-	last, err := w.Finalize(ctx, 1)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, last)
-	require.Len(t, w.blockIndexes, 2)
-}
-
-func TestClosingFlushHandsBackWriterAfterCancelledFinalize(t *testing.T) {
+func TestClosingFlushCancelledFinalizeKeepsAppendAdmissionClosed(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		running bool
+		name      string
+		queueSize int
 	}{
-		{"queued before barrier", false},
-		{"running with barrier", true},
+		{"cancel before the buffered block is queued", 1},
+		{"cancel while waiting for the drain", 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -372,64 +334,54 @@ func TestClosingFlushHandsBackWriterAfterCancelledFinalize(t *testing.T) {
 			releaseClosing := blockWorker(t, s, s.closingJobCh)
 			w, err := NewStagedFileWriter(ctx, "bucket", "root", t.TempDir(), 1, 0, nil, newTestConfig(t), s)
 			require.NoError(t, err)
-			w.flushMu.Lock()
-			unlock := sync.OnceFunc(w.flushMu.Unlock)
 			t.Cleanup(func() {
-				unlock()
-				releaseNormal()
 				releaseClosing()
+				releaseNormal()
 				_ = w.Close(context.Background())
 			})
-			_, err = w.WriteDataAsync(ctx, 0, []byte("first"), nil)
+			w.flushTaskChan = make(chan *blockFlushTask, tc.queueSize)
+			acks := []*channel.LocalResultChannel{
+				channel.NewLocalResultChannel("queued"),
+				channel.NewLocalResultChannel("buffered"),
+			}
+			_, err = w.WriteDataAsync(ctx, 0, []byte("queued"), acks[0])
 			require.NoError(t, err)
 			require.NoError(t, w.Sync(ctx))
+			_, err = w.WriteDataAsync(ctx, 1, []byte("buffered"), acks[1])
+			require.NoError(t, err)
 
 			attempt, stop := context.WithCancel(ctx)
 			defer stop()
-			if tc.running {
-				done := make(chan error, 1)
-				go func() { _, err := w.Finalize(attempt, 0); done <- err }()
-				require.Eventually(t, func() bool { return len(w.flushTaskChan) == 2 }, time.Second, time.Millisecond)
-				releaseClosing()
-				// The worker has taken the first block and is held in its flush;
-				// only the Finalize barrier remains in the writer queue.
-				require.Eventually(t, func() bool {
-					return w.flushDrainState.Load() == flushDrainRunning && len(w.flushTaskChan) == 1
-				}, time.Second, time.Millisecond)
-				stop()
-				require.ErrorIs(t, <-done, context.Canceled)
-			} else {
-				// Finalize promotes the queued drain before checking cancellation.
-				stop()
-				_, err := w.Finalize(attempt, 0)
-				require.ErrorIs(t, err, context.Canceled)
-				require.Equal(t, flushDrainClosingQueued, w.flushDrainState.Load())
-				require.Len(t, w.flushTaskChan, 1)
-			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := w.Finalize(attempt, 1)
+				done <- err
+			}()
+			require.Eventually(t, func() bool {
+				// Both pools are blocked. With one slot the second block is still
+				// buffered. With three slots both blocks and the barrier are queued.
+				return w.flushDrainState.Load() == flushDrainClosingQueued && len(w.flushTaskChan) == tc.queueSize
+			}, time.Second, time.Millisecond)
+			stop()
+			require.ErrorIs(t, <-done, context.Canceled)
 
-			_, err = w.WriteDataAsync(ctx, 1, []byte("after cancellation"), nil)
-			require.NoError(t, err)
-			require.NoError(t, w.Sync(ctx))
-			unlock()
+			_, err = w.WriteDataAsync(ctx, 2, []byte("late"), nil)
+			require.ErrorIs(t, err, werr.ErrFileWriterFinalizing)
+			_, err = w.WriteDataBatchAsync(ctx, []int64{2}, [][]byte{[]byte("late batch")}, []channel.ResultChannel{nil})
+			require.ErrorIs(t, err, werr.ErrFileWriterFinalizing)
+			_, ready := acks[1].TryReadResult()
+			require.False(t, ready, "cancelling Finalize must not fail an accepted append")
+
 			releaseClosing()
-
-			other, err := NewStagedFileWriter(ctx, "bucket", "root", t.TempDir(), 1, 1, nil, newTestConfig(t), s)
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = other.Close(context.Background()) })
-			_, err = other.Fence(ctx)
-			require.NoError(t, err)
-			require.Equal(t, flushDrainNormalQueued, w.flushDrainState.Load())
-			require.Less(t, w.GetLastEntryId(ctx), int64(1), "new append must wait for an ordinary worker")
-
-			releaseNormal()
-			require.Eventually(t, func() bool { return w.GetLastEntryId(ctx) == 1 }, time.Second, time.Millisecond)
 			last, err := w.Finalize(ctx, 1)
 			require.NoError(t, err)
 			require.EqualValues(t, 1, last)
 			require.Len(t, w.blockIndexes, 2)
-			for i, block := range w.blockIndexes {
-				require.EqualValues(t, i, block.FirstEntryID)
-				require.EqualValues(t, i, block.LastEntryID)
+			for id, ack := range acks {
+				result, err := ack.ReadResult(ctx)
+				require.NoError(t, err)
+				require.NoError(t, result.Err)
+				require.EqualValues(t, id, result.SyncedId)
 			}
 		})
 	}
@@ -473,7 +425,8 @@ func TestClosingFlushPromotesFullWriterQueueBeforeAcquiringWriterLock(t *testing
 	t.Cleanup(s.Close)
 	release := blockWorker(t, s, s.jobCh)
 	cfg := newTestConfig(t)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries = 1
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries = 2
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService = config.NewDurationMillisecondsFromInt(60_000)
 	w, err := NewStagedFileWriter(ctx, "bucket", "root", t.TempDir(), 1, 0, nil, cfg, s)
 	require.NoError(t, err)
 	t.Cleanup(func() { release(); _ = w.Close(context.Background()) })
@@ -481,12 +434,15 @@ func TestClosingFlushPromotesFullWriterQueueBeforeAcquiringWriterLock(t *testing
 
 	_, err = w.WriteDataAsync(ctx, 0, []byte("fill queue"), nil)
 	require.NoError(t, err)
+	require.NoError(t, w.Sync(ctx))
 	require.Len(t, w.flushTaskChan, 1)
+	_, err = w.WriteDataAsync(ctx, 1, []byte("wait for queue space"), nil)
+	require.NoError(t, err)
+
+	// Entry 1 is already accepted. Only this Sync can now hold the writer
+	// lock, and it needs queue space before it can release the lock.
 	done := make(chan error, 1)
-	go func() {
-		_, err := w.WriteDataAsync(ctx, 1, []byte("wait for queue space"), nil)
-		done <- err
-	}()
+	go func() { done <- w.Sync(ctx) }()
 	require.Eventually(t, func() bool {
 		if w.mu.TryLock() {
 			w.mu.Unlock()
