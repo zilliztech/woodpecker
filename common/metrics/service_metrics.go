@@ -358,6 +358,24 @@ var (
 		Name:      "sync_scheduler_capacity",
 		Help:      "Worker capacity of the staged-writer sync scheduler",
 	}, []string{"node_id"})
+	WpSyncSchedulerClosingRunning = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_closing_running",
+		Help:      "Number of running staged-writer closing flush pool workers",
+	}, []string{"node_id"})
+	WpSyncSchedulerClosingWaiting = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_closing_waiting",
+		Help:      "Number of staged-writer closing flush pool jobs waiting",
+	}, []string{"node_id"})
+	WpSyncSchedulerClosingCapacity = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_closing_capacity",
+		Help:      "Worker capacity of the staged-writer closing flush pool",
+	}, []string{"node_id"})
 
 	WpCompactionAdmissionRunning = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: woodpeckerNamespace,
@@ -484,6 +502,9 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSyncSchedulerRunning)
 		registerer.MustRegister(WpSyncSchedulerWaiting)
 		registerer.MustRegister(WpSyncSchedulerCapacity)
+		registerer.MustRegister(WpSyncSchedulerClosingRunning)
+		registerer.MustRegister(WpSyncSchedulerClosingWaiting)
+		registerer.MustRegister(WpSyncSchedulerClosingCapacity)
 		registerer.MustRegister(WpCompactionAdmissionRunning)
 		registerer.MustRegister(WpCompactionAdmissionMaxInflightBytes)
 		registerer.MustRegister(WpCompactionAdmissionReservedBytes)

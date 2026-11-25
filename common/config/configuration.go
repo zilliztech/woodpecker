@@ -386,6 +386,13 @@ type SegmentCompactionPolicy struct {
 	MemoryHighWatermark float64 `yaml:"memoryHighWatermark"`
 }
 
+const (
+	// DefaultMaxWorkers is the number of ordinary flush workers per node.
+	DefaultMaxWorkers = 32
+	// DefaultClosingWorkers is the per-node reserve for staged writer shutdown operations.
+	DefaultClosingWorkers = 16
+)
+
 // SyncSchedulerConfig stores the node-wide staged-storage sync scheduler configuration.
 type SyncSchedulerConfig struct {
 	// MaxWorkers is the number of workers in the node's shared flush pool, as a plain count.
@@ -402,6 +409,8 @@ type SyncSchedulerConfig struct {
 	// shrink the per-block batching that absorbs load, so raise it toward the budget and not
 	// beyond.
 	MaxWorkers int `yaml:"maxWorkers"`
+	// MaxClosingWorkers reserves workers per node for draining writers during Fence, Finalize and Close.
+	MaxClosingWorkers int `yaml:"maxClosingWorkers"`
 }
 
 // RetentionPolicyConfig stores the data retention policy configuration.
@@ -1096,6 +1105,9 @@ func (c *Configuration) validateLogstoreConfig() error {
 	if logstore.SyncScheduler.MaxWorkers <= 0 {
 		return fmt.Errorf("sync scheduler max workers must be positive, got %d", logstore.SyncScheduler.MaxWorkers)
 	}
+	if logstore.SyncScheduler.MaxClosingWorkers <= 0 {
+		return fmt.Errorf("sync scheduler max closing workers must be positive, got %d", logstore.SyncScheduler.MaxClosingWorkers)
+	}
 	if logstore.SegmentCompactionPolicy.MaxBytes <= 0 {
 		return fmt.Errorf("segment compaction policy max bytes must be positive, got %d", logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	}
@@ -1246,7 +1258,8 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				CheckpointThreshold:        10,
 			},
 			SyncScheduler: SyncSchedulerConfig{
-				MaxWorkers: 32,
+				MaxWorkers:        DefaultMaxWorkers,
+				MaxClosingWorkers: DefaultClosingWorkers,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
 				MaxBytes:            ByteSize(2000000),

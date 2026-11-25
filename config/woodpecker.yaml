@@ -145,6 +145,8 @@ woodpecker:
       # Tune from the volume's IOPS budget: workers ~= target IOPS x fsync latency. Past the point
       # where the device saturates, more workers buy queueing rather than throughput.
       maxWorkers: 32
+      # Additional workers per node reserved for flushes during Fence, Finalize and Close.
+      maxClosingWorkers: 16
     segmentCompactionPolicy:
       maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4

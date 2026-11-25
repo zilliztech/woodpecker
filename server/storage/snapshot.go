@@ -28,6 +28,9 @@ type WriterSnapshotDetailed struct {
 	SyncSchedulerRunning         int   `json:"sync_scheduler_running,omitempty"`
 	SyncSchedulerWaiting         int   `json:"sync_scheduler_waiting,omitempty"`
 	SyncSchedulerCapacity        int   `json:"sync_scheduler_capacity,omitempty"`
+	SyncSchedulerClosingRunning  int   `json:"sync_scheduler_closing_running,omitempty"`
+	SyncSchedulerClosingWaiting  int   `json:"sync_scheduler_closing_waiting,omitempty"`
+	SyncSchedulerClosingCapacity int   `json:"sync_scheduler_closing_capacity,omitempty"`
 	WrittenBytes                 int64 `json:"written_bytes"`
 	LastSubmittedFlushingEntryID int64 `json:"last_submitted_flushing_entry_id"`
 	LastSubmittedFlushingBlockID int64 `json:"last_submitted_flushing_block_id"`

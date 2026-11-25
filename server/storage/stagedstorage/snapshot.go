@@ -49,6 +49,7 @@ func (w *StagedFileWriter) SnapshotDetailed() storage.WriterSnapshotDetailed {
 		syncCapacity = w.syncScheduler.Capacity()
 	}
 
+	closingRunning, closingWaiting, closingCapacity := w.syncScheduler.ClosingStats()
 	return storage.WriterSnapshotDetailed{
 		WriterSnapshot:               snap,
 		BufferBytes:                  bufBytes,
@@ -59,6 +60,9 @@ func (w *StagedFileWriter) SnapshotDetailed() storage.WriterSnapshotDetailed {
 		SyncSchedulerRunning:         syncRunning,
 		SyncSchedulerWaiting:         syncWaiting,
 		SyncSchedulerCapacity:        syncCapacity,
+		SyncSchedulerClosingRunning:  closingRunning,
+		SyncSchedulerClosingWaiting:  closingWaiting,
+		SyncSchedulerClosingCapacity: closingCapacity,
 		WrittenBytes:                 writtenBytes,
 		LastSubmittedFlushingEntryID: w.lastSubmittedFlushingEntryID.Load(),
 		LastSubmittedFlushingBlockID: w.lastSubmittedFlushingBlockID.Load(),

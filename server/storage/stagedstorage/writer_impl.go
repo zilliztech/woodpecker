@@ -52,6 +52,7 @@ var _ storage.Writer = (*StagedFileWriter)(nil)
 
 // blockFlushTask represents a task to flush a block to disk
 type blockFlushTask struct {
+	drained      chan struct{} // A FIFO barrier acknowledges only the drain that submitted it.
 	entries      []*cache.BufferEntry
 	firstEntryId int64
 	lastEntryId  int64
@@ -123,7 +124,8 @@ type StagedFileWriter struct {
 	lastSubmittedFlushingEntryID atomic.Int64
 	lastSubmittedFlushingBlockID atomic.Int64
 	allUploadingTaskDone         atomic.Bool
-	flushTasksQueueProcessing    atomic.Bool // Ensures only one shared worker is consuming this writer's flushTasksQueue.
+	normalFlushQueued            atomic.Bool // Coalesces ordinary Sync submissions until a worker picks up the job.
+	flushDrainClaimed            atomic.Bool // Held by the FIFO consumer, or reserved by a queued closing job.
 	flushMu                      sync.Mutex  // the mutex ensures sequential writing for each flush batch
 
 	// Close management
@@ -148,9 +150,11 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64()
 	flushQueueSize := max(int(maxBytes/blockSize), 300)
 	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds()
-	syncScheduler := DefaultSyncScheduler()
+	var syncScheduler *SyncScheduler
 	if len(schedulers) > 0 && schedulers[0] != nil {
 		syncScheduler = schedulers[0]
+	} else {
+		syncScheduler = DefaultSyncScheduler()
 	}
 	logger.Ctx(ctx).Debug("creating new staged file writer",
 		zap.String("localBaseDir", localBaseDir),
@@ -236,7 +240,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	writer.allUploadingTaskDone.Store(false)
 	writer.syncScheduled.Store(false)
 	writer.syncTaskSubmitted.Store(false)
-	writer.flushTasksQueueProcessing.Store(false)
 	writer.lastSyncTimestamp.Store(0) // Set to 0 so first write will trigger sync after interval
 
 	// Set default block size if not specified
@@ -397,14 +400,14 @@ func newCompactedStagedFileWriter(ctx context.Context, bucket string, rootPath s
 
 // Sync forces immediate sync of all buffered data
 func (w *StagedFileWriter) Sync(ctx context.Context) error {
-	return w.sync(ctx, false)
+	return w.sync(ctx, false, w.scheduleNormalFlush)
 }
 
-func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool) error {
+func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool, scheduleFlush func(context.Context)) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Sync")
 	defer sp.End()
 	startTime := time.Now()
-	// Roll the buffer under the writer lock; flush execution is serialized by flushTasksQueueProcessing/flushMu.
+	// Roll the buffer under the writer lock; flush execution is serialized by the per-writer drain.
 	w.mu.Lock()
 
 	if w.closed.Load() && !allowClosed {
@@ -431,15 +434,13 @@ func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool) error {
 	// Sync if there's any data to sync
 	needSync := bufferSize > 0 || hasEntries
 
-	submitted := false
 	if needSync {
-		// Add global writer lock to prevent race conditions with WriteDataAsync
-		submitted = w.rollBufferAndEnqueueFlushTaskUnsafe(ctx)
+		w.rollBufferAndEnqueueFlushTaskUnsafe(ctx)
 	}
 	w.mu.Unlock()
 
-	if submitted {
-		w.startFlushTasksQueueProcessing(ctx)
+	if len(w.flushTaskChan) > 0 {
+		scheduleFlush(ctx)
 	}
 
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "sync", "success").Inc()
@@ -449,30 +450,29 @@ func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool) error {
 }
 
 // rollBufferAndEnqueueFlushTaskUnsafe rolls the current buffer and submits a
-// flush task (must be called with mu held). It returns true when a task was
-// accepted into the writer's flush queue.
-func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Context) bool {
+// flush task with mu held.
+func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Context) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "rollBufferAndFlushUnsafe")
 	defer sp.End()
 	startTime := time.Now()
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil {
-		return false
+		return
 	}
 
 	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		return false
+		return
 	}
 
 	// Get entries from old buffer
 	toFlushEntries, err := currentBuffer.ReadEntriesRange(currentBuffer.GetFirstEntryId(), currentBuffer.GetExpectedNextEntryId())
 	if err != nil {
 		logger.Ctx(ctx).Warn("rollBufferAndEnqueueFlushTaskUnsafe: error reading entries from buffer", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Error(err))
-		return false
+		return
 	}
 	if len(toFlushEntries) == 0 {
-		return false
+		return
 	}
 
 	// Create flush task
@@ -486,7 +486,7 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 
 	restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
 	if err != nil {
-		return false
+		return
 	}
 	restDataFirstEntryId := expectedNextEntryId
 	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, restDataFirstEntryId, w.maxBufferEntries, restData, w.logNs)
@@ -523,43 +523,62 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 		w.buffer.Store(newBuffer)
 	case <-ctx.Done():
 		logger.Ctx(ctx).Warn("Context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
-		// Notify entries of cancellation
-		w.notifyFlushError(flushTask.entries, ctx.Err())
-		return false
+		// A cancelled Finalize leaves this block buffered for retry. Its
+		// entries still need their original ACK when that retry flushes them.
+		if !w.finalizing.Load() || w.closed.Load() {
+			w.notifyFlushError(flushTask.entries, ctx.Err())
+		}
+		return
 	case <-w.runCtx.Done():
 		logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
 		// Notify entries of cancellation
 		w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
-		return false
+		return
 	}
 
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "rollBuffer", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return true
 }
 
-func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
-	if !w.flushTasksQueueProcessing.CompareAndSwap(false, true) {
+func (w *StagedFileWriter) scheduleNormalFlush(ctx context.Context) {
+	if w.flushDrainClaimed.Load() || !w.normalFlushQueued.CompareAndSwap(false, true) {
 		return
 	}
-	job := func(context.Context) {
+	job := func(ctx context.Context) {
+		w.normalFlushQueued.Store(false)
+		if w.flushDrainClaimed.CompareAndSwap(false, true) {
+			w.runFlushDrain(ctx)
+		}
+	}
+	if !w.syncScheduler.tryEnqueueJob(job) {
+		job(ctx)
+	}
+}
+
+func (w *StagedFileWriter) scheduleClosingFlush(ctx context.Context) {
+	// Reserve the FIFO before queuing. An ordinary job still waiting in its
+	// pool can then be skipped. A worker already draining keeps ownership.
+	if !w.flushDrainClaimed.CompareAndSwap(false, true) {
+		return
+	}
+	if s := w.syncScheduler; s != nil && s.enqueue(s.closingJobCh, w.runFlushDrain) {
+		return
+	}
+	w.runFlushDrain(ctx)
+}
+
+func (w *StagedFileWriter) runFlushDrain(context.Context) {
+	for {
 		w.processFlushTasksQueue()
+		w.flushDrainClaimed.Store(false)
+		// A producer may have seen our claim just as we found the FIFO empty.
+		if w.runCtx.Err() != nil || len(w.flushTaskChan) == 0 || !w.flushDrainClaimed.CompareAndSwap(false, true) {
+			return
+		}
 	}
-	if w.syncScheduler != nil && w.syncScheduler.tryEnqueueJob(job) {
-		return
-	}
-	// Scheduler shutdown should not leave accepted flush tasks stranded.
-	job(ctx)
 }
 
 func (w *StagedFileWriter) processFlushTasksQueue() {
-	defer func() {
-		w.flushTasksQueueProcessing.Store(false)
-		if w.runCtx.Err() == nil && len(w.flushTaskChan) > 0 {
-			w.startFlushTasksQueueProcessing(context.Background())
-		}
-	}()
-
 	for {
 		select {
 		case <-w.runCtx.Done():
@@ -568,11 +587,9 @@ func (w *StagedFileWriter) processFlushTasksQueue() {
 			if !ok {
 				return
 			}
-			if flushTask.entries == nil {
-				logger.Ctx(context.TODO()).Debug("received termination signal, marking all upload tasks as done",
-					zap.String("segmentFilePath", w.segmentFilePath))
-				w.allUploadingTaskDone.Store(true)
-				return
+			if flushTask.drained != nil {
+				close(flushTask.drained)
+				continue
 			}
 			logger.Ctx(w.runCtx).Debug("Processing flush task from shared scheduler",
 				zap.Int64("logId", w.logId),
@@ -686,6 +703,10 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 
 	w.flushMu.Lock()
 	defer w.flushMu.Unlock()
+	if w.closed.Load() && w.runCtx.Err() != nil {
+		w.notifyFlushError(task.entries, werr.ErrFileWriterAlreadyClosed)
+		return
+	}
 
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
@@ -844,63 +865,50 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 	w.notifyFlushSuccess(task.entries)
 }
 
-func (f *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
-	logger.Ctx(ctx).Info("awaiting completion of all block flush tasks", zap.String("segmentFilePath", f.segmentFilePath))
+// syncAndDrain promotes queued work before Sync acquires mu. Another sync may
+// already hold mu while waiting for space in this writer's full flush queue.
+func (w *StagedFileWriter) syncAndDrain(ctx context.Context, allowClosed bool) error {
+	if len(w.flushTaskChan) > 0 {
+		w.scheduleClosingFlush(ctx)
+	}
+	if err := w.sync(ctx, allowClosed, w.scheduleClosingFlush); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return w.awaitAllFlushTasks(ctx)
+}
 
-	// Fast return if already completed (idempotent for retry)
-	if f.allUploadingTaskDone.Load() {
+func (w *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
+	if w.allUploadingTaskDone.Load() {
 		return nil
 	}
 
-	// Now wait for a shared flush worker to process all completed tasks
-	// This ensures that blockIndexes are properly populated
-	logger.Ctx(ctx).Info("waiting for shared flush worker to process completed tasks", zap.String("segmentFilePath", f.segmentFilePath))
-
-	// Send termination signal to the writer's flush queue.
-	f.startFlushTasksQueueProcessing(ctx)
+	// A cancelled attempt can leave its barrier in the FIFO. Each caller waits
+	// for the barrier it enqueues after syncing its buffered entries.
+	drained := make(chan struct{})
 	select {
-	case f.flushTaskChan <- &blockFlushTask{
-		entries:      nil,
-		firstEntryId: -1,
-		lastEntryId:  -1,
-		blockNumber:  -1,
-	}:
-		logger.Ctx(ctx).Info("termination signal sent to ack goroutine", zap.String("segmentFilePath", f.segmentFilePath))
-		f.startFlushTasksQueueProcessing(ctx)
+	case w.flushTaskChan <- &blockFlushTask{drained: drained}:
+		w.scheduleClosingFlush(ctx)
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-f.runCtx.Done():
+	case <-w.runCtx.Done():
 		return werr.ErrFileWriterAlreadyClosed
 	}
 
-	// Wait for the flush worker to set the done flag
-	ackWaitTime := 15 * time.Second // TODO configurable
-	ackStartTime := time.Now()
-
-	for {
-		if f.allUploadingTaskDone.Load() {
-			logger.Ctx(ctx).Info("shared flush worker completed processing all tasks", zap.String("segmentFilePath", f.segmentFilePath))
-			return nil
-		}
-
-		// Check timeout
-		if time.Since(ackStartTime) > ackWaitTime {
-			logger.Ctx(ctx).Warn("timeout waiting for shared flush worker to complete",
-				zap.String("segmentFilePath", f.segmentFilePath),
-				zap.Bool("allUploadingTaskDone", f.allUploadingTaskDone.Load()),
-				zap.Duration("elapsed", time.Since(ackStartTime)))
-			return errors.New("timeout waiting for ack goroutine to complete")
-		}
-
-		// Short sleep to avoid busy waiting
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-f.runCtx.Done():
-			return werr.ErrFileWriterAlreadyClosed
-		case <-time.After(25 * time.Millisecond):
-			continue
-		}
+	timer := time.NewTimer(15 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-drained:
+		w.allUploadingTaskDone.Store(true)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.runCtx.Done():
+		return werr.ErrFileWriterAlreadyClosed
+	case <-timer.C:
+		return errors.New("timeout waiting for ack goroutine to complete")
 	}
 }
 
@@ -1193,32 +1201,22 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 		return w.lastEntryID.Load(), nil
 	}
 
+	// Once Finalize starts, this writer only drains previously accepted entries.
+	// Keep finalizing set across retries, even if this caller times out in the drain.
 	w.finalizing.Store(true)
-	flushDrained := false
-	defer func() {
-		if retErr != nil {
-			if flushDrained {
-				w.storageWritable.Store(false)
-			} else {
-				w.finalizing.Store(false)
-			}
-		}
-	}()
 
-	// Sync all pending data first
-	if err := w.Sync(ctx); err != nil {
-		return w.lastEntryID.Load(), err
-	}
-
-	// wait all flush
-	waitErr := w.awaitAllFlushTasks(ctx)
+	waitErr := w.syncAndDrain(ctx, false)
 	if waitErr != nil {
 		logger.Ctx(ctx).Warn("wait flush error before close",
 			zap.String("segmentFilePath", w.segmentFilePath),
 			zap.Error(waitErr))
 		return -1, waitErr
 	}
-	flushDrained = true
+	defer func() {
+		if retErr != nil {
+			w.storageWritable.Store(false)
+		}
+	}()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -1312,6 +1310,8 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Close")
 	defer sp.End()
 	startTime := time.Now()
+	w.finalizeMu.Lock()
+	defer w.finalizeMu.Unlock()
 	if !w.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("inst", fmt.Sprintf("%p", w)))
 		return nil
@@ -1326,6 +1326,9 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 	// even if awaitAllFlushTasks fails (e.g., timeout or context cancellation).
 	defer func() {
 		w.runCancel()
+		// A cancelled Close may return from its barrier with a flush still in flight.
+		w.flushMu.Lock()
+		defer w.flushMu.Unlock()
 		if w.file != nil {
 			w.file.Close()
 			w.file = nil
@@ -1334,16 +1337,7 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 		metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr).Dec()
 	}()
 
-	logger.Ctx(ctx).Info("Close: trigger sync before close", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId))
-	err := w.sync(ctx, true) // manual sync all pending append operation
-	if err != nil {
-		logger.Ctx(ctx).Warn("sync error before close",
-			zap.String("segmentFilePath", w.segmentFilePath),
-			zap.Error(err))
-	}
-
-	// wait all flush
-	waitErr := w.awaitAllFlushTasks(ctx)
+	waitErr := w.syncAndDrain(ctx, true)
 	if waitErr != nil {
 		logger.Ctx(ctx).Warn("wait flush error before close",
 			zap.String("segmentFilePath", w.segmentFilePath),
@@ -1372,13 +1366,11 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "fence", status).Observe(float64(time.Since(startTime).Milliseconds()))
 	}()
 
-	// Serialize with Finalize and other fences. The writer lock also makes the
-	// boundary exclude every append that has not already passed its second check.
+	// Serialize with Finalize and other fences. Sync takes the writer lock after
+	// setting fenced so it includes any append already past its second check.
 	w.finalizeMu.Lock()
 	defer w.finalizeMu.Unlock()
-	w.mu.Lock()
 	w.fenced.Store(true)
-	w.mu.Unlock()
 
 	if w.compacted.Load() {
 		// The compacted tombstone and remote footer already reject appends across restart.
@@ -1386,15 +1378,7 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	}
 
 	if !w.allUploadingTaskDone.Load() {
-		// Sync remaining buffer data to flush channel.
-		// processFlushTask does not check fenced, so the task will be processed correctly.
-		if err := w.Sync(ctx); err != nil {
-			return w.GetLastEntryId(ctx), err
-		}
-
-		// Wait for all pending flush tasks (including the one just submitted by Sync) to complete.
-		// This also terminates the flush goroutine since no more writes are expected after fence.
-		if err := w.awaitAllFlushTasks(ctx); err != nil {
+		if err := w.syncAndDrain(ctx, false); err != nil {
 			return w.GetLastEntryId(ctx), err
 		}
 	}
