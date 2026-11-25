@@ -360,7 +360,8 @@ func TestClosingFlushCancelledFinalizeKeepsAppendAdmissionClosed(t *testing.T) {
 			require.Eventually(t, func() bool {
 				// Both pools are blocked. With one slot the second block is still
 				// buffered. With three slots both blocks and the barrier are queued.
-				return w.flushDrainState.Load() == flushDrainClosingQueued && len(w.flushTaskChan) == tc.queueSize
+				_, waiting, _ := s.ClosingStats()
+				return waiting == 1 && len(w.flushTaskChan) == tc.queueSize
 			}, time.Second, time.Millisecond)
 			stop()
 			require.ErrorIs(t, <-done, context.Canceled)
@@ -371,6 +372,18 @@ func TestClosingFlushCancelledFinalizeKeepsAppendAdmissionClosed(t *testing.T) {
 			require.ErrorIs(t, err, werr.ErrFileWriterFinalizing)
 			_, ready := acks[1].TryReadResult()
 			require.False(t, ready, "cancelling Finalize must not fail an accepted append")
+
+			// Let the original normal job run while the closing pool is still
+			// blocked. The queued closing job has already claimed this FIFO.
+			normalDone := make(chan struct{})
+			require.True(t, s.tryEnqueueJob(func(context.Context) { close(normalDone) }))
+			releaseNormal()
+			select {
+			case <-normalDone:
+			case <-ctx.Done():
+				t.Fatal("normal worker did not finish its queued jobs")
+			}
+			require.Len(t, w.flushTaskChan, tc.queueSize)
 
 			releaseClosing()
 			last, err := w.Finalize(ctx, 1)
@@ -401,7 +414,7 @@ func TestClosingFlushWaitsForRunningNormalDrain(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, w.Sync(ctx))
 	require.Eventually(t, func() bool {
-		return w.flushDrainState.Load() == flushDrainRunning && len(w.flushTaskChan) == 0
+		return len(w.flushTaskChan) == 0
 	}, time.Second, time.Millisecond)
 
 	done := make(chan error, 2)

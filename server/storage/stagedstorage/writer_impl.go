@@ -50,14 +50,6 @@ var WriterScope = "StagedFileWriter"
 
 var _ storage.Writer = (*StagedFileWriter)(nil)
 
-// A queued drain can move to the closing pool until a worker claims it.
-const (
-	flushDrainIdle int32 = iota
-	flushDrainNormalQueued
-	flushDrainClosingQueued
-	flushDrainRunning
-)
-
 // blockFlushTask represents a task to flush a block to disk
 type blockFlushTask struct {
 	drained      chan struct{} // A FIFO barrier acknowledges only the drain that submitted it.
@@ -132,8 +124,9 @@ type StagedFileWriter struct {
 	lastSubmittedFlushingEntryID atomic.Int64
 	lastSubmittedFlushingBlockID atomic.Int64
 	allUploadingTaskDone         atomic.Bool
-	flushDrainState              atomic.Int32
-	flushMu                      sync.Mutex // the mutex ensures sequential writing for each flush batch
+	normalFlushQueued            atomic.Bool // Coalesces ordinary Sync submissions until a worker picks up the job.
+	flushDrainClaimed            atomic.Bool // Held by the FIFO consumer, or reserved by a queued closing job.
+	flushMu                      sync.Mutex  // the mutex ensures sequential writing for each flush batch
 
 	// Close management
 	fileClose  chan struct{} // Close signal
@@ -407,10 +400,10 @@ func newCompactedStagedFileWriter(ctx context.Context, bucket string, rootPath s
 
 // Sync forces immediate sync of all buffered data
 func (w *StagedFileWriter) Sync(ctx context.Context) error {
-	return w.sync(ctx, false)
+	return w.sync(ctx, false, w.scheduleNormalFlush)
 }
 
-func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool) error {
+func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool, scheduleFlush func(context.Context)) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Sync")
 	defer sp.End()
 	startTime := time.Now()
@@ -441,15 +434,13 @@ func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool) error {
 	// Sync if there's any data to sync
 	needSync := bufferSize > 0 || hasEntries
 
-	submitted := false
 	if needSync {
-		// Add global writer lock to prevent race conditions with WriteDataAsync
-		submitted = w.rollBufferAndEnqueueFlushTaskUnsafe(ctx)
+		w.rollBufferAndEnqueueFlushTaskUnsafe(ctx)
 	}
 	w.mu.Unlock()
 
-	if submitted {
-		w.startFlushTasksQueueProcessing(ctx)
+	if len(w.flushTaskChan) > 0 {
+		scheduleFlush(ctx)
 	}
 
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "sync", "success").Inc()
@@ -459,30 +450,29 @@ func (w *StagedFileWriter) sync(ctx context.Context, allowClosed bool) error {
 }
 
 // rollBufferAndEnqueueFlushTaskUnsafe rolls the current buffer and submits a
-// flush task (must be called with mu held). It returns true when a task was
-// accepted into the writer's flush queue.
-func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Context) bool {
+// flush task with mu held.
+func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Context) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "rollBufferAndFlushUnsafe")
 	defer sp.End()
 	startTime := time.Now()
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil {
-		return false
+		return
 	}
 
 	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		return false
+		return
 	}
 
 	// Get entries from old buffer
 	toFlushEntries, err := currentBuffer.ReadEntriesRange(currentBuffer.GetFirstEntryId(), currentBuffer.GetExpectedNextEntryId())
 	if err != nil {
 		logger.Ctx(ctx).Warn("rollBufferAndEnqueueFlushTaskUnsafe: error reading entries from buffer", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Error(err))
-		return false
+		return
 	}
 	if len(toFlushEntries) == 0 {
-		return false
+		return
 	}
 
 	// Create flush task
@@ -496,7 +486,7 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 
 	restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
 	if err != nil {
-		return false
+		return
 	}
 	restDataFirstEntryId := expectedNextEntryId
 	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, restDataFirstEntryId, w.maxBufferEntries, restData, w.logNs)
@@ -538,63 +528,57 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 		if !w.finalizing.Load() || w.closed.Load() {
 			w.notifyFlushError(flushTask.entries, ctx.Err())
 		}
-		return false
+		return
 	case <-w.runCtx.Done():
 		logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
 		// Notify entries of cancellation
 		w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
-		return false
+		return
 	}
 
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "rollBuffer", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.logNs, w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return true
 }
 
-func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
-	// Only the job that claims the queued state can consume this writer's FIFO.
-	// Promotion leaves a harmless job in the normal queue. An in-flight flush
-	// keeps ownership until the queue drains.
-	var queued int32
+func (w *StagedFileWriter) scheduleNormalFlush(ctx context.Context) {
+	if w.flushDrainClaimed.Load() || !w.normalFlushQueued.CompareAndSwap(false, true) {
+		return
+	}
+	job := func(ctx context.Context) {
+		w.normalFlushQueued.Store(false)
+		if w.flushDrainClaimed.CompareAndSwap(false, true) {
+			w.runFlushDrain(ctx)
+		}
+	}
+	if !w.syncScheduler.tryEnqueueJob(job) {
+		job(ctx)
+	}
+}
+
+func (w *StagedFileWriter) scheduleClosingFlush(ctx context.Context) {
+	// Reserve the FIFO before queuing. An ordinary job still waiting in its
+	// pool can then be skipped. A worker already draining keeps ownership.
+	if !w.flushDrainClaimed.CompareAndSwap(false, true) {
+		return
+	}
+	if s := w.syncScheduler; s != nil && s.enqueue(s.closingJobCh, w.runFlushDrain) {
+		return
+	}
+	w.runFlushDrain(ctx)
+}
+
+func (w *StagedFileWriter) runFlushDrain(context.Context) {
 	for {
-		state := w.flushDrainState.Load()
-		queued = flushDrainNormalQueued
-		if w.fenced.Load() || w.finalizing.Load() || w.closed.Load() {
-			queued = flushDrainClosingQueued
-		}
-		if state != flushDrainIdle && !(state == flushDrainNormalQueued && queued == flushDrainClosingQueued) {
-			return
-		}
-		if w.flushDrainState.CompareAndSwap(state, queued) {
-			break
-		}
-	}
-	job := func(context.Context) {
-		if w.flushDrainState.CompareAndSwap(queued, flushDrainRunning) {
-			w.processFlushTasksQueue()
-		}
-	}
-	if scheduler := w.syncScheduler; scheduler != nil {
-		queue := scheduler.jobCh
-		if queued == flushDrainClosingQueued {
-			queue = scheduler.closingJobCh
-		}
-		if scheduler.enqueue(queue, job) {
+		w.processFlushTasksQueue()
+		w.flushDrainClaimed.Store(false)
+		// A producer may have seen our claim just as we found the FIFO empty.
+		if w.runCtx.Err() != nil || len(w.flushTaskChan) == 0 || !w.flushDrainClaimed.CompareAndSwap(false, true) {
 			return
 		}
 	}
-	// Scheduler shutdown should not leave accepted flush tasks stranded.
-	job(ctx)
 }
 
 func (w *StagedFileWriter) processFlushTasksQueue() {
-	defer func() {
-		w.flushDrainState.Store(flushDrainIdle)
-		if w.runCtx.Err() == nil && len(w.flushTaskChan) > 0 {
-			w.startFlushTasksQueueProcessing(context.Background())
-		}
-	}()
-
 	for {
 		select {
 		case <-w.runCtx.Done():
@@ -885,9 +869,9 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 // already hold mu while waiting for space in this writer's full flush queue.
 func (w *StagedFileWriter) syncAndDrain(ctx context.Context, allowClosed bool) error {
 	if len(w.flushTaskChan) > 0 {
-		w.startFlushTasksQueueProcessing(ctx)
+		w.scheduleClosingFlush(ctx)
 	}
-	if err := w.sync(ctx, allowClosed); err != nil {
+	if err := w.sync(ctx, allowClosed, w.scheduleClosingFlush); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -906,7 +890,7 @@ func (w *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 	drained := make(chan struct{})
 	select {
 	case w.flushTaskChan <- &blockFlushTask{drained: drained}:
-		w.startFlushTasksQueueProcessing(ctx)
+		w.scheduleClosingFlush(ctx)
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-w.runCtx.Done():
