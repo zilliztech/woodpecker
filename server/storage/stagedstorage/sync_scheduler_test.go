@@ -132,7 +132,7 @@ func BenchmarkSyncSchedulerJobDispatchLatency(b *testing.B) {
 	for _, jobs := range []int{1_000, 10_000, 100_000} {
 		b.Run(fmt.Sprintf("jobs_%d", jobs), func(b *testing.B) {
 			b.ReportAllocs()
-			scheduler := NewSyncScheduler(defaultSyncSchedulerWorkers)
+			scheduler := NewSyncScheduler(config.DefaultMaxWorkers)
 			defer scheduler.Close()
 
 			latencies := make(chan time.Duration, jobs)
@@ -176,7 +176,7 @@ func BenchmarkSyncSchedulerDelayedCheckLatency(b *testing.B) {
 	for _, checks := range []int{1_000, 10_000, 100_000} {
 		b.Run(fmt.Sprintf("checks_%d", checks), func(b *testing.B) {
 			b.ReportAllocs()
-			scheduler := NewSyncScheduler(defaultSyncSchedulerWorkers)
+			scheduler := NewSyncScheduler(config.DefaultMaxWorkers)
 			defer scheduler.Close()
 
 			delay := 10 * time.Millisecond
@@ -226,8 +226,8 @@ func TestNewSyncScheduler_WorkerCountIsExplicit(t *testing.T) {
 	}{
 		{"explicit count is honoured", 5, 5},
 		{"one is honoured", 1, 1},
-		{"zero falls back to the default", 0, defaultSyncSchedulerWorkers},
-		{"negative falls back to the default", -3, defaultSyncSchedulerWorkers},
+		{"zero falls back to the default", 0, config.DefaultMaxWorkers},
+		{"negative falls back to the default", -3, config.DefaultMaxWorkers},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewSyncScheduler(tc.in)

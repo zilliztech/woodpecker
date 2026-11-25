@@ -386,8 +386,12 @@ type SegmentCompactionPolicy struct {
 	MemoryHighWatermark float64 `yaml:"memoryHighWatermark"`
 }
 
-// DefaultClosingWorkers is the per-node reserve for staged writer shutdown operations.
-const DefaultClosingWorkers = 16
+const (
+	// DefaultMaxWorkers is the number of ordinary flush workers per node.
+	DefaultMaxWorkers = 32
+	// DefaultClosingWorkers is the per-node reserve for staged writer shutdown operations.
+	DefaultClosingWorkers = 16
+)
 
 // SyncSchedulerConfig stores the node-wide staged-storage sync scheduler configuration.
 type SyncSchedulerConfig struct {
@@ -1254,7 +1258,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				CheckpointThreshold:        10,
 			},
 			SyncScheduler: SyncSchedulerConfig{
-				MaxWorkers:        32,
+				MaxWorkers:        DefaultMaxWorkers,
 				MaxClosingWorkers: DefaultClosingWorkers,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{

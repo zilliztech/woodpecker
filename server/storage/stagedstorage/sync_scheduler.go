@@ -76,10 +76,6 @@ type SyncScheduler struct {
 	closed         atomic.Bool
 }
 
-// defaultSyncSchedulerWorkers is the pool size used when no configured value is available.
-// It mirrors logstore.syncScheduler.maxWorkers so the two cannot drift.
-const defaultSyncSchedulerWorkers = 32
-
 // syncSchedulerQueueSize is the depth of each scheduler channel.
 //
 // It is deliberately independent of the worker count: the queues hold pending work, and the
@@ -97,7 +93,7 @@ var (
 
 func DefaultSyncScheduler() *SyncScheduler {
 	defaultSyncSchedulerOnce.Do(func() {
-		defaultSyncScheduler = NewSyncScheduler(defaultSyncSchedulerWorkers)
+		defaultSyncScheduler = NewSyncScheduler(config.DefaultMaxWorkers)
 	})
 	return defaultSyncScheduler
 }
@@ -111,7 +107,7 @@ func NewSyncSchedulerWithClosingWorkers(workerCount, closingWorkers int) *SyncSc
 		closingWorkers = config.DefaultClosingWorkers
 	}
 	if workerCount <= 0 {
-		workerCount = defaultSyncSchedulerWorkers
+		workerCount = config.DefaultMaxWorkers
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &SyncScheduler{
