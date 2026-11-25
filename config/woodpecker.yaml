@@ -129,7 +129,7 @@ woodpecker:
       maxBytes: 256000000 # Maximum size of write buffer in bytes
       maxFlushRetries: 5 # Maximum number of retries for sync operations
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
-      maxFlushSize: 2000000 # Maximum size of a block in bytes to flush, default is 2MB, which is the best practice for cloud storage
+      maxFlushSize: 2000000 # Trigger a flush when buffered data reaches 2 MB (2,000,000 bytes).
       maxFlushThreads: 32 # Maximum number of threads to flush data
       # Optional recovery acceleration for embedded MinIO-compatible object storage
       # (storage.type: minio/default); local and service/staged writers ignore this.

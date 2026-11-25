@@ -1182,28 +1182,29 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 		},
 		Client: ClientConfig{
 			SegmentAppend: SegmentAppendConfig{
-				QueueSize:  100,
-				MaxRetries: 2,
+				QueueSize:  10000,
+				MaxRetries: 3,
 				// Batch queued entries without waiting for more to arrive. The byte
 				// threshold may be exceeded by the last entry; see SegmentAppendConfig.
 				MaxBatchEntries: 1000,
 				MaxBatchBytes:   ByteSize(2000000), // 2000000 bytes; YAML "2MB" means 2 MiB.
+				MaxPendingBytes: ByteSize(64 * 1024 * 1024),
 				SendTimeout:     NewDurationMillisecondsFromInt(2000),
 			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
-				MaxSize:     ByteSize(100000000),
-				MaxInterval: DurationSeconds{Duration: Duration{duration: 800 * 1000000000}}, // 800s
+				MaxSize:     ByteSize(256000000),
+				MaxInterval: NewDurationSecondsFromInt(600),
 				MaxBlocks:   1000,
 			},
 			Auditor: AuditorConfig{
-				MaxInterval:              DurationSeconds{Duration: Duration{duration: 5 * 1000000000}}, // 5s
+				MaxInterval:              NewDurationSecondsFromInt(10),
 				CompactionAttemptTimeout: NewDurationSecondsFromInt(330),
 				CompactionPassBudget:     NewDurationSecondsFromInt(60),
 			},
 			Quorum: QuorumConfig{
 				BufferPools: NewDynamic([]QuorumBufferPool{
 					{
-						Name:  "default-pool",
+						Name:  "default-region-pool",
 						Seeds: []string{},
 					},
 				}),
@@ -1224,7 +1225,8 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxBatchSize:    ByteSize(16 * 1024 * 1024), // 16MB
 				MaxFetchThreads: 4,
 			},
-			GRPC: DefaultGRPCClientConfig(),
+			GRPC:                     DefaultGRPCClientConfig(),
+			SkipRangeRefreshInterval: DurationSeconds{NewDuration(DefaultSkipRangeRefreshInterval, time.Second)},
 			SegmentRead: SegmentReadConfig{
 				ActiveTimeout:  NewDurationMillisecondsFromInt(3000),
 				SettledTimeout: NewDurationMillisecondsFromInt(20000),
@@ -1232,22 +1234,22 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{
-				MaxInterval:                DurationMilliseconds{Duration: Duration{duration: 1000 * 1000000}}, // 1000ms
-				MaxIntervalForLocalStorage: DurationMilliseconds{Duration: Duration{duration: 5 * 1000000}},    // 5ms
-				MaxIntervalForService:      DurationMilliseconds{Duration: Duration{duration: 1 * 1000000}},    // 1ms
-				MaxEntries:                 2000,
-				MaxBytes:                   ByteSize(100000000),
-				MaxFlushRetries:            3,
-				RetryInterval:              DurationMilliseconds{Duration: Duration{duration: 2000 * 1000000}}, // 2000ms
-				MaxFlushSize:               ByteSize(16000000),
-				MaxFlushThreads:            8,
+				MaxInterval:                NewDurationMillisecondsFromInt(200),
+				MaxIntervalForLocalStorage: NewDurationMillisecondsFromInt(10),
+				MaxIntervalForService:      DurationMilliseconds{Duration: Duration{duration: 1 * 1000000}}, // 1ms
+				MaxEntries:                 10000,
+				MaxBytes:                   ByteSize(256000000),
+				MaxFlushRetries:            5,
+				RetryInterval:              NewDurationMillisecondsFromInt(1000),
+				MaxFlushSize:               ByteSize(2000000),
+				MaxFlushThreads:            32,
 				CheckpointThreshold:        10,
 			},
 			SyncScheduler: SyncSchedulerConfig{
 				MaxWorkers: 32,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
-				MaxBytes:            ByteSize(32000000),
+				MaxBytes:            ByteSize(2000000),
 				MaxParallelUploads:  4,
 				MaxParallelReads:    8,
 				Timeout:             NewDurationSecondsFromInt(300),
@@ -1255,7 +1257,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MemoryHighWatermark: 0.7,
 			},
 			SegmentReadPolicy: SegmentReadPolicyConfig{
-				MaxBatchSize:    ByteSize(16000000),
+				MaxBatchSize:    ByteSize(2000000),
 				MaxFetchThreads: 32,
 			},
 			RetentionPolicy: RetentionPolicyConfig{
@@ -1296,8 +1298,8 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			},
 		},
 		Storage: StorageConfig{
-			Type:     "default",
-			RootPath: "/tmp/woodpecker",
+			Type:     "minio",
+			RootPath: "/var/lib/woodpecker",
 		},
 		Runtime: RuntimeConfig{
 			OpRegistry: OpRegistryConfig{
@@ -1315,10 +1317,10 @@ func getDefaultLoggerConfig() LogConfig {
 		Format:     "text",
 		Stdout:     true,
 		File: LogFileConfig{
-			RootPath:   "./logs",
-			MaxSize:    100,
-			MaxBackups: 10,
-			MaxAge:     30,
+			RootPath:   "",
+			MaxSize:    300,
+			MaxBackups: 20,
+			MaxAge:     10,
 		},
 	}
 }
@@ -1326,11 +1328,8 @@ func getDefaultLoggerConfig() LogConfig {
 func getDefaultTraceConfig() TraceConfig {
 	return TraceConfig{
 		Exporter: "noop",
-		Jaeger: JaegerConfig{
-			URL: "http://localhost:14268/api/traces",
-		},
 		Otlp: OtlpConfig{
-			Endpoint: "localhost:4317",
+			Endpoint: "127.0.0.1:4317",
 			Method:   "grpc",
 			Secure:   false,
 		},
@@ -1341,12 +1340,18 @@ func getDefaultTraceConfig() TraceConfig {
 
 func getDefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
-		Endpoints:      []string{"localhost:2379"},
-		RootPath:       "woodpecker",
-		MetaSubPath:    "meta",
-		KvSubPath:      "kv",
-		Log:            EtcdLogConfig{Level: "info", Path: "./logs"},
-		Ssl:            EtcdSslConfig{Enabled: false},
+		Endpoints:   []string{"localhost:2379"},
+		RootPath:    "by-dev",
+		MetaSubPath: "meta",
+		KvSubPath:   "kv",
+		Log:         EtcdLogConfig{Level: "info", Path: "stdout"},
+		Ssl: EtcdSslConfig{
+			TlsCert:       "/path/to/etcd-client.pem",
+			TlsKey:        "/path/to/etcd-client-key.pem",
+			TlsCACert:     "/path/to/ca.pem",
+			TlsMinVersion: "1.3",
+		},
+		Data:           EtcdDataConfig{Dir: "default.etcd"},
 		RequestTimeout: DurationMilliseconds{Duration: Duration{duration: 10000 * time.Millisecond}}, // 10000ms
 		Use:            EtcdUseConfig{Embed: false},
 	}
@@ -1372,7 +1377,7 @@ func getDefaultMinioConfig() MinioConfig {
 		LogLevel:           "fatal",
 		Region:             "",
 		UseVirtualHost:     false,
-		RequestTimeoutMs:   DurationMilliseconds{Duration: Duration{duration: 1000 * 1000000}}, // 1000ms
+		RequestTimeoutMs:   NewDurationMillisecondsFromInt(10000),
 		ListObjectsMaxKeys: 0,
 	}
 }

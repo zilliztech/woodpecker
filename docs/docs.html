@@ -8969,18 +8969,18 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
     prefix: <span class="hl-str">woodpecker</span>
   <span class="hl-kw">client</span>:
     <span class="hl-kw">segmentAppend</span>:
-      queueSize: <span class="hl-num">100</span>            <span class="hl-cm"># admitted entries per segment through all replica outcomes and callbacks</span>
-      maxRetries: <span class="hl-num">2</span>             <span class="hl-cm"># total attempts per entry and replica, including the first send</span>
+      queueSize: <span class="hl-num">10000</span>            <span class="hl-cm"># admitted entries per segment through all replica outcomes and callbacks</span>
+      maxRetries: <span class="hl-num">3</span>             <span class="hl-cm"># total attempts per entry and replica, including the first send</span>
       maxBatchEntries: <span class="hl-num">1000</span>     <span class="hl-cm"># queued entries per batch; no wait for more entries</span>
       maxBatchBytes: <span class="hl-num">2000000</span>     <span class="hl-cm"># payload threshold; the last entry may exceed it</span>
-      maxPendingBytes: <span class="hl-num">0</span>        <span class="hl-cm"># retained payload budget in both modes; 0 uses 64 MiB</span>
+      maxPendingBytes: <span class="hl-num">64MB</span>        <span class="hl-cm"># retained payload budget in both modes; 0 uses 64 MiB</span>
       sendTimeout: <span class="hl-num">2000</span>         <span class="hl-cm"># ms per remote send attempt through its first response</span>
     <span class="hl-kw">segmentRollingPolicy</span>:
-      maxSize: <span class="hl-num">100000000</span>        <span class="hl-cm"># 100MB per segment</span>
-      maxInterval: <span class="hl-num">800</span>          <span class="hl-cm"># seconds between rolls</span>
+      maxSize: <span class="hl-num">256000000</span>        <span class="hl-cm"># 256 MB per segment</span>
+      maxInterval: <span class="hl-num">600</span>          <span class="hl-cm"># seconds between rolls</span>
       maxBlocks: <span class="hl-num">1000</span>           <span class="hl-cm"># max blocks per segment</span>
     <span class="hl-kw">auditor</span>:
-      maxInterval: <span class="hl-num">5</span>            <span class="hl-cm"># seconds between audits</span>
+      maxInterval: <span class="hl-num">10</span>            <span class="hl-cm"># seconds between audits</span>
     <span class="hl-kw">sessionMonitor</span>:
       checkInterval: <span class="hl-num">3</span>          <span class="hl-cm"># seconds</span>
       maxFailures: <span class="hl-num">5</span>            <span class="hl-cm"># consecutive fails before invalid</span>
@@ -8990,20 +8990,20 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
     <span class="hl-cm"># quorum: (service mode only, see Quorum section)</span>
   <span class="hl-kw">logstore</span>:
     <span class="hl-kw">segmentSyncPolicy</span>:
-      maxInterval: <span class="hl-num">1000</span>         <span class="hl-cm"># ms between syncs</span>
-      maxIntervalForLocalStorage: <span class="hl-num">5</span>  <span class="hl-cm"># ms for local backend</span>
-      maxEntries: <span class="hl-num">2000</span>          <span class="hl-cm"># max entries per buffer</span>
-      maxBytes: <span class="hl-num">100000000</span>       <span class="hl-cm"># 100MB buffer limit</span>
-      maxFlushRetries: <span class="hl-num">3</span>
-      retryInterval: <span class="hl-num">2000</span>       <span class="hl-cm"># ms between retries</span>
-      maxFlushSize: <span class="hl-num">16000000</span>    <span class="hl-cm"># 16MB per block flush</span>
-      maxFlushThreads: <span class="hl-num">8</span>
+      maxInterval: <span class="hl-num">200</span>         <span class="hl-cm"># ms between syncs</span>
+      maxIntervalForLocalStorage: <span class="hl-num">10</span>  <span class="hl-cm"># ms for local backend</span>
+      maxEntries: <span class="hl-num">10000</span>          <span class="hl-cm"># max entries per buffer</span>
+      maxBytes: <span class="hl-num">256000000</span>       <span class="hl-cm"># 256 MB buffer limit</span>
+      maxFlushRetries: <span class="hl-num">5</span>
+      retryInterval: <span class="hl-num">1000</span>       <span class="hl-cm"># ms between retries</span>
+      maxFlushSize: <span class="hl-num">2000000</span>     <span class="hl-cm"># 2 MB flush trigger</span>
+      maxFlushThreads: <span class="hl-num">32</span>
     <span class="hl-kw">segmentCompactionPolicy</span>:
-      maxBytes: <span class="hl-num">32000000</span>       <span class="hl-cm"># 32MB merged block size</span>
+      maxBytes: <span class="hl-num">2000000</span>       <span class="hl-cm"># 2 MB merged block size</span>
       maxParallelUploads: <span class="hl-num">4</span>
       maxParallelReads: <span class="hl-num">8</span>
     <span class="hl-kw">segmentReadPolicy</span>:
-      maxBatchSize: <span class="hl-num">16000000</span>   <span class="hl-cm"># 16MB read batch</span>
+      maxBatchSize: <span class="hl-num">2000000</span>   <span class="hl-cm"># 2 MB read batch</span>
       maxFetchThreads: <span class="hl-num">32</span>
     <span class="hl-kw">retentionPolicy</span>:
       ttl: <span class="hl-num">259200</span>             <span class="hl-cm"># 72 hours for truncated segments</span>
@@ -9017,20 +9017,20 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
       maxIdleTime: <span class="hl-num">300</span>        <span class="hl-cm"># seconds</span>
       shutdownTimeout: <span class="hl-num">15</span>     <span class="hl-cm"># seconds</span>
   <span class="hl-kw">storage</span>:
-    type: <span class="hl-str">default</span>             <span class="hl-cm"># default(=minio), minio, local, service</span>
+    type: <span class="hl-str">minio</span>             <span class="hl-cm"># default(=minio), minio, local, service</span>
     rootPath: <span class="hl-str">/var/lib/woodpecker</span></pre></div>
             </div>
 
             <h2>Client Configuration</h2>
-            <p>The defaults below are built into the client. The repository's <code>config/woodpecker.yaml</code> explicitly overrides <code>queueSize</code> to 10000 and <code>maxRetries</code> to 3. Append admission limits apply per writable segment handle, not to the whole client process.</p>
+            <p>The client uses the defaults in <code>config/woodpecker.yaml</code> even when started without a configuration file. Append admission limits apply per writable segment handle.</p>
             <p><code>sendTimeout</code> is not an overall append, OpenWriter or Fence deadline. After sending, each entry's final ACK read has a separate internal 30-second budget in both modes, including reads within a batch. Each retry gets fresh attempt budgets.</p>
             <table class="doc-table">
                 <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
-                <tr><td>segmentAppend.queueSize</td><td>Positive entry-count admission limit in both modes, covering queued, sending, ACK-waiting and retrying entries until all replica outcomes and the ordered callback finish, even after quorum success.</td><td>100</td></tr>
-                <tr><td>segmentAppend.maxRetries</td><td>Total attempts per entry and replica, including the initial send. 0 or 1 disables retries. Both modes retry eligible send/ACK failures on the affected replica; non-retryable failure or exhaustion requests rolling, even after quorum success.</td><td>2</td></tr>
+                <tr><td>segmentAppend.queueSize</td><td>Positive entry-count admission limit in both modes, covering queued, sending, ACK-waiting and retrying entries until all replica outcomes and the ordered callback finish, even after quorum success.</td><td>10000</td></tr>
+                <tr><td>segmentAppend.maxRetries</td><td>Total attempts per entry and replica, including the initial send. 0 or 1 disables retries. Both modes retry eligible send/ACK failures on the affected replica; non-retryable failure or exhaustion requests rolling, even after quorum success.</td><td>3</td></tr>
                 <tr><td>segmentAppend.maxBatchEntries</td><td>Maximum consecutive queued entries per dispatched batch in both modes. Service mode sends one AddEntries RPC per replica; embedded mode uses local calls. Does not wait for more entries. Values &le; 1 disable batching; retries are individual.</td><td>1000</td></tr>
                 <tr><td>segmentAppend.maxBatchBytes</td><td>Payload threshold for stopping batch collection. The last entry may exceed it; an oversized first entry is sent alone. Values &le; 0 disable the threshold; ignored when maxBatchEntries &le; 1. This is not a strict RPC-size limit. The YAML string 2MB means 2097152 bytes, unlike the numeric default.</td><td>2000000 bytes</td></tr>
-                <tr><td>segmentAppend.maxPendingBytes</td><td>Admitted payload budget in both modes, counted once per entry, with the same credit lifetime as queueSize. Retries reuse credits. 0 uses 64 MiB; one oversized entry may enter when empty. Excludes transport buffers and bookkeeping.</td><td>0 &rarr; 64 MiB</td></tr>
+                <tr><td>segmentAppend.maxPendingBytes</td><td>Admitted payload budget in both modes, counted once per entry, with the same credit lifetime as queueSize. Retries reuse credits. 0 uses 64 MiB; one oversized entry may enter when empty. Excludes transport buffers and bookkeeping.</td><td>64 MiB</td></tr>
                 <tr><td>segmentAppend.sendTimeout</td><td>Milliseconds per remote AddEntry/AddEntries attempt, from stream opening through the first response (normally Buffered), including connection readiness waits inside the RPC. Excludes admission, client-pool lookup and final ACK reads. Embedded local calls do not use it. 0 uses 2000ms.</td><td>2000</td></tr>
                 <tr><td>grpc.dialTimeout</td><td>Time allowed for one connection attempt to a logstore, in ms (gRPC MinConnectTimeout); also bounds a call to an address that never answers</td><td>1000</td></tr>
                 <tr><td>grpc.connectBackoff.baseDelay</td><td>First delay before reconnecting after a failed attempt, in ms</td><td>100</td></tr>
@@ -9040,10 +9040,10 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
                 <tr><td>quorum.selectNodesTimeout</td><td>Time allowed for one SelectNodes call to a seed, in ms; the next seed is asked when it expires</td><td>2000</td></tr>
                 <tr><td>segmentRead.activeTimeout</td><td>Time allowed for one quorum read of an active segment from one replica, in ms; the reader moves to the next replica when it expires</td><td>3000</td></tr>
                 <tr><td>segmentRead.settledTimeout</td><td>Time allowed for one quorum read of any other segment, which may be served from object storage, in ms</td><td>20000</td></tr>
-                <tr><td>segmentRollingPolicy.maxSize</td><td>Maximum segment size in bytes</td><td>100MB</td></tr>
-                <tr><td>segmentRollingPolicy.maxInterval</td><td>Maximum interval between segment rolls (seconds)</td><td>800</td></tr>
+                <tr><td>segmentRollingPolicy.maxSize</td><td>Maximum segment size in bytes</td><td>256 MB</td></tr>
+                <tr><td>segmentRollingPolicy.maxInterval</td><td>Maximum interval between segment rolls (seconds)</td><td>600</td></tr>
                 <tr><td>segmentRollingPolicy.maxBlocks</td><td>Maximum blocks per segment</td><td>1000</td></tr>
-                <tr><td>auditor.maxInterval</td><td>Audit interval in seconds</td><td>5</td></tr>
+                <tr><td>auditor.maxInterval</td><td>Audit interval in seconds</td><td>10</td></tr>
                 <tr><td>sessionMonitor.checkInterval</td><td>Session health check interval (seconds)</td><td>3</td></tr>
                 <tr><td>sessionMonitor.maxFailures</td><td>Consecutive failures before session invalid</td><td>5</td></tr>
             </table>
@@ -9051,18 +9051,18 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
             <h2>LogStore Configuration</h2>
             <table class="doc-table">
                 <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
-                <tr><td>segmentSyncPolicy.maxInterval</td><td>Max sync interval (milliseconds)</td><td>1000</td></tr>
-                <tr><td>segmentSyncPolicy.maxIntervalForLocalStorage</td><td>Sync interval for local storage (ms)</td><td>5</td></tr>
-                <tr><td>segmentSyncPolicy.maxEntries</td><td>Max entries in write buffer</td><td>2000</td></tr>
-                <tr><td>segmentSyncPolicy.maxBytes</td><td>Max write buffer size</td><td>100MB</td></tr>
-                <tr><td>segmentSyncPolicy.maxFlushRetries</td><td>Max sync retries</td><td>3</td></tr>
-                <tr><td>segmentSyncPolicy.retryInterval</td><td>Retry interval (ms)</td><td>2000</td></tr>
-                <tr><td>segmentSyncPolicy.maxFlushSize</td><td>Max block flush size</td><td>16MB</td></tr>
-                <tr><td>segmentSyncPolicy.maxFlushThreads</td><td>Concurrent flush threads</td><td>8</td></tr>
-                <tr><td>segmentCompactionPolicy.maxBytes</td><td>Max merged block size after compaction</td><td>32MB</td></tr>
+                <tr><td>segmentSyncPolicy.maxInterval</td><td>Max sync interval (milliseconds)</td><td>200</td></tr>
+                <tr><td>segmentSyncPolicy.maxIntervalForLocalStorage</td><td>Sync interval for local storage (ms)</td><td>10</td></tr>
+                <tr><td>segmentSyncPolicy.maxEntries</td><td>Max entries in write buffer</td><td>10000</td></tr>
+                <tr><td>segmentSyncPolicy.maxBytes</td><td>Max write buffer size</td><td>256 MB</td></tr>
+                <tr><td>segmentSyncPolicy.maxFlushRetries</td><td>Max sync retries</td><td>5</td></tr>
+                <tr><td>segmentSyncPolicy.retryInterval</td><td>Retry interval (ms)</td><td>1000</td></tr>
+                <tr><td>segmentSyncPolicy.maxFlushSize</td><td>Block flush size trigger</td><td>2 MB</td></tr>
+                <tr><td>segmentSyncPolicy.maxFlushThreads</td><td>Concurrent flush threads</td><td>32</td></tr>
+                <tr><td>segmentCompactionPolicy.maxBytes</td><td>Max merged block size after compaction</td><td>2 MB</td></tr>
                 <tr><td>segmentCompactionPolicy.maxParallelUploads</td><td>Parallel compaction upload threads</td><td>4</td></tr>
                 <tr><td>segmentCompactionPolicy.maxParallelReads</td><td>Parallel compaction read threads</td><td>8</td></tr>
-                <tr><td>segmentReadPolicy.maxBatchSize</td><td>Max read batch size</td><td>16MB</td></tr>
+                <tr><td>segmentReadPolicy.maxBatchSize</td><td>Max read batch size</td><td>2 MB</td></tr>
                 <tr><td>segmentReadPolicy.maxFetchThreads</td><td>Concurrent fetch threads</td><td>32</td></tr>
                 <tr><td>retentionPolicy.ttl</td><td>TTL for truncated segments (seconds)</td><td>259200 (72h)</td></tr>
                 <tr><td>processorCleanupPolicy.cleanupInterval</td><td>Idle processor scan interval (seconds)</td><td>60</td></tr>
@@ -9072,7 +9072,7 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
             <h2>Storage Configuration</h2>
             <table class="doc-table">
                 <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
-                <tr><td>storage.type</td><td>Storage backend: <code>default</code> (=minio), <code>minio</code>, <code>local</code>, <code>service</code></td><td>default</td></tr>
+                <tr><td>storage.type</td><td>Storage backend: <code>default</code> (=minio), <code>minio</code>, <code>local</code>, <code>service</code></td><td>minio</td></tr>
                 <tr><td>storage.rootPath</td><td>Root path for log data files</td><td>/var/lib/woodpecker</td></tr>
             </table>
 
@@ -9370,10 +9370,10 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
             <ol>
                 <li>Application calls <code>Write()</code> or <code>WriteAsync()</code> on a LogWriter</li>
                 <li>Writer validates the session lock is still valid (distributed lock via etcd)</li>
-                <li>Gets or creates a writable segment via rolling policy (<code>maxSize</code>=100MB, <code>maxInterval</code>=800s, <code>maxBlocks</code>=1000)</li>
+                <li>Gets or creates a writable segment via rolling policy (<code>maxSize</code>=256 MB, <code>maxInterval</code>=600s, <code>maxBlocks</code>=1000)</li>
                 <li>Serializes message with <code>MarshalMessage()</code> (payload + properties)</li>
                 <li>Calls <code>segment.AppendAsync()</code> &mdash; data is buffered</li>
-                <li>Buffer is flushed to storage when sync policy triggers (<code>maxInterval</code>=1000ms, <code>maxEntries</code>=2000, <code>maxBytes</code>=100MB)</li>
+                <li>Buffer is flushed to storage when sync policy triggers (<code>maxInterval</code>=200ms, <code>maxEntries</code>=10000, <code>maxBytes</code>=256 MB)</li>
                 <li>Segment metadata updated in etcd with revision-based optimistic locking</li>
             </ol>
             <h3>Read Path</h3>
@@ -9571,10 +9571,10 @@ VERIFIED mode=minio messages=1</code></pre></div></div><p><code>WROTE</code> rep
             <h2>Performance Best Practices</h2>
             <h3>Write Optimization</h3>
             <ul>
-                <li>The default <code>maxFlushSize</code> is <strong>16MB</strong> &mdash; increase for larger batch uploads to reduce API call overhead</li>
-                <li>Default <code>maxFlushThreads</code> is <strong>8</strong> &mdash; increase for higher parallelism on fast networks</li>
+                <li>The default <code>maxFlushSize</code> is <strong>2 MB</strong> &mdash; increase for larger batch uploads to reduce API call overhead</li>
+                <li>Default <code>maxFlushThreads</code> is <strong>32</strong> &mdash; increase for higher parallelism on fast networks</li>
                 <li>Use <code>WriteAsync</code> with batching for maximum throughput</li>
-                <li>Compaction merges small blocks into <strong>32MB</strong> merged blocks (configurable via <code>segmentCompactionPolicy.maxBytes</code>)</li>
+                <li>Compaction merges small blocks into <strong>2 MB</strong> merged blocks (configurable via <code>segmentCompactionPolicy.maxBytes</code>)</li>
             </ul>
             <h3>Read Optimization</h3>
             <ul>

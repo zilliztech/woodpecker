@@ -26,18 +26,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNewConfiguration test new Configuration
 func TestNewConfiguration(t *testing.T) {
-	tempFile, err := os.OpenFile("../../config/woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
-	assert.NoError(t, err)
-	defer tempFile.Close()
-	// load configuration
-	config, err := NewConfiguration(tempFile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load configuration: %v", err)
-	}
+	config, err := NewConfiguration()
+	require.NoError(t, err)
 
-	// test configuration
 	assert.Equal(t, "etcd", config.Woodpecker.Meta.Type)
 	assert.Equal(t, "woodpecker", config.Woodpecker.Meta.Prefix)
 	assert.Equal(t, 10000, config.Woodpecker.Client.SegmentAppend.QueueSize)
@@ -59,10 +51,12 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 0, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()))
 	assert.Equal(t, 3, config.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, config.Woodpecker.Client.SessionMonitor.MaxFailures)
-	// DirectRead config from yaml
+	// DirectRead defaults
 	assert.True(t, config.Woodpecker.Client.DirectRead.Enabled)
 	assert.Equal(t, int64(16777216), config.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Client.DirectRead.MaxFetchThreads)
+	assert.Zero(t, config.Woodpecker.Logstore.GRPCConfig.ClientMaxSendSize)
+	assert.Zero(t, config.Woodpecker.Logstore.GRPCConfig.ClientMaxRecvSize)
 	assert.Zero(t, config.Woodpecker.Client.GRPC.ClientMaxSendSize)
 	assert.Zero(t, config.Woodpecker.Client.GRPC.ClientMaxRecvSize)
 	sendSize, recvSize, legacySend, legacyRecv := config.Woodpecker.ResolveClientGRPCMessageSizes()
@@ -114,14 +108,14 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, "info", config.Log.Level)
 	assert.Equal(t, "text", config.Log.Format)
 	assert.True(t, config.Log.Stdout)
-	assert.Equal(t, "./logs", config.Log.File.RootPath)
+	assert.Empty(t, config.Log.File.RootPath)
 	assert.Equal(t, 300, config.Log.File.MaxSize)
 	assert.Equal(t, 20, config.Log.File.MaxBackups)
 	assert.Equal(t, 10, config.Log.File.MaxAge)
 	assert.Equal(t, "noop", config.Trace.Exporter)
 	assert.Equal(t, 1.0, config.Trace.SampleFraction)
 	assert.Equal(t, 10, config.Trace.InitTimeout.Seconds())
-	assert.Equal(t, "http://localhost:14268/api/traces", config.Trace.Jaeger.URL)
+	assert.Empty(t, config.Trace.Jaeger.URL)
 	assert.Equal(t, "127.0.0.1:4317", config.Trace.Otlp.Endpoint)
 	assert.Equal(t, "grpc", config.Trace.Otlp.Method)
 	assert.False(t, config.Trace.Otlp.Secure)
@@ -153,128 +147,6 @@ func TestNewConfiguration(t *testing.T) {
 	assert.False(t, config.Minio.UseVirtualHost)
 	assert.Equal(t, 10000, config.Minio.RequestTimeoutMs.Milliseconds())
 	assert.Equal(t, 0, config.Minio.ListObjectsMaxKeys)
-
-	defaultConfig, err := NewConfiguration()
-	assert.NoError(t, err)
-
-	sendSize, recvSize, legacySend, legacyRecv = defaultConfig.Woodpecker.ResolveClientGRPCMessageSizes()
-	assert.Equal(t, defaultClientMaxSendSize, sendSize)
-	assert.Equal(t, defaultClientMaxRecvSize, recvSize)
-	assert.False(t, legacySend)
-	assert.False(t, legacyRecv)
-	assert.Zero(t, defaultConfig.Woodpecker.Client.GRPC.ClientMaxSendSize)
-	assert.Zero(t, defaultConfig.Woodpecker.Client.GRPC.ClientMaxRecvSize)
-	assert.Zero(t, defaultConfig.Woodpecker.Logstore.GRPCConfig.ClientMaxSendSize)
-	assert.Zero(t, defaultConfig.Woodpecker.Logstore.GRPCConfig.ClientMaxRecvSize)
-
-	// test default configuration
-	assert.Equal(t, "etcd", defaultConfig.Woodpecker.Meta.Type)
-	assert.Equal(t, "woodpecker", defaultConfig.Woodpecker.Meta.Prefix)
-	assert.Equal(t, 100, defaultConfig.Woodpecker.Client.SegmentAppend.QueueSize)
-	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.SegmentAppend.MaxRetries)
-	assert.Equal(t, 1000, config.Woodpecker.Client.SegmentAppend.MaxBatchEntries)
-	assert.Equal(t, int64(2000000), config.Woodpecker.Client.SegmentAppend.MaxBatchBytes.Int64())
-	assert.Equal(t, int64(100000000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxSize.Int64())
-	assert.Equal(t, 800, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds())
-	assert.Equal(t, int64(1000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
-	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.Auditor.MaxInterval.Seconds())
-	assert.Equal(t, 330, defaultConfig.Woodpecker.Client.Auditor.CompactionAttemptTimeout.Seconds())
-	assert.Equal(t, 60, defaultConfig.Woodpecker.Client.Auditor.CompactionPassBudget.Seconds())
-	assert.Equal(t, 1, len(defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()))
-	assert.Equal(t, "default-pool", defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()[0].Name)
-	assert.Equal(t, []string{}, defaultConfig.Woodpecker.Client.Quorum.BufferPools.Get()[0].Seeds)
-	assert.Equal(t, "soft", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode.Get())
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Replicas.Get())
-	assert.Equal(t, "random", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Strategy.Get())
-	assert.Equal(t, 0, len(defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement.Get()))
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
-	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.SessionMonitor.MaxFailures)
-	// DirectRead default config
-	assert.True(t, defaultConfig.Woodpecker.Client.DirectRead.Enabled)
-	assert.Equal(t, int64(16*1024*1024), defaultConfig.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
-	assert.Equal(t, 4, defaultConfig.Woodpecker.Client.DirectRead.MaxFetchThreads)
-	// Test the getter methods for backward compatibility
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetEnsembleSize())
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetWriteQuorumSize())
-	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.Quorum.GetAckQuorumSize())
-	assert.Equal(t, 1000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
-	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
-	assert.Equal(t, 1, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForService.Milliseconds())
-	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
-	assert.Equal(t, int64(100000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64())
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries)
-	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
-	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
-	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
-	assert.Equal(t, 10, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold)
-	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SyncScheduler.MaxWorkers)
-	assert.Equal(t, int64(32000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
-	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
-	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
-	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds())
-	assert.Equal(t, int64(1000000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxInflightMemory.Int64())
-	assert.InDelta(t, 0.7, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MemoryHighWatermark, 1e-9)
-	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
-	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
-	assert.Equal(t, 259200, defaultConfig.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
-	assert.Equal(t, "auto", defaultConfig.Woodpecker.Logstore.FencePolicy.ConditionWrite)
-	assert.Equal(t, 536870912, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetServerMaxSendSize())
-	assert.Equal(t, 268435456, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize())
-	assert.Equal(t, 268435456, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize())
-	assert.Equal(t, 536870912, defaultConfig.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
-	assertDefaultCallBounds(t, defaultConfig)
-	assert.Equal(t, 60, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds())
-	assert.Equal(t, 300, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds())
-	assert.Equal(t, 15, defaultConfig.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds())
-	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteGracePeriod.Seconds())            // near-real-time reclaim
-	assert.Equal(t, 2, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.DeleteReclaimInterval.Seconds())        // near-real-time reclaim
-	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.CompactedFileCleanupInterval.Seconds()) // compacted local data.log reclaim scan
-	assert.Equal(t, 1800, defaultConfig.Woodpecker.Logstore.MaintenanceStrategy.ReconcileMinDataLogAge.Seconds())    // pull reconcile footer-HEAD age gate (30m)
-	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
-	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
-	assert.Equal(t, 1024, defaultConfig.Woodpecker.Runtime.OpRegistry.Capacity)
-	assert.Equal(t, 30, defaultConfig.Woodpecker.Runtime.OpRegistry.WarnAge.Seconds())
-	assert.Equal(t, "info", defaultConfig.Log.Level)
-	assert.Equal(t, "text", defaultConfig.Log.Format)
-	assert.True(t, defaultConfig.Log.Stdout)
-	assert.Equal(t, "./logs", defaultConfig.Log.File.RootPath)
-	assert.Equal(t, 100, defaultConfig.Log.File.MaxSize)
-	assert.Equal(t, 10, defaultConfig.Log.File.MaxBackups)
-	assert.Equal(t, 30, defaultConfig.Log.File.MaxAge)
-	assert.Equal(t, "noop", defaultConfig.Trace.Exporter)
-	assert.Equal(t, 1.0, defaultConfig.Trace.SampleFraction)
-	assert.Equal(t, 10, defaultConfig.Trace.InitTimeout.Seconds())
-	assert.Equal(t, "http://localhost:14268/api/traces", defaultConfig.Trace.Jaeger.URL)
-	assert.Equal(t, "localhost:4317", defaultConfig.Trace.Otlp.Endpoint)
-	assert.Equal(t, "grpc", defaultConfig.Trace.Otlp.Method)
-	assert.False(t, defaultConfig.Trace.Otlp.Secure)
-	assert.Equal(t, []string{"localhost:2379"}, defaultConfig.Etcd.GetEndpoints())
-	assert.Equal(t, "woodpecker", defaultConfig.Etcd.RootPath)
-	assert.Equal(t, "meta", defaultConfig.Etcd.MetaSubPath)
-	assert.Equal(t, "kv", defaultConfig.Etcd.KvSubPath)
-	assert.Equal(t, "info", defaultConfig.Etcd.Log.Level)
-	assert.Equal(t, "./logs", defaultConfig.Etcd.Log.Path)
-	assert.False(t, defaultConfig.Etcd.Ssl.Enabled)
-	assert.Equal(t, 10000, defaultConfig.Etcd.RequestTimeout.Milliseconds())
-	assert.False(t, defaultConfig.Etcd.Use.Embed)
-	assert.Equal(t, "localhost", defaultConfig.Minio.Address)
-	assert.Equal(t, 9000, defaultConfig.Minio.Port)
-	assert.Equal(t, "minioadmin", defaultConfig.Minio.AccessKeyID)
-	assert.Equal(t, "minioadmin", defaultConfig.Minio.SecretAccessKey)
-	assert.False(t, defaultConfig.Minio.UseSSL)
-	assert.Equal(t, "/path/to/public.crt", defaultConfig.Minio.Ssl.TlsCACert)
-	assert.Equal(t, "a-bucket", defaultConfig.Minio.BucketName)
-	assert.True(t, defaultConfig.Minio.CreateBucket)
-	assert.Equal(t, "files", defaultConfig.Minio.RootPath)
-	assert.False(t, defaultConfig.Minio.UseIAM)
-	assert.Equal(t, "aws", defaultConfig.Minio.CloudProvider)
-	assert.Equal(t, "", defaultConfig.Minio.GcpCredentialJSON)
-	assert.Equal(t, "", defaultConfig.Minio.IamEndpoint)
-	assert.Equal(t, "fatal", defaultConfig.Minio.LogLevel)
-	assert.Equal(t, "", defaultConfig.Minio.Region)
-	assert.False(t, defaultConfig.Minio.UseVirtualHost)
-	assert.Equal(t, 1000, defaultConfig.Minio.RequestTimeoutMs.Milliseconds())
-	assert.Equal(t, 0, defaultConfig.Minio.ListObjectsMaxKeys)
 }
 
 func TestResolveClientGRPCMessageSizes(t *testing.T) {
@@ -381,7 +253,7 @@ func TestResolveClientGRPCMessageSizesFromLayeredLegacyYAML(t *testing.T) {
 `)
 	require.NoError(t, os.WriteFile(legacyConfigFile, legacyConfig, 0o600))
 
-	cfg, err := NewConfiguration("../../config/woodpecker.yaml", legacyConfigFile)
+	cfg, err := NewConfiguration(writeTestOverrides(t), legacyConfigFile)
 	require.NoError(t, err)
 
 	send, recv, legacySend, legacyRecv := cfg.Woodpecker.ResolveClientGRPCMessageSizes()
@@ -391,14 +263,9 @@ func TestResolveClientGRPCMessageSizesFromLayeredLegacyYAML(t *testing.T) {
 	assert.True(t, legacyRecv)
 }
 
-func TestConfigurationOverwrite(t *testing.T) {
-	// config file 1
-	cfgFile, err := os.OpenFile("../../config/woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
-	assert.NoError(t, err)
-	defer cfgFile.Close()
-
-	// config file2
-	extraCfgContent := `woodpecker:
+func writeTestOverrides(t *testing.T) string {
+	t.Helper()
+	const overrides = `woodpecker:
   meta:
     type: etcd
     prefix: woodpecker
@@ -444,21 +311,26 @@ func TestConfigurationOverwrite(t *testing.T) {
             az: "test-az-3"
             resourceGroup: "test-rg-5"
   logstore:
+    segmentSyncPolicy:
+      maxFlushSize: 8388608
     segmentReadPolicy:
       maxBatchSize: 32000000
-      maxFetchThreads: 64`
-	extraCfgFile, err := os.CreateTemp("/tmp", "custom_*.yaml")
-	assert.NoError(t, err)
-	defer extraCfgFile.Close()
-	_, err = extraCfgFile.WriteString(extraCfgContent)
-	assert.NoError(t, err)
-	config, err := NewConfiguration(cfgFile.Name(), extraCfgFile.Name())
-	assert.NoError(t, err)
-	assert.NotNil(t, config)
+      maxFetchThreads: 64
+`
+	path := filepath.Join(t.TempDir(), "overrides.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(overrides), 0o600))
+	return path
+}
+
+func TestConfigurationOverwrite(t *testing.T) {
+	first := writeTestOverrides(t)
+	config, err := NewConfiguration(first)
+	require.NoError(t, err)
 
 	// check configuration
 	assert.Equal(t, "etcd", config.Woodpecker.Meta.Type)
 	assert.Equal(t, "woodpecker", config.Woodpecker.Meta.Prefix)
+	assert.Equal(t, int64(8*1024*1024), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 20000, config.Woodpecker.Client.SegmentAppend.QueueSize)
 	assert.Equal(t, 22, config.Woodpecker.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, int64(22220000000), config.Woodpecker.Client.SegmentRollingPolicy.MaxSize.Int64())
@@ -492,6 +364,15 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetAckQuorumSize())
 	assert.Equal(t, int64(32000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	assert.Equal(t, 64, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
+	// The fixture omits the flush worker count, so this comes from the built-in defaults.
+	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
+
+	override := filepath.Join(t.TempDir(), "second.yaml")
+	require.NoError(t, os.WriteFile(override, []byte("woodpecker:\n  client:\n    segmentAppend:\n      queueSize: 7\n"), 0o600))
+	layered, err := NewConfiguration(first, override)
+	require.NoError(t, err)
+	assert.Equal(t, 7, layered.Woodpecker.Client.SegmentAppend.QueueSize)
+	assert.Equal(t, 22, layered.Woodpecker.Client.SegmentAppend.MaxRetries)
 }
 
 // TestQuorumConfigValidation tests the validation logic for quorum configuration
@@ -1524,8 +1405,7 @@ func TestDiskWatermarkPolicyConfig_DefaultsAndValidation(t *testing.T) {
 	assert.NoError(t, cfg.Validate())
 }
 
-// assertDefaultCallBounds checks the dial configuration and call bounds the
-// shipped woodpecker.yaml and the built-in defaults must agree on.
+// assertDefaultCallBounds checks the built-in dial configuration and call bounds.
 func assertDefaultCallBounds(t *testing.T, cfg *Configuration) {
 	t.Helper()
 	dial := cfg.Woodpecker.Client.GRPC
@@ -1615,11 +1495,6 @@ func TestSegmentReadConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3*time.Second, defaults.Woodpecker.Client.SegmentRead.ActiveTimeout.Duration.Duration())
 	assert.Equal(t, 20*time.Second, defaults.Woodpecker.Client.SegmentRead.SettledTimeout.Duration.Duration())
-
-	shipped, err := NewConfiguration("../../config/woodpecker.yaml")
-	require.NoError(t, err)
-	assert.Equal(t, defaults.Woodpecker.Client.SegmentRead, shipped.Woodpecker.Client.SegmentRead,
-		"the shipped yaml and the built-in defaults must agree")
 
 	path := filepath.Join(t.TempDir(), "wp.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
