@@ -548,6 +548,10 @@ func (w *StagedFileWriter) rollBufferAndEnqueueFlushTaskUnsafe(ctx context.Conte
 	return true
 }
 
+func (w *StagedFileWriter) needsClosingFlush() bool {
+	return w.fenced.Load() || w.finalizing.Load() || w.closed.Load()
+}
+
 func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
 	// Only the job that claims the queued state can consume this writer's FIFO.
 	// Promotion leaves a harmless job in the normal queue. An in-flight flush
@@ -556,7 +560,7 @@ func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
 	for {
 		state := w.flushDrainState.Load()
 		queued = flushDrainNormalQueued
-		if w.fenced.Load() || w.finalizing.Load() || w.closed.Load() {
+		if w.needsClosingFlush() {
 			queued = flushDrainClosingQueued
 		}
 		if state != flushDrainIdle && !(state == flushDrainNormalQueued && queued == flushDrainClosingQueued) {
@@ -568,7 +572,7 @@ func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
 	}
 	job := func(context.Context) {
 		if w.flushDrainState.CompareAndSwap(queued, flushDrainRunning) {
-			w.processFlushTasksQueue()
+			w.processFlushTasksQueue(queued == flushDrainClosingQueued)
 		}
 	}
 	if scheduler := w.syncScheduler; scheduler != nil {
@@ -584,7 +588,7 @@ func (w *StagedFileWriter) startFlushTasksQueueProcessing(ctx context.Context) {
 	job(ctx)
 }
 
-func (w *StagedFileWriter) processFlushTasksQueue() {
+func (w *StagedFileWriter) processFlushTasksQueue(closingWorker bool) {
 	defer func() {
 		w.flushDrainState.Store(flushDrainIdle)
 		if w.runCtx.Err() == nil && len(w.flushTaskChan) > 0 {
@@ -592,7 +596,9 @@ func (w *StagedFileWriter) processFlushTasksQueue() {
 		}
 	}()
 
-	for {
+	// A cancelled Finalize can reopen this writer while a closing job is queued
+	// or flushing a block. Yield before taking more work from a writable segment.
+	for !closingWorker || w.needsClosingFlush() {
 		select {
 		case <-w.runCtx.Done():
 			return
