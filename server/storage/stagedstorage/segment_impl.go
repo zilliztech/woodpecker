@@ -162,7 +162,9 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 	// List all objects in the segment directory. The prefix is built verbatim from rootPath —
 	// exactly how the writer built the object keys — so the walk covers everything the writer
 	// stored. rootPath is validated clean at startup (config.Validate); no normalization here.
-	listPrefix := fmt.Sprintf("%s/%s", rs.rootPath, rs.segmentFileKey)
+	// The trailing slash matters: a non-recursive listing without it returns the segment
+	// directory as a common prefix and no objects, so nothing would be deleted.
+	listPrefix := fmt.Sprintf("%s/%s/", rs.rootPath, rs.segmentFileKey)
 	type objectToDelete struct {
 		path string
 		size int64
