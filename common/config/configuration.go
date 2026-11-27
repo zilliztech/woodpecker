@@ -797,10 +797,13 @@ func ValidateRootPathValue(rp string) error {
 		return nil // empty = bucket root
 	}
 	if rp == "." || rp == ".." || strings.HasPrefix(rp, "/") || strings.HasSuffix(rp, "/") ||
-		strings.HasPrefix(rp, "../") || rp != path.Clean(rp) {
+		strings.HasPrefix(rp, "../") || rp != path.Clean(rp) ||
+		strings.Contains(rp, "\\") ||
+		(len(rp) >= 2 && rp[1] == ':' &&
+			((rp[0] >= 'A' && rp[0] <= 'Z') || (rp[0] >= 'a' && rp[0] <= 'z'))) {
 		return fmt.Errorf("invalid minio rootPath %q: must be a clean relative path such as "+
 			"\"woodpecker\" or \"wp/data\" (no leading/trailing/doubled slashes, no \".\" or \"..\" "+
-			"segments), or empty for the bucket root", rp)
+			"segments, no backslashes or Windows drive prefixes), or empty for the bucket root", rp)
 	}
 	return nil
 }

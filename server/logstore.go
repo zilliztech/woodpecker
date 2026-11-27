@@ -922,6 +922,15 @@ func (l *logStore) HasLocalSegmentData() bool {
 // (an offline WAL switch, a cold restore) can rely on the reply. Both paths write the marker
 // first and go through reclaimMarker, so a crash mid-way is still picked up by the task.
 func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath string, logId int64, sync bool) (bool, error) {
+	// Both values come from an unauthenticated RPC and are joined into local paths
+	// below (marker and data dirs). A ".." segment would resolve outside the storage
+	// root, so reject anything that is not a clean relative path before any IO.
+	if err := config.ValidateRootPathValue(bucketName); err != nil {
+		return false, werr.ErrLogStoreInvalidRootPath.WithCauseErr(err)
+	}
+	if err := config.ValidateRootPathValue(rootPath); err != nil {
+		return false, werr.ErrLogStoreInvalidRootPath.WithCauseErr(err)
+	}
 	root := l.cfg.Woodpecker.Storage.RootPath
 	marker := deleteMarker{
 		Bucket: bucketName, RootPath: rootPath, LogId: logId, DeletedAt: time.Now().Unix(),
@@ -964,6 +973,13 @@ func (l *logStore) EvictLog(ctx context.Context, bucketName string, rootPath str
 }
 
 func (l *logStore) EvictInstance(ctx context.Context, bucketName string, rootPath string) error {
+	// Same trust boundary as EvictLog: these values become on-disk paths.
+	if err := config.ValidateRootPathValue(bucketName); err != nil {
+		return werr.ErrLogStoreInvalidRootPath.WithCauseErr(err)
+	}
+	if err := config.ValidateRootPathValue(rootPath); err != nil {
+		return werr.ErrLogStoreInvalidRootPath.WithCauseErr(err)
+	}
 	if root := l.cfg.Woodpecker.Storage.RootPath; root != "" {
 		if err := writeDeleteMarker(ctx, root, deleteMarker{
 			Bucket: bucketName, RootPath: rootPath, Instance: true, DeletedAt: time.Now().Unix(),

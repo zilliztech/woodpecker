@@ -953,6 +953,17 @@ func TestValidateMinioRootPath(t *testing.T) {
 	}
 }
 
+func TestValidateRootPathValueRejectsWindowsPaths(t *testing.T) {
+	// A Windows binary treats backslashes and drive letters as path syntax, so a value that
+	// merely looks like a plain name under path.Clean can still escape the storage root.
+	for _, rp := range []string{`..\victim`, `C:\evil`, `\\server\share`, `C:/evil`, `c:evil`} {
+		assert.Error(t, ValidateRootPathValue(rp), "rootPath %q must be rejected", rp)
+	}
+	for _, rp := range []string{"", "woodpecker", "wp/data"} {
+		assert.NoError(t, ValidateRootPathValue(rp), "rootPath %q must be accepted", rp)
+	}
+}
+
 func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
 	makeServiceCfg := func(q QuorumConfig) *Configuration {
 		cfg, _ := NewConfiguration()
