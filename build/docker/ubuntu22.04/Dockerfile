@@ -15,7 +15,8 @@
 # limitations under the License.
 
 # Use Ubuntu as base image
-FROM ubuntu:jammy-20240530
+# Base image pinned to a registry digest so rebuilds cannot pick up a different image.
+FROM ubuntu:jammy-20240530@sha256:19478ce7fc2ffbce89df29fea5725a8d12e57de52eb9ea570890dc5852aac1ac
 
 # Build arguments for multi-platform support
 ARG TARGETPLATFORM

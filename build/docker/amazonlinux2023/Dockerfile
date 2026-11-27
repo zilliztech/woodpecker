@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM amazonlinux:2023
+# Base image pinned to a registry digest so rebuilds cannot pick up a different image.
+FROM amazonlinux:2023@sha256:9cf762f5099b606bcd851391317af7cd75b11363c4816ebcb5e91292dd5736a7
 
 # Build arguments for multi-platform support
 ARG TARGETPLATFORM
