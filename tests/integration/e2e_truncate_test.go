@@ -812,11 +812,21 @@ func TestReopenAtTruncatedButNotGCedPosition(t *testing.T) {
 	}
 }
 
-func TestStagedStorageService_TruncateCleanupDeletesOnlyTargetSegmentObjects(t *testing.T) {
+func TestTruncateCleanupDeletesOnlyTargetSegmentObjects(t *testing.T) {
+	t.Run("ServiceStorage", func(t *testing.T) {
+		testTruncateCleanupSegmentObjects(t, "service")
+	})
+	t.Run("ObjectStorage", func(t *testing.T) {
+		testTruncateCleanupSegmentObjects(t, "minio")
+	})
+}
+
+func testTruncateCleanupSegmentObjects(t *testing.T, storageType string) {
+	t.Helper()
 	root := fmt.Sprintf("test-truncate-cleanup-%d", time.Now().UnixNano())
 	objects, cfg, _ := setupStagedFileTest(t, root)
 	defer cleanupStagedTestObjects(t, objects, root+"/")
-	cfg.Woodpecker.Storage.Type = "service"
+	cfg.Woodpecker.Storage.Type = storageType
 	utils.DisableDiskWatermark(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
