@@ -20,7 +20,8 @@ require (
 	github.com/hashicorp/memberlist v0.5.3
 	github.com/jonboulle/clockwork v0.2.2
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.17.9
+	// Keep at or above v1.18.7: earlier releases have an integer overflow in s2.NewDict.
+	github.com/klauspost/compress v1.18.7
 	github.com/labstack/gommon v0.3.0
 	github.com/minio/minio-go/v7 v7.0.73
 	github.com/panjf2000/ants/v2 v2.11.3
