@@ -673,7 +673,9 @@ func TestDeleteFileData_ReadDirError(t *testing.T) {
 // verbatim <rootPath>/<logId>/<segId> layout the writer stores objects under (getFooterBlockKey /
 // getCompactedBlockKey build "<rootPath>/<logId>/<segId>/..."). rootPath is validated clean at
 // startup and used raw on both sides; if either side ever diverges from this layout the strict
-// mock expectation fails and flags the delete as leaking every compacted object.
+// mock expectation fails and flags the delete as leaking every compacted object. The trailing
+// slash is part of the layout: a non-recursive listing of "<rootPath>/<logId>/<segId>" returns
+// only the common prefix "<rootPath>/<logId>/<segId>/" and no objects.
 func TestDeleteFileData_WalkPrefixMatchesWriterKeys(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.NewConfiguration()
@@ -686,7 +688,7 @@ func TestDeleteFileData_WalkPrefixMatchesWriterKeys(t *testing.T) {
 
 	client := mocks_objectstorage.NewObjectStorage(t)
 	// Must equal the prefix of the writer's object keys for (rootPath="test-root", 7, 4).
-	client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-root/7/4", false, mock.Anything, mock.Anything, mock.Anything).
+	client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-root/7/4/", false, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
 	seg := NewStagedSegmentImpl(context.Background(), "test-bucket", "test-root", dir, logId, segId, client, cfg)
