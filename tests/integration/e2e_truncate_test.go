@@ -28,8 +28,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server"
+	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
@@ -806,6 +809,62 @@ func TestReopenAtTruncatedButNotGCedPosition(t *testing.T) {
 			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
 			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
+	}
+}
+
+func TestTruncateCleanupDeletesOnlyTargetSegmentObjects(t *testing.T) {
+	t.Run("ServiceStorage", func(t *testing.T) {
+		testTruncateCleanupSegmentObjects(t, "service")
+	})
+	t.Run("ObjectStorage", func(t *testing.T) {
+		testTruncateCleanupSegmentObjects(t, "minio")
+	})
+}
+
+func testTruncateCleanupSegmentObjects(t *testing.T, storageType string) {
+	t.Helper()
+	root := fmt.Sprintf("test-truncate-cleanup-%d", time.Now().UnixNano())
+	objects, cfg, _ := setupStagedFileTest(t, root)
+	defer cleanupStagedTestObjects(t, objects, root+"/")
+	cfg.Woodpecker.Storage.Type = storageType
+	utils.DisableDiskWatermark(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	store := server.NewLogStore(ctx, cfg, objects)
+	require.NoError(t, store.Start())
+	defer func() { assert.NoError(t, store.Stop()) }()
+
+	const logID, target, sibling = 7, 4, 40
+	bucket := cfg.Minio.BucketName
+	stat := func(segmentID int64, name string) error {
+		key := fmt.Sprintf("%s/%d/%d/%s", root, logID, segmentID, name)
+		_, _, err := objects.StatObject(ctx, bucket, key, "test-ns", strconv.FormatInt(logID, 10))
+		return err
+	}
+	files := []string{"footer.blk", "m_0.blk"}
+	// The two segment IDs share a string prefix in MinIO.
+	for _, id := range []int64{target, sibling} {
+		synced := channel.NewLocalResultChannel(t.Name())
+		_, err := store.AddEntry(ctx, bucket, root, logID, &proto.LogEntry{SegId: id, EntryId: 0, Values: []byte("entry")}, synced)
+		require.NoError(t, err)
+		result, err := synced.ReadResult(ctx)
+		require.NoError(t, err)
+		require.NoError(t, result.Err)
+		_, err = store.CompleteSegment(ctx, bucket, root, logID, id, 0)
+		require.NoError(t, err)
+		_, err = store.CompactSegment(ctx, bucket, root, logID, id, 0)
+		require.NoError(t, err)
+		for _, name := range files {
+			require.NoError(t, stat(id, name), "compacted object %d/%s", id, name)
+		}
+	}
+
+	// The truncate auditor sends this full cleanup request after retention expires.
+	require.NoError(t, store.CleanSegment(ctx, bucket, root, logID, target, 0))
+	for _, name := range files {
+		err := stat(target, name)
+		assert.True(t, objects.IsObjectNotExistsError(err), "expected %d/%s to be deleted, stat returned %v", target, name, err)
+		assert.NoError(t, stat(sibling, name), "neighboring segment lost %d/%s", sibling, name)
 	}
 }
 
