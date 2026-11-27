@@ -113,7 +113,7 @@ func (l *LocalResultChannel) Close(ctx context.Context) error {
 }
 
 // String renders the channel without exposing its fields to reflection; see the
-// comment on RemoteResultChannel.String for why a mutex-guarded type has to
+// comment on mutex-guarded channel stringers for why a type has to
 // control how it is printed.
 func (l *LocalResultChannel) String() string {
 	l.mu.RLock()

@@ -24,7 +24,7 @@ import (
 )
 
 // ResultChannel is an abstract interface for handling asynchronous result notifications.
-// The local implementation directly uses Go channels, while the remote implementation uses gRPC streams + identifiers.
+// Client implementations deliver both local and remote results through the same mailbox.
 type ResultChannel interface {
 	// GetIdentifier returns the unique identifier of this result channel.
 	GetIdentifier() string

@@ -280,7 +280,7 @@ func TestReplicaAppenderLateACKAfterTimeoutCannotCompleteRetry(t *testing.T) {
 	}
 }
 
-func TestReplicaAppenderRemoteBatchRetryUsesFreshRemoteChannel(t *testing.T) {
+func TestReplicaAppenderRemoteBatchRetryUsesFreshLocalChannel(t *testing.T) {
 	c, sends := controlledAppenderClient(true)
 	h := appenderFixture(t, true, config.SegmentAppendConfig{QueueSize: 3, MaxRetries: 2}, c)
 	holdExecutorForBatch(h, 3)
@@ -303,7 +303,7 @@ func TestReplicaAppenderRemoteBatchRetryUsesFreshRemoteChannel(t *testing.T) {
 	retry := receive(t, sends)
 	require.Len(t, retry.entries, 1)
 	require.Equal(t, int64(1), retry.entries[0].EntryId)
-	require.IsType(t, (*channel.RemoteResultChannel)(nil), retry.channels[0])
+	require.IsType(t, (*channel.LocalResultChannel)(nil), retry.channels[0])
 	require.NotSame(t, batch.channels[1], retry.channels[0])
 	require.True(t, batch.channels[1].IsClosed())
 	waitForPendingQuorum(t, h, 2)

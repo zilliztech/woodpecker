@@ -140,7 +140,7 @@ func TestRemoteClient_BasicAppend(t *testing.T) {
 			logId := generateUniqueLogId()
 
 			// Create result channel
-			resultCh := channel.NewRemoteResultChannel("test")
+			resultCh := channel.NewLocalResultChannel("test")
 
 			// Prepare entry
 			entry := &proto.LogEntry{
@@ -269,7 +269,7 @@ func TestRemoteClient_MultipleAppends(t *testing.T) {
 
 			// Submit all appends
 			for i := 0; i < numAppends; i++ {
-				resultChannels[i] = channel.NewRemoteResultChannel(fmt.Sprintf("test-%d", i))
+				resultChannels[i] = channel.NewLocalResultChannel(fmt.Sprintf("test-%d", i))
 				entry := &proto.LogEntry{
 					SegId:   100,
 					EntryId: int64(i), // Start from 0, 1, 2, ...
@@ -393,7 +393,7 @@ func TestRemoteClient_ClientClose(t *testing.T) {
 			logId := generateUniqueLogId() // Use unique logId for client close test
 
 			// Submit an append
-			resultCh := channel.NewRemoteResultChannel("test")
+			resultCh := channel.NewLocalResultChannel("test")
 			entry := &proto.LogEntry{
 				SegId:   100,
 				EntryId: 0,
