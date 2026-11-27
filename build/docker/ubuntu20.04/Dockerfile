@@ -36,12 +36,14 @@ RUN apt-get update && \
 #    && rm -rf /var/lib/apt/lists/*
 
 # Install tini for proper signal handling (multi-platform support)
+# Reject the binary when its bytes do not match the pinned v0.19.0 release.
 RUN case ${TARGETPLATFORM} in \
-    "linux/amd64") TINI_ARCH=amd64 ;; \
-    "linux/arm64") TINI_ARCH=arm64 ;; \
+    "linux/amd64") TINI_ARCH=amd64; TINI_SHA=93dcc18adc78c65a028a84799ecf8ad40c936fdfc5f2a57b1acda5a8117fa82c ;; \
+    "linux/arm64") TINI_ARCH=arm64; TINI_SHA=07952557df20bfd2a95f9bef198b445e006171969499a1d361bd9e6f8e5e0e81 ;; \
     *) echo "Unsupported platform: ${TARGETPLATFORM}" && exit 1 ;; \
     esac && \
     curl -L -o /tini https://github.com/krallin/tini/releases/download/v0.19.0/tini-${TINI_ARCH} && \
+    echo "${TINI_SHA}  /tini" | sha256sum -c - && \
     chmod +x /tini
 
 # Create directories
